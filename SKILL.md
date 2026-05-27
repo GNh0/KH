@@ -10,7 +10,7 @@ This is a local-first, zero-dependency, and hyper-concurrent agentic coding fram
 ## Requirements
 - Python 3.9+
 - OS: Windows / Linux / macOS
-- Dependencies: `uvicorn`, `fastapi`, `httpx` (installed via pip)
+- Dependencies: `uvicorn`, `fastapi`, `httpx`, `requests` (installed via pip)
 
 ## Execution via CLI
 Do NOT run internal scripts directly. Always use the built-in `cli.py` orchestrator. The CLI handles background server launching, smart polling, and process garbage collection automatically.
@@ -21,11 +21,13 @@ Do NOT run internal scripts directly. Always use the built-in `cli.py` orchestra
 To initialize the orchestrator and generate code for a project:
 ```bash
 python cli.py run --project "./my_project_dir" --prompt "Create a scalable FastAPI backend"
+python cli.py run --project "./my_project_dir" --prompt "Create a scalable FastAPI backend" --platform antigravity
 ```
 
 **2. Advanced Overrides**
 You can pass additional arguments to control the environment:
 - `--workers <int>`: Cap the concurrent workers (Default: 50). The framework will auto-clamp this to safe limits based on CPU cores.
+- `--platform local|antigravity`: Select the dispatcher mode. Use `antigravity` for app/webhook-driven subagent dispatch.
 - `--no-sandbox`: Bypass AST and timeout checks for debugging.
 - `--verbose`: Enable debug logging for the webhook server.
 
@@ -36,8 +38,9 @@ python cli.py run --project "./my_game" --prompt "Create a simple python snake g
 
 ## Internal Architecture
 If you need to extend or debug this framework, here is the structure:
-- **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`).
+- **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`, `WorkflowTaskResult`, `WorkflowDispatchResult`).
 - **`cli.py`**: The main entry point. Orchestrates the Server + Agent Loop.
+- **`src/core/app_bridge.py`**: App-first integration helper for Codex and Antigravity Windows app hosts. Builds role-aware `AdapterRequest` objects without CLI parsing.
 - **`src/orchestration/agent_loop.py`**: The central loop (Architect -> Dispatcher -> Evaluator).
 - **`src/orchestration/roles.py`**: Default UAF role graph (`ceo`, `advisor`, `system-architect`, `controller`, `implementer`, reviewers, QA, security, release).
 - **`src/tasks/workflows.py`**: The `asyncio` queue-based worker engine. Replaces Celery.
@@ -51,6 +54,8 @@ External agents should exchange structured data through the contracts module ins
 - Use `HarnessResult` for sandbox/evaluator execution results.
 - Use `SkillManifest` to normalize plugin and skill metadata.
 - Use `AdapterRequest` and `AdapterResult` when implementing Codex, Antigravity, Claude Code, or local dispatch adapters.
+- Use `WorkflowDispatchResult.task_results` and `WorkflowDispatchResult.gate_results` for worker status, webhook failure propagation, and reviewer/QA/security/release gate results.
+- For Codex and Antigravity Windows app integrations, call `src.core.app_bridge.create_app_request(...)` and `dispatch_app_request(...)` directly instead of shelling through the CLI.
 - Add new UAF skills and harnesses as `skills/<skill-name>/SKILL.md`. The packaged skill folder is the source of truth.
 - Use `src.skills.uaf_skill_catalog` to list/read packaged UAF skill folders. External Gemini, Antigravity, RTK, and Superpowers systems are development references only, not runtime dependencies.
 

@@ -49,6 +49,12 @@ def build_llm_router(args):
     )
 
 
+def build_agent_loop(router, project: str, platform_mode: str):
+    from src.orchestration.agent_loop import AgentLoop
+
+    return AgentLoop(router, project, platform_mode=platform_mode)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Antigravity Universal Agent Framework CLI",
@@ -79,6 +85,9 @@ def main():
                         metavar="PATH",
                         help="추가로 허용할 폴더 경로 (여러 번 사용 가능). 예: --allow-dir C:/shared")
 
+    parser.add_argument("--platform", choices=["local", "antigravity"], default=os.environ.get("AG_PLATFORM_MODE", "local"),
+                        help="Dispatcher platform mode. Use antigravity for app/webhook-driven subagent dispatch.")
+
     parser.add_argument("--provider", default=os.environ.get("AG_LLM_PROVIDER", "local"),
                         help="LLM provider: local, openai, codex, or claude")
     parser.add_argument("--model", default=os.environ.get("AG_LLM_MODEL", "llama3"),
@@ -95,6 +104,7 @@ def main():
     os.environ["AG_MAX_WORKERS"] = str(args.workers)
     os.environ["AG_NO_SANDBOX"] = "1" if args.no_sandbox else "0"
     os.environ["AG_VERBOSE"] = "1" if args.verbose else "0"
+    os.environ["AG_PLATFORM_MODE"] = args.platform
 
     if args.command == "server":
         print(f"🚀 웹훅 서버 단독 모드 (포트: {args.port})")
@@ -119,7 +129,6 @@ def main():
         try:
             print(f"🤖 [CLI] 에이전트 루프 가동 (워커: {args.workers}개 / 샌드박스: {'OFF ⚠️' if args.no_sandbox else 'ON ✅'})...")
 
-            from src.orchestration.agent_loop import AgentLoop
             from src.harness.sandbox import set_allowed_workspace, add_allowed_workspace, CodeSandbox
 
             # [V2.5] 기본 작업 폴더 등록
@@ -131,7 +140,7 @@ def main():
                 add_allowed_workspace(extra)
 
             router = build_llm_router(args)
-            loop = AgentLoop(router, args.project)
+            loop = build_agent_loop(router, args.project, args.platform)
             loop.run(requirement=args.prompt, framework="vanilla")
 
         except KeyboardInterrupt:

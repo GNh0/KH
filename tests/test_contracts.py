@@ -1,6 +1,13 @@
 import unittest
 
-from src.contracts import AdapterRequest, AdapterResult, HarnessResult, SkillManifest
+from src.contracts import (
+    AdapterRequest,
+    AdapterResult,
+    HarnessResult,
+    SkillManifest,
+    WorkflowDispatchResult,
+    WorkflowTaskResult,
+)
 
 
 class HarnessResultContractTests(unittest.TestCase):
@@ -56,6 +63,27 @@ class AdapterContractTests(unittest.TestCase):
         self.assertEqual(AdapterRequest.from_dict(request.to_dict()), request)
         self.assertEqual(AdapterResult.from_dict(result.to_dict()), result)
         self.assertEqual(result.to_legacy_messages(), ["[Accepted] queued (ID: workflow_demo)"])
+
+
+class WorkflowDispatchContractTests(unittest.TestCase):
+    def test_workflow_dispatch_result_round_trips_as_dict(self):
+        task = WorkflowTaskResult(
+            task_id="main_py",
+            file_name="main.py",
+            role="implementer",
+            status="failed",
+            message="webhook failed",
+            metadata={"error_type": "ConnectError"},
+        )
+        workflow = WorkflowDispatchResult(
+            workflow_id="workflow_demo",
+            success=False,
+            task_results=[task],
+            gate_results=[{"role": "spec-reviewer", "status": "failed"}],
+            metadata={"platform_mode": "local"},
+        )
+
+        self.assertEqual(WorkflowDispatchResult.from_dict(workflow.to_dict()), workflow)
 
 
 if __name__ == "__main__":

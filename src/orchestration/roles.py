@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 STAGE_ORDER: Tuple[str, ...] = (
@@ -232,3 +232,79 @@ def format_role_brief(profiles: Optional[Tuple[RoleProfile, ...]] = None) -> str
     for profile in selected_profiles:
         lines.append(f"| {profile.stage} | `{profile.name}` | {profile.purpose} |")
     return "\n".join(lines)
+
+
+def build_role_gate_results(task_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    failed_tasks = [
+        result
+        for result in task_results
+        if result.get("status") != "success"
+    ]
+
+    if failed_tasks:
+        blocked_reason = f"{len(failed_tasks)} implementer task(s) failed"
+        return [
+            {
+                "role": "spec-reviewer",
+                "status": "failed",
+                "message": blocked_reason,
+                "blocks_on": ["implementer"],
+            },
+            {
+                "role": "code-quality-reviewer",
+                "status": "blocked",
+                "message": "spec review did not pass",
+                "blocks_on": ["spec-reviewer"],
+            },
+            {
+                "role": "qa-verifier",
+                "status": "blocked",
+                "message": "quality review did not pass",
+                "blocks_on": ["code-quality-reviewer"],
+            },
+            {
+                "role": "security-reviewer",
+                "status": "blocked",
+                "message": "quality review did not pass",
+                "blocks_on": ["code-quality-reviewer"],
+            },
+            {
+                "role": "release-manager",
+                "status": "blocked",
+                "message": "verification and security gates did not pass",
+                "blocks_on": ["qa-verifier", "security-reviewer"],
+            },
+        ]
+
+    return [
+        {
+            "role": "spec-reviewer",
+            "status": "passed",
+            "message": "all implementer tasks reported success",
+            "blocks_on": ["implementer"],
+        },
+        {
+            "role": "code-quality-reviewer",
+            "status": "passed",
+            "message": "no failed task output to block quality review",
+            "blocks_on": ["spec-reviewer"],
+        },
+        {
+            "role": "qa-verifier",
+            "status": "passed",
+            "message": "all task evidence is successful",
+            "blocks_on": ["code-quality-reviewer"],
+        },
+        {
+            "role": "security-reviewer",
+            "status": "passed",
+            "message": "no task-level security blocker reported",
+            "blocks_on": ["code-quality-reviewer"],
+        },
+        {
+            "role": "release-manager",
+            "status": "passed",
+            "message": "review, verification, and security gates passed",
+            "blocks_on": ["qa-verifier", "security-reviewer"],
+        },
+    ]

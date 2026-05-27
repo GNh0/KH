@@ -123,3 +123,65 @@ class AdapterResult:
             workflow_id=data.get("workflow_id"),
             metadata=dict(data.get("metadata", {})),
         )
+
+
+@dataclass(frozen=True)
+class WorkflowTaskResult:
+    task_id: str
+    file_name: str
+    role: str
+    status: str
+    message: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "file_name": self.file_name,
+            "role": self.role,
+            "status": self.status,
+            "message": self.message,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WorkflowTaskResult":
+        return cls(
+            task_id=data.get("task_id", ""),
+            file_name=data.get("file_name", ""),
+            role=data.get("role", ""),
+            status=data.get("status", ""),
+            message=data.get("message", ""),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
+class WorkflowDispatchResult:
+    workflow_id: str
+    success: bool
+    task_results: List[WorkflowTaskResult] = field(default_factory=list)
+    gate_results: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "success": self.success,
+            "task_results": [result.to_dict() for result in self.task_results],
+            "gate_results": [dict(result) for result in self.gate_results],
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WorkflowDispatchResult":
+        return cls(
+            workflow_id=data.get("workflow_id", ""),
+            success=bool(data.get("success", False)),
+            task_results=[
+                WorkflowTaskResult.from_dict(result)
+                for result in data.get("task_results", [])
+            ],
+            gate_results=[dict(result) for result in data.get("gate_results", [])],
+            metadata=dict(data.get("metadata", {})),
+        )

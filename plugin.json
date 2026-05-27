@@ -1,19 +1,24 @@
 {
   "name": "universal-agent-framework",
   "version": "2.5.0",
-  "description": "Zero-dependency, Pure Python agentic coding orchestration engine for Antigravity, Codex, and Claude Code. Features asyncio-based parallel workers, Windows-compatible multiprocessing sandbox, gzip snapshot rollback, and a one-click CLI launcher.",
+  "description": "Pure Python agentic coding orchestration engine for Antigravity, Codex, and Claude Code. Features asyncio-based parallel workers, Windows app bridge integration, multiprocessing sandboxing, gzip snapshot rollback, and a CLI launcher.",
   "author": "Antigravity Framework Team",
   "entrypoint": "cli.py",
   "skills": [
     {
       "name": "orchestrate",
       "description": "Run the full agent workflow: design → dispatch → parallel coding → sandbox validation → webhook reporting.",
-      "usage": "python cli.py run --project <dir> --prompt <requirement>"
+      "usage": "python cli.py run --project <dir> --prompt <requirement> --platform antigravity"
     },
     {
       "name": "contracts",
       "description": "Shared dataclass contracts for Codex, Antigravity, Claude Code, and local adapters.",
       "module": "src.contracts"
+    },
+    {
+      "name": "windows-app-bridge",
+      "description": "App-first integration helper for Codex and Antigravity Windows hosts. Builds role-aware AdapterRequest metadata and dispatches without CLI parsing.",
+      "module": "src.core.app_bridge"
     },
     {
       "name": "skill-catalog",
@@ -78,7 +83,8 @@
     "AG_API_KEY": "antigravity-secret-key-v2",
     "AG_MAX_WORKERS": "50",
     "AG_NO_SANDBOX": "0",
-    "AG_VERBOSE": "0"
+    "AG_VERBOSE": "0",
+    "AG_PLATFORM_MODE": "local"
   },
   "requires": [
     "fastapi",

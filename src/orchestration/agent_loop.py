@@ -22,6 +22,19 @@ class AgentLoop:
         self.snapshot = SnapshotManager(project_dir)
         self.role_metadata = build_default_role_metadata()
 
+    @staticmethod
+    def parse_target_files(files_str: str) -> list:
+        match = re.search(r'\[.*\]', files_str, re.DOTALL)
+        if not match:
+            raise ValueError("target file response does not contain a JSON array")
+
+        target_files = json.loads(match.group())
+        if not isinstance(target_files, list) or not target_files:
+            raise ValueError("target file response must be a non-empty JSON array")
+        if not all(isinstance(file_name, str) and file_name.strip() for file_name in target_files):
+            raise ValueError("target file response must contain only non-empty strings")
+        return target_files
+
     def run(self, requirement: str, framework: str, libs: list = None, max_turns: int = 5):
         if libs is None:
             libs = []
@@ -39,12 +52,8 @@ class AgentLoop:
             
         print(f"=== 2. [Dispatcher] 필요 파일 목록 분석 및 스레드 분할 ===")
         dispatch_prompt = "아래 아키텍처를 구현하기 위해 작성해야 할 소스코드 파일들의 이름을 JSON 문자열 배열로만 반환하세요. (예: [\"server.py\", \"index.html\", \"style.css\"])"
-        try:
-            files_str = self.llm.chat("You output only JSON arrays.", f"{dispatch_prompt}\n\n{design_content}")
-            match = re.search(r'\[.*\]', files_str, re.DOTALL)
-            target_files = json.loads(match.group()) if match else ["main.py"]
-        except:
-            target_files = ["main.py"]
+        files_str = self.llm.chat("You output only JSON arrays.", f"{dispatch_prompt}\n\n{design_content}")
+        target_files = self.parse_target_files(files_str)
             
         print(f"[Dispatcher] {len(target_files)}개의 파일을 병렬 생성합니다: {target_files}")
         

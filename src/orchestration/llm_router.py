@@ -1,6 +1,11 @@
 import os
 import requests
 
+
+class LLMRouterError(RuntimeError):
+    pass
+
+
 class LLMRouter:
     """다중 LLM 통신을 지원하는 범용 라우터 (OpenAI, Claude, Local 호환)"""
     def __init__(self, provider: str = "local", model: str = "llama3", base_url: str = "http://localhost:11434/v1", api_key: str = None):
@@ -40,7 +45,7 @@ class LLMRouter:
             data = response.json()
             return data["choices"][0]["message"]["content"]
         except Exception as e:
-            return f"Error connecting to LLM API: {str(e)}"
+            raise LLMRouterError(f"Error connecting to LLM API: {str(e)}") from e
         
     def _call_anthropic(self, system_prompt: str, user_prompt: str) -> str:
         headers = {
@@ -60,4 +65,4 @@ class LLMRouter:
             data = response.json()
             return data["content"][0]["text"]
         except Exception as e:
-            return f"Error connecting to Anthropic API: {str(e)}"
+            raise LLMRouterError(f"Error connecting to Anthropic API: {str(e)}") from e

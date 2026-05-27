@@ -38,22 +38,34 @@ class LocalDispatcher:
     def execute_request(self, request: AdapterRequest) -> AdapterResult:
         metadata = ensure_role_metadata(request.metadata)
         print(f"[LocalDispatcher] Starting local workflow for {len(request.files)} files.")
-        workflow_id = dispatch_project_workflow(
+        workflow_result = dispatch_project_workflow(
             request.project_dir,
             request.files,
             request.design_doc,
             request.platform_mode,
             metadata,
         )
+        status = "success" if workflow_result.success else "failed"
+        message = (
+            "workflow completed"
+            if workflow_result.success
+            else "workflow completed with failures"
+        )
         return AdapterResult(
-            status="success",
-            message="workflow submitted for background processing",
-            workflow_id=workflow_id,
+            status=status,
+            message=message,
+            workflow_id=workflow_result.workflow_id,
             metadata={
                 "file_count": len(request.files),
                 "platform_mode": request.platform_mode,
                 "orchestration_roles": metadata.get("orchestration_roles", []),
                 "role_graph": metadata.get("role_graph", {}),
+                "workflow": workflow_result.to_dict(),
+                "task_results": [
+                    result.to_dict()
+                    for result in workflow_result.task_results
+                ],
+                "gate_results": workflow_result.gate_results,
             },
         )
 

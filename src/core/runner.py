@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from src.core.architect import SystemArchitect
 from src.harness.evaluator import Evaluator
@@ -24,6 +25,12 @@ def main():
     parser.add_argument("--llm_provider", type=str, default="local", help="[Orchestrate] LLM 제공자 (openai, claude, local)")
     parser.add_argument("--llm_model", type=str, default="llama3", help="[Orchestrate] LLM 모델명")
     parser.add_argument("--llm_base_url", type=str, default="http://localhost:11434/v1", help="[Orchestrate] 로컬 LLM Base URL")
+    parser.add_argument(
+        "--platform_mode",
+        choices=["local", "antigravity"],
+        default=os.environ.get("AG_PLATFORM_MODE", "local"),
+        help="[Orchestrate] Dispatcher 플랫폼 모드",
+    )
 
     args = parser.parse_args()
 
@@ -53,7 +60,7 @@ def main():
         
         print(">>> [System] 다중 LLM 오케스트레이션 루프 시작...")
         router = LLMRouter(provider=args.llm_provider, model=args.llm_model, base_url=args.llm_base_url)
-        loop = AgentLoop(llm_router=router, project_dir=args.project_dir)
+        loop = AgentLoop(llm_router=router, project_dir=args.project_dir, platform_mode=args.platform_mode)
         loop.run(requirement=args.reqs, framework=args.framework, libs=args.libs)
 
     elif args.mode == "evaluate":

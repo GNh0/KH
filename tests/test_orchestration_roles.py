@@ -2,6 +2,7 @@ import json
 import unittest
 
 from src.orchestration.roles import (
+    build_role_gate_results,
     build_default_role_metadata,
     default_role_graph,
     default_role_profiles,
@@ -73,6 +74,27 @@ class OrchestrationRoleGraphTests(unittest.TestCase):
         self.assertEqual(metadata["orchestration_roles"][0], "ceo")
         self.assertEqual(metadata["orchestration_roles"][-1], "release-manager")
         self.assertEqual(metadata["role_graph"]["roles"][0]["name"], "ceo")
+
+    def test_role_gate_results_pass_when_implementer_tasks_succeed(self):
+        gates = build_role_gate_results([
+            {"role": "implementer", "status": "success", "file_name": "main.py"},
+        ])
+
+        self.assertEqual({gate["status"] for gate in gates}, {"passed"})
+        self.assertEqual(gates[0]["role"], "spec-reviewer")
+        self.assertEqual(gates[-1]["role"], "release-manager")
+
+    def test_role_gate_results_block_downstream_when_implementer_fails(self):
+        gates = build_role_gate_results([
+            {"role": "implementer", "status": "failed", "file_name": "main.py"},
+        ])
+
+        statuses = {gate["role"]: gate["status"] for gate in gates}
+        self.assertEqual(statuses["spec-reviewer"], "failed")
+        self.assertEqual(statuses["code-quality-reviewer"], "blocked")
+        self.assertEqual(statuses["qa-verifier"], "blocked")
+        self.assertEqual(statuses["security-reviewer"], "blocked")
+        self.assertEqual(statuses["release-manager"], "blocked")
 
 
 if __name__ == "__main__":
