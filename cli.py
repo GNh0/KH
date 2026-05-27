@@ -38,6 +38,17 @@ def wait_for_server(port: int, max_retries: int = 30, delay: float = 0.1) -> boo
     return False
 
 
+def build_llm_router(args):
+    from src.orchestration.llm_router import LLMRouter
+
+    return LLMRouter(
+        provider=args.provider,
+        model=args.model,
+        base_url=args.base_url,
+        api_key=args.api_key,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Antigravity Universal Agent Framework CLI",
@@ -67,6 +78,15 @@ def main():
     parser.add_argument("--allow-dir", dest="allow_dirs", action="append", default=[],
                         metavar="PATH",
                         help="추가로 허용할 폴더 경로 (여러 번 사용 가능). 예: --allow-dir C:/shared")
+
+    parser.add_argument("--provider", default=os.environ.get("AG_LLM_PROVIDER", "local"),
+                        help="LLM provider: local, openai, codex, or claude")
+    parser.add_argument("--model", default=os.environ.get("AG_LLM_MODEL", "llama3"),
+                        help="LLM model name")
+    parser.add_argument("--base-url", default=os.environ.get("AG_LLM_BASE_URL", "http://localhost:11434/v1"),
+                        help="OpenAI-compatible API base URL")
+    parser.add_argument("--api-key", default=os.environ.get("AG_LLM_API_KEY"),
+                        help="LLM API key. If omitted, provider-specific environment variables are used.")
 
     args = parser.parse_args()
 
@@ -100,7 +120,6 @@ def main():
             print(f"🤖 [CLI] 에이전트 루프 가동 (워커: {args.workers}개 / 샌드박스: {'OFF ⚠️' if args.no_sandbox else 'ON ✅'})...")
 
             from src.orchestration.agent_loop import AgentLoop
-            from src.orchestration.llm_router import LLMRouter
             from src.harness.sandbox import set_allowed_workspace, add_allowed_workspace, CodeSandbox
 
             # [V2.5] 기본 작업 폴더 등록
@@ -111,7 +130,7 @@ def main():
             for extra in args.allow_dirs:
                 add_allowed_workspace(extra)
 
-            router = LLMRouter("dummy_api_key")
+            router = build_llm_router(args)
             loop = AgentLoop(router, args.project)
             loop.run(requirement=args.prompt, framework="vanilla")
 

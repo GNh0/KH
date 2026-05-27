@@ -40,7 +40,8 @@
     "uvicorn",
     "aiosqlite",
     "httpx",
-    "pydantic"
+    "pydantic",
+    "requests"
   ],
   "python_requires": ">=3.9",
   "roadmap": {
