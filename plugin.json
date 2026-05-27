@@ -26,6 +26,11 @@
       "usage": "python -m src.skills.uaf_skill_catalog --read antigravity-agent-orchestration"
     },
     {
+      "name": "orchestration-role-graph",
+      "description": "Default UAF role graph covering CEO, advisor, architect, controller, implementer, reviewers, QA, security, and release roles.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read orchestration-role-graph"
+    },
+    {
       "name": "development-lifecycle-harness",
       "description": "UAF-native design, planning, TDD, review, verification, and branch-finishing workflow derived from Superpowers methodology.",
       "usage": "python -m src.skills.uaf_skill_catalog --read development-lifecycle-harness"

@@ -21,6 +21,8 @@ This is a UAF-native harness derived from Google Antigravity SDK concepts. It mu
 5. Attach lifecycle hooks for pre-dispatch validation, post-dispatch normalization, error recovery, and audit logging.
 6. Emit observability metadata for model/runtime choice, token budget, elapsed time, tool calls, and failure category.
 
+Use the default UAF role graph for orchestration: `ceo`, `advisor`, `product-strategist`, `system-architect`, `implementation-planner`, `controller`, `implementer`, `spec-reviewer`, `code-quality-reviewer`, `qa-verifier`, `security-reviewer`, and `release-manager`.
+
 ## Required outputs
 
 - `AdapterRequest` containing agent role, task text, allowed tools, budget, and safety policy.
@@ -37,6 +39,7 @@ This is a UAF-native harness derived from Google Antigravity SDK concepts. It mu
 
 - `src.contracts.AdapterRequest`
 - `src.contracts.AdapterResult`
+- `src.orchestration.roles`
 - `src.platforms.dispatcher_factory`
 - `src.orchestration.agent_loop`
 - `src.skills.uaf_skill_catalog`

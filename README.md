@@ -46,6 +46,7 @@ universal_agent_framework/
 │       └── workflows.py      # asyncio.Queue 기반 병렬 워커 엔진
 └── skills/                   # UAF-native 에이전트 스킬/하네스 카탈로그
     ├── antigravity_agent_orchestration/
+    ├── orchestration_role_graph/
     ├── development_lifecycle_harness/
     ├── subagent_review_pipeline/
     ├── quality_gates_harness/
@@ -90,6 +91,7 @@ python cli.py server --port 9000
 
 | 계열 | UAF 스킬 | 용도 |
 |------|----------|------|
+| Core | `orchestration-role-graph` | CEO, advisor, architect, controller, implementer, reviewer, QA, security, release 기본 역할 그래프 |
 | Antigravity | `antigravity-agent-orchestration` | agent/subagent, tool permission, lifecycle hook, observability |
 | Superpowers | `development-lifecycle-harness` | 설계, 계획, TDD, 리뷰, 검증, 브랜치 완료 흐름 |
 | Superpowers | `subagent-review-pipeline` | implementer → spec-reviewer → code-quality-reviewer 역할 파이프라인 |
@@ -105,6 +107,7 @@ python -m src.skills.uaf_skill_catalog --list
 
 # 특정 스킬 읽기
 python -m src.skills.uaf_skill_catalog --read antigravity-agent-orchestration
+python -m src.skills.uaf_skill_catalog --read orchestration-role-graph
 python -m src.skills.uaf_skill_catalog --read rtk-command-output-harness
 ```
 

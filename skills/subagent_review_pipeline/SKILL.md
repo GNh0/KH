@@ -18,6 +18,8 @@ This is a UAF-native subagent coordination harness derived from Superpowers suba
 - `code-quality-reviewer`: reviews maintainability, integration risk, tests, and security after spec compliance passes.
 - `controller`: owns sequencing, shared context, retries, and final reporting.
 
+Upstream governance and downstream release roles come from `orchestration-role-graph`: `ceo`, `advisor`, `product-strategist`, `system-architect`, `implementation-planner`, `qa-verifier`, `security-reviewer`, and `release-manager`.
+
 ## Status contract
 
 - `DONE`: proceed to spec review.
@@ -37,6 +39,7 @@ This is a UAF-native subagent coordination harness derived from Superpowers suba
 ## UAF implementation targets
 
 - `src.tasks.workflows`
+- `src.orchestration.roles`
 - `src.orchestration.agent_loop`
 - `src.contracts.AdapterRequest`
 - `src.contracts.AdapterResult`

@@ -34,6 +34,22 @@ class AntigravityDispatcherTests(unittest.TestCase):
         self.assertEqual(result.status, "pending")
         self.assertEqual(result.workflow_id, "demo")
 
+    def test_execute_request_attaches_default_role_graph_metadata(self):
+        request = AdapterRequest(
+            project_dir="C:/work/demo",
+            files=["main.py"],
+            design_doc="# design",
+            platform_mode="antigravity",
+        )
+
+        with redirect_stdout(StringIO()):
+            result = AntigravityDispatcher().execute_request(request)
+
+        self.assertIn("ceo", result.metadata["orchestration_roles"])
+        self.assertIn("advisor", result.metadata["orchestration_roles"])
+        self.assertIn("implementer", result.metadata["orchestration_roles"])
+        self.assertEqual(result.metadata["role_graph"]["roles"][0]["name"], "ceo")
+
 
 if __name__ == "__main__":
     unittest.main()

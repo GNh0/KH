@@ -39,6 +39,7 @@ If you need to extend or debug this framework, here is the structure:
 - **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`).
 - **`cli.py`**: The main entry point. Orchestrates the Server + Agent Loop.
 - **`src/orchestration/agent_loop.py`**: The central loop (Architect -> Dispatcher -> Evaluator).
+- **`src/orchestration/roles.py`**: Default UAF role graph (`ceo`, `advisor`, `system-architect`, `controller`, `implementer`, reviewers, QA, security, release).
 - **`src/tasks/workflows.py`**: The `asyncio` queue-based worker engine. Replaces Celery.
 - **`src/harness/sandbox.py`**: A secure code runner. Uses `multiprocessing` for absolute timeout guarantees on Windows.
 - **`src/core/snapshot_manager.py`**: State rollback system utilizing pure `gzip` for 90% disk space reduction.
@@ -54,6 +55,7 @@ External agents should exchange structured data through the contracts module ins
 - Use `src.skills.uaf_skill_catalog` to list/read packaged UAF skill folders. External Gemini, Antigravity, RTK, and Superpowers systems are development references only, not runtime dependencies.
 
 ## Packaged Harnesses
+- **Core role graph**: `orchestration-role-graph` for CEO, advisor, product strategy, development architect, planner, controller, implementer, review, QA, security, and release roles.
 - **Antigravity-derived**: `antigravity-agent-orchestration` for agent profiles, subagents, tool permissions, lifecycle hooks, error recovery, and observability.
 - **Superpowers-derived**: `development-lifecycle-harness`, `subagent-review-pipeline`, and `quality-gates-harness` for planning, TDD, review roles, debugging, and evidence-based completion.
 - **RTK-derived**: `rtk-command-output-harness` and `command-hook-policy-harness` for compact command output, exit-code preservation, token-savings tracking, hook trust, and permission precedence.

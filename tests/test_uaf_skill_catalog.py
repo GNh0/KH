@@ -12,6 +12,7 @@ CORE_SKILLS = {
     "command-hook-policy-harness",
     "development-lifecycle-harness",
     "harness-evaluator",
+    "orchestration-role-graph",
     "parallel-orchestration-harness",
     "quality-gates-harness",
     "rtk-command-output-harness",
@@ -64,6 +65,7 @@ class UafSkillCatalogTests(unittest.TestCase):
             "quality-gates-harness": "Superpowers",
             "rtk-command-output-harness": "RTK",
             "command-hook-policy-harness": "RTK",
+            "orchestration-role-graph": "CEO",
         }
 
         for skill_name, source_label in expected_sources.items():

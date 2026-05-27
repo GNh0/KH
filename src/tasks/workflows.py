@@ -21,6 +21,7 @@ async def code_generation_worker(queue: asyncio.Queue, project_id: str):
 
             file_name = task_data["file_name"]
             design_doc = task_data["design_doc"]
+            role = task_data.get("role", "implementer")
 
             print(f"[Worker] '{file_name}' 작업 시작...")
 
@@ -29,7 +30,12 @@ async def code_generation_worker(queue: asyncio.Queue, project_id: str):
                 await asyncio.sleep(1.0)
                 print(f"[Worker] '{file_name}' 작업 완료 (샌드박스 통과)")
 
-                result_payload = {file_name: "SUCCESS"}
+                result_payload = {
+                    file_name: {
+                        "status": "SUCCESS",
+                        "role": role,
+                    }
+                }
                 b64_data = base64.b64encode(json.dumps(result_payload).encode("utf-8")).decode("utf-8")
 
                 payload = {
@@ -49,7 +55,7 @@ async def code_generation_worker(queue: asyncio.Queue, project_id: str):
                 queue.task_done()
 
 
-async def async_project_workflow(project_dir: str, file_list: list, design_doc: str, platform_mode: str):
+async def async_project_workflow(project_dir: str, file_list: list, design_doc: str, platform_mode: str, metadata: dict = None):
     """[V2.5] Celery를 완벽히 대체하는 파이썬 내장 비동기 큐 오케스트레이터"""
     queue = asyncio.Queue()
     project_id = os.path.basename(project_dir)  # 버그 수정: os import 보장 후 호출
@@ -58,7 +64,9 @@ async def async_project_workflow(project_dir: str, file_list: list, design_doc: 
         queue.put_nowait({
             "file_name": f,
             "design_doc": design_doc,
-            "platform_mode": platform_mode
+            "platform_mode": platform_mode,
+            "role": "implementer",
+            "role_graph": (metadata or {}).get("role_graph", {}),
         })
 
     # [V2.5] 워커 개수 안전 캡 - 사용자가 100000을 입력해도 OS가 터지지 않음
@@ -77,6 +85,6 @@ async def async_project_workflow(project_dir: str, file_list: list, design_doc: 
     return f"workflow_{project_id}"
 
 
-def dispatch_project_workflow(project_dir: str, file_list: list, design_doc: str, platform_mode: str):
+def dispatch_project_workflow(project_dir: str, file_list: list, design_doc: str, platform_mode: str, metadata: dict = None):
     """외부 호출용 동기 래퍼"""
-    return asyncio.run(async_project_workflow(project_dir, file_list, design_doc, platform_mode))
+    return asyncio.run(async_project_workflow(project_dir, file_list, design_doc, platform_mode, metadata))
