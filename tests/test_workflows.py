@@ -2,10 +2,37 @@ import os
 import unittest
 
 from src.orchestration.roles import build_default_role_metadata
-from src.tasks.workflows import dispatch_project_workflow
+from src.tasks.workflows import _project_id, _safe_worker_count, dispatch_project_workflow
 
 
 class WorkflowDispatchTests(unittest.TestCase):
+    def test_safe_worker_count_never_returns_zero_for_queued_files(self):
+        original_workers = os.environ.get("AG_MAX_WORKERS")
+        os.environ["AG_MAX_WORKERS"] = "0"
+
+        try:
+            self.assertEqual(_safe_worker_count(file_count=3, cpu_count=8), 1)
+        finally:
+            if original_workers is None:
+                os.environ.pop("AG_MAX_WORKERS", None)
+            else:
+                os.environ["AG_MAX_WORKERS"] = original_workers
+
+    def test_safe_worker_count_handles_invalid_env_value(self):
+        original_workers = os.environ.get("AG_MAX_WORKERS")
+        os.environ["AG_MAX_WORKERS"] = "not-an-int"
+
+        try:
+            self.assertEqual(_safe_worker_count(file_count=3, cpu_count=8), 3)
+        finally:
+            if original_workers is None:
+                os.environ.pop("AG_MAX_WORKERS", None)
+            else:
+                os.environ["AG_MAX_WORKERS"] = original_workers
+
+    def test_project_id_ignores_trailing_path_separator(self):
+        self.assertEqual(_project_id("C:/work/demo/"), "demo")
+
     def test_webhook_failure_returns_failed_workflow_result(self):
         original_url = os.environ.get("AG_WEBHOOK_URL")
         os.environ["AG_WEBHOOK_URL"] = "http://127.0.0.1:9/api/webhook/subagent-result"

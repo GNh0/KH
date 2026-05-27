@@ -15,6 +15,29 @@ def _task_id(file_name: str) -> str:
     return file_name.replace("/", "_").replace("\\", "_").replace(".", "_")
 
 
+def _project_id(project_dir: str) -> str:
+    project_name = os.path.basename(os.path.normpath(project_dir))
+    return project_name or "project"
+
+
+def _requested_worker_limit() -> int:
+    try:
+        requested_workers = int(os.environ.get("AG_MAX_WORKERS", "50"))
+    except ValueError:
+        return 50
+    return max(1, requested_workers)
+
+
+def _safe_worker_count(file_count: int, cpu_count: int = None) -> int:
+    if file_count <= 0:
+        return 0
+
+    requested_workers = _requested_worker_limit()
+    cpu_cores = cpu_count if cpu_count is not None else (multiprocessing.cpu_count() or 4)
+    hard_limit = max(1, cpu_cores * 10)
+    return min(requested_workers, hard_limit, file_count)
+
+
 async def code_generation_worker(queue: asyncio.Queue, project_id: str, results: List[WorkflowTaskResult]):
     webhook_url = os.environ.get("AG_WEBHOOK_URL", "http://127.0.0.1:8000/api/webhook/subagent-result")
     api_key = os.environ.get("AG_API_KEY", "antigravity-secret-key-v2")
@@ -91,7 +114,7 @@ async def async_project_workflow(
     metadata: dict = None,
 ) -> WorkflowDispatchResult:
     queue = asyncio.Queue()
-    project_id = os.path.basename(project_dir)
+    project_id = _project_id(project_dir)
     metadata = metadata or {}
     results: List[WorkflowTaskResult] = []
 
@@ -104,17 +127,16 @@ async def async_project_workflow(
             "role_graph": metadata.get("role_graph", {}),
         })
 
-    max_workers_env = int(os.environ.get("AG_MAX_WORKERS", "50"))
+    requested_workers = _requested_worker_limit()
     cpu_cores = multiprocessing.cpu_count() or 4
-    hard_limit = cpu_cores * 10
-    safe_max_workers = min(max_workers_env, hard_limit)
-    num_workers = min(safe_max_workers, len(file_list))
+    hard_limit = max(1, cpu_cores * 10)
+    num_workers = _safe_worker_count(len(file_list), cpu_cores)
 
     workers = [
         asyncio.create_task(code_generation_worker(queue, project_id, results))
         for _ in range(num_workers)
     ]
-    print(f"[Master] starting {num_workers} worker(s) (requested: {max_workers_env} / hard limit: {hard_limit})")
+    print(f"[Master] starting {num_workers} worker(s) (requested: {requested_workers} / hard limit: {hard_limit})")
 
     await queue.join()
     if workers:
