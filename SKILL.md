@@ -91,14 +91,14 @@ External agents should exchange structured data through the contracts module ins
 - Use `WorkflowDispatchResult.task_results` and `WorkflowDispatchResult.gate_results` for worker status, optional webhook reporting metadata, and reviewer/QA/security/release gate results.
 - For Codex and Antigravity Windows app integrations, call `src.core.app_bridge.create_app_request(...)` and `dispatch_app_request(...)` directly instead of shelling through the CLI.
 - Add new UAF skills and harnesses as `skills/<skill-name>/SKILL.md`. The packaged skill folder is the source of truth.
-- Use `src.skills.uaf_skill_catalog` to list/read packaged UAF skill folders. External Gemini, Antigravity, RTK, and Superpowers systems are development references only, not runtime dependencies.
+- Use `src.skills.uaf_skill_catalog` to list/read packaged UAF skill folders. External systems are development references only, not runtime dependencies.
 
 ## Packaged Harnesses
 - **Core role graph**: `orchestration-role-graph` for CEO, advisor, product strategy, development architect, planner, controller, implementer, review, QA, security, and release roles.
-- **Antigravity-derived**: `antigravity-agent-orchestration` for agent profiles, subagents, tool permissions, lifecycle hooks, error recovery, and observability.
+- **Host orchestration**: `host-agent-orchestration` for agent profiles, subagents, tool permissions, lifecycle hooks, error recovery, and observability across Codex, Antigravity-style, Claude Code, and local runtimes.
 - **Domain orchestration**: `domain-orchestration-harness` for mandatory WorkDesign, domain roles, artifact manifests, review, QA/QC, risk, policy, and final decision gates across arbitrary topics.
-- **Superpowers-derived**: `development-lifecycle-harness`, `subagent-review-pipeline`, and `quality-gates-harness` for planning, TDD, review roles, debugging, and evidence-based completion.
-- **RTK-derived**: `rtk-command-output-harness` and `command-hook-policy-harness` for compact command output, exit-code preservation, token-savings tracking, hook trust, and permission precedence.
+- **Personal skillbook workflow**: `development-lifecycle-harness`, `subagent-review-pipeline`, and `quality-gates-harness` for planning, TDD, review roles, debugging, and evidence-based completion.
+- **Command operations**: `command-output-harness` and `command-hook-policy-harness` for compact command output, exit-code preservation, token-savings tracking, hook trust, and permission precedence.
 - **gstack-derived and goal/memory-aware**: `review-gate-harness`, `qa-gate-harness`, `context-state-harness`, `goal-state-harness`, `memory-state-harness`, `guard-policy-harness`, and `health-check-harness` for structured review, QA, context handoff, objective tracking, scoped persistent memory, safety policy, and health reporting.
 - **Snapshot rollback**: `snapshot-state-harness` for project-local gzip checkpoints, rollback, and `.snapshots` metadata protection.
 

@@ -19,10 +19,10 @@ DESIGN_REFERENCES_CONSIDERED = {
     "design_references_considered": [
         "Gemini plugin skill-folder conventions",
         "Google Antigravity agent and orchestration patterns",
-        "Superpowers-style planning, TDD, verification, and parallel dispatch workflows",
-        "RTK-style reusable task and harness patterns",
+        "Personal skillbook planning, TDD, verification, and parallel dispatch workflows",
+        "Command-operation reusable task and harness patterns",
     ],
-    "runtime_rule": "Do not scan or require local Gemini, Antigravity, RTK, or Superpowers installations at runtime.",
+    "runtime_rule": "Do not scan or require external skill or host installations at runtime.",
 }
 
 

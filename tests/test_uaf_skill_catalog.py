@@ -10,7 +10,6 @@ from src.skills.uaf_skill_catalog import collect_packaged_skills, read_packaged_
 
 CORE_SKILLS = {
     "adapter-contract-harness",
-    "antigravity-agent-orchestration",
     "architect-pipeline",
     "command-hook-policy-harness",
     "development-lifecycle-harness",
@@ -20,13 +19,14 @@ CORE_SKILLS = {
     "guard-policy-harness",
     "harness-evaluator",
     "health-check-harness",
+    "host-agent-orchestration",
     "memory-state-harness",
     "orchestration-role-graph",
     "parallel-orchestration-harness",
     "quality-gates-harness",
     "qa-gate-harness",
     "review-gate-harness",
-    "rtk-command-output-harness",
+    "command-output-harness",
     "skill-catalog",
     "snapshot-state-harness",
     "subagent-review-pipeline",
@@ -100,13 +100,13 @@ class UafSkillCatalogTests(unittest.TestCase):
 
     def test_reference_derived_harnesses_are_uaf_native(self):
         expected_sources = {
-            "antigravity-agent-orchestration": "Google Antigravity SDK",
-            "development-lifecycle-harness": "Superpowers",
+            "development-lifecycle-harness": "Personal skillbook",
             "domain-orchestration-harness": "domain orchestration",
-            "subagent-review-pipeline": "Superpowers",
-            "quality-gates-harness": "Superpowers",
-            "rtk-command-output-harness": "RTK",
-            "command-hook-policy-harness": "RTK",
+            "host-agent-orchestration": "host orchestration",
+            "subagent-review-pipeline": "Personal subagent",
+            "quality-gates-harness": "Personal quality",
+            "command-output-harness": "command output",
+            "command-hook-policy-harness": "Command hook",
             "orchestration-role-graph": "CEO",
             "review-gate-harness": "gstack",
             "qa-gate-harness": "gstack",

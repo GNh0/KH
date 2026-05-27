@@ -1,6 +1,6 @@
 # UAF Persistent Goal Ledger Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED WORKFLOW: Use KH skillbook task-by-task execution to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Persist UAF goal status and event history under each project so workflow intent survives context compaction and process restarts.
 

@@ -2,7 +2,7 @@
   "name": "universal-agent-framework",
   "version": "2.5.0",
   "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features domain profiles, work design artifacts, asyncio-based parallel workers, Windows app bridge integration, multiprocessing sandboxing, gzip snapshot rollback, and a CLI launcher.",
-  "author": "Antigravity Framework Team",
+  "author": "KH UAF",
   "entrypoint": "cli.py",
   "skills": [
     {
@@ -106,9 +106,9 @@
       "usage": "python -m src.skills.uaf_skill_catalog --read snapshot-state-harness"
     },
     {
-      "name": "antigravity-agent-orchestration",
-      "description": "UAF-native agent, subagent, permission, hook, and observability harness derived from Antigravity-style orchestration patterns.",
-      "usage": "python -m src.skills.uaf_skill_catalog --read antigravity-agent-orchestration"
+      "name": "host-agent-orchestration",
+      "description": "Personal UAF host agent, subagent, permission, hook, and observability harness for Codex, Antigravity-style, Claude Code, and local runtimes.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read host-agent-orchestration"
     },
     {
       "name": "orchestration-role-graph",
@@ -117,7 +117,7 @@
     },
     {
       "name": "development-lifecycle-harness",
-      "description": "UAF-native design, planning, TDD, review, verification, and branch-finishing workflow derived from Superpowers methodology.",
+      "description": "Personal UAF design, planning, TDD, review, verification, and branch-finishing workflow.",
       "usage": "python -m src.skills.uaf_skill_catalog --read development-lifecycle-harness"
     },
     {
@@ -136,9 +136,9 @@
       "usage": "python -m src.skills.uaf_skill_catalog --read quality-gates-harness"
     },
     {
-      "name": "rtk-command-output-harness",
-      "description": "UAF-native command output filtering, grouping, truncation, deduplication, exit-code preservation, and savings tracking.",
-      "usage": "python -m src.skills.uaf_skill_catalog --read rtk-command-output-harness"
+      "name": "command-output-harness",
+      "description": "Personal UAF command output filtering, grouping, truncation, deduplication, exit-code preservation, and savings tracking.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read command-output-harness"
     },
     {
       "name": "command-hook-policy-harness",

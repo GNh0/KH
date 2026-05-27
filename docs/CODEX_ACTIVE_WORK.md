@@ -17,14 +17,14 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 ## Current Verified State
 
 - Repository: `GNh0/KH`, local path `C:\Users\User\Documents\Codex\KH`.
-- Core direction approved by user: improve incrementally, taking useful ideas from gstack/Superpowers-style skill repositories.
+- Core direction approved by user: improve incrementally, taking useful ideas from external references while keeping KH/UAF branded as a personal skillbook.
 - Python core should remain the stable center for now.
 - TypeScript is best treated as a future sidecar for browser adapters, dashboards, and skill/template tooling.
 - Latest full verification after resume handoff support:
   - `python -m json.tool plugin.json`
   - `python -m src.skills.uaf_skill_catalog --check`
   - `python -B -c "import pathlib; [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in pathlib.Path('.').rglob('*.py')]"`
-  - `python -m unittest discover -s tests -v` (146 tests)
+  - `python -m unittest discover -s tests -v` (147 tests)
 
 ## Completed
 
@@ -153,6 +153,10 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `.uaf/state/resume_handoff.md`
   - workflow metadata now includes `resume_handoff` when goal metadata is present
   - later host sessions can resume from goal ledger, artifact manifest, memory context, missing evidence, and next action without relying on chat context
+- Rebranded external-methodology work records into a personal KH/UAF skillbook:
+  - `docs/skillbook/specs/`
+  - `docs/skillbook/plans/`
+  - packaged skill list now uses `host-agent-orchestration` and `command-output-harness` instead of vendor/reference-branded names
 - Reworked `README.md` to reflect current implementation level, references, verification, and roadmap.
 - Reworked `AgentLoop` user-facing prompts and target-file prompt from mojibake into ASCII English so LLM target-file selection is usable.
 

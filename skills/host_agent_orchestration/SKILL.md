@@ -1,16 +1,16 @@
 ---
-name: antigravity-agent-orchestration
-description: Use when designing portable UAF agent loops, subagent delegation, tool permissions, hooks, or observability from Antigravity-style agent patterns.
+name: host-agent-orchestration
+description: Use when designing portable UAF host agent loops, subagent delegation, tool permissions, hooks, or observability across Codex, Antigravity-style, Claude Code, or local runtimes.
 ---
 
-# Antigravity Agent Orchestration
+# Host Agent Orchestration
 
-This is a UAF-native harness derived from Google Antigravity SDK concepts. It must not import or require an installed Antigravity SDK, Gemini plugin directory, or local user configuration at runtime.
+This is a personal UAF host orchestration harness. It packages reusable agent, subagent, permission, hook, persistence, structured output, and observability patterns without requiring any installed vendor SDK, Gemini plugin directory, or local user configuration at runtime.
 
 ## Reference basis
 
-- Google Antigravity SDK: agent, conversation, connection, subagents, MCP tools, tool permissions, safety policies, hooks, error recovery, persistence, structured output, and observability.
-- Local Antigravity skills are design inputs only. Package the reusable behavior here as UAF contracts and orchestration rules.
+- Host orchestration patterns: agent profiles, conversation records, connections, subagents, MCP tools, tool permissions, safety policies, hooks, error recovery, persistence, structured output, and observability.
+- Antigravity-style SDK concepts are design inputs only. Package the reusable behavior here as UAF contracts and personal orchestration rules.
 
 ## Workflow
 

@@ -5,12 +5,12 @@ description: Use when defining UAF command rewrite hooks, trust checks, permissi
 
 # Command Hook Policy Harness
 
-This is a UAF-native hook and permission harness derived from RTK hook architecture and Antigravity prompt-level command guidance. It must not install or require external hooks by default.
+This is a personal UAF hook and permission harness for command rewrite, trust, and safety policy. It must not install or require external hooks by default.
 
 ## Reference basis
 
-- RTK: agent command hooks, permission precedence, integrity verification, audit/trust checks, and fail-safe command passthrough.
-- Google Antigravity SDK: lifecycle hooks, tool permissions, and safety policy routing.
+- Command hook patterns: agent command hooks, permission precedence, integrity verification, audit/trust checks, and fail-safe command passthrough.
+- Host SDK patterns: lifecycle hooks, tool permissions, and safety policy routing.
 
 ## Permission precedence
 

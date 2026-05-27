@@ -6,7 +6,7 @@ description: Use when listing, reading, or adding packaged UAF skills and harnes
 # UAF Skill Catalog
 
 UAF skills are packaged inside this repository under `skills/<skill-name>/SKILL.md`.
-Do not depend on installed Gemini, Antigravity, RTK, or Superpowers skill folders at runtime.
+Do not depend on installed external skill folders at runtime.
 
 ## Add a skill
 
@@ -40,8 +40,8 @@ python -m src.skills.uaf_skill_catalog --read parallel-orchestration-harness
 Reference-derived examples:
 
 ```bash
-python -m src.skills.uaf_skill_catalog --read antigravity-agent-orchestration
-python -m src.skills.uaf_skill_catalog --read rtk-command-output-harness
+python -m src.skills.uaf_skill_catalog --read host-agent-orchestration
+python -m src.skills.uaf_skill_catalog --read command-output-harness
 ```
 
 ## UAF implementation targets

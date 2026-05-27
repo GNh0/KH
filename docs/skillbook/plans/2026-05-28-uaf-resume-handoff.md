@@ -1,6 +1,6 @@
 # UAF Resume Handoff Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED WORKFLOW: Use KH skillbook task-by-task execution to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add resume-safe handoff snapshots and a final audit/TODO artifact so future host sessions can continue UAF work from repo-local state.
 

@@ -5,11 +5,11 @@ description: Use when a UAF workflow needs failing-test-first implementation, sy
 
 # Quality Gates Harness
 
-This is a UAF-native quality harness derived from Superpowers testing, debugging, and verification workflows. It complements the sandbox evaluator by defining when evidence is required.
+This is a personal UAF quality harness for testing, debugging, and verification workflows. It complements the sandbox evaluator by defining when evidence is required.
 
 ## Reference basis
 
-- Superpowers: test-driven development, systematic debugging, requesting code review, receiving code review, and verification before completion.
+- Personal quality workflow: test-driven development, systematic debugging, requesting code review, receiving code review, and verification before completion.
 
 ## Workflow
 

@@ -16,10 +16,16 @@ UAF intentionally borrows the strongest ideas from mature skill repositories, th
 | Reference | What UAF takes from it |
 |-----------|------------------------|
 | [garrytan/gstack](https://github.com/garrytan/gstack) | Skill-as-workflow structure, role-specialized review/QA/release gates, guard policies, browser/QA direction, host adapter mindset, and skill quality checks. |
-| Superpowers skills | Explicit planning, TDD, systematic debugging, subagent-oriented development, and evidence-before-completion discipline. |
-| RTK-style harness patterns | Command output normalization, hook policy boundaries, metadata-first execution records, and fail-safe behavior. |
+| Personal skillbook workflow | Explicit planning, TDD, systematic debugging, subagent-oriented development, and evidence-before-completion discipline. |
+| Command operations patterns | Command output normalization, hook policy boundaries, metadata-first execution records, and fail-safe behavior. |
 
 UAF does not vendor those repositories. The current implementation keeps the stable core in Python and leaves TypeScript as a good future sidecar option for browser adapters, dashboards, and skill template tooling.
+
+## Personal Skillbook
+
+Project planning records live under `docs/skillbook/`. This folder is not runtime state and does not represent an external dependency. It is KH/UAF's personal skillbook: design notes, implementation plans, and handoff decisions that explain why a harness exists and how it should evolve.
+
+Runtime continuation state still lives under `.uaf/`, and packaged host-readable skills still live under `skills/`.
 
 ## Current State
 
@@ -240,7 +246,7 @@ The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_
 |-------|---------|
 | `orchestration-role-graph` | Default CEO, advisor, planner, implementer, reviewer, QA, security, and release role contracts. |
 | `adapter-contract-harness` | Shared request/result expectations for Codex, Antigravity, Claude, and local adapters. |
-| `antigravity-agent-orchestration` | Antigravity-style agent/subagent/tool permission, hook, and observability patterns. |
+| `host-agent-orchestration` | Personal host agent/subagent/tool permission, hook, and observability patterns for Codex, Antigravity-style, Claude Code, and local runtimes. |
 | `parallel-orchestration-harness` | Fan-out/fan-in task dispatch, worker limits, and aggregation rules. |
 | `subagent-review-pipeline` | Implementer -> spec reviewer -> code quality reviewer flow. |
 
@@ -271,7 +277,7 @@ The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_
 |-------|---------|
 | `guard-policy-harness` | Destructive command warnings, edit boundary policy, and fail-safe execution rules. |
 | `command-hook-policy-harness` | Hook trust, permission precedence, integrity checks, and passthrough behavior. |
-| `rtk-command-output-harness` | Command output grouping, truncation, deduplication, and exit code preservation. |
+| `command-output-harness` | Command output grouping, truncation, deduplication, and exit code preservation. |
 | `snapshot-state-harness` | Gzip checkpoints, rollback semantics, and `.snapshots` protection rules. |
 | `token-optimizer` | Long log and code output compression. |
 | `harness-evaluator` | Python code sandbox evaluation. |

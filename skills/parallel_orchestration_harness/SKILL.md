@@ -5,7 +5,7 @@ description: Use when a task needs bounded parallel worker execution, fan-out/fa
 
 # Parallel Orchestration Harness
 
-This is the portable UAF replacement for Antigravity/Superpowers-style parallel dispatch patterns. It should work from the repository alone and must not require any local Gemini, Antigravity, RTK, or Superpowers installation.
+This is the portable UAF replacement for host and personal skillbook parallel dispatch patterns. It should work from the repository alone and must not require any external host or skill installation.
 
 ## Workflow
 

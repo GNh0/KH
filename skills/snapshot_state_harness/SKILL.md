@@ -5,7 +5,7 @@ description: Use when UAF workflows need rollback points, compressed file snapsh
 
 # Snapshot State Harness
 
-This is a UAF-native rollback harness. It packages snapshot behavior inside this repository and does not require Gemini, Antigravity, RTK, or Superpowers installations at runtime.
+This is a UAF-native rollback harness. It packages snapshot behavior inside this repository and does not require external host or skill installations at runtime.
 
 ## Workflow
 

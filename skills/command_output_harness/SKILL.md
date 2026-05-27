@@ -1,15 +1,15 @@
 ---
-name: rtk-command-output-harness
+name: command-output-harness
 description: Use when compressing command output for agents, preserving exit codes, filtering noisy logs, or tracking token savings in UAF workflows.
 ---
 
-# RTK Command Output Harness
+# Command Output Harness
 
-This is a UAF-native command-output harness derived from RTK. It should provide the same class of behavior without requiring the `rtk` binary at runtime.
+This is a personal UAF command output harness. It provides compact command output behavior without requiring any external command proxy at runtime.
 
 ## Reference basis
 
-- RTK: command proxying, smart filtering, grouping, truncation, deduplication, raw passthrough, token-savings tracking, and exit-code preservation.
+- Command output patterns: command proxying, smart filtering, grouping, truncation, deduplication, raw passthrough, token-savings tracking, and exit-code preservation.
 
 ## Command lifecycle
 

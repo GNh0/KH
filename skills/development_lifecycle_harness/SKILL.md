@@ -5,11 +5,11 @@ description: Use when running UAF development work through design, isolated work
 
 # Development Lifecycle Harness
 
-This is a UAF-native development workflow derived from Superpowers. It packages the useful methodology without requiring the Superpowers plugin at runtime.
+This is a personal UAF development workflow. It packages the useful planning, TDD, review, and branch-finishing methodology without requiring any external workflow plugin at runtime.
 
 ## Reference basis
 
-- Superpowers: brainstorming, isolated worktrees, writing plans, subagent-driven development, executing plans, test-driven development, requesting code review, receiving code review, and finishing a development branch.
+- Personal skillbook workflow: brainstorming, isolated workspaces, writing plans, subagent-driven development, executing plans, test-driven development, requesting code review, receiving code review, and finishing a development branch.
 
 ## Workflow
 

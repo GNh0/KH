@@ -5,11 +5,11 @@ description: Use when coordinating implementer, spec-reviewer, and code-quality-
 
 # Subagent Review Pipeline
 
-This is a UAF-native subagent coordination harness derived from Superpowers subagent-driven development. It defines review roles and status handling without depending on external subagent plugins.
+This is a personal UAF subagent coordination harness. It defines review roles and status handling without depending on external subagent plugins.
 
 ## Reference basis
 
-- Superpowers: fresh subagent per task, two-stage review, implementer status handling, and final review before branch finishing.
+- Personal subagent workflow: fresh subagent per task, two-stage review, implementer status handling, and final review before branch finishing.
 
 ## Roles
 
