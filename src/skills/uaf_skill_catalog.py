@@ -16,10 +16,10 @@ PACKAGED_SKILLS_DIR = os.path.join(PROJECT_ROOT, "skills")
 
 DESIGN_REFERENCES_CONSIDERED = {
     "design_references_considered": [
-        "Gemini plugin skills under .gemini/config/plugins",
-        "Google Antigravity SDK skill patterns",
+        "Gemini plugin skill-folder conventions",
+        "Google Antigravity agent and orchestration patterns",
         "Superpower-style planning, TDD, verification, and parallel dispatch workflows",
-        "RTK-style reusable task/harness/kernel patterns",
+        "RTK-style reusable task and harness patterns",
     ],
     "runtime_rule": "Do not scan or require local Gemini, Antigravity, RTK, or Superpower installations at runtime.",
 }
@@ -93,8 +93,8 @@ def _scan_skill_folders(skills_dir: str = PACKAGED_SKILLS_DIR, include_path: boo
     return sorted(skills, key=lambda skill: skill["name"])
 
 
-def collect_reference_skills(skills_dir: str = PACKAGED_SKILLS_DIR, **_ignored_paths: Any) -> Dict[str, Any]:
-    """Return packaged UAF skills/harnesses from skills/<name>/SKILL.md folders."""
+def collect_packaged_skills(skills_dir: str = PACKAGED_SKILLS_DIR) -> Dict[str, Any]:
+    """Return packaged UAF skills and harnesses from skills/<name>/SKILL.md folders."""
     skills = _scan_skill_folders(skills_dir)
     return {
         "external_runtime_dependency": False,
@@ -105,7 +105,7 @@ def collect_reference_skills(skills_dir: str = PACKAGED_SKILLS_DIR, **_ignored_p
     }
 
 
-def read_reference_skill(skill_name: str, skills_dir: str = PACKAGED_SKILLS_DIR, **_ignored_paths: Any) -> str:
+def read_packaged_skill(skill_name: str, skills_dir: str = PACKAGED_SKILLS_DIR) -> str:
     """Read a packaged UAF skill by frontmatter name."""
     for skill in _scan_skill_folders(skills_dir, include_path=True):
         if skill["name"] != skill_name:
@@ -123,27 +123,27 @@ def read_reference_skill(skill_name: str, skills_dir: str = PACKAGED_SKILLS_DIR,
 
 
 @agent_skill(
-    name="list_reference_blueprints",
+    name="list_uaf_skills",
     description="List packaged UAF skill and harness folders.",
 )
-def list_reference_blueprints() -> str:
-    return json.dumps(collect_reference_skills(), ensure_ascii=False)
+def list_uaf_skills() -> str:
+    return json.dumps(collect_packaged_skills(), ensure_ascii=False)
 
 
 @agent_skill(
-    name="read_reference_blueprint",
+    name="read_uaf_skill",
     description="Read a packaged UAF skill or harness by frontmatter name.",
 )
-def read_reference_blueprint(name: str) -> str:
-    return read_reference_skill(name)
+def read_uaf_skill(name: str) -> str:
+    return read_packaged_skill(name)
 
 
 def list_skills() -> None:
-    print(json.dumps(collect_reference_skills(), indent=2, ensure_ascii=False))
+    print(json.dumps(collect_packaged_skills(), indent=2, ensure_ascii=False))
 
 
 def read_skill(skill_name: str) -> None:
-    print(read_reference_skill(skill_name))
+    print(read_packaged_skill(skill_name))
 
 
 if __name__ == "__main__":

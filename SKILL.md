@@ -50,7 +50,7 @@ External agents should exchange structured data through the contracts module ins
 - Use `SkillManifest` to normalize plugin and skill metadata.
 - Use `AdapterRequest` and `AdapterResult` when implementing Codex, Antigravity, Claude Code, or local dispatch adapters.
 - Add new UAF skills and harnesses as `skills/<skill-name>/SKILL.md`. The packaged skill folder is the source of truth.
-- Use `src.skills.antigravity_bridge` to list/read packaged UAF skill folders. External Gemini, Antigravity, RTK, and Superpower systems are development references only, not runtime dependencies.
+- Use `src.skills.uaf_skill_catalog` to list/read packaged UAF skill folders. External Gemini, Antigravity, RTK, and Superpower systems are development references only, not runtime dependencies.
 
 ## Security Constraints
 When utilizing this framework, remember that the sandbox enforces strict checks via AST parsing. If you are generating AI code that requires `os`, `sys`, or `subprocess`, the framework will intentionally block it unless you run it with `--no-sandbox`. 

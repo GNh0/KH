@@ -18,7 +18,7 @@
     {
       "name": "skill-catalog",
       "description": "Packaged UAF skill folder catalog. Add skills as skills/<skill-name>/SKILL.md; external plugin folders are not runtime dependencies.",
-      "usage": "python -m src.skills.antigravity_bridge --list"
+      "usage": "python -m src.skills.uaf_skill_catalog --list"
     },
     {
       "name": "sandbox",

@@ -13,8 +13,10 @@ class SkillCatalogTests(unittest.TestCase):
         self.assertIn("analyze_design_pattern", names)
         self.assertIn("minify_code", names)
         self.assertIn("truncate_logs", names)
-        self.assertIn("list_reference_blueprints", names)
-        self.assertIn("read_reference_blueprint", names)
+        self.assertIn("list_uaf_skills", names)
+        self.assertIn("read_uaf_skill", names)
+        self.assertNotIn("list_reference_blueprints", names)
+        self.assertNotIn("read_reference_blueprint", names)
 
     def test_registered_skill_catalog_is_sorted(self):
         load_builtin_skills()

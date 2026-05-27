@@ -2,30 +2,49 @@ import os
 import tempfile
 import unittest
 
-from src.skills.antigravity_bridge import collect_reference_skills, read_reference_skill
+from src.skills.uaf_skill_catalog import collect_packaged_skills, read_packaged_skill
 
 
-class AntigravityReferenceTests(unittest.TestCase):
-    def test_collect_reference_skills_uses_packaged_uaf_skill_folders(self):
-        result = collect_reference_skills()
+CORE_SKILLS = {
+    "adapter-contract-harness",
+    "architect-pipeline",
+    "harness-evaluator",
+    "parallel-orchestration-harness",
+    "skill-catalog",
+    "token-optimizer",
+    "workflow-skill-distiller",
+}
+
+REMOVED_EXAMPLE_SKILLS = {
+    "android-cli-harness",
+    "browser-devtools-harness",
+    "firebase-project-harness",
+    "license-policy-gate",
+    "modern-web-quality-harness",
+    "science-api-wrapper-harness",
+    "antigravity-bridge",
+}
+
+
+class UafSkillCatalogTests(unittest.TestCase):
+    def test_catalog_contains_only_core_uaf_skill_folders(self):
+        result = collect_packaged_skills()
 
         self.assertFalse(result["external_runtime_dependency"])
         self.assertTrue(result["packaged_skill_folder_available"])
-        self.assertGreaterEqual(result["total_skills_found"], 4)
-        self.assertIn("design_references_considered", result["references_considered"])
+        self.assertEqual(result["total_skills_found"], len(CORE_SKILLS))
 
         names = {skill["name"] for skill in result["skills"]}
-        self.assertIn("antigravity-bridge", names)
-        self.assertIn("harness-evaluator", names)
-        self.assertIn("parallel-orchestration-harness", names)
+        self.assertEqual(names, CORE_SKILLS)
+        self.assertTrue(names.isdisjoint(REMOVED_EXAMPLE_SKILLS))
 
         for skill in result["skills"]:
             self.assertEqual(skill["source"], "uaf_skill_folder")
             self.assertTrue(skill["packaged"])
             self.assertNotIn("path", skill)
 
-    def test_read_reference_skill_returns_packaged_skill_without_external_files(self):
-        content = read_reference_skill("parallel-orchestration-harness")
+    def test_read_packaged_skill_returns_skill_folder_content(self):
+        content = read_packaged_skill("parallel-orchestration-harness")
 
         self.assertIn("Packaged source: uaf_skill_folder", content)
         self.assertIn("UAF implementation targets", content)
@@ -47,7 +66,7 @@ class AntigravityReferenceTests(unittest.TestCase):
                     "- src.skills.custom_harness\n"
                 )
 
-            result = collect_reference_skills(skills_dir=temp_dir)
+            result = collect_packaged_skills(skills_dir=temp_dir)
 
             self.assertTrue(result["packaged_skill_folder_available"])
             self.assertEqual(result["total_skills_found"], 1)

@@ -1,15 +1,16 @@
 ---
-name: antigravity-bridge
-description: Use when listing, reading, or extending the packaged UAF skill and harness folders that were designed from Antigravity, Gemini, RTK, and Superpower-style references.
+name: skill-catalog
+description: Use when listing, reading, or adding packaged UAF skills and harnesses in this repository.
 ---
 
-# UAF Skill Folder Catalog
+# UAF Skill Catalog
 
-This is not a runtime bridge into an installed Antigravity or Gemini plugin directory. UAF skills are packaged inside this repository under `skills/<skill-name>/SKILL.md`.
+UAF skills are packaged inside this repository under `skills/<skill-name>/SKILL.md`.
+Do not depend on installed Gemini, Antigravity, RTK, or Superpower skill folders at runtime.
 
 ## Add a skill
 
-1. Create a folder under `skills/`.
+1. Create `skills/<skill-name>/`.
 2. Add `SKILL.md`.
 3. Put `name` and `description` in YAML frontmatter.
 4. Keep the body focused on the UAF-native workflow and implementation targets.
@@ -27,17 +28,17 @@ Support files only affect behavior when `SKILL.md` says when to read or run them
 List packaged UAF skills:
 
 ```bash
-python -m src.skills.antigravity_bridge --list
+python -m src.skills.uaf_skill_catalog --list
 ```
 
 Read one packaged skill:
 
 ```bash
-python -m src.skills.antigravity_bridge --read parallel-orchestration-harness
+python -m src.skills.uaf_skill_catalog --read parallel-orchestration-harness
 ```
 
 ## UAF implementation targets
 
 - `skills/<skill-name>/SKILL.md`
-- `src.skills.antigravity_bridge`
+- `src.skills.uaf_skill_catalog`
 - `src.skills.catalog`

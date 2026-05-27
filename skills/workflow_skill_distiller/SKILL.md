@@ -18,4 +18,4 @@ This skill defines how UAF captures workflows as portable skills. A new skill sh
 
 - `skills/<skill-name>/SKILL.md`
 - `src.skills.catalog`
-- `src.skills.antigravity_bridge`
+- `src.skills.uaf_skill_catalog`

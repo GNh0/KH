@@ -9,7 +9,7 @@ BUILTIN_SKILL_MODULES = [
     "src.skills.license_checker",
     "src.skills.pattern_analyzer",
     "src.skills.token_optimizer",
-    "src.skills.antigravity_bridge",
+    "src.skills.uaf_skill_catalog",
 ]
 
 
