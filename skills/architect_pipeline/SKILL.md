@@ -14,3 +14,11 @@ When the user asks you to build an application, design a system, or write a code
 3. **Parallel Dispatching Note**: The `design_doc.md` must clearly outline all the files that need to be generated. The Orchestrator will parse these files and dispatch multiple parallel Coder agents to build them simultaneously.
 4. Follow the exact design patterns, architectures, and library recommendations written in `design_doc.md` when writing your code.
 5. If there are license warnings for libraries, do NOT use them and find alternatives.
+
+## UAF implementation targets
+
+- `src.core.architect.SystemArchitect`
+- `src.core.runner`
+- `src.orchestration.agent_loop`
+- `src.skills.pattern_analyzer`
+- `src.skills.license_checker`

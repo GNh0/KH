@@ -3,6 +3,43 @@ from typing import Any, Dict, List, Optional
 
 
 @dataclass(frozen=True)
+class GoalState:
+    objective: str
+    status: str = "active"
+    success_criteria: List[str] = field(default_factory=list)
+    evidence_required: List[str] = field(default_factory=list)
+    evidence: List[str] = field(default_factory=list)
+    progress_notes: List[str] = field(default_factory=list)
+    blocked_reason: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "objective": self.objective,
+            "status": self.status,
+            "success_criteria": list(self.success_criteria),
+            "evidence_required": list(self.evidence_required),
+            "evidence": list(self.evidence),
+            "progress_notes": list(self.progress_notes),
+            "blocked_reason": self.blocked_reason,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "GoalState":
+        return cls(
+            objective=data.get("objective", ""),
+            status=data.get("status", "active"),
+            success_criteria=list(data.get("success_criteria", [])),
+            evidence_required=list(data.get("evidence_required", [])),
+            evidence=list(data.get("evidence", [])),
+            progress_notes=list(data.get("progress_notes", [])),
+            blocked_reason=data.get("blocked_reason", ""),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
 class HarnessResult:
     success: bool
     stdout: str = ""

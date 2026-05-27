@@ -1,4 +1,7 @@
 import os
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -11,10 +14,16 @@ CORE_SKILLS = {
     "architect-pipeline",
     "command-hook-policy-harness",
     "development-lifecycle-harness",
+    "context-state-harness",
+    "goal-state-harness",
+    "guard-policy-harness",
     "harness-evaluator",
+    "health-check-harness",
     "orchestration-role-graph",
     "parallel-orchestration-harness",
     "quality-gates-harness",
+    "qa-gate-harness",
+    "review-gate-harness",
     "rtk-command-output-harness",
     "skill-catalog",
     "snapshot-state-harness",
@@ -51,6 +60,27 @@ class UafSkillCatalogTests(unittest.TestCase):
             self.assertTrue(skill["packaged"])
             self.assertNotIn("path", skill)
 
+    def test_catalog_includes_validation_summary(self):
+        result = collect_packaged_skills()
+
+        self.assertIn("validation", result)
+        self.assertTrue(result["validation"]["success"], result["validation"])
+        self.assertEqual(result["validation"]["total_skills"], len(CORE_SKILLS))
+        self.assertEqual(result["validation"]["invalid_skills"], 0)
+
+    def test_check_command_outputs_validation_json(self):
+        completed = subprocess.run(
+            [sys.executable, "-m", "src.skills.uaf_skill_catalog", "--check"],
+            cwd=os.getcwd(),
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        data = json.loads(completed.stdout)
+        self.assertTrue(data["success"], data)
+        self.assertEqual(data["invalid_skills"], 0)
+
     def test_read_packaged_skill_returns_skill_folder_content(self):
         content = read_packaged_skill("parallel-orchestration-harness")
 
@@ -75,6 +105,12 @@ class UafSkillCatalogTests(unittest.TestCase):
             "rtk-command-output-harness": "RTK",
             "command-hook-policy-harness": "RTK",
             "orchestration-role-graph": "CEO",
+            "review-gate-harness": "gstack",
+            "qa-gate-harness": "gstack",
+            "context-state-harness": "gstack",
+            "goal-state-harness": "GoalState",
+            "guard-policy-harness": "gstack",
+            "health-check-harness": "gstack",
         }
 
         for skill_name, source_label in expected_sources.items():

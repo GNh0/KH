@@ -7,13 +7,58 @@
   "skills": [
     {
       "name": "orchestrate",
-      "description": "Run the full agent workflow: design → dispatch → parallel coding → sandbox validation → webhook reporting.",
+      "description": "Run the full agent workflow: design, dispatch, parallel coding, sandbox validation, and optional webhook reporting.",
       "usage": "python cli.py run --project <dir> --prompt <requirement> --platform antigravity"
     },
     {
       "name": "contracts",
       "description": "Shared dataclass contracts for Codex, Antigravity, Claude Code, and local adapters.",
       "module": "src.contracts"
+    },
+    {
+      "name": "evidence-producers",
+      "description": "Normalize command, review, and QA outputs into GoalState evidence keys.",
+      "module": "src.orchestration.evidence_producers"
+    },
+    {
+      "name": "gate-evaluators",
+      "description": "Focused spec, code-quality, QA, security, and release gate evaluators with structured evidence records.",
+      "module": "src.orchestration.gate_evaluators"
+    },
+    {
+      "name": "extension-registry",
+      "description": "Shared registry for pluggable dispatchers, LLM providers, skill harnesses, and host adapters.",
+      "module": "src.orchestration.extension_registry"
+    },
+    {
+      "name": "llm-router",
+      "description": "Built-in OpenAI-compatible and Anthropic routing with custom LLM provider registration.",
+      "module": "src.orchestration.llm_router"
+    },
+    {
+      "name": "command-check-runner",
+      "description": "Run bounded local verification commands or named presets and convert subprocess results into evidence records.",
+      "module": "src.tasks.checks"
+    },
+    {
+      "name": "browser-qa-boundary",
+      "description": "Browser/QA check contracts, runner boundary, and JSON process sidecar adapter for injected browser adapters or future TypeScript sidecars.",
+      "module": "src.tasks.browser_qa"
+    },
+    {
+      "name": "workflow-check-stage",
+      "description": "Typed workflow stage for command and Browser/QA check planning, execution, evidence aggregation, and success calculation.",
+      "module": "src.tasks.workflow_checks"
+    },
+    {
+      "name": "local-generation-adapters",
+      "description": "Deterministic and LLM-backed local code generation adapters behind LocalTaskRunner.",
+      "module": "src.tasks.runners"
+    },
+    {
+      "name": "antigravity-native-boundary",
+      "description": "Native Antigravity dispatch result contract with injected-adapter and JSON process sidecar boundaries.",
+      "module": "src.platforms.antigravity_native"
     },
     {
       "name": "windows-app-bridge",
@@ -66,6 +111,36 @@
       "usage": "python -m src.skills.uaf_skill_catalog --read command-hook-policy-harness"
     },
     {
+      "name": "review-gate-harness",
+      "description": "UAF-native review gate harness derived from gstack review workflow patterns.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read review-gate-harness"
+    },
+    {
+      "name": "qa-gate-harness",
+      "description": "UAF-native QA gate harness derived from gstack QA workflow patterns.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read qa-gate-harness"
+    },
+    {
+      "name": "context-state-harness",
+      "description": "UAF-native context save and restore harness derived from gstack context workflow patterns.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read context-state-harness"
+    },
+    {
+      "name": "goal-state-harness",
+      "description": "UAF-native goal state harness for objective tracking, completion criteria, and evidence-based closure.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read goal-state-harness"
+    },
+    {
+      "name": "guard-policy-harness",
+      "description": "UAF-native guard policy harness derived from gstack careful, freeze, and guard workflow patterns.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read guard-policy-harness"
+    },
+    {
+      "name": "health-check-harness",
+      "description": "UAF-native health check harness derived from gstack quality dashboard workflow patterns.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read health-check-harness"
+    },
+    {
       "name": "sandbox",
       "description": "Safely execute untrusted Python code with AST filtering and multiprocessing-based timeout kill. Windows compatible.",
       "module": "src.harness.sandbox",
@@ -79,12 +154,12 @@
     },
     {
       "name": "webhook-server",
-      "description": "FastAPI webhook receiver with aiosqlite + WAL mode for high-concurrency async DB writes and auto log rotation.",
+      "description": "Optional FastAPI webhook receiver for external host callbacks, using aiosqlite + WAL mode and auto log rotation.",
       "usage": "python cli.py server --port 8000"
     }
   ],
   "environment": {
-    "AG_WEBHOOK_URL": "http://127.0.0.1:8000/api/webhook/subagent-result",
+    "AG_WEBHOOK_URL": "",
     "AG_API_KEY": "antigravity-secret-key-v2",
     "AG_MAX_WORKERS": "50",
     "AG_NO_SANDBOX": "0",

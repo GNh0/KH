@@ -12,3 +12,10 @@ This skill acts as a Tester/Evaluator for your code. It runs the code in an isol
    `python -m src.core.runner --mode evaluate --agent_code_path "./workspace/main.py" --test_code_path "./workspace/test.py"`
 3. If the evaluation output contains `[Fail]`, read the Stderr logs carefully.
 4. Fix the errors in the code based on the Stderr feedback, and re-run the evaluator until it passes `[Success]`.
+
+## UAF implementation targets
+
+- `src.harness.evaluator.Evaluator`
+- `src.harness.sandbox.CodeSandbox`
+- `src.core.runner`
+- `src.contracts.HarnessResult`

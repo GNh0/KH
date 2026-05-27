@@ -5,6 +5,7 @@ import sys
 from typing import Any, Dict, List
 
 from src.skills.base import agent_skill
+from src.skills.uaf_skill_validator import validate_skill_folders
 
 
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -96,11 +97,13 @@ def _scan_skill_folders(skills_dir: str = PACKAGED_SKILLS_DIR, include_path: boo
 def collect_packaged_skills(skills_dir: str = PACKAGED_SKILLS_DIR) -> Dict[str, Any]:
     """Return packaged UAF skills and harnesses from skills/<name>/SKILL.md folders."""
     skills = _scan_skill_folders(skills_dir)
+    validation = validate_skill_folders(skills_dir)
     return {
         "external_runtime_dependency": False,
         "packaged_skill_folder_available": bool(skills),
         "total_skills_found": len(skills),
         "references_considered": DESIGN_REFERENCES_CONSIDERED,
+        "validation": validation.to_dict(),
         "skills": skills,
     }
 
@@ -146,17 +149,26 @@ def read_skill(skill_name: str) -> None:
     print(read_packaged_skill(skill_name))
 
 
+def check_skills(skills_dir: str = PACKAGED_SKILLS_DIR) -> int:
+    report = validate_skill_folders(skills_dir)
+    print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    return 0 if report.success else 1
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="List or read packaged UAF skill and harness folders."
     )
     parser.add_argument("--list", action="store_true", help="List packaged UAF skills in JSON format")
     parser.add_argument("--read", type=str, help="Read a packaged UAF skill by name")
+    parser.add_argument("--check", action="store_true", help="Validate packaged UAF skill folders and exit non-zero on errors")
     args = parser.parse_args()
 
     if args.list:
         list_skills()
     elif args.read:
         read_skill(args.read)
+    elif args.check:
+        sys.exit(check_skills())
     else:
         parser.print_help()

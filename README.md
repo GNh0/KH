@@ -1,67 +1,118 @@
 # Universal Agent Framework (UAF)
 
-Codex, Antigravity, Claude Code 같은 로컬 AI 코딩 에이전트에서 공통으로 쓸 수 있는 범용 오케스트레이션/스킬 하네스입니다.
+UAF is a Python-first, local-first orchestration framework for AI coding agents such as Codex, Antigravity, Claude Code, and other host runtimes.
 
-핵심 목표는 외부 Gemini/Antigravity/RTK/Superpowers 설치 폴더에 의존하지 않고, 이 저장소 안의 `skills/<skill-folder>/SKILL.md`와 Python 계약만으로 역할, 병렬 작업, 리뷰, 검증 흐름을 재사용하는 것입니다.
+The project packages reusable agent workflows as two things:
+
+- Python contracts and dispatchers under `src/`
+- Host-readable skills under `skills/<skill-folder>/SKILL.md`
+
+The goal is to make role graphs, planning, worker dispatch, review gates, QA gates, safety policy, snapshots, and goal tracking portable across agent hosts without depending on one vendor-specific runtime folder.
+
+## Design References
+
+UAF intentionally borrows the strongest ideas from mature skill repositories, then adapts them to this repo's Python core.
+
+| Reference | What UAF takes from it |
+|-----------|------------------------|
+| [garrytan/gstack](https://github.com/garrytan/gstack) | Skill-as-workflow structure, role-specialized review/QA/release gates, guard policies, browser/QA direction, host adapter mindset, and skill quality checks. |
+| Superpowers skills | Explicit planning, TDD, systematic debugging, subagent-oriented development, and evidence-before-completion discipline. |
+| RTK-style harness patterns | Command output normalization, hook policy boundaries, metadata-first execution records, and fail-safe behavior. |
+
+UAF does not vendor those repositories. The current implementation keeps the stable core in Python and leaves TypeScript as a good future sidecar option for browser adapters, dashboards, and skill template tooling.
+
+## Current State
+
+What works today:
+
+- CLI entrypoint for local project runs.
+- Optional FastAPI webhook server for external host callbacks and reporting.
+- Dataclass contracts for adapter requests, results, workflow results, and goal state.
+- Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
+- Focused review, QA, security, and release gate evaluators.
+- Local and Antigravity dispatcher contracts.
+- Antigravity native dispatch boundary with injected and JSON process sidecar adapters, plus pending fallback when no host adapter is configured.
+- Extension registry for custom host dispatchers and LLM providers.
+- Async workflow fan-out/fan-in harness.
+- Local task runner with a swappable code-generation adapter for bounded file tasks.
+- Bounded command check runner and curated presets that turn subprocess results into evidence records.
+- Browser/QA runner boundary and JSON sidecar adapter that convert injected or process-backed adapter results into QA evidence records.
+- Typed workflow check stage for command and Browser/QA planning, execution, evidence aggregation, and success calculation.
+- Evidence producer helpers for command, review, and QA result metadata.
+- Python sandbox and evaluator.
+- Gzip snapshot manager.
+- Packaged skill catalog with validation.
+- GoalState metadata attached to dispatch requests and workflow results.
+- Goal evidence evaluation, including conservative aliases, that blocks QA/release gates when required evidence is missing.
+- Workflow task metadata can carry normalized evidence records into `GoalState.evidence`.
+- Gate results carry structured findings and evidence records for downstream goal/release checks.
+- Persistent project-local goal ledger under `.uaf/state/` for resumable workflow state.
+- Unit tests covering the contracts, catalog, dispatcher, sandbox, snapshots, server, and workflow harness.
+
+What is still intentionally incomplete:
+
+- The default `LocalTaskRunner` remains deterministic when used alone, but `AgentLoop` local runs now pass the active `LLMRouter` into `LLMCodeGenerationAdapter` for file generation.
+- The Antigravity dispatcher can consume an injected native adapter or JSON process sidecar, but no concrete external Antigravity host SDK package is bundled yet.
+- Browser/QA execution has a Python contract boundary, workflow evidence integration, and JSON process sidecar adapter, but no bundled Playwright implementation yet.
+- Workflow metadata can run bounded command checks, named presets, or browser/QA checks and feed the resulting evidence into `GoalState`.
+- TypeScript tooling is not part of the core package yet.
 
 ## Quick Start
 
 ```bash
 pip install -r requirements.txt
-python cli.py run --project ./my_app --prompt "FastAPI 백엔드 서버 만들어줘"
-python cli.py run --project ./my_app --prompt "FastAPI 백엔드 서버 만들어줘" --platform antigravity
+python cli.py run --project ./my_app --prompt "Create a FastAPI backend"
+python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --platform antigravity
 ```
 
-자주 쓰는 명령:
+Useful commands:
 
 ```bash
-# 내장 스킬 목록
+# List packaged skills
 python -m src.skills.uaf_skill_catalog --list
 
-# 특정 스킬 읽기
+# Read a specific skill
 python -m src.skills.uaf_skill_catalog --read orchestration-role-graph
-python -m src.skills.uaf_skill_catalog --read antigravity-agent-orchestration
+python -m src.skills.uaf_skill_catalog --read goal-state-harness
 
-# 테스트
+# Validate all packaged skills
+python -m src.skills.uaf_skill_catalog --check
+
+# Run tests
 python -m unittest discover -s tests -v
-```
-
-## Windows App Integration
-
-Codex, Antigravity 같은 Windows 앱형 호스트는 CLI 파싱 대신 `src.core.app_bridge`를 직접 호출할 수 있습니다. 기본값은 앱/웹훅형 실행에 맞춘 `platform_mode="antigravity"`입니다.
-
-```python
-from src.core.app_bridge import create_app_request, dispatch_app_request
-
-request = create_app_request(
-    project_dir="C:/work/demo",
-    files=["main.py"],
-    design_doc="# design",
-    app_host="codex",
-    thread_id="thread-1",
-)
-
-result = dispatch_app_request(request)
 ```
 
 ## Core Flow
 
 ```text
 cli.py run
-  -> SystemArchitect creates design_doc.md
-  -> AgentLoop attaches the default role graph
-  -> DispatcherFactory selects local or Antigravity dispatch
-  -> asyncio workers process file tasks
-  -> sandbox / webhook / metadata report results
+  -> SystemArchitect writes design_doc.md
+  -> AgentLoop attaches role graph metadata and GoalState
+  -> DispatcherFactory selects local or Antigravity mode
+  -> Workflow workers fan out file-level implementer tasks through LocalTaskRunner
+  -> Goal evidence is evaluated before QA/release completion
+  -> Goal ledger writes .uaf/state/current_goal.json and goal_events.jsonl
+  -> Review, QA, security, and release gate metadata is collected
+  -> WorkflowDispatchResult returns task_results, gate_results, and metadata.goal
 ```
 
-기본 병렬 worker는 현재 `implementer` 역할로 실행됩니다. `ceo`, `advisor`, reviewer, QA, security, release 역할은 `AdapterRequest.metadata`의 role graph에 포함되어 후속 게이트와 외부 에이전트 런타임이 사용할 수 있게 전달됩니다.
+The default local worker now calls `LocalTaskRunner` for each bounded file task and treats the returned `WorkflowTaskResult` as the source of truth. Webhook posting is optional and only runs when `AG_WEBHOOK_URL` is set; the result is recorded as a reporting side effect under `task_result.metadata["webhook_report"]`. The runner validates target paths, writes generated artifacts through `DeterministicCodeGenerationAdapter`, and emits runner evidence including `code generated`. `LLMCodeGenerationAdapter` can be supplied when a host wants local generation to call an injected LLM router.
 
-worker/webhook 결과는 `WorkflowDispatchResult`로 반환됩니다. 각 파일 작업은 `task_results`에 남고, `spec-reviewer`, `code-quality-reviewer`, QA, security, release 판정은 `gate_results`에 남습니다. webhook 오류나 worker 예외는 성공으로 숨기지 않고 실패 상태로 전파됩니다.
+`src.tasks.checks.CommandCheckRunner` can run a bounded command list with `shell=False` from the project root and return a command evidence record. Successful checks emit the requested evidence key; failed or rejected checks preserve stdout/stderr and exit metadata without granting evidence. Workflow metadata can provide `command_checks`, and those evidence keys are added to `GoalState.evidence_required` for that run.
+
+Workflow metadata can also provide `command_check_presets` for common checks. Current presets are `plugin-json`, `python-compile`, `python-unittest`, and `skill-catalog`; each expands into a bounded `CommandCheckInput` and contributes its evidence key to the active `GoalState`.
+
+`src.tasks.browser_qa.BrowserQACheckRunner` is the browser/QA adapter boundary. It accepts `BrowserQACheckInput`, calls an injected adapter when available, and converts `BrowserQACheckResult` into QA evidence records. If no adapter is configured, it returns a structured blocked result without granting evidence. `BrowserQASidecarAdapter` can launch a configured process with the check JSON on stdin and read a `BrowserQACheckResult` JSON object from stdout, which lets a TypeScript/Playwright sidecar plug in without changing Python core contracts.
+
+`src.tasks.workflow_checks.WorkflowCheckStage` owns command and Browser/QA check planning for workflows. It preserves metadata compatibility while keeping `src.tasks.workflows` focused on orchestration, goal evaluation, ledger persistence, and final result assembly. Browser sidecars can be configured with `metadata["browser_qa_sidecar"] = {"command": [...]}`.
+
+`src.platforms.antigravity_native.AntigravityNativeDispatchResult` is the native host boundary for Antigravity-style integrations. `AntigravityDispatcher` uses it when a native adapter is injected, or when metadata provides `antigravity_native_sidecar.command`. The sidecar adapter sends `AdapterRequest` JSON on stdin and expects `AntigravityNativeDispatchResult` JSON on stdout. If neither adapter path is configured, the dispatcher returns a structured pending result and leaves external callbacks optional.
+
+`src.orchestration.extension_registry.ExtensionRegistry` is the shared extension point for host and provider integration. `DispatcherFactory.register_dispatcher(...)` lets a host add another dispatch mode without changing the core switch logic, and `LLMRouter.register_provider(...)` lets another LLM backend supply a provider object behind the same `chat(system, user)` contract.
 
 ## Default Roles
 
-기본 역할 그래프는 `src.orchestration.roles`가 원본입니다.
+The canonical role graph lives in `src/orchestration/roles.py`.
 
 ```text
 ceo
@@ -78,27 +129,117 @@ security-reviewer
 release-manager
 ```
 
+## GoalState
+
+UAF now carries an explicit `GoalState` contract through orchestration metadata.
+
+`GoalState` records:
+
+- objective
+- active, completed, or blocked status
+- success criteria
+- required evidence
+- collected evidence
+- progress notes
+- blocked reason
+- implementation metadata
+
+Workflow dispatch now adds deterministic evidence such as `design_doc`, `target_files`, and `workflow dispatch completed`. The goal evidence evaluator compares those values with `GoalState.evidence_required`, marks the goal `complete` only when required evidence is present, and marks it `blocked` when evidence or workflow execution is missing. The evaluator supports conservative default aliases such as `design_doc`/`design doc` and `unit tests passed`/`tests passed`, plus workflow-provided aliases through `GoalState.metadata["evidence_aliases"]`. Alias hits are recorded under `metadata.evidence_alias_matches` so a release gate can audit why a required evidence key was accepted. QA and release gates use that evaluated goal before reporting completion.
+
+When goal metadata is present, local workflow dispatch also writes a resume-safe ledger:
+
+```text
+.uaf/
+  state/
+    current_goal.json
+    goal_events.jsonl
+```
+
+`current_goal.json` stores the latest objective, status, task buckets, evidence, blocked reason, and next recommended action. `goal_events.jsonl` is append-only history for `goal_created`, `goal_updated`, `evidence_added`, `goal_completed`, and `goal_blocked` events. The `.uaf/` runtime folder is ignored by git.
+
 ## Packaged Skills
 
-카탈로그는 `skills/` 폴더를 스캔합니다. 새 스킬은 `skills/<skill-folder>/SKILL.md`를 추가하면 됩니다.
+The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_skill_catalog`.
+
+### Orchestration and Adapters
 
 | Skill | Purpose |
-|------|---------|
-| `orchestration-role-graph` | CEO, advisor, architect, controller, implementer, reviewer, QA, security, release 역할 계약 |
-| `antigravity-agent-orchestration` | Antigravity식 agent/subagent/tool permission/hook/observability 패턴 |
-| `parallel-orchestration-harness` | fan-out/fan-in, 병렬 worker, task aggregation |
-| `subagent-review-pipeline` | implementer -> spec-reviewer -> code-quality-reviewer 리뷰 파이프라인 |
-| `development-lifecycle-harness` | 설계, 계획, TDD, 리뷰, 검증, 브랜치 완료 흐름 |
-| `quality-gates-harness` | TDD, systematic debugging, evidence-before-completion |
-| `rtk-command-output-harness` | 명령 출력 압축, grouping/truncation/dedup, exit code 보존 |
-| `command-hook-policy-harness` | hook trust, permission precedence, integrity, fail-safe passthrough |
-| `adapter-contract-harness` | Codex/Antigravity/Claude/local adapter 계약 |
-| `architect-pipeline` | 요구사항에서 설계 문서 생성 |
-| `harness-evaluator` | Python 코드 샌드박스 평가 |
-| `skill-catalog` | 내장 UAF 스킬 목록/읽기 |
-| `snapshot-state-harness` | gzip 스냅샷 checkpoint, rollback, `.snapshots` 보호 규칙 |
-| `token-optimizer` | 긴 로그와 코드 출력 압축 |
-| `workflow-skill-distiller` | 반복 workflow를 새 스킬로 패키징 |
+|-------|---------|
+| `orchestration-role-graph` | Default CEO, advisor, planner, implementer, reviewer, QA, security, and release role contracts. |
+| `adapter-contract-harness` | Shared request/result expectations for Codex, Antigravity, Claude, and local adapters. |
+| `antigravity-agent-orchestration` | Antigravity-style agent/subagent/tool permission, hook, and observability patterns. |
+| `parallel-orchestration-harness` | Fan-out/fan-in task dispatch, worker limits, and aggregation rules. |
+| `subagent-review-pipeline` | Implementer -> spec reviewer -> code quality reviewer flow. |
+
+### Planning and Lifecycle
+
+| Skill | Purpose |
+|-------|---------|
+| `architect-pipeline` | Convert a user requirement into a design document and target files. |
+| `development-lifecycle-harness` | Planning, TDD, review, verification, and branch completion workflow. |
+| `quality-gates-harness` | TDD, systematic debugging, and evidence-before-completion requirements. |
+| `workflow-skill-distiller` | Turn repeated workflows into reusable UAF skills. |
+
+### Gates and State
+
+| Skill | Purpose |
+|-------|---------|
+| `goal-state-harness` | Goal objective tracking, completion criteria, evidence requirements, and blocked-state reporting. |
+| `context-state-harness` | Context save/restore, handoff payloads, and continuation metadata. |
+| `review-gate-harness` | Spec, code, and release review gate contracts inspired by gstack-style review flows. |
+| `qa-gate-harness` | QA checks, regression evidence, bug reports, and browser-adapter expectations. |
+| `health-check-harness` | Code health dashboard inputs, readiness scoring, and trend signals. |
+
+### Safety and Operations
+
+| Skill | Purpose |
+|-------|---------|
+| `guard-policy-harness` | Destructive command warnings, edit boundary policy, and fail-safe execution rules. |
+| `command-hook-policy-harness` | Hook trust, permission precedence, integrity checks, and passthrough behavior. |
+| `rtk-command-output-harness` | Command output grouping, truncation, deduplication, and exit code preservation. |
+| `snapshot-state-harness` | Gzip checkpoints, rollback semantics, and `.snapshots` protection rules. |
+| `token-optimizer` | Long log and code output compression. |
+| `harness-evaluator` | Python code sandbox evaluation. |
+| `skill-catalog` | Packaged UAF skill listing, reading, and validation. |
+
+## Skill Quality Checks
+
+Every packaged skill is expected to have:
+
+- valid YAML frontmatter
+- a unique `name`
+- a useful `description`
+- one top-level H1
+- a `## UAF implementation targets` section
+- no unresolved `{{placeholder}}` tokens
+
+Run:
+
+```bash
+python -m src.skills.uaf_skill_catalog --check
+```
+
+The check is intentionally simple and repo-local. It gives UAF the same kind of skill hygiene that larger skill packs rely on, without adding another runtime dependency.
+
+## Windows App Integration
+
+Windows app hosts can call the bridge directly instead of shelling through the CLI. The default app-oriented platform mode is `antigravity`.
+
+```python
+from src.core.app_bridge import create_app_request, dispatch_app_request
+
+request = create_app_request(
+    project_dir="C:/work/demo",
+    files=["main.py"],
+    design_doc="# design",
+    app_host="codex",
+    thread_id="thread-1",
+)
+
+result = dispatch_app_request(request)
+```
+
+For web or app hosts that cannot return results in-process, start the webhook server and set `AG_WEBHOOK_URL` to the callback endpoint. Local-only runs do not need the webhook server.
 
 ## Project Layout
 
@@ -111,19 +252,31 @@ src/
   contracts.py
   core/
     app_bridge.py
+    snapshot_manager.py
   orchestration/
     agent_loop.py
+    evidence_producers.py
+    extension_registry.py
+    gate_evaluators.py
+    goal_evidence.py
+    goal_ledger.py
     roles.py
     llm_router.py
   platforms/
+    antigravity_native.py
     dispatcher_factory.py
   tasks/
+    browser_qa.py
+    checks.py
+    runners.py
+    workflow_checks.py
     workflows.py
   harness/
     sandbox.py
     evaluator.py
   skills/
     uaf_skill_catalog.py
+    uaf_skill_validator.py
 skills/
   <skill-folder>/SKILL.md
 tests/
@@ -131,22 +284,35 @@ tests/
 
 ## Environment
 
-주요 환경변수는 필요할 때만 설정하면 됩니다.
+Set these only when you need to override the defaults.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `AG_WEBHOOK_URL` | `http://127.0.0.1:8000/api/webhook/subagent-result` | subagent result webhook |
-| `AG_API_KEY` | `antigravity-secret-key-v2` | webhook API key |
-| `AG_MAX_WORKERS` | `50` | max async workers, clamped by CPU |
-| `AG_NO_SANDBOX` | `0` | disable sandbox when set to `1` |
-| `AG_VERBOSE` | `0` | verbose server logs |
-| `AG_PLATFORM_MODE` | `local` | dispatcher platform mode for CLI/runner paths |
+| `AG_WEBHOOK_URL` | unset | Optional subagent result webhook for external host callbacks. |
+| `AG_API_KEY` | `antigravity-secret-key-v2` | API key used only when webhook reporting is enabled. |
+| `AG_MAX_WORKERS` | `50` | Max async workers, clamped by CPU. |
+| `AG_NO_SANDBOX` | `0` | Disable sandbox when set to `1`. |
+| `AG_VERBOSE` | `0` | Verbose server logs. |
+| `AG_PLATFORM_MODE` | `local` | Dispatcher platform mode for CLI and runner paths. |
 
 ## Verification
 
+Use these before claiming a branch is ready:
+
 ```bash
 python -m json.tool plugin.json
+python -m src.skills.uaf_skill_catalog --check
 python -m unittest discover -s tests -v
 python -B -c "import pathlib; [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in pathlib.Path('.').rglob('*.py')]"
-python -m src.skills.uaf_skill_catalog --list
 ```
+
+## Roadmap
+
+Recommended next improvements:
+
+1. Add concrete host packages for Antigravity SDK and TypeScript/Playwright once those runtimes are explicit.
+2. Continue extracting the workflow pipeline into typed stages so runners, gates, ledger writes, and result assembly register without growing `workflows.py`.
+3. Expand command check presets for project-specific lint, security, and release checks.
+4. Feed other host-native adapter results through the same `GeneratedTaskArtifact`, `WorkflowTaskResult`, and evidence contracts.
+
+The preferred direction is hybrid: keep UAF core contracts and orchestration in Python, then add TypeScript around host integrations, browser automation, dashboards, and template generation where it brings clear ecosystem advantages.

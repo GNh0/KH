@@ -1,8 +1,35 @@
+import json
 import os
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from src.orchestration.roles import build_default_role_metadata
+from src.tasks.browser_qa import BrowserQACheckResult
 from src.tasks.workflows import _project_id, _safe_worker_count, dispatch_project_workflow
+
+
+class StaticBrowserQAAdapter:
+    name = "static-browser"
+
+    def __init__(self, result):
+        self.result = result
+        self.checks = []
+
+    def run(self, check):
+        self.checks.append(check)
+        return self.result
+
+
+class FakeLLMRouter:
+    def __init__(self, response):
+        self.response = response
+        self.calls = []
+
+    def chat(self, system_prompt, user_prompt):
+        self.calls.append((system_prompt, user_prompt))
+        return self.response
 
 
 class WorkflowDispatchTests(unittest.TestCase):
@@ -33,18 +60,33 @@ class WorkflowDispatchTests(unittest.TestCase):
     def test_project_id_ignores_trailing_path_separator(self):
         self.assertEqual(_project_id("C:/work/demo/"), "demo")
 
-    def test_webhook_failure_returns_failed_workflow_result(self):
+    def test_webhook_failure_is_recorded_without_overriding_runner_result(self):
         original_url = os.environ.get("AG_WEBHOOK_URL")
         os.environ["AG_WEBHOOK_URL"] = "http://127.0.0.1:9/api/webhook/subagent-result"
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": [
+                "design_doc",
+                "target_files",
+                "workflow dispatch completed",
+                "task runner completed",
+            ],
+            "evidence": [],
+        }
 
         try:
-            result = dispatch_project_workflow(
-                project_dir="C:/work/demo",
-                file_list=["main.py"],
-                design_doc="# design",
-                platform_mode="local",
-                metadata=build_default_role_metadata(),
-            )
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                project_dir.mkdir()
+                result = dispatch_project_workflow(
+                    project_dir=str(project_dir),
+                    file_list=["main.py"],
+                    design_doc="# design",
+                    platform_mode="local",
+                    metadata=metadata,
+                )
         finally:
             if original_url is None:
                 os.environ.pop("AG_WEBHOOK_URL", None)
@@ -52,12 +94,448 @@ class WorkflowDispatchTests(unittest.TestCase):
                 os.environ["AG_WEBHOOK_URL"] = original_url
 
         self.assertEqual(result.workflow_id, "workflow_demo")
-        self.assertFalse(result.success)
+        self.assertTrue(result.success)
         self.assertEqual(len(result.task_results), 1)
-        self.assertEqual(result.task_results[0].status, "failed")
+        self.assertEqual(result.task_results[0].status, "success")
         self.assertEqual(result.task_results[0].role, "implementer")
+        self.assertEqual(result.task_results[0].metadata["runner"], "local")
+        self.assertEqual(result.task_results[0].metadata["webhook_report"]["status"], "failed")
+        self.assertEqual(result.metadata["goal"]["objective"], "build api")
+        self.assertEqual(result.metadata["goal"]["status"], "complete")
+        self.assertIn("task runner completed", result.metadata["goal"]["evidence"])
         self.assertIn("spec-reviewer", [gate["role"] for gate in result.gate_results])
-        self.assertIn("failed", {gate["status"] for gate in result.gate_results})
+        self.assertEqual({gate["status"] for gate in result.gate_results}, {"passed"})
+
+    def test_webhook_report_is_skipped_when_url_is_not_configured(self):
+        original_url = os.environ.pop("AG_WEBHOOK_URL", None)
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": [
+                "design_doc",
+                "target_files",
+                "workflow dispatch completed",
+                "task runner completed",
+            ],
+            "evidence": [],
+        }
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                project_dir.mkdir()
+                result = dispatch_project_workflow(
+                    project_dir=str(project_dir),
+                    file_list=["main.py"],
+                    design_doc="# design",
+                    platform_mode="local",
+                    metadata=metadata,
+                )
+        finally:
+            if original_url is not None:
+                os.environ["AG_WEBHOOK_URL"] = original_url
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.task_results[0].metadata["webhook_report"]["status"], "skipped")
+        self.assertEqual(
+            result.task_results[0].metadata["webhook_report"]["reason"],
+            "AG_WEBHOOK_URL not configured",
+        )
+
+    def test_workflow_collects_generated_code_evidence(self):
+        original_url = os.environ.pop("AG_WEBHOOK_URL", None)
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": [
+                "design_doc",
+                "target_files",
+                "workflow dispatch completed",
+                "task runner completed",
+                "code generated",
+            ],
+            "evidence": [],
+        }
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                project_dir.mkdir()
+                result = dispatch_project_workflow(
+                    project_dir=str(project_dir),
+                    file_list=["main.py"],
+                    design_doc="# design",
+                    platform_mode="local",
+                    metadata=metadata,
+                )
+                generated_content = (project_dir / "main.py").read_text(encoding="utf-8")
+        finally:
+            if original_url is not None:
+                os.environ["AG_WEBHOOK_URL"] = original_url
+
+        self.assertTrue(result.success)
+        self.assertIn("code generated", result.metadata["goal"]["evidence"])
+        self.assertIn("Generated by UAF LocalTaskRunner", generated_content)
+        self.assertTrue(result.task_results[0].metadata["artifact_exists"])
+
+    def test_workflow_uses_llm_router_for_local_generation_when_provided(self):
+        original_url = os.environ.pop("AG_WEBHOOK_URL", None)
+        llm = FakeLLMRouter("```python\nprint('from workflow llm')\n```")
+        metadata = build_default_role_metadata()
+        metadata["llm_router"] = llm
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": [
+                "design_doc",
+                "target_files",
+                "workflow dispatch completed",
+                "code generated",
+            ],
+            "evidence": [],
+        }
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                project_dir.mkdir()
+                result = dispatch_project_workflow(
+                    project_dir=str(project_dir),
+                    file_list=["main.py"],
+                    design_doc="# design",
+                    platform_mode="local",
+                    metadata=metadata,
+                )
+                generated_content = (project_dir / "main.py").read_text(encoding="utf-8")
+        finally:
+            if original_url is not None:
+                os.environ["AG_WEBHOOK_URL"] = original_url
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.task_results[0].metadata["generation_adapter"], "llm-local")
+        self.assertEqual(generated_content, "print('from workflow llm')\n")
+        self.assertIn("main.py", llm.calls[0][1])
+
+    def test_workflow_runs_command_checks_into_goal_evidence(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+        metadata["command_checks"] = [
+            {
+                "command": [sys.executable, "-c", "print('ok')"],
+                "evidence_key": "unit tests passed",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.metadata["command_check_results"][0]["status"], "passed")
+        self.assertIn("unit tests passed", result.metadata["goal"]["evidence"])
+        self.assertIn("unit tests passed", result.metadata["goal"]["evidence_required"])
+
+    def test_workflow_expands_command_check_presets(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+        metadata["command_check_presets"] = ["python-compile"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.metadata["command_check_results"][0]["status"], "passed")
+        self.assertIn("python compile passed", result.metadata["goal"]["evidence"])
+        self.assertIn("python compile passed", result.metadata["goal"]["evidence_required"])
+
+    def test_workflow_runs_browser_qa_checks_into_goal_evidence(self):
+        adapter = StaticBrowserQAAdapter(
+            BrowserQACheckResult(
+                status="passed",
+                message="page loaded",
+                checks=["homepage"],
+                artifacts={"screenshot": "artifacts/home.png"},
+            )
+        )
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+        metadata["browser_qa_adapter"] = adapter
+        metadata["browser_qa_checks"] = [
+            {
+                "target": "http://localhost:3000",
+                "scenario": "homepage loads",
+                "evidence_key": "browser qa passed",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.metadata["browser_qa_results"][0]["status"], "passed")
+        self.assertEqual(result.metadata["browser_qa_results"][0]["metadata"]["adapter"], "static-browser")
+        self.assertEqual(adapter.checks[0].target, "http://localhost:3000")
+        self.assertIn("browser qa passed", result.metadata["goal"]["evidence"])
+        self.assertIn("browser qa passed", result.metadata["goal"]["evidence_required"])
+
+    def test_missing_browser_qa_adapter_blocks_goal_and_release(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+        metadata["browser_qa_checks"] = [
+            {
+                "target": "http://localhost:3000",
+                "scenario": "homepage loads",
+                "evidence_key": "browser qa passed",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+
+        statuses = {gate["role"]: gate["status"] for gate in result.gate_results}
+        self.assertFalse(result.success)
+        self.assertEqual(result.metadata["browser_qa_results"][0]["status"], "blocked")
+        self.assertEqual(
+            result.metadata["browser_qa_results"][0]["metadata"]["error_type"],
+            "BrowserQAAdapterNotConfigured",
+        )
+        self.assertEqual(result.metadata["goal"]["status"], "blocked")
+        self.assertEqual(result.metadata["goal"]["metadata"]["missing_evidence"], ["browser qa passed"])
+        self.assertEqual(statuses["qa-verifier"], "blocked")
+        self.assertEqual(statuses["release-manager"], "blocked")
+
+    def test_failed_command_check_blocks_goal_and_release(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+        metadata["command_checks"] = [
+            {
+                "command": [sys.executable, "-c", "import sys; sys.exit(2)"],
+                "evidence_key": "unit tests passed",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+
+        statuses = {gate["role"]: gate["status"] for gate in result.gate_results}
+        self.assertFalse(result.success)
+        self.assertEqual(result.metadata["command_check_results"][0]["status"], "failed")
+        self.assertEqual(result.metadata["goal"]["status"], "blocked")
+        self.assertEqual(result.metadata["goal"]["metadata"]["missing_evidence"], ["unit tests passed"])
+        self.assertEqual(statuses["qa-verifier"], "blocked")
+        self.assertEqual(statuses["release-manager"], "blocked")
+
+    def test_workflow_records_post_gate_evidence_in_final_goal(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.metadata["goal"]["status"], "complete")
+        self.assertIn("spec review passed", result.metadata["gate_evidence"])
+        self.assertIn("qa gate passed", result.metadata["gate_evidence"])
+        self.assertIn("release gate passed", result.metadata["gate_evidence"])
+        self.assertIn("release gate passed", result.metadata["goal"]["evidence"])
+
+    def test_post_gate_evidence_does_not_unblock_missing_required_evidence(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "release gate passed"],
+            "evidence": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.metadata["goal"]["status"], "blocked")
+        self.assertEqual(result.metadata["goal"]["metadata"]["missing_evidence"], ["release gate passed"])
+        self.assertIn("security review passed", result.metadata["goal"]["evidence"])
+        self.assertNotIn("release gate passed", result.metadata["goal"]["evidence"])
+
+    def test_runner_failure_blocks_workflow_before_goal_completion(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["task runner completed"],
+            "evidence": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=["../outside.py"],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.task_results[0].status, "failed")
+        self.assertEqual(result.task_results[0].metadata["error_type"], "ValueError")
+        self.assertEqual(result.metadata["goal"]["status"], "blocked")
+        self.assertEqual(result.metadata["goal"]["blocked_reason"], "workflow dispatch failed")
+
+    def test_workflow_marks_goal_complete_when_required_evidence_is_collected(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+            ledger_path = Path(result.metadata["goal_ledger"]["current_goal_path"])
+            events_path = Path(result.metadata["goal_ledger"]["events_path"])
+            ledger_state = json.loads(ledger_path.read_text(encoding="utf-8"))
+            ledger_events = [
+                json.loads(line)
+                for line in events_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.metadata["goal"]["status"], "complete")
+        self.assertEqual(ledger_state["status"], "complete")
+        self.assertEqual(ledger_events[-1]["event_type"], "goal_completed")
+        self.assertIn("design_doc", result.metadata["goal"]["evidence"])
+        self.assertIn("workflow dispatch completed", result.metadata["goal"]["evidence"])
+        self.assertIn("release gate passed", result.metadata["goal"]["evidence"])
+        self.assertEqual({gate["status"] for gate in result.gate_results}, {"passed"})
+
+    def test_workflow_blocks_goal_and_release_when_required_evidence_is_missing(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "qa report"],
+            "evidence": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+            ledger_state = json.loads(
+                Path(result.metadata["goal_ledger"]["current_goal_path"]).read_text(encoding="utf-8")
+            )
+
+        statuses = {gate["role"]: gate["status"] for gate in result.gate_results}
+        self.assertFalse(result.success)
+        self.assertEqual(result.metadata["goal"]["status"], "blocked")
+        self.assertEqual(ledger_state["status"], "blocked")
+        self.assertEqual(result.metadata["goal"]["metadata"]["missing_evidence"], ["qa report"])
+        self.assertEqual(statuses["qa-verifier"], "blocked")
+        self.assertEqual(statuses["release-manager"], "blocked")
 
 
 if __name__ == "__main__":

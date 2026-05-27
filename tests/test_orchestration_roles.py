@@ -83,6 +83,8 @@ class OrchestrationRoleGraphTests(unittest.TestCase):
         self.assertEqual({gate["status"] for gate in gates}, {"passed"})
         self.assertEqual(gates[0]["role"], "spec-reviewer")
         self.assertEqual(gates[-1]["role"], "release-manager")
+        self.assertIn("evidence_records", gates[0])
+        self.assertIn("evidence_records", gates[-1])
 
     def test_role_gate_results_block_downstream_when_implementer_fails(self):
         gates = build_role_gate_results([
@@ -95,6 +97,30 @@ class OrchestrationRoleGraphTests(unittest.TestCase):
         self.assertEqual(statuses["qa-verifier"], "blocked")
         self.assertEqual(statuses["security-reviewer"], "blocked")
         self.assertEqual(statuses["release-manager"], "blocked")
+
+    def test_role_gate_results_block_qa_and_release_when_goal_evidence_is_missing(self):
+        gates = build_role_gate_results(
+            [{"role": "implementer", "status": "success", "file_name": "main.py"}],
+            goal={
+                "objective": "build api",
+                "status": "blocked",
+                "blocked_reason": "missing required evidence: tests",
+                "metadata": {"missing_evidence": ["tests"]},
+            },
+        )
+
+        statuses = {gate["role"]: gate["status"] for gate in gates}
+        self.assertEqual(statuses["spec-reviewer"], "passed")
+        self.assertEqual(statuses["code-quality-reviewer"], "passed")
+        self.assertEqual(statuses["qa-verifier"], "blocked")
+        self.assertEqual(statuses["security-reviewer"], "passed")
+        self.assertEqual(statuses["release-manager"], "blocked")
+
+        qa_gate = next(gate for gate in gates if gate["role"] == "qa-verifier")
+        release_gate = next(gate for gate in gates if gate["role"] == "release-manager")
+        self.assertEqual(qa_gate["missing_evidence"], ["tests"])
+        self.assertEqual(release_gate["missing_evidence"], ["tests"])
+        self.assertIn("missing goal evidence", qa_gate["message"])
 
 
 if __name__ == "__main__":

@@ -11,3 +11,10 @@ This skill provides utilities to prevent token exhaustion during complex debuggi
    `python -c "from src.skills.token_optimizer import truncate_logs; print(truncate_logs('''<PASTE_LOG_HERE>'''))"`
 2. Alternatively, if you need to pass a large python file to another agent (or summarize it), minify it first by stripping comments and docstrings via AST:
    `python -c "from src.skills.token_optimizer import minify_code; print(minify_code(open('file.py').read()))"`
+
+## UAF implementation targets
+
+- `src.skills.token_optimizer`
+- `src.skills.catalog`
+- `src.skills.uaf_skill_catalog`
+- `src.contracts.HarnessResult`
