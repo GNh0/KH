@@ -21,6 +21,36 @@
       "usage": "python -m src.skills.uaf_skill_catalog --list"
     },
     {
+      "name": "antigravity-agent-orchestration",
+      "description": "UAF-native agent, subagent, permission, hook, and observability harness derived from Antigravity-style orchestration patterns.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read antigravity-agent-orchestration"
+    },
+    {
+      "name": "development-lifecycle-harness",
+      "description": "UAF-native design, planning, TDD, review, verification, and branch-finishing workflow derived from Superpowers methodology.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read development-lifecycle-harness"
+    },
+    {
+      "name": "subagent-review-pipeline",
+      "description": "UAF-native implementer, spec-reviewer, and code-quality-reviewer pipeline for independent subagent tasks.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read subagent-review-pipeline"
+    },
+    {
+      "name": "quality-gates-harness",
+      "description": "UAF-native TDD, systematic debugging, review, and evidence-before-completion gate definitions.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read quality-gates-harness"
+    },
+    {
+      "name": "rtk-command-output-harness",
+      "description": "UAF-native command output filtering, grouping, truncation, deduplication, exit-code preservation, and savings tracking.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read rtk-command-output-harness"
+    },
+    {
+      "name": "command-hook-policy-harness",
+      "description": "UAF-native command rewrite, trust, integrity, permission precedence, and non-blocking hook policy harness.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read command-hook-policy-harness"
+    },
+    {
       "name": "sandbox",
       "description": "Safely execute untrusted Python code with AST filtering and multiprocessing-based timeout kill. Windows compatible.",
       "module": "src.harness.sandbox",

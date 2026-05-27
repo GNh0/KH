@@ -1,0 +1,36 @@
+---
+name: quality-gates-harness
+description: Use when a UAF workflow needs failing-test-first implementation, systematic debugging, review gates, or evidence-based completion checks.
+---
+
+# Quality Gates Harness
+
+This is a UAF-native quality harness derived from Superpowers testing, debugging, and verification workflows. It complements the sandbox evaluator by defining when evidence is required.
+
+## Reference basis
+
+- Superpowers: test-driven development, systematic debugging, requesting code review, receiving code review, and verification before completion.
+
+## Workflow
+
+1. For new behavior or bug fixes, write the narrow test or smoke check first.
+2. Run the check and confirm it fails for the expected reason.
+3. Change production code only after the failing check is observed.
+4. Re-run the targeted check, then the broader relevant suite.
+5. For unexpected failures, capture the exact error, form a root-cause hypothesis, test it, then patch.
+6. Before completion, map each user requirement to evidence from tests, build output, command output, or manual inspection.
+
+## Review gates
+
+- `spec`: every requested behavior is covered and no unrelated behavior was added.
+- `runtime`: tests, build, or evaluator output prove the code can run.
+- `regression`: the original bug or requested behavior has a direct check when practical.
+- `security`: new command execution, file writes, network calls, and secrets handling are reviewed.
+
+## UAF implementation targets
+
+- `src.harness.evaluator`
+- `src.harness.sandbox`
+- `src.core.runner`
+- `tests`
+- `src.skills.uaf_skill_catalog`

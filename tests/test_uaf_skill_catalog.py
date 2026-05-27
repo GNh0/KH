@@ -7,10 +7,16 @@ from src.skills.uaf_skill_catalog import collect_packaged_skills, read_packaged_
 
 CORE_SKILLS = {
     "adapter-contract-harness",
+    "antigravity-agent-orchestration",
     "architect-pipeline",
+    "command-hook-policy-harness",
+    "development-lifecycle-harness",
     "harness-evaluator",
     "parallel-orchestration-harness",
+    "quality-gates-harness",
+    "rtk-command-output-harness",
     "skill-catalog",
+    "subagent-review-pipeline",
     "token-optimizer",
     "workflow-skill-distiller",
 }
@@ -49,6 +55,26 @@ class UafSkillCatalogTests(unittest.TestCase):
         self.assertIn("Packaged source: uaf_skill_folder", content)
         self.assertIn("UAF implementation targets", content)
         self.assertNotIn(r"C:\Users\KONEIT\.gemini", content)
+
+    def test_reference_derived_harnesses_are_uaf_native(self):
+        expected_sources = {
+            "antigravity-agent-orchestration": "Google Antigravity SDK",
+            "development-lifecycle-harness": "Superpowers",
+            "subagent-review-pipeline": "Superpowers",
+            "quality-gates-harness": "Superpowers",
+            "rtk-command-output-harness": "RTK",
+            "command-hook-policy-harness": "RTK",
+        }
+
+        for skill_name, source_label in expected_sources.items():
+            with self.subTest(skill_name=skill_name):
+                content = read_packaged_skill(skill_name)
+
+                self.assertIn("Packaged source: uaf_skill_folder", content)
+                self.assertIn("External runtime dependency: false", content)
+                self.assertIn("UAF implementation targets", content)
+                self.assertIn(source_label, content)
+                self.assertNotIn(r"C:\Users\KONEIT\.gemini", content)
 
     def test_skills_folder_makes_new_harness_easy_to_add(self):
         with tempfile.TemporaryDirectory() as temp_dir:
