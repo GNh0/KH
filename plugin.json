@@ -1,0 +1,49 @@
+{
+  "name": "universal-agent-framework",
+  "version": "2.5.0",
+  "description": "Zero-dependency, Pure Python agentic coding orchestration engine for Antigravity, Codex, and Claude Code. Features asyncio-based parallel workers, Windows-compatible multiprocessing sandbox, gzip snapshot rollback, and a one-click CLI launcher.",
+  "author": "Antigravity Framework Team",
+  "entrypoint": "cli.py",
+  "skills": [
+    {
+      "name": "orchestrate",
+      "description": "Run the full agent workflow: design → dispatch → parallel coding → sandbox validation → webhook reporting.",
+      "usage": "python cli.py run --project <dir> --prompt <requirement>"
+    },
+    {
+      "name": "sandbox",
+      "description": "Safely execute untrusted Python code with AST filtering and multiprocessing-based timeout kill. Windows compatible.",
+      "module": "src.harness.sandbox",
+      "class": "CodeSandbox"
+    },
+    {
+      "name": "snapshot",
+      "description": "Commit and rollback file states using gzip-compressed snapshots. Provides 90%+ disk savings over plain-text backup.",
+      "module": "src.core.snapshot_manager",
+      "class": "SnapshotManager"
+    },
+    {
+      "name": "webhook-server",
+      "description": "FastAPI webhook receiver with aiosqlite + WAL mode for high-concurrency async DB writes and auto log rotation.",
+      "usage": "python cli.py server --port 8000"
+    }
+  ],
+  "environment": {
+    "AG_WEBHOOK_URL": "http://127.0.0.1:8000/api/webhook/subagent-result",
+    "AG_API_KEY": "antigravity-secret-key-v2",
+    "AG_MAX_WORKERS": "50",
+    "AG_NO_SANDBOX": "0",
+    "AG_VERBOSE": "0"
+  },
+  "requires": [
+    "fastapi",
+    "uvicorn",
+    "aiosqlite",
+    "httpx",
+    "pydantic"
+  ],
+  "python_requires": ">=3.9",
+  "roadmap": {
+    "v3.0": "OpenClaw / Hermes distributed server integration"
+  }
+}

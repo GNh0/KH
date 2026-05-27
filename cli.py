@@ -1,0 +1,139 @@
+import argparse
+import multiprocessing
+import time
+import os
+import urllib.request
+import urllib.error
+
+
+def start_server_process(port: int, verbose: bool):
+    """uvicorn 서버를 독립된 프로세스에서 실행합니다."""
+    # 버그 수정: 최상단 import를 제거하고 실제로 서버가 필요한 이 함수 안에서만 import
+    # 이렇게 하면 uvicorn 미설치 환경에서도 cli.py 임포트 자체는 성공함
+    from src.api.server import app
+    import uvicorn
+    log_level = "info" if verbose else "warning"
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level=log_level)
+
+
+def wait_for_server(port: int, max_retries: int = 30, delay: float = 0.1) -> bool:
+    """[V2.5] 서버가 구동될 때까지 스마트 폴링으로 기다립니다.
+    
+    최대 max_retries * delay 초(기본 3초) 안에 응답이 없으면 False를 반환하고
+    CLI가 즉시 종료합니다. 무한 대기 없음.
+    """
+    url = f"http://127.0.0.1:{port}/api/health"
+    print(f"📡 [CLI] 서버 응답 대기 중... (최대 {max_retries * delay:.1f}초)")
+    for i in range(max_retries):
+        try:
+            req = urllib.request.urlopen(url, timeout=0.5)
+            if req.getcode() == 200:
+                elapsed = (i + 1) * delay
+                print(f"📡 [CLI] 서버 연결 성공! ({elapsed:.1f}초 소요)")
+                return True
+        except (urllib.error.URLError, ConnectionResetError):
+            time.sleep(delay)
+    print(f"❌ [CLI] 서버가 {max_retries * delay:.1f}초 내에 응답하지 않았습니다.")
+    print(f"   → 포트 {port}가 이미 사용 중이거나, uvicorn/fastapi가 설치되지 않은 것일 수 있습니다.")
+    return False
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Antigravity Universal Agent Framework CLI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+사용 예시:
+  python cli.py run --prompt "FastAPI 서버 만들어줘"
+  python cli.py run --project ./my_app --workers 20 --verbose
+  python cli.py server --port 9000
+        """
+    )
+    parser.add_argument("command", choices=["run", "server"],
+                        help="실행할 명령어 (run: 통합 실행, server: 서버 단독)")
+    parser.add_argument("--project", type=str, default=".",
+                        help="대상 프로젝트 디렉토리 경로 (기본값: 현재 디렉토리)")
+    parser.add_argument("--prompt", type=str, default="간단한 웹사이트 만들어줘",
+                        help="에이전트에게 지시할 요구사항")
+    parser.add_argument("--port", type=int, default=8000,
+                        help="웹훅 서버 포트 (기본값: 8000)")
+    # [V2.4] 고급 옵션
+    parser.add_argument("--workers", type=int, default=50,
+                        help="동시 실행 워커 수 (기본값: 50 / CPU 코어 * 10 초과 불가)")
+    parser.add_argument("--no-sandbox", action="store_true",
+                        help="보안 샌드박스 비활성화 - 디버그 전용, 운영 환경에서 사용 금지")
+    parser.add_argument("--verbose", action="store_true",
+                        help="상세 디버그 로그 출력 (서버 로그 포함)")
+    parser.add_argument("--allow-dir", dest="allow_dirs", action="append", default=[],
+                        metavar="PATH",
+                        help="추가로 허용할 폴더 경로 (여러 번 사용 가능). 예: --allow-dir C:/shared")
+
+    args = parser.parse_args()
+
+    # 환경변수로 프레임워크 내부 모듈에 옵션 전달 (결합도 제거)
+    os.environ["AG_WEBHOOK_URL"] = f"http://127.0.0.1:{args.port}/api/webhook/subagent-result"
+    os.environ["AG_MAX_WORKERS"] = str(args.workers)
+    os.environ["AG_NO_SANDBOX"] = "1" if args.no_sandbox else "0"
+    os.environ["AG_VERBOSE"] = "1" if args.verbose else "0"
+
+    if args.command == "server":
+        print(f"🚀 웹훅 서버 단독 모드 (포트: {args.port})")
+        start_server_process(args.port, args.verbose)
+
+    elif args.command == "run":
+        if args.no_sandbox:
+            print("⚠️  [CLI] --no-sandbox 활성화 됨: 코드 보안 검사가 비활성화 상태입니다.")
+
+        print(f"🚀 [CLI] 백그라운드 Webhook 서버 시작 중... (포트: {args.port})")
+        server_process = multiprocessing.Process(
+            target=start_server_process,
+            args=(args.port, args.verbose),
+            daemon=True
+        )
+        server_process.start()
+
+        if not wait_for_server(args.port):
+            server_process.terminate()
+            return
+
+        try:
+            print(f"🤖 [CLI] 에이전트 루프 가동 (워커: {args.workers}개 / 샌드박스: {'OFF ⚠️' if args.no_sandbox else 'ON ✅'})...")
+
+            from src.orchestration.agent_loop import AgentLoop
+            from src.orchestration.llm_router import LLMRouter
+            from src.harness.sandbox import set_allowed_workspace, add_allowed_workspace, CodeSandbox
+
+            # [V2.5] 기본 작업 폴더 등록
+            workspace = os.path.abspath(args.project)
+            set_allowed_workspace(workspace)
+
+            # [V2.5] --allow-dir 로 지정한 추가 폴더 등록
+            for extra in args.allow_dirs:
+                add_allowed_workspace(extra)
+
+            router = LLMRouter("dummy_api_key")
+            loop = AgentLoop(router, args.project)
+            loop.run(requirement=args.prompt, framework="vanilla")
+
+        except KeyboardInterrupt:
+            print("\n⚠️  [CLI] 작업이 사용자에 의해 중단되었습니다.")
+        except Exception as e:
+            print(f"\n❌ [CLI] 런타임 에러 발생: {e}")
+        finally:
+            # [V2.5] 작업 폴더 내 임시 찌꺼기 파일 자동 청소
+            try:
+                sandbox = CodeSandbox()
+                sandbox.cleanup_workspace_temps()
+            except Exception:
+                pass
+            # 백그라운드 서버 종료 (좀비 방지)
+            print("🧹 [CLI] 백그라운드 서버를 안전하게 종료합니다...")
+            server_process.terminate()
+            server_process.join()
+            print("✅ [CLI] 모든 프로세스 종료 완료.")
+
+
+if __name__ == "__main__":
+    # Windows에서 multiprocessing fork bomb 방지 필수 가드
+    multiprocessing.freeze_support()
+    main()
