@@ -18,6 +18,7 @@
 | 🔒 **비동기 DB (aiosqlite + WAL)** | 동기식 sqlite3 제거 → `aiosqlite` + WAL 모드로 병렬 쓰기 병목 해소 |
 | ♻️ **가비지 컬렉션 보장** | `try...finally`로 에러/타임아웃 시에도 임시 폴더 누수 원천 차단 |
 | 🎛️ **환경변수 단일 관리** | 모든 설정값은 `.env.example` 참조, 코드 내 하드코딩 0개 |
+| 🧩 **내장 스킬/하네스 카탈로그** | Antigravity, Superpowers, RTK 계열 패턴을 UAF-native `skills/<name>/SKILL.md`로 패키징 |
 
 ---
 
@@ -43,7 +44,13 @@ universal_agent_framework/
 │   │   └── dispatcher_factory.py # 플랫폼별 디스패처 선택기
 │   └── tasks/
 │       └── workflows.py      # asyncio.Queue 기반 병렬 워커 엔진
-└── skills/                   # 확장 가능한 에이전트 스킬 모음
+└── skills/                   # UAF-native 에이전트 스킬/하네스 카탈로그
+    ├── antigravity_agent_orchestration/
+    ├── development_lifecycle_harness/
+    ├── subagent_review_pipeline/
+    ├── quality_gates_harness/
+    ├── rtk_command_output_harness/
+    └── command_hook_policy_harness/
 ```
 
 ---
@@ -72,6 +79,38 @@ python cli.py run --prompt "테스트" --no-sandbox
 # 웹훅 서버만 단독 실행
 python cli.py server --port 9000
 ```
+
+---
+
+## 🧩 내장 스킬/하네스 카탈로그
+
+이 프로젝트는 외부 Gemini/Antigravity/RTK/Superpowers 설치 폴더를 런타임에 읽지 않습니다. 필요한 패턴은 저장소 내부의 `skills/<skill-folder>/SKILL.md`로 독립 패키징되어 있습니다.
+
+### 참조 기반 핵심 하네스
+
+| 계열 | UAF 스킬 | 용도 |
+|------|----------|------|
+| Antigravity | `antigravity-agent-orchestration` | agent/subagent, tool permission, lifecycle hook, observability |
+| Superpowers | `development-lifecycle-harness` | 설계, 계획, TDD, 리뷰, 검증, 브랜치 완료 흐름 |
+| Superpowers | `subagent-review-pipeline` | implementer → spec-reviewer → code-quality-reviewer 역할 파이프라인 |
+| Superpowers | `quality-gates-harness` | failing-test-first, systematic debugging, evidence-before-completion |
+| RTK | `rtk-command-output-harness` | 명령 출력 압축, grouping/truncation/dedup, exit code 보존 |
+| RTK | `command-hook-policy-harness` | hook trust, permission precedence, integrity, fail-safe passthrough |
+
+### 카탈로그 확인
+
+```bash
+# 전체 내장 스킬 목록
+python -m src.skills.uaf_skill_catalog --list
+
+# 특정 스킬 읽기
+python -m src.skills.uaf_skill_catalog --read antigravity-agent-orchestration
+python -m src.skills.uaf_skill_catalog --read rtk-command-output-harness
+```
+
+### 새 스킬 추가 방식
+
+새 스킬은 별도 코드 등록 없이 `skills/<skill-folder>/SKILL.md`를 만들면 카탈로그에 잡힙니다. `SKILL.md`에는 YAML frontmatter의 `name`, `description`과 UAF 구현 타깃을 적으면 됩니다.
 
 ---
 
@@ -122,5 +161,5 @@ cli.py run
 - [x] V2.2 · aiosqlite + WAL 비동기 DB
 - [x] V2.3 · Celery 제거 + asyncio 큐 + gzip 스냅샷 + Windows 샌드박스
 - [x] V2.4 · 원클릭 CLI 런처 + 스마트 폴링 + 고급 옵션
-- [x] V2.5 · 워커 하드 리미트 + 치명적 버그 수정 + 환경변수 단일화
+- [x] V2.5 · 워커 하드 리미트 + 치명적 버그 수정 + 환경변수 단일화 + UAF-native 스킬/하네스 카탈로그
 - [ ] V3.0 · OpenClaw / Hermes 분산 서버 연동 (예정)
