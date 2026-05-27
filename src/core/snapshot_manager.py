@@ -22,16 +22,19 @@ class SnapshotManager:
     def _sanitize_path(self, file_name: str) -> str:
         """[V2.1 보안] Path Traversal 공격 방어를 위한 경로 검증"""
         safe_path = os.path.abspath(os.path.join(self.base_dir, file_name))
-        if not safe_path.startswith(self.base_dir):
+        if os.path.commonpath([self.base_dir, safe_path]) != self.base_dir:
             raise PermissionError(f"[보안 위반] 프로젝트 디렉토리를 벗어나는 경로는 접근할 수 없습니다: {file_name}")
         return safe_path
+
+    def _is_snapshot_path(self, file_path: str) -> bool:
+        return os.path.commonpath([self.snapshot_dir, file_path]) == self.snapshot_dir
 
     def commit(self, file_name: str, code: str, message: str) -> str:
         """파일의 현재 코드를 시간 기반 스냅샷으로 백업합니다."""
         safe_path = self._sanitize_path(file_name)
         
         # [V2.1 보안] 메타데이터 조작 시도 원천 차단
-        if safe_path.startswith(self.snapshot_dir):
+        if self._is_snapshot_path(safe_path):
             raise PermissionError(f"[보안 위반] 스냅샷 보호 구역(.snapshots) 내의 파일은 조작할 수 없습니다: {file_name}")
             
         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -78,7 +81,7 @@ class SnapshotManager:
         target_file = target_entry["file"]
         restore_path = self._sanitize_path(target_file)
         
-        if restore_path.startswith(self.snapshot_dir):
+        if self._is_snapshot_path(restore_path):
             raise PermissionError(f"[보안 위반] 보호 구역 내 파일 덮어쓰기 시도 감지됨: {target_file}")
         
         backup_path = os.path.join(self.snapshot_dir, target_version_id)

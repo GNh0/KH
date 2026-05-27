@@ -96,6 +96,7 @@ release-manager
 | `architect-pipeline` | 요구사항에서 설계 문서 생성 |
 | `harness-evaluator` | Python 코드 샌드박스 평가 |
 | `skill-catalog` | 내장 UAF 스킬 목록/읽기 |
+| `snapshot-state-harness` | gzip 스냅샷 checkpoint, rollback, `.snapshots` 보호 규칙 |
 | `token-optimizer` | 긴 로그와 코드 출력 압축 |
 | `workflow-skill-distiller` | 반복 workflow를 새 스킬로 패키징 |
 

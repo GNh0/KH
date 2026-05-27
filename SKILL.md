@@ -64,6 +64,7 @@ External agents should exchange structured data through the contracts module ins
 - **Antigravity-derived**: `antigravity-agent-orchestration` for agent profiles, subagents, tool permissions, lifecycle hooks, error recovery, and observability.
 - **Superpowers-derived**: `development-lifecycle-harness`, `subagent-review-pipeline`, and `quality-gates-harness` for planning, TDD, review roles, debugging, and evidence-based completion.
 - **RTK-derived**: `rtk-command-output-harness` and `command-hook-policy-harness` for compact command output, exit-code preservation, token-savings tracking, hook trust, and permission precedence.
+- **Snapshot rollback**: `snapshot-state-harness` for project-local gzip checkpoints, rollback, and `.snapshots` metadata protection.
 
 ## Security Constraints
 When utilizing this framework, remember that the sandbox enforces strict checks via AST parsing. If you are generating AI code that requires `os`, `sys`, or `subprocess`, the framework will intentionally block it unless you run it with `--no-sandbox`. 

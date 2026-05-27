@@ -17,6 +17,7 @@ CORE_SKILLS = {
     "quality-gates-harness",
     "rtk-command-output-harness",
     "skill-catalog",
+    "snapshot-state-harness",
     "subagent-review-pipeline",
     "token-optimizer",
     "workflow-skill-distiller",
@@ -56,6 +57,14 @@ class UafSkillCatalogTests(unittest.TestCase):
         self.assertIn("Packaged source: uaf_skill_folder", content)
         self.assertIn("UAF implementation targets", content)
         self.assertNotIn(r"C:\Users\KONEIT\.gemini", content)
+
+    def test_snapshot_state_harness_is_packaged(self):
+        content = read_packaged_skill("snapshot-state-harness")
+
+        self.assertIn("Packaged source: uaf_skill_folder", content)
+        self.assertIn("src.core.snapshot_manager", content)
+        self.assertIn("commit", content)
+        self.assertIn("rollback", content)
 
     def test_reference_derived_harnesses_are_uaf_native(self):
         expected_sources = {

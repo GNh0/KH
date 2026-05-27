@@ -26,6 +26,11 @@
       "usage": "python -m src.skills.uaf_skill_catalog --list"
     },
     {
+      "name": "snapshot-state-harness",
+      "description": "Packaged UAF snapshot skill for project-local gzip checkpoints, rollback, and .snapshots metadata protection.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read snapshot-state-harness"
+    },
+    {
       "name": "antigravity-agent-orchestration",
       "description": "UAF-native agent, subagent, permission, hook, and observability harness derived from Antigravity-style orchestration patterns.",
       "usage": "python -m src.skills.uaf_skill_catalog --read antigravity-agent-orchestration"
