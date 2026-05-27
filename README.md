@@ -60,6 +60,8 @@ What works today:
 - Persistent project-local goal ledger under `.uaf/state/` for resumable workflow state.
 - Project-local persistent memory store under `.uaf/memory/`, with JSON records, JSONL events, memory candidates, and cleanup policy.
 - Optional Codex desktop thread registry reader for active/archived conversation memory cleanup when the local registry is available.
+- Codex plugin manifest under `.codex-plugin/plugin.json`.
+- Antigravity workspace plugin bootstrap under `.agents/plugins/kh-uaf/`.
 - Unit tests covering the contracts, catalog, dispatcher, sandbox, snapshots, server, and workflow harness.
 
 What is still intentionally incomplete:
@@ -95,6 +97,66 @@ python -m src.skills.uaf_skill_catalog --check
 # Run tests
 python -m unittest discover -s tests -v
 ```
+
+## Codex Plugin Install
+
+This repo can be installed as a local Codex plugin because it includes `.codex-plugin/plugin.json` and points Codex at the packaged `skills/` directory.
+
+Recommended clone path on another PC:
+
+```bash
+git clone https://github.com/GNh0/KH.git ~/plugins/kh-uaf
+cd ~/plugins/kh-uaf
+python -m src.skills.uaf_skill_catalog --check
+```
+
+Then ask Codex in that environment:
+
+```text
+Register ~/plugins/kh-uaf as a local Codex plugin using .codex-plugin/plugin.json,
+install the kh-uaf plugin, then start a new thread so the KH UAF skills are loaded.
+```
+
+On Windows, use a concrete path such as:
+
+```powershell
+git clone https://github.com/GNh0/KH.git "$env:USERPROFILE\plugins\kh-uaf"
+cd "$env:USERPROFILE\plugins\kh-uaf"
+python -m src.skills.uaf_skill_catalog --check
+```
+
+The root `plugin.json` remains the UAF runtime manifest. The Codex-specific plugin manifest lives at `.codex-plugin/plugin.json`.
+
+## Antigravity Plugin Install
+
+Antigravity can load KH UAF in two ways:
+
+1. Global plugin: clone this repo into Antigravity's global plugin directory so the full `skills/` catalog is available across workspaces.
+2. Workspace bootstrap: open this repo as a workspace; Antigravity can discover `.agents/plugins/kh-uaf/`, which points the agent back to the root UAF skillbook and harness.
+
+Global install on Windows:
+
+```powershell
+git clone https://github.com/GNh0/KH.git "$env:USERPROFILE\.gemini\config\plugins\kh-uaf"
+cd "$env:USERPROFILE\.gemini\config\plugins\kh-uaf"
+python -m src.skills.uaf_skill_catalog --check
+```
+
+Global install on macOS/Linux:
+
+```bash
+git clone https://github.com/GNh0/KH.git ~/.gemini/config/plugins/kh-uaf
+cd ~/.gemini/config/plugins/kh-uaf
+python -m src.skills.uaf_skill_catalog --check
+```
+
+For a workspace-local install in another project, place or copy the plugin folder under:
+
+```text
+<workspace-root>/.agents/plugins/kh-uaf/
+```
+
+Antigravity's workspace bootstrap plugin included in this repo is intentionally small. It exposes the `kh-uaf` skill and tells the agent to use the root `skills/`, `SKILL.md`, and UAF validation commands. For full global access to every packaged KH UAF skill, use the global plugin clone path above.
 
 ## Core Flow
 
@@ -325,6 +387,14 @@ For web or app hosts that cannot return results in-process, start the webhook se
 ## Project Layout
 
 ```text
+.codex-plugin/
+  plugin.json
+.agents/
+  plugins/
+    kh-uaf/
+      plugin.json
+      skills/
+        kh-uaf/SKILL.md
 cli.py
 plugin.json
 SKILL.md
@@ -385,6 +455,7 @@ Use these before claiming a branch is ready:
 
 ```bash
 python -m json.tool plugin.json
+python -m json.tool .codex-plugin/plugin.json
 python -m src.skills.uaf_skill_catalog --check
 python -m unittest discover -s tests -v
 python -B -c "import pathlib; [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in pathlib.Path('.').rglob('*.py')]"

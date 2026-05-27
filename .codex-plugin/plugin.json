@@ -1,0 +1,38 @@
+{
+  "name": "kh-uaf",
+  "version": "2.5.0",
+  "description": "KH Universal Agent Framework skills and local orchestration harness for Codex.",
+  "author": {
+    "name": "KH UAF",
+    "url": "https://github.com/GNh0"
+  },
+  "repository": "https://github.com/GNh0/KH",
+  "keywords": [
+    "uaf",
+    "skills",
+    "harness",
+    "orchestration",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "KH UAF",
+    "shortDescription": "Personal UAF skillbook and orchestration harness.",
+    "longDescription": "KH UAF packages host-readable skills, goal and memory state, domain design artifacts, review/QA gates, and local Python orchestration contracts for Codex workflows.",
+    "developerName": "KH UAF",
+    "category": "Productivity",
+    "capabilities": [
+      "Skills",
+      "Orchestration",
+      "Local Harness",
+      "Goal State",
+      "Memory State"
+    ],
+    "defaultPrompt": [
+      "Use KH UAF to plan and run this project.",
+      "List the KH UAF skills available here.",
+      "Resume the current UAF goal ledger."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

@@ -20,11 +20,12 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 - Core direction approved by user: improve incrementally, taking useful ideas from external references while keeping KH/UAF branded as a personal skillbook.
 - Python core should remain the stable center for now.
 - TypeScript is best treated as a future sidecar for browser adapters, dashboards, and skill/template tooling.
-- Latest full verification after resume handoff support:
+- Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
   - `python -m src.skills.uaf_skill_catalog --check`
   - `python -B -c "import pathlib; [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in pathlib.Path('.').rglob('*.py')]"`
-  - `python -m unittest discover -s tests -v` (147 tests)
+  - `python -m unittest discover -s tests -v` (152 tests)
 
 ## Completed
 
@@ -115,6 +116,10 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 - Added packaged skill validation:
   - `src/skills/uaf_skill_validator.py`
   - `python -m src.skills.uaf_skill_catalog --check`
+- Added host plugin packaging:
+  - `.codex-plugin/plugin.json` for Codex local plugin registration
+  - `.agents/plugins/kh-uaf/` bootstrap plugin for Antigravity workspace discovery
+  - `README.md` install sections for Codex and Antigravity
 - Added UAF-native gate and state harness skills:
   - `review-gate-harness`
   - `qa-gate-harness`

@@ -1,5 +1,5 @@
 {
-  "name": "universal-agent-framework",
+  "name": "kh-uaf",
   "version": "2.5.0",
   "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features domain profiles, work design artifacts, asyncio-based parallel workers, Windows app bridge integration, multiprocessing sandboxing, gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
