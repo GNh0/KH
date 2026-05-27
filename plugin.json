@@ -11,6 +11,16 @@
       "usage": "python cli.py run --project <dir> --prompt <requirement>"
     },
     {
+      "name": "contracts",
+      "description": "Shared dataclass contracts for Codex, Antigravity, Claude Code, and local adapters.",
+      "module": "src.contracts"
+    },
+    {
+      "name": "skill-catalog",
+      "description": "Packaged UAF skill folder catalog. Add skills as skills/<skill-name>/SKILL.md; external plugin folders are not runtime dependencies.",
+      "usage": "python -m src.skills.antigravity_bridge --list"
+    },
+    {
       "name": "sandbox",
       "description": "Safely execute untrusted Python code with AST filtering and multiprocessing-based timeout kill. Windows compatible.",
       "module": "src.harness.sandbox",

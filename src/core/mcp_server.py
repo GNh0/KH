@@ -2,6 +2,7 @@ import sys
 import json
 import logging
 from typing import Any, Dict, List
+from src.skills.catalog import load_builtin_skills
 from src.skills.base import SKILL_REGISTRY
 
 # 심플한 MCP (Model Context Protocol) 호환 Stdio 서버
@@ -26,6 +27,7 @@ def _send_error(response_id: str, code: int, message: str):
     sys.stdout.flush()
 
 def serve_mcp():
+    load_builtin_skills()
     for line in sys.stdin:
         if not line.strip():
             continue
@@ -46,7 +48,7 @@ def serve_mcp():
                 for name, skill in SKILL_REGISTRY.items():
                     tools.append({
                         "name": name,
-                        "description": skill.__doc__ or "Skill tool",
+                        "description": skill.description or "Skill tool",
                         "inputSchema": {
                             "type": "object",
                             "properties": {

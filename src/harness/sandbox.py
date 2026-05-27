@@ -9,6 +9,8 @@ import tempfile
 import time
 import traceback
 
+from src.contracts import HarnessResult
+
 
 _ALLOWED_WORKSPACES: list[str] = []
 
@@ -174,26 +176,28 @@ class CodeSandbox:
             print("[Sandbox] No temporary files to remove.")
 
     def run_python_code(self, code: str) -> dict:
+        return self.run_python_code_result(code).to_dict()
+
+    def run_python_code_result(self, code: str) -> HarnessResult:
         start_time = time.time()
 
         if os.environ.get("AG_NO_SANDBOX") == "1":
             print("[Sandbox] Security sandbox is disabled.")
-            return {
-                "success": True,
-                "stdout": "Sandbox bypassed.",
-                "stderr": "",
-                "exit_code": 0,
-                "execution_time": 0.0,
-            }
+            return HarnessResult(
+                success=True,
+                stdout="Sandbox bypassed.",
+                exit_code=0,
+                execution_time=0.0,
+                metadata={"sandbox": "disabled"},
+            )
 
         if not _is_safe_code(code):
-            return {
-                "success": False,
-                "stdout": "",
-                "stderr": "Security Error: blocked unsafe syntax or API usage.",
-                "exit_code": -1,
-                "execution_time": 0.0,
-            }
+            return HarnessResult(
+                success=False,
+                stderr="Security Error: blocked unsafe syntax or API usage.",
+                exit_code=-1,
+                execution_time=0.0,
+            )
 
         sandbox_dir = tempfile.mkdtemp(prefix="ag_sandbox_")
         result_queue = multiprocessing.Queue()
@@ -205,25 +209,29 @@ class CodeSandbox:
             if process.is_alive():
                 process.terminate()
                 process.join()
-                return {
-                    "success": False,
-                    "stdout": "",
-                    "stderr": f"TimeoutError: execution exceeded {self.timeout} seconds.",
-                    "exit_code": 124,
-                    "execution_time": time.time() - start_time,
-                }
+                return HarnessResult(
+                    success=False,
+                    stderr=f"TimeoutError: execution exceeded {self.timeout} seconds.",
+                    exit_code=124,
+                    execution_time=time.time() - start_time,
+                )
 
             try:
-                result = result_queue.get_nowait()
+                result = HarnessResult.from_dict(result_queue.get_nowait())
             except queue.Empty:
-                result = {
-                    "success": process.exitcode == 0,
-                    "stdout": "",
-                    "stderr": "" if process.exitcode == 0 else "Runtime Error occurred.",
-                    "exit_code": process.exitcode,
-                }
-            result["execution_time"] = time.time() - start_time
-            return result
+                result = HarnessResult(
+                    success=process.exitcode == 0,
+                    stderr="" if process.exitcode == 0 else "Runtime Error occurred.",
+                    exit_code=process.exitcode,
+                )
+            return HarnessResult(
+                success=result.success,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.exit_code,
+                execution_time=time.time() - start_time,
+                metadata=result.metadata,
+            )
         finally:
             result_queue.close()
             shutil.rmtree(sandbox_dir, ignore_errors=True)

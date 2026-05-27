@@ -36,12 +36,21 @@ python cli.py run --project "./my_game" --prompt "Create a simple python snake g
 
 ## Internal Architecture
 If you need to extend or debug this framework, here is the structure:
+- **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`).
 - **`cli.py`**: The main entry point. Orchestrates the Server + Agent Loop.
 - **`src/orchestration/agent_loop.py`**: The central loop (Architect -> Dispatcher -> Evaluator).
 - **`src/tasks/workflows.py`**: The `asyncio` queue-based worker engine. Replaces Celery.
 - **`src/harness/sandbox.py`**: A secure code runner. Uses `multiprocessing` for absolute timeout guarantees on Windows.
 - **`src/core/snapshot_manager.py`**: State rollback system utilizing pure `gzip` for 90% disk space reduction.
 - **`src/api/server.py`**: A FastAPI webhook receiver using `aiosqlite` with WAL mode.
+
+## Integration Contracts
+External agents should exchange structured data through the contracts module instead of ad-hoc dictionaries:
+- Use `HarnessResult` for sandbox/evaluator execution results.
+- Use `SkillManifest` to normalize plugin and skill metadata.
+- Use `AdapterRequest` and `AdapterResult` when implementing Codex, Antigravity, Claude Code, or local dispatch adapters.
+- Add new UAF skills and harnesses as `skills/<skill-name>/SKILL.md`. The packaged skill folder is the source of truth.
+- Use `src.skills.antigravity_bridge` to list/read packaged UAF skill folders. External Gemini, Antigravity, RTK, and Superpower systems are development references only, not runtime dependencies.
 
 ## Security Constraints
 When utilizing this framework, remember that the sandbox enforces strict checks via AST parsing. If you are generating AI code that requires `os`, `sys`, or `subprocess`, the framework will intentionally block it unless you run it with `--no-sandbox`. 

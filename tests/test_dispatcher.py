@@ -2,6 +2,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 
+from src.contracts import AdapterRequest, AdapterResult
 from src.platforms.dispatcher_factory import AntigravityDispatcher
 
 
@@ -17,6 +18,21 @@ class AntigravityDispatcherTests(unittest.TestCase):
 
         self.assertEqual(len(result), 1)
         self.assertIn("Pending", result[0])
+
+    def test_execute_request_returns_adapter_result(self):
+        request = AdapterRequest(
+            project_dir="C:/work/demo",
+            files=["main.py"],
+            design_doc="# design",
+            platform_mode="antigravity",
+        )
+
+        with redirect_stdout(StringIO()):
+            result = AntigravityDispatcher().execute_request(request)
+
+        self.assertIsInstance(result, AdapterResult)
+        self.assertEqual(result.status, "pending")
+        self.assertEqual(result.workflow_id, "demo")
 
 
 if __name__ == "__main__":

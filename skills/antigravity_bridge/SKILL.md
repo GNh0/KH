@@ -1,24 +1,43 @@
 ---
 name: antigravity-bridge
-description: Allows Claude Code, Cursor, Codex, or any other external agent to discover and use Antigravity's massive built-in skill ecosystem (Science, Android, etc.).
+description: Use when listing, reading, or extending the packaged UAF skill and harness folders that were designed from Antigravity, Gemini, RTK, and Superpower-style references.
 ---
-# Antigravity Ecosystem Bridge
 
-This skill acts as a universal portal. It allows YOU (the external agent) to tap into Antigravity's deep pool of native skills, such as AlphaFold analysis, Literature Search, and Android CLI tools, regardless of what LLM or framework you are running on.
+# UAF Skill Folder Catalog
 
-## Instructions
-If you need to perform a complex task (like searching scientific databases, fetching protein structures, or managing Android builds), follow these steps to see if an Antigravity tool already exists for it:
+This is not a runtime bridge into an installed Antigravity or Gemini plugin directory. UAF skills are packaged inside this repository under `skills/<skill-name>/SKILL.md`.
 
-1. **Discover Available Skills:**
-   Run the bridge script to list all installed Antigravity skills in JSON format:
-   `python -m src.skills.antigravity_bridge --list`
+## Add a skill
 
-2. **Select the Right Skill:**
-   Look through the JSON output. Find the `name` of the skill whose `description` matches your current task.
+1. Create a folder under `skills/`.
+2. Add `SKILL.md`.
+3. Put `name` and `description` in YAML frontmatter.
+4. Keep the body focused on the UAF-native workflow and implementation targets.
 
-3. **Read the Skill Manual (SOP):**
-   To learn exactly how to use that skill, run:
-   `python -m src.skills.antigravity_bridge --read <skill_name>`
+Optional support files are allowed:
 
-4. **Execute:**
-   The output will be a Markdown SOP (`SKILL.md`). Read it carefully and execute the terminal commands or python scripts it recommends just as if you were native to Antigravity!
+- `references/` for long examples or external reference notes.
+- `scripts/` for deterministic helpers.
+- `assets/` for templates or reusable output files.
+
+Support files only affect behavior when `SKILL.md` says when to read or run them.
+
+## CLI
+
+List packaged UAF skills:
+
+```bash
+python -m src.skills.antigravity_bridge --list
+```
+
+Read one packaged skill:
+
+```bash
+python -m src.skills.antigravity_bridge --read parallel-orchestration-harness
+```
+
+## UAF implementation targets
+
+- `skills/<skill-name>/SKILL.md`
+- `src.skills.antigravity_bridge`
+- `src.skills.catalog`

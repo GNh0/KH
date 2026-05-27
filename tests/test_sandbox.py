@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 
+from src.contracts import HarnessResult
 from src.harness.sandbox import CodeSandbox, set_allowed_workspace
 
 
@@ -13,6 +14,13 @@ class SandboxTests(unittest.TestCase):
         self.assertNotEqual(result["exit_code"], 0)
         self.assertIn("ValueError", result["stderr"])
         self.assertIn("boom", result["stderr"])
+
+    def test_run_python_code_result_returns_contract_object(self):
+        result = CodeSandbox(timeout=2).run_python_code_result("print('ok')")
+
+        self.assertIsInstance(result, HarnessResult)
+        self.assertTrue(result.success)
+        self.assertEqual(result.stdout, "ok\n")
 
     def test_cleanup_workspace_temps_removes_tmp_files(self):
         with tempfile.TemporaryDirectory() as workspace:
