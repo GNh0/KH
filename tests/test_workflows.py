@@ -617,6 +617,44 @@ class WorkflowDispatchTests(unittest.TestCase):
             result.workflow_id,
         )
 
+    def test_workflow_writes_resume_handoff_for_next_session(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "Resume a blocked workflow",
+            "status": "active",
+            "evidence_required": [
+                "design_doc",
+                "workflow dispatch completed",
+                "review passed",
+            ],
+            "evidence": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# Resume Design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+            handoff = result.metadata["resume_handoff"]
+            json_path = Path(handoff["paths"]["json_path"])
+            markdown_path = Path(handoff["paths"]["markdown_path"])
+            json_exists = json_path.exists()
+            markdown_exists = markdown_path.exists()
+            persisted = json.loads(json_path.read_text(encoding="utf-8"))
+
+        self.assertFalse(result.success)
+        self.assertTrue(json_exists)
+        self.assertTrue(markdown_exists)
+        self.assertEqual(handoff["snapshot"]["status"], "blocked")
+        self.assertEqual(handoff["snapshot"]["missing_evidence"], ["review passed"])
+        self.assertIn("review passed", persisted["missing_evidence"])
+        self.assertEqual(handoff["snapshot"]["workflow_id"], result.workflow_id)
+
     def test_workflow_blocks_goal_and_release_when_required_evidence_is_missing(self):
         metadata = build_default_role_metadata()
         metadata["goal"] = {

@@ -20,11 +20,11 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 - Core direction approved by user: improve incrementally, taking useful ideas from gstack/Superpowers-style skill repositories.
 - Python core should remain the stable center for now.
 - TypeScript is best treated as a future sidecar for browser adapters, dashboards, and skill/template tooling.
-- Latest full verification after domain orchestration and design artifact support:
+- Latest full verification after resume handoff support:
   - `python -m json.tool plugin.json`
   - `python -m src.skills.uaf_skill_catalog --check`
   - `python -B -c "import pathlib; [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in pathlib.Path('.').rglob('*.py')]"`
-  - `python -m unittest discover -s tests -v` (142 tests)
+  - `python -m unittest discover -s tests -v` (146 tests)
 
 ## Completed
 
@@ -146,12 +146,19 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - workflow dispatch now creates a mandatory design stage, records design artifact evidence, and attaches `domain_profile`, `work_design`, and `artifact_manifest` to `WorkflowDispatchResult.metadata`
   - `GoalState.metadata` and goal ledger state now carry the artifact manifest for resume-safe review/release decisions
   - `domain-orchestration-harness` packaged skill
+- Added resume-safe handoff support:
+  - `HandoffSnapshot` contract
+  - `src/orchestration/handoff.py`
+  - `.uaf/state/resume_handoff.json`
+  - `.uaf/state/resume_handoff.md`
+  - workflow metadata now includes `resume_handoff` when goal metadata is present
+  - later host sessions can resume from goal ledger, artifact manifest, memory context, missing evidence, and next action without relying on chat context
 - Reworked `README.md` to reflect current implementation level, references, verification, and roadmap.
 - Reworked `AgentLoop` user-facing prompts and target-file prompt from mojibake into ASCII English so LLM target-file selection is usable.
 
 ## Active Decision
 
-The persistent goal ledger exists. The local execution path now has runner, check, QA, sidecar, evidence, registry, evidence-alias, scoped persistent-memory, domain profile, work design, and artifact manifest boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
+The persistent goal ledger exists. The local execution path now has runner, check, QA, sidecar, evidence, registry, evidence-alias, scoped persistent-memory, domain profile, work design, artifact manifest, and resume handoff boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
 
 Active task: none. Recommended next improvement is optional host package scaffolding or domain-specific artifact producers only when the actual runtime or domain dependency is explicit.
 
@@ -178,6 +185,11 @@ There are two related layers:
    - `WorkDesign` answers "what must be designed before execution?"
    - `ArtifactManifest` answers "which design artifacts exist and what evidence do they satisfy?"
    - These are stored in workflow metadata and the goal ledger so context compaction or a new session can recover the current design basis.
+
+5. UAF resume handoff:
+   - `resume_handoff.json` is the machine-readable continuation snapshot.
+   - `resume_handoff.md` is the human-readable note for the next LLM session.
+   - It records objective, status, workflow id, missing evidence, collected evidence, artifact basis, memory record count, and next action.
 
 ## Implementation Priority After Ledger
 
@@ -216,4 +228,5 @@ Implement the next concrete adapter or domain producer only when runtime/domain 
 - Browser/QA has a Python contract boundary, workflow integration, and JSON sidecar adapter, but no concrete Playwright package is bundled.
 - Persistent memory has local contracts/store and Codex registry polling support, but no Hermes/OpenClaw provider adapter is bundled.
 - Domain orchestration uses a generic builder; domain-specific artifact producers and validators are not bundled yet.
+- Resume handoff stores local paths; redact these before sharing runtime `.uaf` state outside a local workspace.
 - Check/QA pipeline is extracted; remaining workflow growth points are ledger persistence, gate evaluation, and result assembly.

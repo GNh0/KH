@@ -15,6 +15,7 @@ from src.orchestration.goal_evidence import (
     evaluate_goal_evidence,
 )
 from src.orchestration.goal_ledger import GoalLedger
+from src.orchestration.handoff import ResumeHandoff
 from src.orchestration.memory_state import MemoryScopeResolver
 from src.orchestration.memory_store import MemoryStore
 from src.orchestration.roles import build_role_gate_results
@@ -350,6 +351,7 @@ async def async_project_workflow(
     results: List[WorkflowTaskResult] = []
     ledger = GoalLedger(project_dir) if goal_metadata else None
     goal_ledger_metadata = ledger.describe_paths() if ledger else {}
+    resume_handoff_metadata = {}
 
     if ledger:
         existing_goal = ledger.load_current_goal()
@@ -439,6 +441,7 @@ async def async_project_workflow(
             tasks=_task_ledger_summary(ordered_results, list(file_list)),
             next_recommended_action=_next_goal_action(final_goal),
         )
+        resume_handoff_metadata = ResumeHandoff(project_dir).save()
         event_type = "goal_completed" if final_goal.get("status") == "complete" else "goal_updated"
         if final_goal.get("status") == "blocked":
             event_type = "goal_blocked"
@@ -468,6 +471,7 @@ async def async_project_workflow(
             "orchestration_roles": metadata.get("orchestration_roles", []),
             "goal": final_goal or goal_metadata,
             "goal_ledger": goal_ledger_metadata,
+            "resume_handoff": resume_handoff_metadata,
             "memory_context": memory_context,
             "memory_store": memory_store_metadata,
             "domain_profile": design_stage.get("domain_profile", {}),

@@ -17,8 +17,9 @@ This is a UAF-native context harness derived from gstack context-save and contex
 1. Capture current git branch, dirty files, active workflow id, role graph, and task status.
 2. Record decisions, assumptions, blockers, and next actions in structured metadata.
 3. Store context artifacts inside a project-local state directory, not in external user skill folders.
-4. Restore by reading the newest matching context and validating that the repository state still matches.
-5. Treat stale or conflicting context as blocked, not silently authoritative.
+4. Write a resume handoff snapshot to `.uaf/state/resume_handoff.json` and a human-readable note to `.uaf/state/resume_handoff.md`.
+5. Restore by reading the newest matching context and validating that the repository state still matches.
+6. Treat stale or conflicting context as blocked, not silently authoritative.
 
 ## Required outputs
 
@@ -26,11 +27,14 @@ This is a UAF-native context harness derived from gstack context-save and contex
 - `git_state`: branch, head sha, and dirty file summary.
 - `decisions`: explicit decisions and assumptions.
 - `remaining_work`: next tasks and verification commands.
+- `resume_handoff`: JSON and Markdown paths for a future host session.
 
 ## UAF implementation targets
 
 - `src.core.snapshot_manager`
 - `src.contracts.AdapterRequest`
 - `src.contracts.AdapterResult`
+- `src.contracts.HandoffSnapshot`
 - `src.contracts.WorkflowDispatchResult`
+- `src.orchestration.handoff`
 - `src.orchestration.agent_loop`

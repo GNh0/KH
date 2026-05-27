@@ -31,6 +31,7 @@ What works today:
 - Scoped persistent memory contracts for project and conversation namespaces.
 - DomainProfile, WorkDesign, DesignArtifact, and ArtifactManifest contracts for domain-neutral orchestration.
 - Mandatory workflow design-stage persistence under `.uaf/artifacts/design/` and `.uaf/state/artifact_manifest.json`.
+- Resume-safe handoff snapshots under `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
 - Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
 - Focused review, QA, security, and release gate evaluators.
 - Local and Antigravity dispatcher contracts.
@@ -102,8 +103,9 @@ cli.py run
   -> Workflow workers fan out file-level implementer tasks through LocalTaskRunner
   -> Goal evidence is evaluated before QA/release completion
   -> Goal ledger writes .uaf/state/current_goal.json and goal_events.jsonl
+  -> Resume handoff writes .uaf/state/resume_handoff.json and resume_handoff.md
   -> Review, QA, security, and release gate metadata is collected
-  -> WorkflowDispatchResult returns task_results, gate_results, and metadata.goal
+  -> WorkflowDispatchResult returns task_results, gate_results, metadata.goal, and metadata.resume_handoff
 ```
 
 The default local worker now calls `LocalTaskRunner` for each bounded file task and treats the returned `WorkflowTaskResult` as the source of truth. Webhook posting is optional and only runs when `AG_WEBHOOK_URL` is set; the result is recorded as a reporting side effect under `task_result.metadata["webhook_report"]`. The runner validates target paths, writes generated artifacts through `DeterministicCodeGenerationAdapter`, and emits runner evidence including `code generated`. `LLMCodeGenerationAdapter` can be supplied when a host wants local generation to call an injected LLM router.
@@ -164,6 +166,22 @@ UAF separates short-lived workflow state from long-lived memory:
 When workflow metadata sets `enable_memory`, dispatch loads memory context and attaches it to both `WorkflowDispatchResult.metadata["memory_context"]` and `GoalState.metadata["memory_context"]`, so the goal ledger can resume with the same scoped memory context.
 
 `src.platforms.codex_thread_registry.CodexThreadRegistry` can read the local Codex desktop `threads` registry when available. It detects active and archived threads from the registry and drives conversation memory cleanup. Deleted thread memory is handled conservatively by absence from the registry: the default cleanup action is quarantine, not immediate hard delete.
+
+## Resume Handoff
+
+UAF writes a resume handoff whenever workflow goal metadata is present. The handoff is deliberately simple and project-local:
+
+```text
+.uaf/
+  state/
+    current_goal.json
+    goal_events.jsonl
+    artifact_manifest.json
+    resume_handoff.json
+    resume_handoff.md
+```
+
+`src.orchestration.handoff.ResumeHandoff` reads the current goal, missing evidence, artifact manifest, and optional memory context. It writes a JSON snapshot for host tooling and a Markdown handoff note for the next LLM session. A later Codex, Antigravity, or other host run can inspect `resume_handoff.md` without the previous chat transcript and know the objective, status, missing evidence, artifact basis, and next recommended action.
 
 ## Default Roles
 

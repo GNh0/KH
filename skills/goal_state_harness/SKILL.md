@@ -21,10 +21,11 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 4. Add deterministic workflow evidence such as `design_doc`, `target_files`, and `workflow dispatch completed`.
 5. Persist resumable goal state to `.uaf/state/current_goal.json`.
 6. Append goal lifecycle events to `.uaf/state/goal_events.jsonl`.
-7. Add richer evidence as checks, reviews, QA, or release gates run.
-8. Use `GoalState.metadata.evidence_aliases` when host-specific tools emit equivalent evidence keys with different names.
-9. Mark a goal `complete` only when success criteria and required evidence are satisfied.
-10. Mark a goal `blocked` when the workflow cannot make meaningful progress without missing evidence, context, credentials, tools, or external state.
+7. Write `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md` after the evaluated goal is saved.
+8. Add richer evidence as checks, reviews, QA, or release gates run.
+9. Use `GoalState.metadata.evidence_aliases` when host-specific tools emit equivalent evidence keys with different names.
+10. Mark a goal `complete` only when success criteria and required evidence are satisfied.
+11. Mark a goal `blocked` when the workflow cannot make meaningful progress without missing evidence, context, credentials, tools, or external state.
 
 ## Required outputs
 
@@ -37,12 +38,14 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 - `metadata.missing_evidence`: normalized evidence keys that prevented completion.
 - `metadata.evidence_alias_matches`: required evidence keys satisfied by an accepted alias.
 - `goal_ledger`: paths to the project-local current goal and event log.
+- `resume_handoff`: paths and snapshot for continuing from repo-local state without prior chat context.
 
 ## UAF implementation targets
 
 - `src.contracts.GoalState`
 - `src.orchestration.goal_evidence`
 - `src.orchestration.goal_ledger`
+- `src.orchestration.handoff`
 - `src.orchestration.agent_loop`
 - `src.platforms.dispatcher_factory`
 - `src.tasks.workflows`

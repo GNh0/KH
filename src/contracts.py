@@ -40,6 +40,58 @@ class GoalState:
 
 
 @dataclass(frozen=True)
+class HandoffSnapshot:
+    project_dir: str = ""
+    workflow_id: str = ""
+    objective: str = ""
+    status: str = "unknown"
+    next_recommended_action: str = ""
+    evidence_required: List[str] = field(default_factory=list)
+    evidence: List[str] = field(default_factory=list)
+    missing_evidence: List[str] = field(default_factory=list)
+    artifact_manifest: Dict[str, Any] = field(default_factory=dict)
+    memory_context: Dict[str, Any] = field(default_factory=dict)
+    goal: Dict[str, Any] = field(default_factory=dict)
+    generated_at: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "project_dir": self.project_dir,
+            "workflow_id": self.workflow_id,
+            "objective": self.objective,
+            "status": self.status,
+            "next_recommended_action": self.next_recommended_action,
+            "evidence_required": list(self.evidence_required),
+            "evidence": list(self.evidence),
+            "missing_evidence": list(self.missing_evidence),
+            "artifact_manifest": dict(self.artifact_manifest),
+            "memory_context": dict(self.memory_context),
+            "goal": dict(self.goal),
+            "generated_at": self.generated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "HandoffSnapshot":
+        return cls(
+            project_dir=data.get("project_dir", ""),
+            workflow_id=data.get("workflow_id", ""),
+            objective=data.get("objective", ""),
+            status=data.get("status", "unknown"),
+            next_recommended_action=data.get("next_recommended_action", ""),
+            evidence_required=list(data.get("evidence_required", [])),
+            evidence=list(data.get("evidence", [])),
+            missing_evidence=list(data.get("missing_evidence", [])),
+            artifact_manifest=dict(data.get("artifact_manifest", {})),
+            memory_context=dict(data.get("memory_context", {})),
+            goal=dict(data.get("goal", {})),
+            generated_at=data.get("generated_at", ""),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
 class MemoryScope:
     kind: str
     namespace: str

@@ -38,7 +38,7 @@ python cli.py run --project "./my_game" --prompt "Create a simple python snake g
 
 ## Internal Architecture
 If you need to extend or debug this framework, here is the structure:
-- **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`GoalState`, `MemoryScope`, `MemoryRecord`, `MemoryEvent`, `DomainProfile`, `DomainRole`, `WorkDesign`, `DesignArtifact`, `ArtifactManifest`, `HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`, `WorkflowTaskResult`, `WorkflowDispatchResult`).
+- **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`GoalState`, `HandoffSnapshot`, `MemoryScope`, `MemoryRecord`, `MemoryEvent`, `DomainProfile`, `DomainRole`, `WorkDesign`, `DesignArtifact`, `ArtifactManifest`, `HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`, `WorkflowTaskResult`, `WorkflowDispatchResult`).
 - **`cli.py`**: The main entry point. Orchestrates the Server + Agent Loop.
 - **`src/core/app_bridge.py`**: App-first integration helper for Codex and Antigravity Windows app hosts. Builds role-aware `AdapterRequest` objects without CLI parsing.
 - **`src/orchestration/agent_loop.py`**: The central loop (Architect -> Dispatcher -> Evaluator).
@@ -47,6 +47,7 @@ If you need to extend or debug this framework, here is the structure:
 - **`src/orchestration/gate_evaluators.py`**: Focused spec, code-quality, QA, security, and release gate evaluators that emit structured findings and evidence records.
 - **`src/orchestration/goal_evidence.py`**: Goal evidence normalization and complete/blocked evaluation for QA and release gates.
 - **`src/orchestration/goal_ledger.py`**: Project-local `.uaf/state/` persistence for resumable current goal state and append-only goal events.
+- **`src/orchestration/handoff.py`**: Resume-safe handoff builder that writes `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md` from goal, artifact, and memory state.
 - **`src/orchestration/domain_profiles.py`**: Domain-neutral profile and work-design builder for software, operations, analysis, design, and other topics.
 - **`src/orchestration/artifacts.py`**: Project-local WorkDesign and DesignArtifact store that writes `.uaf/artifacts/design/` files and `.uaf/state/artifact_manifest.json`.
 - **`src/orchestration/memory_state.py`**: Project/conversation memory scope resolver for host-neutral persistent memory namespaces.
@@ -79,6 +80,7 @@ External agents should exchange structured data through the contracts module ins
 - Use `src.orchestration.evidence_producers` to convert command, review, and QA outputs into normalized evidence records before adding them to task or gate metadata.
 - Use `src.orchestration.gate_evaluators` for focused review/QA/security/release gate decisions; keep `src.orchestration.roles.build_role_gate_results(...)` as the public compatibility wrapper.
 - Use `GoalLedger` for `.uaf/state/current_goal.json` and `.uaf/state/goal_events.jsonl` persistence when goal metadata is present.
+- Use `ResumeHandoff` when a future host session needs to continue without previous chat context. The workflow metadata key is `resume_handoff`, and the project-local files are `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
 - Use `MemoryScopeResolver` and `MemoryStore` when attaching `memory_context` to workflow metadata or `GoalState.metadata`; store uncertain facts as candidates before promotion.
 - Use `WorkflowTaskInput` and `LocalTaskRunner` for bounded local file tasks. Do not treat webhook success as the source of task truth.
 - Use `GeneratedTaskArtifact`, `DeterministicCodeGenerationAdapter`, or `LLMCodeGenerationAdapter` when implementing local generation paths behind `LocalTaskRunner`.

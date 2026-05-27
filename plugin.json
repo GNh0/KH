@@ -26,6 +26,11 @@
       "module": "src.orchestration.artifacts"
     },
     {
+      "name": "resume-handoff",
+      "description": "Build resume-safe handoff snapshots from goal ledger, artifact manifest, and scoped memory context.",
+      "module": "src.orchestration.handoff"
+    },
+    {
       "name": "evidence-producers",
       "description": "Normalize command, review, and QA outputs into GoalState evidence keys.",
       "module": "src.orchestration.evidence_producers"

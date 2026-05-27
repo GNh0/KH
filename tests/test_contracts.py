@@ -9,6 +9,7 @@ from src.contracts import (
     DomainProfile,
     DomainRole,
     GoalState,
+    HandoffSnapshot,
     HarnessResult,
     SkillManifest,
     WorkDesign,
@@ -80,6 +81,26 @@ class GoalStateContractTests(unittest.TestCase):
         self.assertEqual(goal.status, "blocked")
         self.assertEqual(goal.blocked_reason, "missing credentials")
         self.assertEqual(goal.success_criteria, [])
+
+
+class HandoffSnapshotContractTests(unittest.TestCase):
+    def test_handoff_snapshot_round_trips_as_dict(self):
+        snapshot = HandoffSnapshot(
+            project_dir="C:/work/demo",
+            workflow_id="workflow_demo",
+            objective="continue the workflow",
+            status="blocked",
+            next_recommended_action="collect missing evidence: review passed",
+            evidence_required=["design_doc", "review passed"],
+            evidence=["design_doc"],
+            missing_evidence=["review passed"],
+            artifact_manifest={"workflow_id": "workflow_demo"},
+            memory_context={"record_count": 1},
+            goal={"objective": "continue the workflow"},
+            metadata={"source": "resume_handoff"},
+        )
+
+        self.assertEqual(HandoffSnapshot.from_dict(snapshot.to_dict()), snapshot)
 
 
 class DomainDesignContractTests(unittest.TestCase):
