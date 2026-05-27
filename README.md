@@ -28,6 +28,7 @@ What works today:
 - CLI entrypoint for local project runs.
 - Optional FastAPI webhook server for external host callbacks and reporting.
 - Dataclass contracts for adapter requests, results, workflow results, and goal state.
+- Scoped persistent memory contracts for project and conversation namespaces.
 - Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
 - Focused review, QA, security, and release gate evaluators.
 - Local and Antigravity dispatcher contracts.
@@ -47,6 +48,8 @@ What works today:
 - Workflow task metadata can carry normalized evidence records into `GoalState.evidence`.
 - Gate results carry structured findings and evidence records for downstream goal/release checks.
 - Persistent project-local goal ledger under `.uaf/state/` for resumable workflow state.
+- Project-local persistent memory store under `.uaf/memory/`, with JSON records, JSONL events, memory candidates, and cleanup policy.
+- Optional Codex desktop thread registry reader for active/archived conversation memory cleanup when the local registry is available.
 - Unit tests covering the contracts, catalog, dispatcher, sandbox, snapshots, server, and workflow harness.
 
 What is still intentionally incomplete:
@@ -55,6 +58,7 @@ What is still intentionally incomplete:
 - The Antigravity dispatcher can consume an injected native adapter or JSON process sidecar, but no concrete external Antigravity host SDK package is bundled yet.
 - Browser/QA execution has a Python contract boundary, workflow evidence integration, and JSON process sidecar adapter, but no bundled Playwright implementation yet.
 - Workflow metadata can run bounded command checks, named presets, or browser/QA checks and feed the resulting evidence into `GoalState`.
+- External memory providers such as Hermes or OpenClaw are not bundled; UAF now has the local contracts and store that a provider adapter can implement later.
 - TypeScript tooling is not part of the core package yet.
 
 ## Quick Start
@@ -88,6 +92,7 @@ python -m unittest discover -s tests -v
 cli.py run
   -> SystemArchitect writes design_doc.md
   -> AgentLoop attaches role graph metadata and GoalState
+  -> Scoped memory context is loaded when memory is enabled
   -> DispatcherFactory selects local or Antigravity mode
   -> Workflow workers fan out file-level implementer tasks through LocalTaskRunner
   -> Goal evidence is evaluated before QA/release completion
@@ -109,6 +114,30 @@ Workflow metadata can also provide `command_check_presets` for common checks. Cu
 `src.platforms.antigravity_native.AntigravityNativeDispatchResult` is the native host boundary for Antigravity-style integrations. `AntigravityDispatcher` uses it when a native adapter is injected, or when metadata provides `antigravity_native_sidecar.command`. The sidecar adapter sends `AdapterRequest` JSON on stdin and expects `AntigravityNativeDispatchResult` JSON on stdout. If neither adapter path is configured, the dispatcher returns a structured pending result and leaves external callbacks optional.
 
 `src.orchestration.extension_registry.ExtensionRegistry` is the shared extension point for host and provider integration. `DispatcherFactory.register_dispatcher(...)` lets a host add another dispatch mode without changing the core switch logic, and `LLMRouter.register_provider(...)` lets another LLM backend supply a provider object behind the same `chat(system, user)` contract.
+
+## Persistent Memory
+
+UAF separates short-lived workflow state from long-lived memory:
+
+```text
+.uaf/
+  state/
+    current_goal.json
+    goal_events.jsonl
+  memory/
+    project_memory.json
+    memory_events.jsonl
+    memory_candidates.jsonl
+    scope_state.json
+```
+
+`GoalLedger` answers "what is currently being worked on?" while `MemoryStore` answers "what should this project or conversation remember later?" Project work uses project-local memory under `.uaf/memory/`. Projectless chats should use a conversation namespace such as `conversation/<thread_id>/`. Global memory is intentionally not the default and should require explicit user promotion.
+
+`MemoryScopeResolver` chooses project memory when a workspace root exists and conversation memory when there is only a thread id. `MemoryStore` persists verified `MemoryRecord` values, appends audit events, and keeps uncertain facts in `memory_candidates.jsonl` until they are promoted. Secret-like content such as API keys, tokens, private keys, and credentials is rejected before it is stored.
+
+When workflow metadata sets `enable_memory`, dispatch loads memory context and attaches it to both `WorkflowDispatchResult.metadata["memory_context"]` and `GoalState.metadata["memory_context"]`, so the goal ledger can resume with the same scoped memory context.
+
+`src.platforms.codex_thread_registry.CodexThreadRegistry` can read the local Codex desktop `threads` registry when available. It detects active and archived threads from the registry and drives conversation memory cleanup. Deleted thread memory is handled conservatively by absence from the registry: the default cleanup action is quarantine, not immediate hard delete.
 
 ## Default Roles
 
@@ -185,6 +214,7 @@ The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_
 | Skill | Purpose |
 |-------|---------|
 | `goal-state-harness` | Goal objective tracking, completion criteria, evidence requirements, and blocked-state reporting. |
+| `memory-state-harness` | Scoped persistent memory, candidates, project/conversation namespace isolation, and cleanup policy. |
 | `context-state-harness` | Context save/restore, handoff payloads, and continuation metadata. |
 | `review-gate-harness` | Spec, code, and release review gate contracts inspired by gstack-style review flows. |
 | `qa-gate-harness` | QA checks, regression evidence, bug reports, and browser-adapter expectations. |
@@ -260,10 +290,13 @@ src/
     gate_evaluators.py
     goal_evidence.py
     goal_ledger.py
+    memory_state.py
+    memory_store.py
     roles.py
     llm_router.py
   platforms/
     antigravity_native.py
+    codex_thread_registry.py
     dispatcher_factory.py
   tasks/
     browser_qa.py

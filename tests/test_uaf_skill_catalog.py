@@ -19,6 +19,7 @@ CORE_SKILLS = {
     "guard-policy-harness",
     "harness-evaluator",
     "health-check-harness",
+    "memory-state-harness",
     "orchestration-role-graph",
     "parallel-orchestration-harness",
     "quality-gates-harness",
@@ -111,6 +112,7 @@ class UafSkillCatalogTests(unittest.TestCase):
             "goal-state-harness": "GoalState",
             "guard-policy-harness": "gstack",
             "health-check-harness": "gstack",
+            "memory-state-harness": "persistent memory",
         }
 
         for skill_name, source_label in expected_sources.items():

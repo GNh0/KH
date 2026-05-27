@@ -31,6 +31,16 @@
       "module": "src.orchestration.extension_registry"
     },
     {
+      "name": "memory-state",
+      "description": "Resolve project and conversation scoped persistent memory namespaces.",
+      "module": "src.orchestration.memory_state"
+    },
+    {
+      "name": "memory-store",
+      "description": "JSON/JSONL scoped persistent memory store with candidates, events, and cleanup policy.",
+      "module": "src.orchestration.memory_store"
+    },
+    {
       "name": "llm-router",
       "description": "Built-in OpenAI-compatible and Anthropic routing with custom LLM provider registration.",
       "module": "src.orchestration.llm_router"
@@ -59,6 +69,11 @@
       "name": "antigravity-native-boundary",
       "description": "Native Antigravity dispatch result contract with injected-adapter and JSON process sidecar boundaries.",
       "module": "src.platforms.antigravity_native"
+    },
+    {
+      "name": "codex-thread-registry",
+      "description": "Read Codex desktop thread state for active/archived conversation memory cleanup when the local registry is available.",
+      "module": "src.platforms.codex_thread_registry"
     },
     {
       "name": "windows-app-bridge",
@@ -129,6 +144,11 @@
       "name": "goal-state-harness",
       "description": "UAF-native goal state harness for objective tracking, completion criteria, and evidence-based closure.",
       "usage": "python -m src.skills.uaf_skill_catalog --read goal-state-harness"
+    },
+    {
+      "name": "memory-state-harness",
+      "description": "UAF-native scoped persistent memory harness for project/conversation memory, candidates, and cleanup policy.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read memory-state-harness"
     },
     {
       "name": "guard-policy-harness",

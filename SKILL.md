@@ -38,7 +38,7 @@ python cli.py run --project "./my_game" --prompt "Create a simple python snake g
 
 ## Internal Architecture
 If you need to extend or debug this framework, here is the structure:
-- **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`GoalState`, `HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`, `WorkflowTaskResult`, `WorkflowDispatchResult`).
+- **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`GoalState`, `MemoryScope`, `MemoryRecord`, `MemoryEvent`, `HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`, `WorkflowTaskResult`, `WorkflowDispatchResult`).
 - **`cli.py`**: The main entry point. Orchestrates the Server + Agent Loop.
 - **`src/core/app_bridge.py`**: App-first integration helper for Codex and Antigravity Windows app hosts. Builds role-aware `AdapterRequest` objects without CLI parsing.
 - **`src/orchestration/agent_loop.py`**: The central loop (Architect -> Dispatcher -> Evaluator).
@@ -47,9 +47,12 @@ If you need to extend or debug this framework, here is the structure:
 - **`src/orchestration/gate_evaluators.py`**: Focused spec, code-quality, QA, security, and release gate evaluators that emit structured findings and evidence records.
 - **`src/orchestration/goal_evidence.py`**: Goal evidence normalization and complete/blocked evaluation for QA and release gates.
 - **`src/orchestration/goal_ledger.py`**: Project-local `.uaf/state/` persistence for resumable current goal state and append-only goal events.
+- **`src/orchestration/memory_state.py`**: Project/conversation memory scope resolver for host-neutral persistent memory namespaces.
+- **`src/orchestration/memory_store.py`**: JSON/JSONL memory store for scoped records, candidates, events, and cleanup policy.
 - **`src/orchestration/llm_router.py`**: Built-in OpenAI-compatible and Anthropic routing plus custom LLM provider registration.
 - **`src/orchestration/roles.py`**: Default UAF role graph (`ceo`, `advisor`, `system-architect`, `controller`, `implementer`, reviewers, QA, security, release).
 - **`src/platforms/antigravity_native.py`**: Native Antigravity dispatch result contract for injected host adapters and JSON process sidecars.
+- **`src/platforms/codex_thread_registry.py`**: Optional Codex desktop thread registry reader for active/archived thread memory cleanup.
 - **`src/tasks/browser_qa.py`**: Browser/QA check contract boundary for injected browser adapters and JSON process sidecars, including future TypeScript/Playwright sidecars.
 - **`src/tasks/checks.py`**: Bounded command check runner and named presets that convert subprocess results into evidence producer records.
 - **`src/tasks/runners.py`**: Local bounded-task runner with deterministic and LLM-backed code-generation adapters. Runner output is the source of truth for `WorkflowTaskResult`; webhook reporting is side-effect metadata.
@@ -68,9 +71,11 @@ External agents should exchange structured data through the contracts module ins
 - Use `ExtensionRegistry`, `DispatcherFactory.register_dispatcher(...)`, and `LLMRouter.register_provider(...)` for new host modes or LLM backends. Avoid hardcoding provider-specific branches unless the provider is part of the core runtime.
 - Use `AntigravityNativeDispatchResult` and `AntigravityNativeSidecarAdapter` when bridging an Antigravity host-native adapter into UAF; keep no-adapter behavior as structured pending. Metadata can provide `antigravity_native_sidecar.command` to launch a sidecar without Python object injection.
 - Use `GoalState` metadata to carry objective, required evidence, collected evidence, and complete/blocked status through the workflow.
+- Use `MemoryScope`, `MemoryRecord`, and `MemoryEvent` for scoped persistent memory. Project memory lives under `.uaf/memory/`; projectless chat memory must use a conversation namespace.
 - Use `src.orchestration.evidence_producers` to convert command, review, and QA outputs into normalized evidence records before adding them to task or gate metadata.
 - Use `src.orchestration.gate_evaluators` for focused review/QA/security/release gate decisions; keep `src.orchestration.roles.build_role_gate_results(...)` as the public compatibility wrapper.
 - Use `GoalLedger` for `.uaf/state/current_goal.json` and `.uaf/state/goal_events.jsonl` persistence when goal metadata is present.
+- Use `MemoryScopeResolver` and `MemoryStore` when attaching `memory_context` to workflow metadata or `GoalState.metadata`; store uncertain facts as candidates before promotion.
 - Use `WorkflowTaskInput` and `LocalTaskRunner` for bounded local file tasks. Do not treat webhook success as the source of task truth.
 - Use `GeneratedTaskArtifact`, `DeterministicCodeGenerationAdapter`, or `LLMCodeGenerationAdapter` when implementing local generation paths behind `LocalTaskRunner`.
 - Local `AgentLoop` dispatch metadata passes the active `LLMRouter` to workflow workers so local file generation can use the LLM-backed adapter instead of only deterministic artifacts.
@@ -87,7 +92,7 @@ External agents should exchange structured data through the contracts module ins
 - **Antigravity-derived**: `antigravity-agent-orchestration` for agent profiles, subagents, tool permissions, lifecycle hooks, error recovery, and observability.
 - **Superpowers-derived**: `development-lifecycle-harness`, `subagent-review-pipeline`, and `quality-gates-harness` for planning, TDD, review roles, debugging, and evidence-based completion.
 - **RTK-derived**: `rtk-command-output-harness` and `command-hook-policy-harness` for compact command output, exit-code preservation, token-savings tracking, hook trust, and permission precedence.
-- **gstack-derived and goal-aware**: `review-gate-harness`, `qa-gate-harness`, `context-state-harness`, `goal-state-harness`, `guard-policy-harness`, and `health-check-harness` for structured review, QA, context handoff, objective tracking, safety policy, and health reporting.
+- **gstack-derived and goal/memory-aware**: `review-gate-harness`, `qa-gate-harness`, `context-state-harness`, `goal-state-harness`, `memory-state-harness`, `guard-policy-harness`, and `health-check-harness` for structured review, QA, context handoff, objective tracking, scoped persistent memory, safety policy, and health reporting.
 - **Snapshot rollback**: `snapshot-state-harness` for project-local gzip checkpoints, rollback, and `.snapshots` metadata protection.
 
 ## Security Constraints

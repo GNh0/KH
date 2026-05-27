@@ -7,13 +7,15 @@ from typing import List
 
 import httpx
 
-from src.contracts import WorkflowDispatchResult, WorkflowTaskResult
+from src.contracts import MemoryScope, WorkflowDispatchResult, WorkflowTaskResult
 from src.orchestration.evidence_producers import collect_metadata_evidence
 from src.orchestration.goal_evidence import (
     collect_workflow_goal_evidence,
     evaluate_goal_evidence,
 )
 from src.orchestration.goal_ledger import GoalLedger
+from src.orchestration.memory_state import MemoryScopeResolver
+from src.orchestration.memory_store import MemoryStore
 from src.orchestration.roles import build_role_gate_results
 from src.tasks.workflow_checks import WorkflowCheckStage, goal_with_check_requirements
 from src.tasks.runners import (
@@ -144,6 +146,57 @@ def _goal_with_added_evidence(goal: dict, evidence_items: List[str]) -> dict:
     return updated_goal
 
 
+def _memory_enabled(metadata: dict) -> bool:
+    return bool(
+        metadata.get("enable_memory")
+        or metadata.get("memory_context")
+        or metadata.get("memory_scope")
+    )
+
+
+def _goal_with_memory_context(goal: dict, memory_context: dict) -> dict:
+    if not goal or not memory_context:
+        return goal
+
+    updated_goal = dict(goal)
+    metadata = dict(updated_goal.get("metadata", {}))
+    metadata["memory_context"] = json.loads(json.dumps(memory_context))
+    updated_goal["metadata"] = metadata
+    return updated_goal
+
+
+def _workflow_memory_context(project_dir: str, metadata: dict) -> tuple:
+    if not _memory_enabled(metadata):
+        return {}, {}
+
+    if metadata.get("memory_context"):
+        return (
+            json.loads(json.dumps(metadata.get("memory_context"))),
+            json.loads(json.dumps(metadata.get("memory_store", {}))),
+        )
+
+    scope_data = metadata.get("memory_scope")
+    if isinstance(scope_data, dict):
+        scope = MemoryScope.from_dict(scope_data)
+    else:
+        scope = MemoryScopeResolver.from_adapter_metadata(
+            project_dir=project_dir,
+            metadata=metadata,
+            conversation_memory_root=metadata.get("conversation_memory_root", ""),
+        )
+
+    store = MemoryStore(MemoryScopeResolver.storage_path(scope), scope)
+    context = store.build_context()
+    store.append_event(
+        "memory_context_loaded",
+        {
+            "record_count": context.get("record_count", 0),
+            "namespace": scope.namespace,
+        },
+    )
+    return context, store.describe_paths()
+
+
 async def _report_task_result_to_webhook(
     client: httpx.AsyncClient,
     webhook_url: str,
@@ -268,6 +321,8 @@ async def async_project_workflow(
     metadata = metadata or {}
     check_stage = WorkflowCheckStage()
     goal_metadata = goal_with_check_requirements(metadata.get("goal", {}), metadata)
+    memory_context, memory_store_metadata = _workflow_memory_context(project_dir, metadata)
+    goal_metadata = _goal_with_memory_context(goal_metadata, memory_context)
     task_runner = _local_task_runner_from_metadata(metadata)
     results: List[WorkflowTaskResult] = []
     ledger = GoalLedger(project_dir) if goal_metadata else None
@@ -389,6 +444,8 @@ async def async_project_workflow(
             "orchestration_roles": metadata.get("orchestration_roles", []),
             "goal": final_goal or goal_metadata,
             "goal_ledger": goal_ledger_metadata,
+            "memory_context": memory_context,
+            "memory_store": memory_store_metadata,
             **check_results.to_metadata(),
             "gate_evidence": gate_evidence,
         },

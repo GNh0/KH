@@ -20,10 +20,10 @@ Make UAF progress from a contract-heavy orchestration skeleton into an execution
 - Core direction approved by user: improve incrementally, taking useful ideas from gstack/Superpowers-style skill repositories.
 - Python core should remain the stable center for now.
 - TypeScript is best treated as a future sidecar for browser adapters, dashboards, and skill/template tooling.
-- Latest full verification after LLM-backed local workflow generation and evidence alias matching:
+- Latest full verification after scoped persistent memory support:
   - `python -m json.tool plugin.json`
   - `python -m src.skills.uaf_skill_catalog --check`
-  - `python -m unittest discover -s tests -v` (118 tests)
+  - `python -m unittest discover -s tests -v` (132 tests)
   - `python -B -c "import pathlib; [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in pathlib.Path('.').rglob('*.py')]"`
 
 ## Completed
@@ -129,12 +129,22 @@ Make UAF progress from a contract-heavy orchestration skeleton into an execution
   - conservative evidence alias matching for common key variants
   - workflow-provided aliases through `GoalState.metadata.evidence_aliases`
   - alias matches recorded under `metadata.evidence_alias_matches`
+- Added scoped persistent memory support:
+  - `MemoryScope`, `MemoryRecord`, and `MemoryEvent` contracts
+  - project/conversation scope resolver in `src/orchestration/memory_state.py`
+  - JSON/JSONL store in `src/orchestration/memory_store.py`
+  - memory records, candidates, append-only events, scope state, and secret-like content rejection
+  - workflow `enable_memory` support that attaches `memory_context` to workflow metadata and `GoalState.metadata`
+  - goal ledger persists the memory context through the serialized goal
+  - archived/deleted conversation cleanup policy with quarantine by default
+  - optional `CodexThreadRegistry` that reads local Codex `threads.archived` state when the registry is available
+  - `memory-state-harness` packaged skill
 - Reworked `README.md` to reflect current implementation level, references, verification, and roadmap.
 - Reworked `AgentLoop` user-facing prompts and target-file prompt from mojibake into ASCII English so LLM target-file selection is usable.
 
 ## Active Decision
 
-The persistent goal ledger exists. The local execution path now has runner, check, QA, sidecar, evidence, registry, and evidence-alias boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
+The persistent goal ledger exists. The local execution path now has runner, check, QA, sidecar, evidence, registry, evidence-alias, and scoped persistent-memory boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
 
 Active task: none. Recommended next improvement is optional host package scaffolding only when the actual Antigravity SDK or Playwright runtime is introduced.
 
@@ -148,6 +158,13 @@ There are two related layers:
    - Repo-local persistent goal ledger lives under `.uaf/state/`.
    - `current_goal.json` is the resumable state snapshot.
    - `goal_events.jsonl` is append-only audit history.
+
+3. UAF scoped persistent memory:
+   - Project memory lives under `.uaf/memory/`.
+   - Projectless chat memory should use a conversation namespace outside a repo.
+   - Archived conversation memory is retained.
+   - Deleted/missing conversation memory is quarantined by default.
+   - Codex desktop local registry can identify active vs archived threads when `state_5.sqlite` is available.
 
 ## Implementation Priority After Ledger
 
@@ -164,6 +181,10 @@ Improve existing execution paths in this order:
 3. More project-specific check presets
    - UAF has core presets; future work can add lint/security/release presets as real project conventions emerge.
 
+4. External memory providers
+   - UAF now has local scoped memory contracts and a JSON/JSONL store.
+   - Future Hermes/OpenClaw adapters should implement the same `MemoryScope`/`MemoryRecord` contract without replacing the local store.
+
 ## Recommended Next Task
 
 Implement next host-specific package when runtime details are explicit:
@@ -179,4 +200,5 @@ Implement next host-specific package when runtime details are explicit:
 - Default `LocalTaskRunner` writes deterministic generated artifacts; `LLMCodeGenerationAdapter` exists but must be explicitly injected.
 - Antigravity dispatcher has an injected native boundary, but no concrete host SDK adapter is bundled.
 - Browser/QA has a Python contract boundary, workflow integration, and JSON sidecar adapter, but no concrete Playwright package is bundled.
+- Persistent memory has local contracts/store and Codex registry polling support, but no Hermes/OpenClaw provider adapter is bundled.
 - Check/QA pipeline is extracted; remaining workflow growth points are ledger persistence, gate evaluation, and result assembly.

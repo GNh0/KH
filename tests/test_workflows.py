@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 
 from src.orchestration.roles import build_default_role_metadata
+from src.contracts import MemoryRecord
+from src.orchestration.memory_state import MemoryScopeResolver
+from src.orchestration.memory_store import MemoryStore
 from src.tasks.browser_qa import BrowserQACheckResult
 from src.tasks.workflows import _project_id, _safe_worker_count, dispatch_project_workflow
 
@@ -505,6 +508,54 @@ class WorkflowDispatchTests(unittest.TestCase):
         self.assertIn("workflow dispatch completed", result.metadata["goal"]["evidence"])
         self.assertIn("release gate passed", result.metadata["goal"]["evidence"])
         self.assertEqual({gate["status"] for gate in result.gate_results}, {"passed"})
+
+    def test_workflow_loads_memory_context_into_metadata_and_goal_ledger(self):
+        metadata = build_default_role_metadata()
+        metadata["enable_memory"] = True
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            scope = MemoryScopeResolver.project_scope(str(project_dir))
+            store = MemoryStore(MemoryScopeResolver.storage_path(scope), scope)
+            store.save_record(
+                MemoryRecord(
+                    record_id="decision-1",
+                    kind="decision",
+                    content="Use Python core and TypeScript sidecars.",
+                    scope=scope.kind,
+                    source="user-approved",
+                    confidence="high",
+                )
+            )
+
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+            ledger_state = json.loads(
+                Path(result.metadata["goal_ledger"]["current_goal_path"]).read_text(encoding="utf-8")
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.metadata["memory_context"]["records"][0]["record_id"], "decision-1")
+        self.assertEqual(
+            result.metadata["goal"]["metadata"]["memory_context"]["records"][0]["content"],
+            "Use Python core and TypeScript sidecars.",
+        )
+        self.assertEqual(
+            ledger_state["goal"]["metadata"]["memory_context"]["records"][0]["record_id"],
+            "decision-1",
+        )
 
     def test_workflow_blocks_goal_and_release_when_required_evidence_is_missing(self):
         metadata = build_default_role_metadata()

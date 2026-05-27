@@ -40,6 +40,111 @@ class GoalState:
 
 
 @dataclass(frozen=True)
+class MemoryScope:
+    kind: str
+    namespace: str
+    project_id: str = ""
+    thread_id: Optional[str] = None
+    root_path: str = ""
+    status: str = "active"
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "namespace": self.namespace,
+            "project_id": self.project_id,
+            "thread_id": self.thread_id,
+            "root_path": self.root_path,
+            "status": self.status,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MemoryScope":
+        return cls(
+            kind=data.get("kind", ""),
+            namespace=data.get("namespace", ""),
+            project_id=data.get("project_id", ""),
+            thread_id=data.get("thread_id"),
+            root_path=data.get("root_path", ""),
+            status=data.get("status", "active"),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
+class MemoryRecord:
+    record_id: str
+    kind: str
+    content: str
+    scope: str
+    source: str = ""
+    confidence: str = "medium"
+    created_at: str = ""
+    updated_at: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "record_id": self.record_id,
+            "kind": self.kind,
+            "content": self.content,
+            "scope": self.scope,
+            "source": self.source,
+            "confidence": self.confidence,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MemoryRecord":
+        return cls(
+            record_id=data.get("record_id", ""),
+            kind=data.get("kind", ""),
+            content=data.get("content", ""),
+            scope=data.get("scope", ""),
+            source=data.get("source", ""),
+            confidence=data.get("confidence", "medium"),
+            created_at=data.get("created_at", ""),
+            updated_at=data.get("updated_at", ""),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
+class MemoryEvent:
+    event_type: str
+    record_id: str = ""
+    scope: str = ""
+    payload: Dict[str, Any] = field(default_factory=dict)
+    timestamp: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "event_type": self.event_type,
+            "record_id": self.record_id,
+            "scope": self.scope,
+            "payload": dict(self.payload),
+            "timestamp": self.timestamp,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MemoryEvent":
+        return cls(
+            event_type=data.get("event_type", ""),
+            record_id=data.get("record_id", ""),
+            scope=data.get("scope", ""),
+            payload=dict(data.get("payload", {})),
+            timestamp=data.get("timestamp", ""),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
 class HarnessResult:
     success: bool
     stdout: str = ""
