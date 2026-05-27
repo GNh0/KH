@@ -41,11 +41,17 @@ class AgentLoop:
             objective=requirement,
             success_criteria=[
                 "design document created",
+                "work design saved",
+                "artifact manifest saved",
+                "required design artifacts saved",
                 "target files identified",
                 "workflow dispatch completed",
             ],
             evidence_required=[
                 "design_doc",
+                "work design saved",
+                "artifact manifest saved",
+                "required design artifacts saved",
                 "target_files",
                 "workflow dispatch completed",
             ],

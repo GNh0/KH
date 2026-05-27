@@ -1,11 +1,11 @@
 ---
 name: universal-agent-framework
-description: "A pure-local, highly concurrent, and sandboxed AI coding orchestration framework. Use this skill when the user asks to orchestrate a complex coding project or when you need to parallelize multiple file generations."
+description: "A pure-local, highly concurrent, and sandboxed AI/domain orchestration framework. Use this skill when the user asks to orchestrate a complex project, persist design artifacts, or parallelize multiple bounded tasks."
 ---
 
 # Universal Agent Framework (UAF)
 
-This is a local-first, zero-dependency, and hyper-concurrent agentic coding framework. It uses a Pure Python `asyncio` architecture to bypass traditional broker limits and can safely test Python code on Windows via `multiprocessing`-based sandboxing.
+This is a local-first, zero-dependency, and hyper-concurrent agentic orchestration framework. It uses a Pure Python `asyncio` architecture to bypass traditional broker limits, can carry domain-neutral design artifacts through workflows, and can safely test Python code on Windows via `multiprocessing`-based sandboxing.
 
 ## Requirements
 - Python 3.9+
@@ -38,7 +38,7 @@ python cli.py run --project "./my_game" --prompt "Create a simple python snake g
 
 ## Internal Architecture
 If you need to extend or debug this framework, here is the structure:
-- **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`GoalState`, `MemoryScope`, `MemoryRecord`, `MemoryEvent`, `HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`, `WorkflowTaskResult`, `WorkflowDispatchResult`).
+- **`src/contracts.py`**: Shared contracts for Codex, Antigravity, Claude Code, and local adapters (`GoalState`, `MemoryScope`, `MemoryRecord`, `MemoryEvent`, `DomainProfile`, `DomainRole`, `WorkDesign`, `DesignArtifact`, `ArtifactManifest`, `HarnessResult`, `SkillManifest`, `AdapterRequest`, `AdapterResult`, `WorkflowTaskResult`, `WorkflowDispatchResult`).
 - **`cli.py`**: The main entry point. Orchestrates the Server + Agent Loop.
 - **`src/core/app_bridge.py`**: App-first integration helper for Codex and Antigravity Windows app hosts. Builds role-aware `AdapterRequest` objects without CLI parsing.
 - **`src/orchestration/agent_loop.py`**: The central loop (Architect -> Dispatcher -> Evaluator).
@@ -47,6 +47,8 @@ If you need to extend or debug this framework, here is the structure:
 - **`src/orchestration/gate_evaluators.py`**: Focused spec, code-quality, QA, security, and release gate evaluators that emit structured findings and evidence records.
 - **`src/orchestration/goal_evidence.py`**: Goal evidence normalization and complete/blocked evaluation for QA and release gates.
 - **`src/orchestration/goal_ledger.py`**: Project-local `.uaf/state/` persistence for resumable current goal state and append-only goal events.
+- **`src/orchestration/domain_profiles.py`**: Domain-neutral profile and work-design builder for software, operations, analysis, design, and other topics.
+- **`src/orchestration/artifacts.py`**: Project-local WorkDesign and DesignArtifact store that writes `.uaf/artifacts/design/` files and `.uaf/state/artifact_manifest.json`.
 - **`src/orchestration/memory_state.py`**: Project/conversation memory scope resolver for host-neutral persistent memory namespaces.
 - **`src/orchestration/memory_store.py`**: JSON/JSONL memory store for scoped records, candidates, events, and cleanup policy.
 - **`src/orchestration/llm_router.py`**: Built-in OpenAI-compatible and Anthropic routing plus custom LLM provider registration.
@@ -72,6 +74,8 @@ External agents should exchange structured data through the contracts module ins
 - Use `AntigravityNativeDispatchResult` and `AntigravityNativeSidecarAdapter` when bridging an Antigravity host-native adapter into UAF; keep no-adapter behavior as structured pending. Metadata can provide `antigravity_native_sidecar.command` to launch a sidecar without Python object injection.
 - Use `GoalState` metadata to carry objective, required evidence, collected evidence, and complete/blocked status through the workflow.
 - Use `MemoryScope`, `MemoryRecord`, and `MemoryEvent` for scoped persistent memory. Project memory lives under `.uaf/memory/`; projectless chat memory must use a conversation namespace.
+- Use `DomainProfile`, `WorkDesign`, `DesignArtifact`, and `ArtifactManifest` for domain-general orchestration. Every substantial workflow should persist a work design and attach the artifact manifest to `WorkflowDispatchResult.metadata` and `GoalState.metadata`.
+- Use `DomainProfileBuilder`, `work_design_from_profile(...)`, and `ArtifactStore` when adding new domain or design-artifact producers. Do not hardcode one industry taxonomy into core orchestration.
 - Use `src.orchestration.evidence_producers` to convert command, review, and QA outputs into normalized evidence records before adding them to task or gate metadata.
 - Use `src.orchestration.gate_evaluators` for focused review/QA/security/release gate decisions; keep `src.orchestration.roles.build_role_gate_results(...)` as the public compatibility wrapper.
 - Use `GoalLedger` for `.uaf/state/current_goal.json` and `.uaf/state/goal_events.jsonl` persistence when goal metadata is present.
@@ -90,6 +94,7 @@ External agents should exchange structured data through the contracts module ins
 ## Packaged Harnesses
 - **Core role graph**: `orchestration-role-graph` for CEO, advisor, product strategy, development architect, planner, controller, implementer, review, QA, security, and release roles.
 - **Antigravity-derived**: `antigravity-agent-orchestration` for agent profiles, subagents, tool permissions, lifecycle hooks, error recovery, and observability.
+- **Domain orchestration**: `domain-orchestration-harness` for mandatory WorkDesign, domain roles, artifact manifests, review, QA/QC, risk, policy, and final decision gates across arbitrary topics.
 - **Superpowers-derived**: `development-lifecycle-harness`, `subagent-review-pipeline`, and `quality-gates-harness` for planning, TDD, review roles, debugging, and evidence-based completion.
 - **RTK-derived**: `rtk-command-output-harness` and `command-hook-policy-harness` for compact command output, exit-code preservation, token-savings tracking, hook trust, and permission precedence.
 - **gstack-derived and goal/memory-aware**: `review-gate-harness`, `qa-gate-harness`, `context-state-harness`, `goal-state-harness`, `memory-state-harness`, `guard-policy-harness`, and `health-check-harness` for structured review, QA, context handoff, objective tracking, scoped persistent memory, safety policy, and health reporting.

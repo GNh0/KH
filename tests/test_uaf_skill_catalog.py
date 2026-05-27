@@ -15,6 +15,7 @@ CORE_SKILLS = {
     "command-hook-policy-harness",
     "development-lifecycle-harness",
     "context-state-harness",
+    "domain-orchestration-harness",
     "goal-state-harness",
     "guard-policy-harness",
     "harness-evaluator",
@@ -101,6 +102,7 @@ class UafSkillCatalogTests(unittest.TestCase):
         expected_sources = {
             "antigravity-agent-orchestration": "Google Antigravity SDK",
             "development-lifecycle-harness": "Superpowers",
+            "domain-orchestration-harness": "domain orchestration",
             "subagent-review-pipeline": "Superpowers",
             "quality-gates-harness": "Superpowers",
             "rtk-command-output-harness": "RTK",

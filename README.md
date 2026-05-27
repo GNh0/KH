@@ -1,13 +1,13 @@
 # Universal Agent Framework (UAF)
 
-UAF is a Python-first, local-first orchestration framework for AI coding agents such as Codex, Antigravity, Claude Code, and other host runtimes.
+UAF is a Python-first, local-first orchestration framework for AI agents such as Codex, Antigravity, Claude Code, and other host runtimes.
 
 The project packages reusable agent workflows as two things:
 
 - Python contracts and dispatchers under `src/`
 - Host-readable skills under `skills/<skill-folder>/SKILL.md`
 
-The goal is to make role graphs, planning, worker dispatch, review gates, QA gates, safety policy, snapshots, and goal tracking portable across agent hosts without depending on one vendor-specific runtime folder.
+The goal is to make domain profiling, mandatory design, persisted artifacts, role graphs, planning, worker dispatch, review gates, QA/QC gates, safety policy, snapshots, memory, and goal tracking portable across agent hosts without depending on one vendor-specific runtime folder.
 
 ## Design References
 
@@ -29,6 +29,8 @@ What works today:
 - Optional FastAPI webhook server for external host callbacks and reporting.
 - Dataclass contracts for adapter requests, results, workflow results, and goal state.
 - Scoped persistent memory contracts for project and conversation namespaces.
+- DomainProfile, WorkDesign, DesignArtifact, and ArtifactManifest contracts for domain-neutral orchestration.
+- Mandatory workflow design-stage persistence under `.uaf/artifacts/design/` and `.uaf/state/artifact_manifest.json`.
 - Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
 - Focused review, QA, security, and release gate evaluators.
 - Local and Antigravity dispatcher contracts.
@@ -45,6 +47,7 @@ What works today:
 - Packaged skill catalog with validation.
 - GoalState metadata attached to dispatch requests and workflow results.
 - Goal evidence evaluation, including conservative aliases, that blocks QA/release gates when required evidence is missing.
+- Workflow GoalState metadata now carries domain profile, work design, and artifact manifest context.
 - Workflow task metadata can carry normalized evidence records into `GoalState.evidence`.
 - Gate results carry structured findings and evidence records for downstream goal/release checks.
 - Persistent project-local goal ledger under `.uaf/state/` for resumable workflow state.
@@ -93,6 +96,8 @@ cli.py run
   -> SystemArchitect writes design_doc.md
   -> AgentLoop attaches role graph metadata and GoalState
   -> Scoped memory context is loaded when memory is enabled
+  -> DomainProfile and WorkDesign are created for the objective
+  -> Design artifacts are persisted and attached as an ArtifactManifest
   -> DispatcherFactory selects local or Antigravity mode
   -> Workflow workers fan out file-level implementer tasks through LocalTaskRunner
   -> Goal evidence is evaluated before QA/release completion
@@ -114,6 +119,27 @@ Workflow metadata can also provide `command_check_presets` for common checks. Cu
 `src.platforms.antigravity_native.AntigravityNativeDispatchResult` is the native host boundary for Antigravity-style integrations. `AntigravityDispatcher` uses it when a native adapter is injected, or when metadata provides `antigravity_native_sidecar.command`. The sidecar adapter sends `AdapterRequest` JSON on stdin and expects `AntigravityNativeDispatchResult` JSON on stdout. If neither adapter path is configured, the dispatcher returns a structured pending result and leaves external callbacks optional.
 
 `src.orchestration.extension_registry.ExtensionRegistry` is the shared extension point for host and provider integration. `DispatcherFactory.register_dispatcher(...)` lets a host add another dispatch mode without changing the core switch logic, and `LLMRouter.register_provider(...)` lets another LLM backend supply a provider object behind the same `chat(system, user)` contract.
+
+## Domain Orchestration and Design Artifacts
+
+UAF now treats design as a mandatory workflow stage, not a software-only convention. A request can be software development, equipment planning, investment analysis, operations, education, legal review, research synthesis, or another topic. The core flow is still the same:
+
+```text
+understand objective
+  -> identify domain and subdomains
+  -> assign roles
+  -> create WorkDesign
+  -> persist required design artifacts
+  -> execute bounded tasks
+  -> review, analysis, QA/QC, risk, policy, and final gates
+  -> complete or block based on GoalState evidence
+```
+
+`src.orchestration.domain_profiles.DomainProfileBuilder` creates a generic `DomainProfile` when no domain taxonomy is known. It carries subdomains, roles, artifact types, review gates, risk/policy gates, and required evidence. `work_design_from_profile(...)` turns that profile into a `WorkDesign`.
+
+`src.orchestration.artifacts.ArtifactStore` saves the work design and any supplied design artifacts under `.uaf/artifacts/design/`, then writes `.uaf/state/artifact_manifest.json`. The manifest is attached to `WorkflowDispatchResult.metadata["artifact_manifest"]` and to `GoalState.metadata["artifact_manifest"]`, so resume-safe goal ledger state can prove which design artifacts existed when the workflow completed or blocked.
+
+The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
 
 ## Persistent Memory
 
@@ -206,6 +232,7 @@ The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_
 |-------|---------|
 | `architect-pipeline` | Convert a user requirement into a design document and target files. |
 | `development-lifecycle-harness` | Planning, TDD, review, verification, and branch completion workflow. |
+| `domain-orchestration-harness` | Domain-neutral WorkDesign, artifact manifest, review, QA/QC, risk, policy, and final decision workflow. |
 | `quality-gates-harness` | TDD, systematic debugging, and evidence-before-completion requirements. |
 | `workflow-skill-distiller` | Turn repeated workflows into reusable UAF skills. |
 

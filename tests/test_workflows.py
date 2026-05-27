@@ -557,6 +557,66 @@ class WorkflowDispatchTests(unittest.TestCase):
             "decision-1",
         )
 
+    def test_workflow_saves_work_design_artifacts_into_manifest_and_goal_evidence(self):
+        metadata = build_default_role_metadata()
+        metadata["domain_profile"] = {
+            "domain_name": "operations",
+            "objective": "Improve a support workflow",
+            "subdomains": ["triage", "handoff"],
+            "required_design_artifact_types": ["workflow-map"],
+        }
+        metadata["design_artifacts"] = [
+            {
+                "artifact_id": "workflow_map",
+                "kind": "workflow-map",
+                "title": "Workflow Map",
+                "content": "# Workflow Map\n",
+                "owner_role": "domain-designer",
+                "required_for": ["review", "qa"],
+            }
+        ]
+        metadata["goal"] = {
+            "objective": "Improve a support workflow",
+            "status": "active",
+            "evidence_required": [
+                "design_doc",
+                "workflow dispatch completed",
+                "work design saved",
+                "artifact manifest saved",
+                "required design artifacts saved",
+            ],
+            "evidence": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# Source design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+            manifest_path = Path(result.metadata["artifact_store"]["manifest_path"])
+            manifest_exists = manifest_path.exists()
+            ledger_state = json.loads(
+                Path(result.metadata["goal_ledger"]["current_goal_path"]).read_text(encoding="utf-8")
+            )
+
+        self.assertTrue(result.success)
+        self.assertTrue(manifest_exists)
+        self.assertEqual(result.metadata["domain_profile"]["domain_name"], "operations")
+        self.assertEqual(result.metadata["work_design"]["domain"], "operations")
+        self.assertEqual(len(result.metadata["artifact_manifest"]["design_artifacts"]), 2)
+        self.assertIn("work design saved", result.metadata["goal"]["evidence"])
+        self.assertIn("artifact manifest saved", result.metadata["goal"]["evidence"])
+        self.assertIn("required design artifacts saved", result.metadata["goal"]["evidence"])
+        self.assertEqual(
+            ledger_state["goal"]["metadata"]["artifact_manifest"]["workflow_id"],
+            result.workflow_id,
+        )
+
     def test_workflow_blocks_goal_and_release_when_required_evidence_is_missing(self):
         metadata = build_default_role_metadata()
         metadata["goal"] = {

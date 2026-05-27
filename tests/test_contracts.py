@@ -4,9 +4,14 @@ import unittest
 from src.contracts import (
     AdapterRequest,
     AdapterResult,
+    ArtifactManifest,
+    DesignArtifact,
+    DomainProfile,
+    DomainRole,
     GoalState,
     HarnessResult,
     SkillManifest,
+    WorkDesign,
     WorkflowDispatchResult,
     WorkflowTaskResult,
 )
@@ -75,6 +80,69 @@ class GoalStateContractTests(unittest.TestCase):
         self.assertEqual(goal.status, "blocked")
         self.assertEqual(goal.blocked_reason, "missing credentials")
         self.assertEqual(goal.success_criteria, [])
+
+
+class DomainDesignContractTests(unittest.TestCase):
+    def test_domain_profile_round_trips_as_dict(self):
+        profile = DomainProfile(
+            domain_name="generic",
+            objective="Plan a new topic",
+            subdomains=["requirements", "risk"],
+            roles=[
+                DomainRole(
+                    name="domain-designer",
+                    purpose="Create the mandatory design.",
+                    responsibilities=["define artifacts"],
+                    stage="design",
+                    required_artifacts=["work-design"],
+                    produces=["work_design"],
+                )
+            ],
+            required_design_artifact_types=["work-design", "risk-policy-checklist"],
+            evidence_required=["work design saved"],
+            review_gates=["design review"],
+            risk_policy_gates=["risk policy checked"],
+        )
+
+        self.assertEqual(DomainProfile.from_dict(profile.to_dict()), profile)
+
+    def test_work_design_round_trips_as_dict(self):
+        design = WorkDesign(
+            objective="Create an operations plan",
+            domain="operations",
+            scope="single team",
+            assumptions=["source data will be provided"],
+            constraints=["no private credentials"],
+            subdomains=["process", "metrics"],
+            roles_required=["domain-designer", "qa-qc-verifier"],
+            deliverables=["process map"],
+            evidence_required=["work design saved"],
+            risk_policy_checks=["privacy review"],
+            review_gates=["design review"],
+            design_artifacts=["work-design", "risk-policy-checklist"],
+        )
+
+        self.assertEqual(WorkDesign.from_dict(design.to_dict()), design)
+
+    def test_artifact_manifest_round_trips_as_dict(self):
+        artifact = DesignArtifact(
+            artifact_id="work_design",
+            kind="work-design",
+            title="Work Design",
+            path=".uaf/artifacts/design/work_design.md",
+            owner_role="domain-designer",
+            domain="generic",
+            required_for=["dispatch", "review"],
+            status="created",
+            checksum="abc123",
+        )
+        manifest = ArtifactManifest(
+            workflow_id="workflow_demo",
+            design_artifacts=[artifact],
+            evidence=["work design saved"],
+        )
+
+        self.assertEqual(ArtifactManifest.from_dict(manifest.to_dict()), manifest)
 
 
 class AdapterContractTests(unittest.TestCase):

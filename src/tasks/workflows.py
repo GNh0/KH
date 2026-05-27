@@ -8,6 +8,7 @@ from typing import List
 import httpx
 
 from src.contracts import MemoryScope, WorkflowDispatchResult, WorkflowTaskResult
+from src.orchestration.artifacts import build_design_stage
 from src.orchestration.evidence_producers import collect_metadata_evidence
 from src.orchestration.goal_evidence import (
     collect_workflow_goal_evidence,
@@ -165,6 +166,19 @@ def _goal_with_memory_context(goal: dict, memory_context: dict) -> dict:
     return updated_goal
 
 
+def _goal_with_design_stage(goal: dict, design_stage: dict) -> dict:
+    if not goal or not design_stage:
+        return goal
+
+    updated_goal = dict(goal)
+    metadata = dict(updated_goal.get("metadata", {}))
+    metadata["domain_profile"] = json.loads(json.dumps(design_stage.get("domain_profile", {})))
+    metadata["work_design"] = json.loads(json.dumps(design_stage.get("work_design", {})))
+    metadata["artifact_manifest"] = json.loads(json.dumps(design_stage.get("manifest", {})))
+    updated_goal["metadata"] = metadata
+    return updated_goal
+
+
 def _workflow_memory_context(project_dir: str, metadata: dict) -> tuple:
     if not _memory_enabled(metadata):
         return {}, {}
@@ -318,11 +332,20 @@ async def async_project_workflow(
 ) -> WorkflowDispatchResult:
     queue = asyncio.Queue()
     project_id = _project_id(project_dir)
+    workflow_id = f"workflow_{project_id}"
     metadata = metadata or {}
     check_stage = WorkflowCheckStage()
     goal_metadata = goal_with_check_requirements(metadata.get("goal", {}), metadata)
     memory_context, memory_store_metadata = _workflow_memory_context(project_dir, metadata)
     goal_metadata = _goal_with_memory_context(goal_metadata, memory_context)
+    design_stage = build_design_stage(
+        project_dir=project_dir,
+        workflow_id=workflow_id,
+        design_doc=design_doc,
+        file_list=file_list,
+        metadata=metadata,
+    )
+    goal_metadata = _goal_with_design_stage(goal_metadata, design_stage)
     task_runner = _local_task_runner_from_metadata(metadata)
     results: List[WorkflowTaskResult] = []
     ledger = GoalLedger(project_dir) if goal_metadata else None
@@ -346,7 +369,7 @@ async def async_project_workflow(
             {
                 "objective": goal_metadata.get("objective", ""),
                 "status": goal_metadata.get("status", "active"),
-                "workflow_id": f"workflow_{project_id}",
+                "workflow_id": workflow_id,
                 "file_count": len(file_list),
             },
         )
@@ -389,6 +412,7 @@ async def async_project_workflow(
         workflow_completed=True,
     )
     workflow_evidence.extend(_task_result_evidence(ordered_results))
+    workflow_evidence.extend(design_stage.get("evidence", []))
     workflow_evidence.extend(check_results.evidence)
     evaluated_goal = evaluate_goal_evidence(
         goal_metadata,
@@ -405,7 +429,7 @@ async def async_project_workflow(
         ledger.append_event(
             "evidence_added",
             {
-                "workflow_id": f"workflow_{project_id}",
+                "workflow_id": workflow_id,
                 "evidence": list(final_goal.get("evidence", [])),
             },
         )
@@ -425,7 +449,7 @@ async def async_project_workflow(
                 "status": final_goal.get("status", ""),
                 "blocked_reason": final_goal.get("blocked_reason", ""),
                 "missing_evidence": final_goal.get("metadata", {}).get("missing_evidence", []),
-                "workflow_id": f"workflow_{project_id}",
+                "workflow_id": workflow_id,
             },
         )
     success = task_success and check_success
@@ -434,7 +458,7 @@ async def async_project_workflow(
 
     print("[Master] async workflow completed.")
     return WorkflowDispatchResult(
-        workflow_id=f"workflow_{project_id}",
+        workflow_id=workflow_id,
         success=success,
         task_results=ordered_results,
         gate_results=gate_results,
@@ -446,6 +470,10 @@ async def async_project_workflow(
             "goal_ledger": goal_ledger_metadata,
             "memory_context": memory_context,
             "memory_store": memory_store_metadata,
+            "domain_profile": design_stage.get("domain_profile", {}),
+            "work_design": design_stage.get("work_design", {}),
+            "artifact_manifest": design_stage.get("manifest", {}),
+            "artifact_store": design_stage.get("store", {}),
             **check_results.to_metadata(),
             "gate_evidence": gate_evidence,
         },

@@ -1,19 +1,29 @@
 {
   "name": "universal-agent-framework",
   "version": "2.5.0",
-  "description": "Pure Python agentic coding orchestration engine for Antigravity, Codex, and Claude Code. Features asyncio-based parallel workers, Windows app bridge integration, multiprocessing sandboxing, gzip snapshot rollback, and a CLI launcher.",
+  "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features domain profiles, work design artifacts, asyncio-based parallel workers, Windows app bridge integration, multiprocessing sandboxing, gzip snapshot rollback, and a CLI launcher.",
   "author": "Antigravity Framework Team",
   "entrypoint": "cli.py",
   "skills": [
     {
       "name": "orchestrate",
-      "description": "Run the full agent workflow: design, dispatch, parallel coding, sandbox validation, and optional webhook reporting.",
+      "description": "Run the full agent workflow: domain design, artifact persistence, dispatch, parallel bounded task execution, validation, and optional webhook reporting.",
       "usage": "python cli.py run --project <dir> --prompt <requirement> --platform antigravity"
     },
     {
       "name": "contracts",
-      "description": "Shared dataclass contracts for Codex, Antigravity, Claude Code, and local adapters.",
+      "description": "Shared dataclass contracts for Codex, Antigravity, Claude Code, local adapters, domain profiles, work designs, and artifact manifests.",
       "module": "src.contracts"
+    },
+    {
+      "name": "domain-profiles",
+      "description": "Build domain-neutral DomainProfile and WorkDesign metadata for software, operations, analysis, design, and other workflow topics.",
+      "module": "src.orchestration.domain_profiles"
+    },
+    {
+      "name": "artifact-manifest-store",
+      "description": "Persist work designs and domain design artifacts under .uaf/ and expose ArtifactManifest evidence for workflow gates.",
+      "module": "src.orchestration.artifacts"
     },
     {
       "name": "evidence-producers",
@@ -104,6 +114,11 @@
       "name": "development-lifecycle-harness",
       "description": "UAF-native design, planning, TDD, review, verification, and branch-finishing workflow derived from Superpowers methodology.",
       "usage": "python -m src.skills.uaf_skill_catalog --read development-lifecycle-harness"
+    },
+    {
+      "name": "domain-orchestration-harness",
+      "description": "UAF-native domain orchestration harness for mandatory work design, role decomposition, design artifacts, review, QA/QC, risk, policy, and final decision gates.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read domain-orchestration-harness"
     },
     {
       "name": "subagent-review-pipeline",

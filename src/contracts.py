@@ -145,6 +145,212 @@ class MemoryEvent:
 
 
 @dataclass(frozen=True)
+class DomainRole:
+    name: str
+    purpose: str
+    responsibilities: List[str] = field(default_factory=list)
+    stage: str = ""
+    required_artifacts: List[str] = field(default_factory=list)
+    produces: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "purpose": self.purpose,
+            "responsibilities": list(self.responsibilities),
+            "stage": self.stage,
+            "required_artifacts": list(self.required_artifacts),
+            "produces": list(self.produces),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DomainRole":
+        return cls(
+            name=data.get("name", ""),
+            purpose=data.get("purpose", ""),
+            responsibilities=list(data.get("responsibilities", [])),
+            stage=data.get("stage", ""),
+            required_artifacts=list(data.get("required_artifacts", [])),
+            produces=list(data.get("produces", [])),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
+class DomainProfile:
+    domain_name: str
+    objective: str
+    subdomains: List[str] = field(default_factory=list)
+    roles: List[DomainRole] = field(default_factory=list)
+    required_design_artifact_types: List[str] = field(default_factory=list)
+    evidence_required: List[str] = field(default_factory=list)
+    review_gates: List[str] = field(default_factory=list)
+    risk_policy_gates: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "domain_name": self.domain_name,
+            "objective": self.objective,
+            "subdomains": list(self.subdomains),
+            "roles": [role.to_dict() for role in self.roles],
+            "required_design_artifact_types": list(self.required_design_artifact_types),
+            "evidence_required": list(self.evidence_required),
+            "review_gates": list(self.review_gates),
+            "risk_policy_gates": list(self.risk_policy_gates),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DomainProfile":
+        return cls(
+            domain_name=data.get("domain_name", ""),
+            objective=data.get("objective", ""),
+            subdomains=list(data.get("subdomains", [])),
+            roles=[
+                role if isinstance(role, DomainRole) else DomainRole.from_dict(role)
+                for role in data.get("roles", [])
+            ],
+            required_design_artifact_types=list(data.get("required_design_artifact_types", [])),
+            evidence_required=list(data.get("evidence_required", [])),
+            review_gates=list(data.get("review_gates", [])),
+            risk_policy_gates=list(data.get("risk_policy_gates", [])),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
+class WorkDesign:
+    objective: str
+    domain: str
+    scope: str = ""
+    assumptions: List[str] = field(default_factory=list)
+    constraints: List[str] = field(default_factory=list)
+    subdomains: List[str] = field(default_factory=list)
+    roles_required: List[str] = field(default_factory=list)
+    deliverables: List[str] = field(default_factory=list)
+    evidence_required: List[str] = field(default_factory=list)
+    risk_policy_checks: List[str] = field(default_factory=list)
+    review_gates: List[str] = field(default_factory=list)
+    design_artifacts: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "objective": self.objective,
+            "domain": self.domain,
+            "scope": self.scope,
+            "assumptions": list(self.assumptions),
+            "constraints": list(self.constraints),
+            "subdomains": list(self.subdomains),
+            "roles_required": list(self.roles_required),
+            "deliverables": list(self.deliverables),
+            "evidence_required": list(self.evidence_required),
+            "risk_policy_checks": list(self.risk_policy_checks),
+            "review_gates": list(self.review_gates),
+            "design_artifacts": list(self.design_artifacts),
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WorkDesign":
+        return cls(
+            objective=data.get("objective", ""),
+            domain=data.get("domain", ""),
+            scope=data.get("scope", ""),
+            assumptions=list(data.get("assumptions", [])),
+            constraints=list(data.get("constraints", [])),
+            subdomains=list(data.get("subdomains", [])),
+            roles_required=list(data.get("roles_required", [])),
+            deliverables=list(data.get("deliverables", [])),
+            evidence_required=list(data.get("evidence_required", [])),
+            risk_policy_checks=list(data.get("risk_policy_checks", [])),
+            review_gates=list(data.get("review_gates", [])),
+            design_artifacts=list(data.get("design_artifacts", [])),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
+class DesignArtifact:
+    artifact_id: str
+    kind: str
+    title: str
+    path: str
+    owner_role: str = ""
+    domain: str = ""
+    required_for: List[str] = field(default_factory=list)
+    status: str = "created"
+    checksum: str = ""
+    created_at: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "artifact_id": self.artifact_id,
+            "kind": self.kind,
+            "title": self.title,
+            "path": self.path,
+            "owner_role": self.owner_role,
+            "domain": self.domain,
+            "required_for": list(self.required_for),
+            "status": self.status,
+            "checksum": self.checksum,
+            "created_at": self.created_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DesignArtifact":
+        return cls(
+            artifact_id=data.get("artifact_id", ""),
+            kind=data.get("kind", ""),
+            title=data.get("title", ""),
+            path=data.get("path", ""),
+            owner_role=data.get("owner_role", ""),
+            domain=data.get("domain", ""),
+            required_for=list(data.get("required_for", [])),
+            status=data.get("status", "created"),
+            checksum=data.get("checksum", ""),
+            created_at=data.get("created_at", ""),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
+class ArtifactManifest:
+    workflow_id: str
+    design_artifacts: List[DesignArtifact] = field(default_factory=list)
+    evidence: List[str] = field(default_factory=list)
+    updated_at: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "design_artifacts": [artifact.to_dict() for artifact in self.design_artifacts],
+            "evidence": list(self.evidence),
+            "updated_at": self.updated_at,
+            "metadata": dict(self.metadata),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ArtifactManifest":
+        return cls(
+            workflow_id=data.get("workflow_id", ""),
+            design_artifacts=[
+                artifact if isinstance(artifact, DesignArtifact) else DesignArtifact.from_dict(artifact)
+                for artifact in data.get("design_artifacts", [])
+            ],
+            evidence=list(data.get("evidence", [])),
+            updated_at=data.get("updated_at", ""),
+            metadata=dict(data.get("metadata", {})),
+        )
+
+
+@dataclass(frozen=True)
 class HarnessResult:
     success: bool
     stdout: str = ""
