@@ -5,11 +5,11 @@ description: Use when a UAF workflow needs QA checks, regression evidence, manua
 
 # QA Gate Harness
 
-This is a UAF-native QA harness derived from gstack QA workflow patterns. It describes portable QA gates without requiring gstack browser tooling.
+This is a UAF-native QA harness for regression and verification workflow patterns. It describes portable QA gates without requiring bundled browser tooling.
 
-## Reference basis
+## Pattern basis
 
-- gstack: QA lead workflow, reproduce-fix-verify loops, regression test creation, and report-only QA mode.
+- QA workflow: lead review, reproduce-fix-verify loops, regression test creation, and report-only QA mode.
 - UAF: sandbox evaluator, workflow gate results, and future platform adapters.
 
 ## Workflow

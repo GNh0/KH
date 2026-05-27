@@ -108,12 +108,12 @@ class UafSkillCatalogTests(unittest.TestCase):
             "command-output-harness": "command output",
             "command-hook-policy-harness": "Command hook",
             "orchestration-role-graph": "CEO",
-            "review-gate-harness": "gstack",
-            "qa-gate-harness": "gstack",
-            "context-state-harness": "gstack",
+            "review-gate-harness": "Review workflow",
+            "qa-gate-harness": "QA workflow",
+            "context-state-harness": "Context workflow",
             "goal-state-harness": "GoalState",
-            "guard-policy-harness": "gstack",
-            "health-check-harness": "gstack",
+            "guard-policy-harness": "Guard workflow",
+            "health-check-harness": "Health workflow",
             "memory-state-harness": "persistent memory",
         }
 

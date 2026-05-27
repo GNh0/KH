@@ -115,7 +115,7 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 - Added packaged skill validation:
   - `src/skills/uaf_skill_validator.py`
   - `python -m src.skills.uaf_skill_catalog --check`
-- Added gstack-derived UAF-native harness skills:
+- Added UAF-native gate and state harness skills:
   - `review-gate-harness`
   - `qa-gate-harness`
   - `context-state-harness`

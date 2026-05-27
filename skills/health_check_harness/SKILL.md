@@ -5,11 +5,11 @@ description: Use when a UAF workflow needs a code quality dashboard, test health
 
 # Health Check Harness
 
-This is a UAF-native health harness derived from gstack health workflow patterns. It turns verification commands into a compact quality dashboard.
+This is a UAF-native health harness for quality dashboard workflow patterns. It turns verification commands into a compact quality dashboard.
 
-## Reference basis
+## Pattern basis
 
-- gstack: health dashboard, type checker, linter, tests, dead code checks, weighted scores, and trend-friendly summaries.
+- Health workflow: quality dashboard, type checker, linter, tests, dead code checks, weighted scores, and trend-friendly summaries.
 - UAF: validator checks, sandbox/evaluator results, workflow gate results, and release-manager metadata.
 
 ## Workflow

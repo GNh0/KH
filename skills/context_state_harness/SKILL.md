@@ -5,11 +5,11 @@ description: Use when a UAF workflow needs resumable context, decision capture, 
 
 # Context State Harness
 
-This is a UAF-native context harness derived from gstack context-save and context-restore patterns. It keeps resumable workflow state project-local and explicit.
+This is a UAF-native context harness for context-save and context-restore patterns. It keeps resumable workflow state project-local and explicit.
 
-## Reference basis
+## Pattern basis
 
-- gstack: save/restore working context, git state, decisions, remaining work, and handoff continuity.
+- Context workflow: save/restore working context, git state, decisions, remaining work, and handoff continuity.
 - UAF: snapshot manager, adapter metadata, role graph, and workflow dispatch results.
 
 ## Workflow

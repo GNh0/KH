@@ -77,7 +77,7 @@ Expected: all focused tests pass.
 
 - [ ] **Step 1: Write failing catalog expectation**
 
-Add `goal-state-harness` to the expected packaged skill set and gstack-derived/UAF-native source checks.
+Add `goal-state-harness` to the expected packaged skill set and UAF-native source checks.
 
 - [ ] **Step 2: Run catalog tests to confirm RED**
 

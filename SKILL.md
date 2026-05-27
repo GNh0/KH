@@ -99,7 +99,7 @@ External agents should exchange structured data through the contracts module ins
 - **Domain orchestration**: `domain-orchestration-harness` for mandatory WorkDesign, domain roles, artifact manifests, review, QA/QC, risk, policy, and final decision gates across arbitrary topics.
 - **Personal skillbook workflow**: `development-lifecycle-harness`, `subagent-review-pipeline`, and `quality-gates-harness` for planning, TDD, review roles, debugging, and evidence-based completion.
 - **Command operations**: `command-output-harness` and `command-hook-policy-harness` for compact command output, exit-code preservation, token-savings tracking, hook trust, and permission precedence.
-- **gstack-derived and goal/memory-aware**: `review-gate-harness`, `qa-gate-harness`, `context-state-harness`, `goal-state-harness`, `memory-state-harness`, `guard-policy-harness`, and `health-check-harness` for structured review, QA, context handoff, objective tracking, scoped persistent memory, safety policy, and health reporting.
+- **Review, state, and goal/memory workflow**: `review-gate-harness`, `qa-gate-harness`, `context-state-harness`, `goal-state-harness`, `memory-state-harness`, `guard-policy-harness`, and `health-check-harness` for structured review, QA, context handoff, objective tracking, scoped persistent memory, safety policy, and health reporting.
 - **Snapshot rollback**: `snapshot-state-harness` for project-local gzip checkpoints, rollback, and `.snapshots` metadata protection.
 
 ## Security Constraints

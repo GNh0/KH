@@ -5,11 +5,11 @@ description: Use when a UAF workflow needs structured pre-landing review gates, 
 
 # Review Gate Harness
 
-This is a UAF-native review harness derived from gstack review workflow patterns. It must not call gstack or require an installed gstack checkout at runtime.
+This is a UAF-native review harness for structured review workflow patterns. It must not call or require an external review runtime at execution time.
 
-## Reference basis
+## Pattern basis
 
-- gstack: pre-landing review, completeness checks, severity-ranked findings, auto-fix separation, and final readiness dashboards.
+- Review workflow: pre-landing review, completeness checks, severity-ranked findings, auto-fix separation, and final readiness dashboards.
 - UAF: `WorkflowDispatchResult.gate_results`, role graph review stages, and adapter result metadata.
 
 ## Workflow

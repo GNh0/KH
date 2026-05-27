@@ -5,11 +5,11 @@ description: Use when a UAF workflow needs destructive-command warnings, directo
 
 # Guard Policy Harness
 
-This is a UAF-native safety harness derived from gstack careful, freeze, guard, and unfreeze workflow patterns. It defines guard policy without installing shell hooks.
+This is a UAF-native safety harness for careful execution, edit boundary, guard, and unlock workflow patterns. It defines guard policy without installing shell hooks.
 
-## Reference basis
+## Pattern basis
 
-- gstack: destructive command warnings, directory edit locks, full guard mode, and explicit override behavior.
+- Guard workflow: destructive command warnings, directory edit locks, full guard mode, and explicit override behavior.
 - UAF: sandbox workspace boundaries, command hook policy, adapter metadata, and security review roles.
 
 ## Workflow

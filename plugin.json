@@ -147,17 +147,17 @@
     },
     {
       "name": "review-gate-harness",
-      "description": "UAF-native review gate harness derived from gstack review workflow patterns.",
+      "description": "UAF-native review gate harness for structured review workflow patterns.",
       "usage": "python -m src.skills.uaf_skill_catalog --read review-gate-harness"
     },
     {
       "name": "qa-gate-harness",
-      "description": "UAF-native QA gate harness derived from gstack QA workflow patterns.",
+      "description": "UAF-native QA gate harness for regression and verification workflow patterns.",
       "usage": "python -m src.skills.uaf_skill_catalog --read qa-gate-harness"
     },
     {
       "name": "context-state-harness",
-      "description": "UAF-native context save and restore harness derived from gstack context workflow patterns.",
+      "description": "UAF-native context save and restore harness for resumable workflow patterns.",
       "usage": "python -m src.skills.uaf_skill_catalog --read context-state-harness"
     },
     {
@@ -172,12 +172,12 @@
     },
     {
       "name": "guard-policy-harness",
-      "description": "UAF-native guard policy harness derived from gstack careful, freeze, and guard workflow patterns.",
+      "description": "UAF-native guard policy harness for careful execution, edit boundary, and override workflow patterns.",
       "usage": "python -m src.skills.uaf_skill_catalog --read guard-policy-harness"
     },
     {
       "name": "health-check-harness",
-      "description": "UAF-native health check harness derived from gstack quality dashboard workflow patterns.",
+      "description": "UAF-native health check harness for quality dashboard and release readiness workflow patterns.",
       "usage": "python -m src.skills.uaf_skill_catalog --read health-check-harness"
     },
     {

@@ -11,15 +11,15 @@ The goal is to make domain profiling, mandatory design, persisted artifacts, rol
 
 ## Design References
 
-UAF intentionally borrows the strongest ideas from mature skill repositories, then adapts them to this repo's Python core.
+UAF intentionally borrows the strongest ideas from mature agent-workflow references, then adapts them to this repo's Python core and personal skillbook.
 
 | Reference | What UAF takes from it |
 |-----------|------------------------|
-| [garrytan/gstack](https://github.com/garrytan/gstack) | Skill-as-workflow structure, role-specialized review/QA/release gates, guard policies, browser/QA direction, host adapter mindset, and skill quality checks. |
+| External agent workflow references | Skill-as-workflow structure, role-specialized review/QA/release gates, guard policies, browser/QA direction, host adapter mindset, and skill quality checks. |
 | Personal skillbook workflow | Explicit planning, TDD, systematic debugging, subagent-oriented development, and evidence-before-completion discipline. |
 | Command operations patterns | Command output normalization, hook policy boundaries, metadata-first execution records, and fail-safe behavior. |
 
-UAF does not vendor those repositories. The current implementation keeps the stable core in Python and leaves TypeScript as a good future sidecar option for browser adapters, dashboards, and skill template tooling.
+UAF does not vendor external reference repositories. The current implementation keeps the stable core in Python and leaves TypeScript as a good future sidecar option for browser adapters, dashboards, and skill template tooling.
 
 ## Personal Skillbook
 
@@ -267,7 +267,7 @@ The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_
 | `goal-state-harness` | Goal objective tracking, completion criteria, evidence requirements, and blocked-state reporting. |
 | `memory-state-harness` | Scoped persistent memory, candidates, project/conversation namespace isolation, and cleanup policy. |
 | `context-state-harness` | Context save/restore, handoff payloads, and continuation metadata. |
-| `review-gate-harness` | Spec, code, and release review gate contracts inspired by gstack-style review flows. |
+| `review-gate-harness` | Spec, code, and release review gate contracts for UAF workflows. |
 | `qa-gate-harness` | QA checks, regression evidence, bug reports, and browser-adapter expectations. |
 | `health-check-harness` | Code health dashboard inputs, readiness scoring, and trend signals. |
 

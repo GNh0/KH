@@ -1,8 +1,8 @@
-# UAF GStack-Derived Skill Quality Implementation Plan
+# UAF Skill Quality Implementation Plan
 
 > **For agentic workers:** REQUIRED WORKFLOW: Use KH skillbook task-by-task execution to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add UAF-native skill validation, catalog health checks, and gstack-derived quality harness skills.
+**Goal:** Add UAF-native skill validation, catalog health checks, and quality harness skills.
 
 **Architecture:** Add a dependency-free Python validator module under `src.skills`, expose it through `uaf_skill_catalog`, and add focused tests before implementation. Add new `skills/<name>/SKILL.md` folders that describe UAF-native review, QA, context, guard, and health gate workflows.
 
@@ -62,7 +62,7 @@ Run: `python -m unittest tests.test_uaf_skill_catalog -v`
 
 Expected: all catalog tests pass.
 
-### Task 3: GStack-Derived UAF Harness Skills
+### Task 3: UAF Quality Harness Skills
 
 **Files:**
 - Create: `skills/review_gate_harness/SKILL.md`

@@ -1,14 +1,14 @@
-# UAF GStack-Derived Skill Quality Design
+# UAF Skill Quality Design
 
 ## Goal
 
-Improve the Universal Agent Framework by importing the useful parts of `garrytan/gstack` that fit UAF's Python-first architecture: skill catalog validation, health reporting, and reusable quality-gate harness definitions.
+Improve the Universal Agent Framework by adding Python-first skill catalog validation, health reporting, and reusable quality-gate harness definitions.
 
 ## Context
 
 UAF currently has a working contract layer, role graph, sandbox, snapshot manager, webhook receiver, and packaged skill catalog. The weak point is not the list/read catalog itself; it is that `skills/*/SKILL.md` files are trusted without validation, and the workflow gates are mostly represented as metadata rather than executable checks.
 
-`gstack` solves similar problems with generated `SKILL.md` files, host-specific skill outputs, static validation, health checks, safety skills, review/QA workflows, and rich tests. UAF should not vendor or depend on gstack. It should adopt the portable design patterns that match this repository.
+Mature agent workflow systems solve similar problems with generated `SKILL.md` files, host-specific skill outputs, static validation, health checks, safety skills, review/QA workflows, and rich tests. UAF should not vendor or depend on external skill runtimes. It should adopt the portable design patterns that match this repository.
 
 ## Scope
 
@@ -17,7 +17,7 @@ This phase adds:
 - A Python `uaf_skill_validator` module for packaged skill validation.
 - A `--check` command in `src.skills.uaf_skill_catalog`.
 - JSON health output that callers can use in CLI, CI, or future app integrations.
-- UAF-native harness skills derived from gstack workflow patterns:
+- UAF-native harness skills for review, QA, context, guard, and health workflow patterns:
   - `review-gate-harness`
   - `qa-gate-harness`
   - `context-state-harness`
