@@ -234,7 +234,7 @@ understand objective
 
 Review gates are deliberately evidence-based. `spec-reviewer` fails if an implementer reports success without task evidence, `code-quality-reviewer` fails on task-level quality findings, and QA/release gates remain blocked when required `GoalState` evidence is missing. Evidence records keep both the granted `evidence` list and trace metadata such as `metadata.evidence_key`; only the granted `evidence` list satisfies goals.
 
-`src.orchestration.deliverable_exports.export_office_deliverables(...)` keeps its historical function name for compatibility, but it now acts as a type-aware deliverable router. It writes user-facing work products directly into the target project's `docs/` folder. These are not internal `.uaf` state files.
+`src.orchestration.deliverable_exports.export_office_deliverables(...)` keeps its historical function name for compatibility, but it now acts as a type-aware deliverable router. It writes user-facing work products directly into the target project's `docs/` folder. These are not internal `.uaf` state files and should not read like execution logs.
 
 The general orchestration profile remains domain-neutral and works for software, operations, research, planning, and other workflow topics:
 
@@ -245,6 +245,8 @@ The general orchestration profile remains domain-neutral and works for software,
 - `docs/역할별_작업분해표.xlsx`
 - `docs/증거계획서.xlsx`
 - `docs/위험_정책_체크리스트.xlsx`
+
+General DOCX exports are documentation-grade templates, not simple status dumps. The requirements brief includes functional requirements, non-functional quality requirements, acceptance criteria, assumptions, constraints, and open questions. The orchestration design includes role DAG, parallel execution strategy, runtime-state separation, gate flow, and blocked/rework handling. The process flow includes staged flow, decision points, and a rework loop. XLSX exports include owner role, inputs, outputs, completion criteria, verification method, evidence keys, risk level, mitigation, and blocking conditions.
 
 `docs/사용_매뉴얼.docx` is conditional, not mandatory. It is generated when `export_manual` is true, when manual revision metadata is supplied, or when the workflow looks operational/procedural enough to need user or operations instructions. Analysis-style domains such as investment, valuation, portfolio review, research, or generic analysis skip the manual by default. When generated, the manual starts with a `리비전 버전 관리` section using `manual_revision` and `manual_revision_note` metadata, defaulting to `Rev. 1.0`.
 

@@ -271,7 +271,17 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 
 ## Active Decision
 
-The persistent goal ledger exists. The local execution path now has DAG role orchestration, runner, check, QA, sidecar, evidence, registry, evidence-alias, scoped persistent-memory, domain profile, work design, artifact manifest, type-aware deliverable export, and resume handoff boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
+The persistent goal ledger exists. The local execution path now has DAG role orchestration, runner, check, QA, sidecar, evidence, registry, evidence-alias, scoped persistent-memory, domain profile, work design, artifact manifest, documentation-grade type-aware deliverable export, and resume handoff boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
+
+Latest user review found that the general DOCX/XLSX exports existed but read like shallow workflow logs. The export generator now treats those files as user-facing documents:
+
+- `요구정의서.docx`: functional requirements, quality requirements, acceptance criteria, assumptions, constraints, open questions, source trace.
+- `오케스트레이션_설계서.docx`: role DAG, parallel execution strategy, runtime-state separation, gate flow, failure/blocked handling.
+- `산출물_정의서.docx`: artifact purpose, generation conditions, quality criteria, verification intent.
+- `처리흐름도.docx`: staged flow, decision points, and rework loop.
+- `역할별_작업분해표.xlsx`, `증거계획서.xlsx`, `위험_정책_체크리스트.xlsx`: owner, inputs, completion criteria, verification method, evidence, mitigation, and blocking conditions.
+
+Tests now assert those document-quality markers instead of only checking that the files exist and are valid Office packages.
 
 Active task: none. Recommended next improvement is optional host package scaffolding or additional domain-specific artifact producers only when the actual runtime or domain dependency is explicit.
 

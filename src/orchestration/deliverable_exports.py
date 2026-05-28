@@ -260,25 +260,78 @@ def _requirements_sections(
     source_design_doc: str,
 ) -> List[Dict[str, Any]]:
     return [
+        {
+            "heading": "문서 목적",
+            "paragraphs": [
+                "이 문서는 현재 요청을 실행 가능한 요구사항, 인수 기준, 제약, 확인 필요 항목으로 정리한 사용자 산출물이다.",
+                "로그나 내부 상태 기록이 아니라 후속 작업자가 같은 목표를 재현하고 검증할 수 있는 기준 문서로 사용한다.",
+            ],
+        },
         {"heading": "요청 요약", "paragraphs": [source_title]},
         {"heading": "목표", "paragraphs": [design.objective or profile.objective]},
         {"heading": "도메인", "paragraphs": [profile.domain_name or design.domain or "generic"]},
         {"heading": "범위", "paragraphs": [design.scope or "not specified"]},
+        {"heading": "이해관계자 및 역할", "items": _role_summary_lines(profile, design)},
+        {"heading": "기능 요구사항", "items": _functional_requirement_lines(design)},
+        {
+            "heading": "비기능/품질 요구사항",
+            "items": [
+                "NFR-001: 산출물은 사용자가 바로 열어 검토할 수 있는 파일 형식으로 생성한다.",
+                "NFR-002: 내부 작업 상태와 사용자 산출물을 분리해 프로젝트 루트 오염을 방지한다.",
+                "NFR-003: 완료 판정은 성공 문자열이 아니라 evidence와 gate 결과를 기준으로 한다.",
+                "NFR-004: 입력에 없는 사실, 치수, 정책 판단은 확정값이 아니라 확인 필요 항목으로 표시한다.",
+            ],
+        },
+        {"heading": "인수 기준", "items": _acceptance_criteria_lines(design)},
         {"heading": "필수 산출물", "items": design.deliverables},
         {"heading": "가정", "items": design.assumptions},
         {"heading": "제약", "items": design.constraints},
+        {"heading": "미해결 확인사항", "items": _open_question_lines(design, source_design_doc)},
         {"heading": "원본 요청", "paragraphs": [_compact_text(source_design_doc)]},
     ]
 
 
 def _orchestration_sections(profile: DomainProfile, design: WorkDesign) -> List[Dict[str, Any]]:
     return [
+        {
+            "heading": "설계 개요",
+            "paragraphs": [
+                "이 설계서는 목표를 역할별 작업, 병렬 실행 단위, 검토 게이트, evidence 수집 흐름으로 나눈다.",
+                "각 역할은 산출물과 검증 책임을 갖고, 하위 gate가 실패하면 release 단계로 진행하지 않는다.",
+            ],
+        },
         {"heading": "오케스트레이션 목표", "paragraphs": [design.objective]},
         {"heading": "하위 도메인", "items": design.subdomains},
         {"heading": "필요 역할", "items": design.roles_required},
+        {"heading": "역할 DAG", "items": _role_dag_lines(profile, design)},
+        {
+            "heading": "병렬 실행 전략",
+            "items": [
+                "governance/design/planning 역할은 선행 의사결정과 작업분해를 만든다.",
+                "서로 의존성이 없는 specialist 또는 implementer 작업은 bounded worker로 fan-out 처리한다.",
+                "review/QA/security/release 역할은 fan-in 결과와 evidence를 받아 gate를 판정한다.",
+                "같은 wave 안의 역할은 병렬 실행 가능하지만, 의존 gate가 실패하면 downstream 역할은 blocked 처리한다.",
+            ],
+        },
         {"heading": "설계 산출물", "items": design.design_artifacts},
         {"heading": "검토 게이트", "items": design.review_gates},
         {"heading": "위험 및 정책 게이트", "items": design.risk_policy_checks},
+        {
+            "heading": "상태 및 산출물 경로",
+            "items": [
+                "사용자 산출물은 project/docs 아래에 생성한다.",
+                "runtime role artifacts, goal ledger, memory, manifest는 UAF runtime root 아래에 저장한다.",
+                "프로젝트 루트에는 .uaf 또는 .snapshots 같은 내부 작업 폴더를 기본 생성하지 않는다.",
+            ],
+        },
+        {
+            "heading": "실패 및 차단 처리",
+            "items": [
+                "필수 evidence가 없으면 spec/QA/release gate를 통과시키지 않는다.",
+                "quality finding 또는 failed task가 있으면 code-quality gate에서 차단한다.",
+                "차단 상태는 원인, 누락 evidence, 재작업 대상 역할을 함께 기록한다.",
+            ],
+        },
         {
             "heading": "역할 그래프",
             "items": [
@@ -291,8 +344,34 @@ def _orchestration_sections(profile: DomainProfile, design: WorkDesign) -> List[
 
 def _deliverable_sections(design: WorkDesign, file_list: List[str]) -> List[Dict[str, Any]]:
     return [
+        {
+            "heading": "산출물 정의 원칙",
+            "paragraphs": [
+                "산출물은 내부 로그가 아니라 사용자가 목적별로 열람, 승인, 재작업 지시를 할 수 있는 문서 또는 데이터 파일이어야 한다.",
+                "파일 형식은 고정 목록이 아니라 작업 유형과 evidence 요구에 맞춰 선택한다.",
+            ],
+        },
         {"heading": "사용자 산출물", "items": design.deliverables},
         {"heading": "작업 대상", "items": file_list or ["final output"]},
+        {"heading": "산출물 상세", "items": _deliverable_detail_lines(design, file_list)},
+        {
+            "heading": "산출물 품질 기준",
+            "items": [
+                "각 산출물은 목적, 입력, 생성 조건, 검증 방법, 차단 기준을 포함한다.",
+                "문서형 산출물은 요구/설계/흐름/검증 기준을 분리해 작성한다.",
+                "표형 산출물은 역할, 작업, evidence, gate, 상태를 행 단위로 추적 가능해야 한다.",
+                "도면/CAD/이미지 산출물은 치수와 공차가 없을 때 개념 산출물임을 명시해야 한다.",
+            ],
+        },
+        {
+            "heading": "생성 조건",
+            "items": [
+                "general-orchestration: 요구정의서, 오케스트레이션 설계서, 처리흐름도, 증거/위험 표를 생성한다.",
+                "product-design: 설계 문서, 치수/BOM 표, 검토용 도면 또는 CAD handoff 파일을 생성한다.",
+                "investment-analysis: 분석 보고서, 시나리오 모델, 위험/정책 체크리스트를 생성한다.",
+                "사용 매뉴얼은 운영/인수인계/절차 목적이 있거나 metadata로 명시된 경우에만 생성한다.",
+            ],
+        },
         {"heading": "증거 요구사항", "items": design.evidence_required},
         {
             "heading": "기본 export 파일",
@@ -313,17 +392,34 @@ def _deliverable_sections(design: WorkDesign, file_list: List[str]) -> List[Dict
 def _process_flow_sections(design: WorkDesign) -> List[Dict[str, Any]]:
     return [
         {
-            "heading": "기본 흐름",
+            "heading": "단계별 처리 흐름",
             "items": [
-                "목표 접수",
-                "도메인 및 하위 도메인 식별",
-                "역할과 책임 배정",
-                "WorkDesign 작성",
-                "사용자 산출물 export",
-                "작업 실행",
-                "검토 및 QA/QC",
-                "위험/정책 점검",
-                "완료 또는 차단 결정",
+                "1. 목표 접수: 사용자의 목적, 대상, 기대 산출물, 제약을 캡처한다.",
+                "2. 도메인 분류: 작업 유형과 필요한 산출물 프로필을 결정한다.",
+                "3. WorkDesign 작성: 범위, 역할, evidence, risk/policy gate를 확정한다.",
+                "4. 산출물 계획: docs 산출물과 runtime 내부 artifact를 분리한다.",
+                "5. 역할 fan-out: 독립 실행 가능한 역할 또는 파일 작업을 병렬로 dispatch한다.",
+                "6. 결과 fan-in: task result, role artifact, evidence record를 모은다.",
+                "7. Review/QA/Security gate: 누락, 실패, 품질 finding을 차단한다.",
+                "8. Release decision: 모든 필수 evidence가 충족되면 완료하고 아니면 blocked로 남긴다.",
+            ],
+        },
+        {
+            "heading": "재작업 루프",
+            "items": [
+                "review gate 실패: implementer 또는 specialist 단계로 되돌려 누락 산출물을 보완한다.",
+                "QA gate 실패: 테스트/검증 evidence를 추가하거나 산출물 내용을 수정한다.",
+                "risk/policy gate 실패: 위험 항목의 owner, mitigation, 승인 조건을 갱신한다.",
+                "release gate 실패: goal evidence 요구사항과 실제 evidence record를 대조해 missing 항목을 해결한다.",
+            ],
+        },
+        {
+            "heading": "결정 지점",
+            "items": [
+                "입력이 충분한가: 부족하면 확인사항을 문서화하고 확정 산출물 대신 초안/개념 산출물로 표시한다.",
+                "병렬 실행 가능한가: 공유 상태 충돌이 없으면 bounded worker로 fan-out한다.",
+                "사용자 매뉴얼이 필요한가: 운영/반복 사용/인수인계 목적일 때만 생성한다.",
+                "완료 가능한가: 필수 evidence와 gate 통과 여부로 complete 또는 blocked를 결정한다.",
             ],
         },
         {"heading": "검토 게이트", "items": design.review_gates},
@@ -336,7 +432,7 @@ def _role_task_rows(
     design: WorkDesign,
     file_list: List[str],
 ) -> List[List[str]]:
-    rows = [["역할", "단계", "목적", "필요 산출물", "생성물", "책임"]]
+    rows = [["역할", "단계", "작업", "입력", "생성물", "완료 기준", "증거", "병렬성", "책임"]]
     roles = profile.roles or [
         DomainRole(name=name, purpose="Execute assigned orchestration responsibility.")
         for name in design.roles_required
@@ -348,35 +444,71 @@ def _role_task_rows(
             role.purpose,
             "; ".join(role.required_artifacts),
             "; ".join(role.produces),
+            _role_done_definition(role, design),
+            _role_evidence_text(role, design),
+            _role_parallelism(role),
             "; ".join(role.responsibilities),
         ])
     if file_list:
-        rows.append([
-            "implementer",
-            "execution",
-            "Produce requested target deliverables.",
-            "work-design; role-task-plan",
-            "; ".join(file_list),
-            "execute assigned outputs; record evidence",
-        ])
+        for index, target in enumerate(file_list, start=1):
+            rows.append([
+                "implementer",
+                "execution",
+                f"Produce requested target deliverable {index}.",
+                "work-design; role-task-plan; source request",
+                target,
+                "target deliverable exists, is reviewable, and has implementation evidence",
+                "generated code written; implementation evidence recorded",
+                "parallel with other independent targets",
+                "execute assigned output; record evidence; surface blockers",
+            ])
     return rows
 
 
 def _evidence_rows(design: WorkDesign, export_evidence: List[str]) -> List[List[str]]:
-    rows = [["증거 키", "출처", "상태", "비고"]]
+    rows = [["증거 키", "출처", "검증 방법", "필수 여부", "상태", "실패/차단 처리", "비고"]]
     for item in _unique(list(design.evidence_required) + list(export_evidence)):
-        rows.append([item, "workflow/design-stage", "planned", "required when goal evidence asks for it"])
+        rows.append([
+            item,
+            "workflow/design-stage",
+            "Check goal evidence and artifact metadata for the exact evidence key.",
+            "required when listed by goal",
+            "planned",
+            "missing evidence blocks release or marks the goal incomplete",
+            "required when goal evidence asks for it",
+        ])
     for item in design.review_gates:
-        rows.append([item, "review-gate", "planned", "review gate output"])
+        rows.append([
+            item,
+            "review-gate",
+            "Inspect gate status, findings, and evidence_records.",
+            "required for governed workflow",
+            "planned",
+            "failed gate blocks downstream roles",
+            "review gate output",
+        ])
     return rows
 
 
 def _risk_policy_rows(design: WorkDesign) -> List[List[str]]:
-    rows = [["체크 항목", "담당 역할", "상태", "차단 기준"]]
-    for item in design.risk_policy_checks:
-        rows.append([item, "risk-policy-reviewer", "planned", "missing or failed check blocks completion"])
-    if len(rows) == 1:
-        rows.append(["missing evidence checked", "risk-policy-reviewer", "planned", "required evidence is absent"])
+    rows = [["체크 항목", "담당 역할", "위험 수준", "상태", "완화 방법", "차단 기준", "확인 증거"]]
+    checks = _unique(list(design.risk_policy_checks) + [
+        "user deliverable completeness checked",
+        "runtime state isolation checked",
+        "unsupported claim checked",
+        "manual export necessity checked",
+        "format suitability checked",
+    ])
+    for item in checks:
+        rows.append([
+            item,
+            "risk-policy-reviewer",
+            _risk_level(item),
+            "planned",
+            _risk_mitigation(item),
+            _risk_block_condition(item),
+            "risk policy evidence record or reviewer finding",
+        ])
     return rows
 
 
@@ -424,6 +556,138 @@ def _manual_sections(
             ],
         },
     ]
+
+
+def _role_summary_lines(profile: DomainProfile, design: WorkDesign) -> List[str]:
+    roles = profile.roles or [
+        DomainRole(name=name, purpose="Execute assigned orchestration responsibility.")
+        for name in design.roles_required
+    ]
+    return [
+        f"{role.name}: {role.purpose} / stage={role.stage or 'unspecified'}"
+        for role in roles
+    ] or ["final-decision-manager: approve or block the final workflow result"]
+
+
+def _functional_requirement_lines(design: WorkDesign) -> List[str]:
+    deliverables = list(design.deliverables) or ["final synthesized output"]
+    lines = [
+        f"REQ-{index:03d}: Generate and validate `{item}` as a user-facing deliverable."
+        for index, item in enumerate(deliverables, start=1)
+    ]
+    base = len(lines)
+    lines.extend([
+        f"REQ-{base + 1:03d}: Separate user-facing files under docs from internal runtime state.",
+        f"REQ-{base + 2:03d}: Record evidence for each required design artifact, review gate, and final decision.",
+        f"REQ-{base + 3:03d}: Block completion when required evidence, QA result, or risk-policy confirmation is missing.",
+    ])
+    return lines
+
+
+def _acceptance_criteria_lines(design: WorkDesign) -> List[str]:
+    return [
+        "AC-001: All planned user deliverables exist in the configured export directory.",
+        "AC-002: Each deliverable has a clear purpose, input basis, verification method, and owner role.",
+        "AC-003: Required evidence keys are present in goal evidence or a blocked reason lists missing keys.",
+        "AC-004: Review, QA/QC, risk/policy, and release gates are passed or have actionable findings.",
+        "AC-005: Unsupported or insufficiently specified claims are listed as open questions, not asserted as facts.",
+    ]
+
+
+def _open_question_lines(design: WorkDesign, source_design_doc: str) -> List[str]:
+    questions = [
+        "Are there source documents, domain rules, or reference data that must override the generated assumptions?",
+        "Which deliverables require formal approval, and who owns that approval?",
+        "What level of evidence is enough for final acceptance in this workflow?",
+    ]
+    if "not specified" in (design.scope or "").lower() or not design.scope:
+        questions.append("The workflow scope is not fully specified; confirm inclusions and exclusions before release.")
+    if len(_compact_text(source_design_doc)) < 80:
+        questions.append("The source request is short; confirm missing constraints, examples, and acceptance criteria.")
+    return questions
+
+
+def _role_dag_lines(profile: DomainProfile, design: WorkDesign) -> List[str]:
+    roles = profile.roles or [
+        DomainRole(name=name, purpose="Execute assigned orchestration responsibility.")
+        for name in design.roles_required
+    ]
+    stage_order = ["governance", "design", "planning", "execution", "review", "qa", "risk", "final"]
+    lines: List[str] = []
+    for stage in stage_order:
+        stage_roles = [role.name for role in roles if role.stage == stage]
+        if stage_roles:
+            lines.append(f"{stage}: {' + '.join(stage_roles)}")
+    unstaged = [role.name for role in roles if not role.stage or role.stage not in stage_order]
+    if unstaged:
+        lines.append(f"unspecified: {' + '.join(unstaged)}")
+    lines.append("Dependency rule: each stage consumes prior stage artifacts and blocks downstream release on failed gate evidence.")
+    return lines
+
+
+def _deliverable_detail_lines(design: WorkDesign, file_list: List[str]) -> List[str]:
+    deliverables = list(design.deliverables) or ["final synthesized output"]
+    targets = file_list or ["final output"]
+    lines = []
+    for index, item in enumerate(deliverables, start=1):
+        target = targets[min(index - 1, len(targets) - 1)]
+        lines.append(
+            f"OUT-{index:03d}: {item} / target={target} / verifies={'; '.join(design.evidence_required) or 'goal evidence'}"
+        )
+    return lines
+
+
+def _role_done_definition(role: DomainRole, design: WorkDesign) -> str:
+    produced = "; ".join(role.produces) or "assigned output"
+    gates = "; ".join(design.review_gates) or "review gate"
+    return f"{produced} exists and can satisfy {gates}"
+
+
+def _role_evidence_text(role: DomainRole, design: WorkDesign) -> str:
+    if role.stage in {"review", "qa", "risk", "final"}:
+        return "; ".join(design.evidence_required + design.review_gates) or "gate evidence"
+    return "; ".join(role.required_artifacts or design.design_artifacts or ["work-design"])
+
+
+def _role_parallelism(role: DomainRole) -> str:
+    if role.stage in {"execution", "review"}:
+        return "parallel when inputs are independent"
+    if role.stage in {"qa", "risk"}:
+        return "parallel after review fan-in"
+    return "sequential dependency stage"
+
+
+def _risk_level(item: str) -> str:
+    lower = item.lower()
+    if "secret" in lower or "sensitive" in lower or "policy" in lower:
+        return "high"
+    if "missing" in lower or "unsupported" in lower or "evidence" in lower:
+        return "medium"
+    return "medium"
+
+
+def _risk_mitigation(item: str) -> str:
+    lower = item.lower()
+    if "evidence" in lower or "missing" in lower:
+        return "Map every required evidence key to a producer and block release when missing."
+    if "state" in lower or "runtime" in lower:
+        return "Store internal UAF runtime data outside the project docs/output surface."
+    if "manual" in lower:
+        return "Create manuals only for operational, repeated-use, or explicit manual requests."
+    if "format" in lower:
+        return "Choose artifact formats by objective and verification needs."
+    return "Record owner, verification method, and mitigation before final release."
+
+
+def _risk_block_condition(item: str) -> str:
+    lower = item.lower()
+    if "sensitive" in lower or "secret" in lower:
+        return "potential secret or sensitive data is exposed"
+    if "unsupported" in lower:
+        return "claim cannot be traced to source input or evidence"
+    if "format" in lower:
+        return "chosen format cannot represent the requested artifact"
+    return "missing or failed check blocks completion"
 
 
 def _product_design_sections(

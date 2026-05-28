@@ -157,13 +157,38 @@ class ArtifactStoreTests(unittest.TestCase):
 
                 with zipfile.ZipFile(exported_paths["요구정의서.docx"]) as package:
                     document_xml = package.read("word/document.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["오케스트레이션_설계서.docx"]) as package:
+                    orchestration_xml = package.read("word/document.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["산출물_정의서.docx"]) as package:
+                    deliverable_xml = package.read("word/document.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["처리흐름도.docx"]) as package:
+                    process_xml = package.read("word/document.xml").decode("utf-8")
                 with zipfile.ZipFile(exported_paths["역할별_작업분해표.xlsx"]) as package:
                     sheet_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["증거계획서.xlsx"]) as package:
+                    evidence_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["위험_정책_체크리스트.xlsx"]) as package:
+                    risk_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
                 with zipfile.ZipFile(exported_paths["사용_매뉴얼.docx"]) as package:
                     manual_xml = package.read("word/document.xml").decode("utf-8")
 
                 self.assertIn("Warehouse Exception Review", document_xml)
+                self.assertIn("기능 요구사항", document_xml)
+                self.assertIn("인수 기준", document_xml)
+                self.assertIn("미해결 확인사항", document_xml)
+                self.assertIn("역할 DAG", orchestration_xml)
+                self.assertIn("병렬 실행 전략", orchestration_xml)
+                self.assertIn("재작업 루프", process_xml)
+                self.assertIn("단계별 처리 흐름", process_xml)
+                self.assertIn("산출물 품질 기준", deliverable_xml)
+                self.assertIn("생성 조건", deliverable_xml)
                 self.assertIn("operator-handoff", sheet_xml)
+                self.assertIn("완료 기준", sheet_xml)
+                self.assertIn("검증 방법", evidence_xml)
+                self.assertIn("차단 기준", risk_xml)
+                self.assertGreaterEqual(sheet_xml.count("<row "), 10)
+                self.assertGreaterEqual(evidence_xml.count("<row "), 10)
+                self.assertGreaterEqual(risk_xml.count("<row "), 8)
                 self.assertIn("리비전 버전 관리", manual_xml)
                 self.assertIn("Rev. 1.0", manual_xml)
                 self.assertLess(manual_xml.index("리비전 버전 관리"), manual_xml.index("운영"))
