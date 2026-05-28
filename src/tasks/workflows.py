@@ -419,7 +419,7 @@ async def async_project_workflow(
     evaluated_goal = evaluate_goal_evidence(
         goal_metadata,
         workflow_evidence=workflow_evidence,
-        workflow_success=task_success,
+        workflow_success=task_success and check_success,
     )
     gate_results = build_role_gate_results([
         result.to_dict()

@@ -16,7 +16,7 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 
 ## Current Verified State
 
-- Repository: `GNh0/KH`, local path `C:\Users\User\Documents\Codex\KH`.
+- Repository: `GNh0/KH`, local path `C:\Users\KONEIT\Desktop\Jang\KH`.
 - Core direction approved by user: improve incrementally, taking useful ideas from external references while keeping KH/UAF branded as a personal skillbook.
 - Python core should remain the stable center for now.
 - TypeScript is best treated as a future sidecar for browser adapters, dashboards, and skill/template tooling.
@@ -39,6 +39,13 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_catalog --check`
   - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"`
   - `python -B -m unittest discover -s tests -v` (157 tests)
+- Latest full verification after goal-state hardening:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool .agents/plugins/marketplace.json`
+  - `python -m src.skills.uaf_skill_catalog --check`
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (72 files)
+  - `python -B -m unittest discover -s tests -v` (159 tests)
 
 ## Completed
 
@@ -189,6 +196,11 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 - Strengthened packaged skill behavior validation:
   - `src.skills.uaf_skill_validator` now requires trigger-focused `Use when` descriptions and an explicit behavior section.
   - `tests.test_uaf_skill_catalog` verifies packaged skill implementation target references resolve to repo modules, symbols, or skill files.
+- Hardened goal-state verification:
+  - command/check-stage failures now keep evaluated goals blocked even when the failed check has no evidence key.
+  - unknown command-check presets now block goal completion instead of allowing an evidence-only complete state.
+  - goal ledger and resume handoff snapshots expose `success_criteria` at the top level.
+  - LocalDispatcher adapter metadata exposes `resume_handoff` next to `goal` and `goal_ledger`.
 
 ## Active Decision
 

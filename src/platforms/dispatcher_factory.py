@@ -78,6 +78,7 @@ class LocalDispatcher:
         )
         evaluated_goal = workflow_result.metadata.get("goal", metadata.get("goal", {}))
         goal_ledger = workflow_result.metadata.get("goal_ledger", {})
+        resume_handoff = workflow_result.metadata.get("resume_handoff", {})
         return AdapterResult(
             status=status,
             message=message,
@@ -89,6 +90,7 @@ class LocalDispatcher:
                 "role_graph": metadata.get("role_graph", {}),
                 "goal": evaluated_goal,
                 "goal_ledger": goal_ledger,
+                "resume_handoff": resume_handoff,
                 "workflow": workflow_result.to_dict(),
                 "task_results": [
                     result.to_dict()

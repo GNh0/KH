@@ -267,7 +267,9 @@ class LocalDispatcherTests(unittest.TestCase):
             self.assertEqual(result.metadata["goal"]["status"], "complete")
             self.assertEqual(result.metadata["workflow"]["metadata"]["goal"]["status"], "complete")
             self.assertIn("goal_ledger", result.metadata)
+            self.assertIn("resume_handoff", result.metadata)
             self.assertTrue(Path(result.metadata["goal_ledger"]["current_goal_path"]).exists())
+            self.assertTrue(Path(result.metadata["resume_handoff"]["paths"]["json_path"]).exists())
 
     def test_execute_request_exposes_runner_metadata_for_file_tasks(self):
         original_url = os.environ.pop("AG_WEBHOOK_URL", None)

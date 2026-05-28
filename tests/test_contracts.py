@@ -91,6 +91,7 @@ class HandoffSnapshotContractTests(unittest.TestCase):
             objective="continue the workflow",
             status="blocked",
             next_recommended_action="collect missing evidence: review passed",
+            success_criteria=["review evidence is available"],
             evidence_required=["design_doc", "review passed"],
             evidence=["design_doc"],
             missing_evidence=["review passed"],

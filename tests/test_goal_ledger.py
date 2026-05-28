@@ -13,6 +13,7 @@ class GoalLedgerTests(unittest.TestCase):
             goal = {
                 "objective": "build api",
                 "status": "active",
+                "success_criteria": ["tests are green"],
                 "evidence_required": ["tests"],
                 "evidence": [],
             }
@@ -29,6 +30,7 @@ class GoalLedgerTests(unittest.TestCase):
             self.assertEqual(loaded, state)
             self.assertEqual(loaded["objective"], "build api")
             self.assertEqual(loaded["status"], "active")
+            self.assertEqual(loaded["success_criteria"], ["tests are green"])
             self.assertEqual(loaded["tasks"]["pending"], ["main.py"])
             self.assertEqual(loaded["goal"], goal)
 

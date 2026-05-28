@@ -46,6 +46,7 @@ class HandoffSnapshot:
     objective: str = ""
     status: str = "unknown"
     next_recommended_action: str = ""
+    success_criteria: List[str] = field(default_factory=list)
     evidence_required: List[str] = field(default_factory=list)
     evidence: List[str] = field(default_factory=list)
     missing_evidence: List[str] = field(default_factory=list)
@@ -62,6 +63,7 @@ class HandoffSnapshot:
             "objective": self.objective,
             "status": self.status,
             "next_recommended_action": self.next_recommended_action,
+            "success_criteria": list(self.success_criteria),
             "evidence_required": list(self.evidence_required),
             "evidence": list(self.evidence),
             "missing_evidence": list(self.missing_evidence),
@@ -80,6 +82,7 @@ class HandoffSnapshot:
             objective=data.get("objective", ""),
             status=data.get("status", "unknown"),
             next_recommended_action=data.get("next_recommended_action", ""),
+            success_criteria=list(data.get("success_criteria", [])),
             evidence_required=list(data.get("evidence_required", [])),
             evidence=list(data.get("evidence", [])),
             missing_evidence=list(data.get("missing_evidence", [])),

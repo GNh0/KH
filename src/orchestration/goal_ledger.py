@@ -56,6 +56,7 @@ class GoalLedger:
             "status": goal.get("status", "active"),
             "active_task": active_task,
             "tasks": normalized_tasks,
+            "success_criteria": list(goal.get("success_criteria", [])),
             "evidence_required": list(goal.get("evidence_required", [])),
             "evidence": list(goal.get("evidence", [])),
             "blocked_reason": goal.get("blocked_reason", ""),

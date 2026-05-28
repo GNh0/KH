@@ -27,6 +27,7 @@ class ResumeHandoffTests(unittest.TestCase):
             goal = GoalState(
                 objective="Improve a support workflow",
                 status="blocked",
+                success_criteria=["review evidence is available"],
                 evidence_required=["design_doc", "review passed"],
                 evidence=["design_doc"],
                 blocked_reason="missing required evidence: review passed",
@@ -55,10 +56,14 @@ class ResumeHandoffTests(unittest.TestCase):
         self.assertEqual(snapshot["objective"], "Improve a support workflow")
         self.assertEqual(snapshot["status"], "blocked")
         self.assertEqual(snapshot["workflow_id"], "workflow_demo")
+        self.assertEqual(snapshot["success_criteria"], ["review evidence is available"])
         self.assertEqual(snapshot["missing_evidence"], ["review passed"])
         self.assertEqual(persisted["next_recommended_action"], "collect missing evidence: review passed")
+        self.assertEqual(persisted["success_criteria"], ["review evidence is available"])
         self.assertIn("# UAF Resume Handoff", markdown)
         self.assertIn("No prior chat context is required", markdown)
+        self.assertIn("## Success Criteria", markdown)
+        self.assertIn("review evidence is available", markdown)
         self.assertIn("review passed", markdown)
 
     def test_handoff_snapshot_handles_missing_state_as_unavailable(self):

@@ -394,6 +394,76 @@ class WorkflowDispatchTests(unittest.TestCase):
         self.assertEqual(statuses["qa-verifier"], "blocked")
         self.assertEqual(statuses["release-manager"], "blocked")
 
+    def test_failed_command_check_without_evidence_key_blocks_goal_and_ledger(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+        metadata["command_checks"] = [
+            {
+                "command": [sys.executable, "-c", "import sys; sys.exit(2)"],
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+            ledger_state = json.loads(
+                Path(result.metadata["goal_ledger"]["current_goal_path"]).read_text(encoding="utf-8")
+            )
+            ledger_events = [
+                json.loads(line)
+                for line in Path(result.metadata["goal_ledger"]["events_path"]).read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.metadata["command_check_results"][0]["status"], "failed")
+        self.assertEqual(result.metadata["goal"]["status"], "blocked")
+        self.assertEqual(result.metadata["goal"]["blocked_reason"], "workflow dispatch failed")
+        self.assertEqual(result.metadata["goal"]["metadata"]["missing_evidence"], [])
+        self.assertEqual(ledger_state["status"], "blocked")
+        self.assertEqual(ledger_events[-1]["event_type"], "goal_blocked")
+
+    def test_unknown_command_preset_blocks_goal_even_without_required_evidence(self):
+        metadata = build_default_role_metadata()
+        metadata["goal"] = {
+            "objective": "build api",
+            "status": "active",
+            "evidence_required": ["design_doc", "workflow dispatch completed"],
+            "evidence": [],
+        }
+        metadata["command_check_presets"] = ["missing-preset"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            result = dispatch_project_workflow(
+                project_dir=str(project_dir),
+                file_list=[],
+                design_doc="# design",
+                platform_mode="local",
+                metadata=metadata,
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.metadata["command_check_results"][0]["status"], "failed")
+        self.assertEqual(
+            result.metadata["command_check_results"][0]["metadata"]["error_type"],
+            "ValueError",
+        )
+        self.assertEqual(result.metadata["goal"]["status"], "blocked")
+        self.assertEqual(result.metadata["goal"]["blocked_reason"], "workflow dispatch failed")
+
     def test_workflow_records_post_gate_evidence_in_final_goal(self):
         metadata = build_default_role_metadata()
         metadata["goal"] = {
@@ -622,6 +692,7 @@ class WorkflowDispatchTests(unittest.TestCase):
         metadata["goal"] = {
             "objective": "Resume a blocked workflow",
             "status": "active",
+            "success_criteria": ["review evidence is available"],
             "evidence_required": [
                 "design_doc",
                 "workflow dispatch completed",
@@ -651,7 +722,9 @@ class WorkflowDispatchTests(unittest.TestCase):
         self.assertTrue(json_exists)
         self.assertTrue(markdown_exists)
         self.assertEqual(handoff["snapshot"]["status"], "blocked")
+        self.assertEqual(handoff["snapshot"]["success_criteria"], ["review evidence is available"])
         self.assertEqual(handoff["snapshot"]["missing_evidence"], ["review passed"])
+        self.assertEqual(persisted["success_criteria"], ["review evidence is available"])
         self.assertIn("review passed", persisted["missing_evidence"])
         self.assertEqual(handoff["snapshot"]["workflow_id"], result.workflow_id)
 
