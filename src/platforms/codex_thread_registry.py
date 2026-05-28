@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -26,7 +27,7 @@ class CodexThreadRegistry:
         if not self.db_path.exists():
             return False
         try:
-            with sqlite3.connect(self.db_path) as connection:
+            with closing(sqlite3.connect(self.db_path)) as connection:
                 columns = {
                     row[1]
                     for row in connection.execute("pragma table_info(threads)")
@@ -56,7 +57,7 @@ class CodexThreadRegistry:
     def list_thread_states(self) -> List[CodexThreadState]:
         if not self.available():
             return []
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             rows = connection.execute(
                 "select id, archived, archived_at from threads order by id"
             ).fetchall()

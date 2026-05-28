@@ -7,7 +7,10 @@ WORKSPACE_ROOT = os.path.abspath(os.getcwd())
 def _is_safe_path(filepath: str) -> bool:
     """요청된 경로가 허용된 워크스페이스 내부에 있는지 검증합니다."""
     abs_path = os.path.abspath(filepath)
-    return abs_path.startswith(WORKSPACE_ROOT)
+    try:
+        return os.path.commonpath([WORKSPACE_ROOT, abs_path]) == WORKSPACE_ROOT
+    except ValueError:
+        return False
 
 @agent_skill(name="read_file", description="주어진 경로의 파일 내용을 읽어옵니다.")
 def read_file(filepath: str) -> str:

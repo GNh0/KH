@@ -26,6 +26,12 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_catalog --check`
   - `python -B -c "import pathlib; [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in pathlib.Path('.').rglob('*.py')]"`
   - `python -m unittest discover -s tests -v` (152 tests)
+- Latest full verification after Windows/source audit:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m src.skills.uaf_skill_catalog --check`
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"`
+  - `python -B -m unittest discover -s tests -v` (153 tests)
 
 ## Completed
 
@@ -164,6 +170,12 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - packaged skill list now uses `host-agent-orchestration` and `command-output-harness` instead of vendor/reference-branded names
 - Reworked `README.md` to reflect current implementation level, references, verification, and roadmap.
 - Reworked `AgentLoop` user-facing prompts and target-file prompt from mojibake into ASCII English so LLM target-file selection is usable.
+- Fixed Windows SQLite registry cleanup:
+  - `src.platforms.codex_thread_registry` now closes SQLite connections explicitly with `contextlib.closing`.
+  - This prevents temporary `state.sqlite` files from remaining locked during test cleanup on Windows.
+- Fixed file operation skill path boundary:
+  - `src.skills.file_ops` now uses `os.path.commonpath` instead of string-prefix checks.
+  - Added regression coverage for prefix-sibling workspace paths such as `workspace` vs `workspace_evil`.
 
 ## Active Decision
 
