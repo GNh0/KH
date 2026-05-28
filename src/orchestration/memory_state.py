@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from src.contracts import MemoryScope
+from src.orchestration.runtime_paths import conversation_runtime_root, project_memory_dir
 
 
 MEMORY_STATUSES = {"active", "archived", "deleted"}
@@ -36,7 +37,7 @@ class MemoryScopeResolver:
     ) -> MemoryScope:
         project_root = Path(project_dir).resolve()
         display_id = project_id or project_root.name or "project"
-        memory_root = project_root / ".uaf" / "memory"
+        memory_root = project_memory_dir(str(project_root), thread_id=thread_id)
         return MemoryScope(
             kind="project",
             namespace=_project_namespace(project_root),
@@ -55,16 +56,16 @@ class MemoryScopeResolver:
     ) -> MemoryScope:
         if not thread_id:
             raise ValueError("conversation memory requires a thread_id")
-        root = Path(conversation_memory_root).resolve()
         safe_thread_id = _safe_segment(thread_id)
-        memory_root = root / "conversations" / safe_thread_id
+        conversation_root = conversation_runtime_root(thread_id, conversation_memory_root)
+        memory_root = conversation_root / ".uaf" / "memory"
         return MemoryScope(
             kind="conversation",
             namespace=f"conversation:{safe_thread_id}",
             thread_id=thread_id,
             root_path=str(memory_root),
             status=normalize_memory_status(status),
-            metadata={"conversation_memory_root": str(root)},
+            metadata={"conversation_memory_root": str(conversation_root)},
         )
 
     @staticmethod
@@ -87,8 +88,6 @@ class MemoryScopeResolver:
             )
 
         root = conversation_memory_root or metadata.get("conversation_memory_root", "")
-        if not root:
-            raise ValueError("conversation memory requires conversation_memory_root when project_dir is empty")
         return MemoryScopeResolver.conversation_scope(
             thread_id=thread_id,
             conversation_memory_root=root,

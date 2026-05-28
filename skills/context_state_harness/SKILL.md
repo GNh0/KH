@@ -5,7 +5,7 @@ description: Use when a UAF workflow needs resumable context, decision capture, 
 
 # Context State Harness
 
-This is a UAF-native context harness for context-save and context-restore patterns. It keeps resumable workflow state project-local and explicit.
+This is a UAF-native context harness for context-save and context-restore patterns. It keeps resumable workflow state project/chat-scoped and explicit without polluting the target project root by default.
 
 ## Pattern basis
 
@@ -16,8 +16,8 @@ This is a UAF-native context harness for context-save and context-restore patter
 
 1. Capture current git branch, dirty files, active workflow id, role graph, and task status.
 2. Record decisions, assumptions, blockers, and next actions in structured metadata.
-3. Store context artifacts inside a project-local state directory, not in external user skill folders.
-4. Write a resume handoff snapshot to `.uaf/state/resume_handoff.json` and a human-readable note to `.uaf/state/resume_handoff.md`.
+3. Store context artifacts inside the UAF runtime state directory, not in external user skill folders and not in the target project root by default.
+4. Write a resume handoff snapshot to runtime `.uaf/state/resume_handoff.json` and a human-readable note to `.uaf/state/resume_handoff.md`.
 5. Restore by reading the newest matching context and validating that the repository state still matches.
 6. Treat stale or conflicting context as blocked, not silently authoritative.
 

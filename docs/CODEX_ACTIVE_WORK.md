@@ -46,6 +46,13 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_catalog --check`
   - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (72 files)
   - `python -B -m unittest discover -s tests -v` (159 tests)
+- Latest full verification after runtime-state isolation and work snapshot bundling:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool .agents/plugins/marketplace.json`
+  - `python -m src.skills.uaf_skill_catalog --check`
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (73 files)
+  - `python -B -m unittest discover -s tests -v` (164 tests)
 
 ## Completed
 
@@ -201,6 +208,11 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - unknown command-check presets now block goal completion instead of allowing an evidence-only complete state.
   - goal ledger and resume handoff snapshots expose `success_criteria` at the top level.
   - LocalDispatcher adapter metadata exposes `resume_handoff` next to `goal` and `goal_ledger`.
+- Moved default runtime state out of target project roots:
+  - `.uaf/` and `.snapshots/` now live under the UAF runtime store by default, normally `%LOCALAPPDATA%\KH-UAF\projects\<project-key>\`.
+  - `UAF_RUNTIME_ROOT` overrides the runtime base.
+  - `UAF_PROJECT_LOCAL_STATE=1` is the explicit opt-in for project-local runtime folders.
+  - `SnapshotManager.commit_many(...)` creates one work-level snapshot bundle for multi-file tasks.
 
 ## Active Decision
 
@@ -215,12 +227,12 @@ There are two related layers:
    - It exists so context compaction does not erase current direction and pending tasks.
 
 2. UAF product feature:
-   - Repo-local persistent goal ledger lives under `.uaf/state/`.
+   - Project-scoped persistent goal ledger lives under runtime `.uaf/state/`.
    - `current_goal.json` is the resumable state snapshot.
    - `goal_events.jsonl` is append-only audit history.
 
 3. UAF scoped persistent memory:
-   - Project memory lives under `.uaf/memory/`.
+   - Project/chat memory lives under runtime `.uaf/memory/`.
    - Projectless chat memory should use a conversation namespace outside a repo.
    - Archived conversation memory is retained.
    - Deleted/missing conversation memory is quarantined by default.

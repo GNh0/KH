@@ -156,6 +156,11 @@ def _memory_enabled(metadata: dict) -> bool:
     )
 
 
+def _thread_id_from_metadata(metadata: dict) -> str:
+    app_context = metadata.get("app_context", {}) or {}
+    return metadata.get("thread_id", "") or app_context.get("thread_id", "")
+
+
 def _goal_with_memory_context(goal: dict, memory_context: dict) -> dict:
     if not goal or not memory_context:
         return goal
@@ -349,7 +354,8 @@ async def async_project_workflow(
     goal_metadata = _goal_with_design_stage(goal_metadata, design_stage)
     task_runner = _local_task_runner_from_metadata(metadata)
     results: List[WorkflowTaskResult] = []
-    ledger = GoalLedger(project_dir) if goal_metadata else None
+    thread_id = _thread_id_from_metadata(metadata)
+    ledger = GoalLedger(project_dir, thread_id=thread_id) if goal_metadata else None
     goal_ledger_metadata = ledger.describe_paths() if ledger else {}
     resume_handoff_metadata = {}
 
@@ -441,7 +447,7 @@ async def async_project_workflow(
             tasks=_task_ledger_summary(ordered_results, list(file_list)),
             next_recommended_action=_next_goal_action(final_goal),
         )
-        resume_handoff_metadata = ResumeHandoff(project_dir).save()
+        resume_handoff_metadata = ResumeHandoff(project_dir, thread_id=thread_id).save()
         event_type = "goal_completed" if final_goal.get("status") == "complete" else "goal_updated"
         if final_goal.get("status") == "blocked":
             event_type = "goal_blocked"

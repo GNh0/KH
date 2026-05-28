@@ -4,11 +4,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.orchestration.runtime_paths import project_state_dir
+
 
 class GoalLedger:
-    def __init__(self, project_dir: str):
+    def __init__(self, project_dir: str, thread_id: str = ""):
         self.project_root = Path(project_dir).resolve()
-        self.state_dir = self.resolve_project_path(".uaf/state")
+        self.thread_id = thread_id
+        self.state_dir = project_state_dir(str(self.project_root), thread_id=thread_id)
         self.current_goal_path = self.state_dir / "current_goal.json"
         self.events_path = self.state_dir / "goal_events.jsonl"
 

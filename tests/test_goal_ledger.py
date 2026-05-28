@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,27 @@ from src.orchestration.goal_ledger import GoalLedger
 
 
 class GoalLedgerTests(unittest.TestCase):
+    def test_default_goal_state_does_not_create_project_uaf_folder(self):
+        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                runtime_root = Path(tmp) / "runtime"
+                project_dir.mkdir()
+                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
+                ledger = GoalLedger(str(project_dir))
+
+                state = ledger.save_current_goal({"objective": "build api"})
+
+                self.assertFalse((project_dir / ".uaf").exists())
+                self.assertTrue(str(ledger.current_goal_path).startswith(str(runtime_root)))
+                self.assertEqual(state["objective"], "build api")
+        finally:
+            if original_runtime_root is None:
+                os.environ.pop("UAF_RUNTIME_ROOT", None)
+            else:
+                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
+
     def test_save_and_load_current_goal_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = GoalLedger(tmp)

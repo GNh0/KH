@@ -10,16 +10,18 @@ This is a UAF-native rollback harness. It packages snapshot behavior inside this
 ## Workflow
 
 1. Create a checkpoint before an agent writes generated code or modifies a risky file.
-2. Store the file content with `SnapshotManager.commit(file_name, code, message)`.
-3. Keep snapshot metadata inside the project-local `.snapshots/commit_log.json`.
-4. Restore a known version with `SnapshotManager.rollback(version_id)` when a generated change fails review, tests, or user approval.
-5. Never allow snapshots to target files outside the project root or inside `.snapshots`.
+2. Prefer one work-level checkpoint with `SnapshotManager.commit_many(file_names, message)` before a batch of related edits.
+3. Use `SnapshotManager.commit(file_name, code, message)` only for a truly single-file checkpoint.
+4. Keep snapshot metadata in the project/chat-scoped UAF runtime store, normally `%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.snapshots/commit_log.json`.
+5. Restore a known version with `SnapshotManager.rollback(version_id)` when a generated change fails review, tests, or user approval.
+6. Never allow snapshots to target files outside the project root or inside `.snapshots`.
 
 ## Safety rules
 
 - Treat `.snapshots` as protected metadata.
 - Validate paths with real path boundaries, not string prefixes.
-- Keep snapshot artifacts project-local so Windows app hosts can run without external service state.
+- Do not create `.snapshots` in the target project root by default; use `UAF_PROJECT_LOCAL_STATE=1` only when project-local runtime state is explicitly requested.
+- Keep one snapshot bundle per work batch instead of one archive per file when several files are being changed together.
 - Use fresh verification after rollback before claiming the workspace is restored.
 
 ## UAF implementation targets

@@ -25,7 +25,7 @@ UAF does not vendor external reference repositories. The current implementation 
 
 Project planning records live under `docs/skillbook/`. This folder is not runtime state and does not represent an external dependency. It is KH/UAF's personal skillbook: design notes, implementation plans, and handoff decisions that explain why a harness exists and how it should evolve.
 
-Runtime continuation state still lives under `.uaf/`, and packaged host-readable skills still live under `skills/`.
+Runtime continuation state defaults to the user-local UAF runtime store, not the target project root. Packaged host-readable skills still live under `skills/`.
 
 ## Current State
 
@@ -36,8 +36,8 @@ What works today:
 - Dataclass contracts for adapter requests, results, workflow results, and goal state.
 - Scoped persistent memory contracts for project and conversation namespaces.
 - DomainProfile, WorkDesign, DesignArtifact, and ArtifactManifest contracts for domain-neutral orchestration.
-- Mandatory workflow design-stage persistence under `.uaf/artifacts/design/` and `.uaf/state/artifact_manifest.json`.
-- Resume-safe handoff snapshots under `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
+- Mandatory workflow design-stage persistence under the project-scoped runtime `.uaf/artifacts/design/` and `.uaf/state/artifact_manifest.json`.
+- Resume-safe handoff snapshots under the project-scoped runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
 - Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
 - Focused review, QA, security, and release gate evaluators.
 - Local and Antigravity dispatcher contracts.
@@ -50,15 +50,15 @@ What works today:
 - Typed workflow check stage for command and Browser/QA planning, execution, evidence aggregation, and success calculation.
 - Evidence producer helpers for command, review, and QA result metadata.
 - Python sandbox and evaluator.
-- Gzip snapshot manager.
+- Gzip snapshot manager with work-level multi-file snapshot bundles.
 - Packaged skill catalog with validation.
 - GoalState metadata attached to dispatch requests and workflow results.
 - Goal evidence evaluation, including conservative aliases, that blocks QA/release gates when required evidence is missing.
 - Workflow GoalState metadata now carries domain profile, work design, and artifact manifest context.
 - Workflow task metadata can carry normalized evidence records into `GoalState.evidence`.
 - Gate results carry structured findings and evidence records for downstream goal/release checks.
-- Persistent project-local goal ledger under `.uaf/state/` for resumable workflow state.
-- Project-local persistent memory store under `.uaf/memory/`, with JSON records, JSONL events, memory candidates, and cleanup policy.
+- Persistent project-scoped goal ledger under the UAF runtime store for resumable workflow state.
+- Project/chat-scoped persistent memory store under the UAF runtime store, with JSON records, JSONL events, memory candidates, and cleanup policy.
 - Optional Codex desktop thread registry reader for active/archived conversation memory cleanup when the local registry is available.
 - Codex plugin manifest under `.codex-plugin/plugin.json`.
 - Antigravity workspace plugin bootstrap under `.agents/plugins/kh-uaf/`.
@@ -186,8 +186,8 @@ cli.py run
   -> DispatcherFactory selects local or Antigravity mode
   -> Workflow workers fan out file-level implementer tasks through LocalTaskRunner
   -> Goal evidence is evaluated before QA/release completion
-  -> Goal ledger writes .uaf/state/current_goal.json and goal_events.jsonl
-  -> Resume handoff writes .uaf/state/resume_handoff.json and resume_handoff.md
+  -> Goal ledger writes runtime .uaf/state/current_goal.json and goal_events.jsonl
+  -> Resume handoff writes runtime .uaf/state/resume_handoff.json and resume_handoff.md
   -> Review, QA, security, and release gate metadata is collected
   -> WorkflowDispatchResult returns task_results, gate_results, metadata.goal, and metadata.resume_handoff
 ```
@@ -223,7 +223,7 @@ understand objective
 
 `src.orchestration.domain_profiles.DomainProfileBuilder` creates a generic `DomainProfile` when no domain taxonomy is known. It carries subdomains, roles, artifact types, review gates, risk/policy gates, and required evidence. `work_design_from_profile(...)` turns that profile into a `WorkDesign`.
 
-`src.orchestration.artifacts.ArtifactStore` saves the work design and any supplied design artifacts under `.uaf/artifacts/design/`, then writes `.uaf/state/artifact_manifest.json`. The manifest is attached to `WorkflowDispatchResult.metadata["artifact_manifest"]` and to `GoalState.metadata["artifact_manifest"]`, so resume-safe goal ledger state can prove which design artifacts existed when the workflow completed or blocked.
+`src.orchestration.artifacts.ArtifactStore` saves the work design and any supplied design artifacts under the UAF runtime store, normally `%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/artifacts/design/`, then writes `.uaf/state/artifact_manifest.json` in the same project-scoped runtime slot. Set `UAF_RUNTIME_ROOT` to choose another runtime root, or set `UAF_PROJECT_LOCAL_STATE=1` only when you explicitly want `.uaf/` inside the target project. The manifest is attached to `WorkflowDispatchResult.metadata["artifact_manifest"]` and to `GoalState.metadata["artifact_manifest"]`, so resume-safe goal ledger state can prove which design artifacts existed when the workflow completed or blocked.
 
 The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
 
@@ -232,7 +232,7 @@ The default design-stage evidence keys are `work design saved`, `artifact manife
 UAF separates short-lived workflow state from long-lived memory:
 
 ```text
-.uaf/
+%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/
   state/
     current_goal.json
     goal_events.jsonl
@@ -243,7 +243,7 @@ UAF separates short-lived workflow state from long-lived memory:
     scope_state.json
 ```
 
-`GoalLedger` answers "what is currently being worked on?" while `MemoryStore` answers "what should this project or conversation remember later?" Project work uses project-local memory under `.uaf/memory/`. Projectless chats should use a conversation namespace such as `conversation/<thread_id>/`. Global memory is intentionally not the default and should require explicit user promotion.
+`GoalLedger` answers "what is currently being worked on?" while `MemoryStore` answers "what should this project or conversation remember later?" Project work uses project-scoped memory under the runtime `.uaf/memory/`. Projectless chats use a conversation namespace such as `conversations/<thread_id>/.uaf/memory/`. Global memory is intentionally not the default and should require explicit user promotion.
 
 `MemoryScopeResolver` chooses project memory when a workspace root exists and conversation memory when there is only a thread id. `MemoryStore` persists verified `MemoryRecord` values, appends audit events, and keeps uncertain facts in `memory_candidates.jsonl` until they are promoted. Secret-like content such as API keys, tokens, private keys, and credentials is rejected before it is stored.
 
@@ -253,10 +253,10 @@ When workflow metadata sets `enable_memory`, dispatch loads memory context and a
 
 ## Resume Handoff
 
-UAF writes a resume handoff whenever workflow goal metadata is present. The handoff is deliberately simple and project-local:
+UAF writes a resume handoff whenever workflow goal metadata is present. The handoff is deliberately simple and project-scoped:
 
 ```text
-.uaf/
+%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/
   state/
     current_goal.json
     goal_events.jsonl
@@ -306,13 +306,13 @@ Workflow dispatch now adds deterministic evidence such as `design_doc`, `target_
 When goal metadata is present, local workflow dispatch also writes a resume-safe ledger:
 
 ```text
-.uaf/
+%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/
   state/
     current_goal.json
     goal_events.jsonl
 ```
 
-`current_goal.json` stores the latest objective, status, task buckets, evidence, blocked reason, and next recommended action. `goal_events.jsonl` is append-only history for `goal_created`, `goal_updated`, `evidence_added`, `goal_completed`, and `goal_blocked` events. The `.uaf/` runtime folder is ignored by git.
+`current_goal.json` stores the latest objective, status, task buckets, evidence, blocked reason, and next recommended action. `goal_events.jsonl` is append-only history for `goal_created`, `goal_updated`, `evidence_added`, `goal_completed`, and `goal_blocked` events. Runtime `.uaf/` folders are outside the target project by default; if `UAF_PROJECT_LOCAL_STATE=1` is used, local `.uaf/` should be ignored by git.
 
 ## Packaged Skills
 
@@ -356,7 +356,7 @@ The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_
 | `guard-policy-harness` | Destructive command warnings, edit boundary policy, and fail-safe execution rules. |
 | `command-hook-policy-harness` | Hook trust, permission precedence, integrity checks, and passthrough behavior. |
 | `command-output-harness` | Command output grouping, truncation, deduplication, and exit code preservation. |
-| `snapshot-state-harness` | Gzip checkpoints, rollback semantics, and `.snapshots` protection rules. |
+| `snapshot-state-harness` | Work-level gzip checkpoint bundles, rollback semantics, and `.snapshots` protection rules. |
 | `token-optimizer` | Long log and code output compression. |
 | `harness-evaluator` | Python code sandbox evaluation. |
 | `skill-catalog` | Packaged UAF skill listing, reading, and validation. |

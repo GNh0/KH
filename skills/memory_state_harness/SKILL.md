@@ -16,8 +16,9 @@ This is the UAF-native persistent memory harness. It keeps long-lived project or
 ## Workflow
 
 1. Resolve memory scope before dispatch:
-   - project workspace present: use project-local `.uaf/memory/`.
-   - projectless chat: use `conversation/<thread_id>/`.
+   - project workspace present: use project-scoped runtime `.uaf/memory/`.
+   - project workspace plus host thread id: use project/chat-scoped runtime `.uaf/memory/`.
+   - projectless chat: use `conversations/<thread_id>/.uaf/memory/`.
    - global memory: require explicit user promotion.
 2. Load scoped memory context and attach it to `AdapterRequest.metadata["memory_context"]`.
 3. Preserve memory context inside `GoalState.metadata["memory_context"]` so the goal ledger can resume with the same long-term context.
@@ -27,6 +28,10 @@ This is the UAF-native persistent memory harness. It keeps long-lived project or
 7. Keep active and archived conversation memories.
 8. Delete or quarantine conversation memories only when the host reports deletion or the thread disappears from the host registry.
 9. Never store secrets, API keys, private keys, credentials, or one-off transient prompts.
+
+## Runtime storage rule
+
+Do not create `.uaf/` in the target project root by default. Use `%LOCALAPPDATA%/KH-UAF/` or `UAF_RUNTIME_ROOT` for project/chat-scoped memory. `UAF_PROJECT_LOCAL_STATE=1` is the explicit opt-in for project-local runtime files.
 
 ## Required outputs
 

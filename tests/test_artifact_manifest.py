@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,33 @@ from src.orchestration.domain_profiles import DomainProfileBuilder, work_design_
 
 
 class ArtifactStoreTests(unittest.TestCase):
+    def test_default_artifact_storage_does_not_create_project_uaf_folder(self):
+        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                runtime_root = Path(tmp) / "runtime"
+                project_dir.mkdir()
+                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
+                profile = DomainProfileBuilder.build(objective="Design a plan", domain_hint="ops")
+                design = work_design_from_profile(profile, deliverables=["plan"])
+                store = ArtifactStore(str(project_dir))
+
+                result = store.save_work_design(
+                    workflow_id="workflow_demo",
+                    work_design=design,
+                    source_design_doc="# Source design",
+                )
+
+                self.assertFalse((project_dir / ".uaf").exists())
+                self.assertTrue(str(result["store"]["manifest_path"]).startswith(str(runtime_root)))
+                self.assertTrue(Path(result["store"]["manifest_path"]).exists())
+        finally:
+            if original_runtime_root is None:
+                os.environ.pop("UAF_RUNTIME_ROOT", None)
+            else:
+                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
+
     def test_store_saves_work_design_and_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             profile = DomainProfileBuilder.build(

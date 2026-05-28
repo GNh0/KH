@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.5.0",
-  "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features domain profiles, work design artifacts, asyncio-based parallel workers, Windows app bridge integration, multiprocessing sandboxing, gzip snapshot rollback, and a CLI launcher.",
+  "version": "2.5.1",
+  "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features domain profiles, work design artifacts, asyncio-based parallel workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "skills": [
@@ -22,7 +22,7 @@
     },
     {
       "name": "artifact-manifest-store",
-      "description": "Persist work designs and domain design artifacts under .uaf/ and expose ArtifactManifest evidence for workflow gates.",
+      "description": "Persist work designs and domain design artifacts in project-scoped UAF runtime state and expose ArtifactManifest evidence for workflow gates.",
       "module": "src.orchestration.artifacts"
     },
     {
@@ -102,7 +102,7 @@
     },
     {
       "name": "snapshot-state-harness",
-      "description": "Packaged UAF snapshot skill for project-local gzip checkpoints, rollback, and .snapshots metadata protection.",
+      "description": "Packaged UAF snapshot skill for project/chat-scoped work-level gzip checkpoint bundles, rollback, and .snapshots metadata protection.",
       "usage": "python -m src.skills.uaf_skill_catalog --read snapshot-state-harness"
     },
     {

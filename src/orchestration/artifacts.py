@@ -12,6 +12,7 @@ from src.orchestration.domain_profiles import (
     render_work_design_markdown,
     work_design_from_profile,
 )
+from src.orchestration.runtime_paths import project_artifact_design_dir, project_state_dir
 
 
 ARTIFACT_EVIDENCE = [
@@ -22,10 +23,11 @@ ARTIFACT_EVIDENCE = [
 
 
 class ArtifactStore:
-    def __init__(self, project_dir: str):
+    def __init__(self, project_dir: str, thread_id: str = ""):
         self.project_root = Path(project_dir).resolve()
-        self.design_dir = self.resolve_project_path(".uaf/artifacts/design")
-        self.state_dir = self.resolve_project_path(".uaf/state")
+        self.thread_id = thread_id
+        self.design_dir = project_artifact_design_dir(str(self.project_root), thread_id=thread_id)
+        self.state_dir = project_state_dir(str(self.project_root), thread_id=thread_id)
         self.manifest_path = self.state_dir / "artifact_manifest.json"
         self.events_path = self.state_dir / "artifact_events.jsonl"
 
@@ -247,7 +249,7 @@ def build_design_stage(
     profile = _domain_profile_from_metadata(metadata, design_doc)
     deliverables = list(metadata.get("deliverables", [])) or list(file_list or []) or ["final output"]
     work_design = _work_design_from_metadata(metadata, profile, deliverables)
-    store = ArtifactStore(project_dir)
+    store = ArtifactStore(project_dir, thread_id=_thread_id_from_metadata(metadata))
     result = store.save_stage(
         workflow_id=workflow_id,
         domain_profile=profile,
@@ -310,6 +312,11 @@ def _objective_from_design_doc(design_doc: str) -> str:
         if stripped:
             return stripped
     return "UAF workflow"
+
+
+def _thread_id_from_metadata(metadata: Dict[str, Any]) -> str:
+    app_context = metadata.get("app_context", {}) or {}
+    return metadata.get("thread_id", "") or app_context.get("thread_id", "")
 
 
 def _stage_result(manifest: ArtifactManifest, store_paths: Dict[str, str]) -> Dict[str, Any]:

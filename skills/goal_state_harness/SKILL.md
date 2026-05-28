@@ -19,9 +19,9 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 2. Store the serialized goal at `AdapterRequest.metadata["goal"]`.
 3. Preserve the goal through adapter results and workflow dispatch results.
 4. Add deterministic workflow evidence such as `design_doc`, `target_files`, and `workflow dispatch completed`.
-5. Persist resumable goal state to `.uaf/state/current_goal.json`.
-6. Append goal lifecycle events to `.uaf/state/goal_events.jsonl`.
-7. Write `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md` after the evaluated goal is saved.
+5. Persist resumable goal state to the project/chat-scoped runtime `.uaf/state/current_goal.json`.
+6. Append goal lifecycle events to the runtime `.uaf/state/goal_events.jsonl`.
+7. Write runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md` after the evaluated goal is saved.
 8. Add richer evidence as checks, reviews, QA, or release gates run.
 9. Use `GoalState.metadata.evidence_aliases` when host-specific tools emit equivalent evidence keys with different names.
 10. Mark a goal `complete` only when success criteria and required evidence are satisfied.
@@ -37,8 +37,12 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 - `blocked_reason`: specific blocker when status is `blocked`.
 - `metadata.missing_evidence`: normalized evidence keys that prevented completion.
 - `metadata.evidence_alias_matches`: required evidence keys satisfied by an accepted alias.
-- `goal_ledger`: paths to the project-local current goal and event log.
-- `resume_handoff`: paths and snapshot for continuing from repo-local state without prior chat context.
+- `goal_ledger`: paths to the project/chat-scoped current goal and event log.
+- `resume_handoff`: paths and snapshot for continuing from runtime state without prior chat context.
+
+## Runtime storage rule
+
+By default, do not create `.uaf/` in the target project root. Store runtime state under the UAF runtime root, normally `%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/`, or under `projects/<project-key>/chats/<thread-id>/.uaf/` when a host thread id is available. `UAF_RUNTIME_ROOT` may override the base directory. `UAF_PROJECT_LOCAL_STATE=1` is the explicit opt-in for project-local `.uaf/`.
 
 ## UAF implementation targets
 

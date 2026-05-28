@@ -7,12 +7,14 @@ from typing import Any, Dict, List
 from src.contracts import HandoffSnapshot
 from src.orchestration.artifacts import ArtifactStore
 from src.orchestration.goal_ledger import GoalLedger
+from src.orchestration.runtime_paths import project_state_dir
 
 
 class ResumeHandoff:
-    def __init__(self, project_dir: str):
+    def __init__(self, project_dir: str, thread_id: str = ""):
         self.project_root = Path(project_dir).resolve()
-        self.state_dir = self.resolve_project_path(".uaf/state")
+        self.thread_id = thread_id
+        self.state_dir = project_state_dir(str(self.project_root), thread_id=thread_id)
         self.json_path = self.state_dir / "resume_handoff.json"
         self.markdown_path = self.state_dir / "resume_handoff.md"
 
@@ -35,7 +37,7 @@ class ResumeHandoff:
         }
 
     def build_snapshot(self) -> HandoffSnapshot:
-        ledger = GoalLedger(str(self.project_root))
+        ledger = GoalLedger(str(self.project_root), thread_id=self.thread_id)
         state = ledger.load_current_goal()
         if not state:
             return HandoffSnapshot(
@@ -51,7 +53,7 @@ class ResumeHandoff:
 
         goal = dict(state.get("goal", {}))
         goal_metadata = dict(goal.get("metadata", {}))
-        manifest = _artifact_manifest_from_state(str(self.project_root), goal_metadata)
+        manifest = _artifact_manifest_from_state(str(self.project_root), goal_metadata, self.thread_id)
         missing_evidence = _missing_evidence(state, goal_metadata)
         workflow_id = manifest.get("workflow_id", "")
 
@@ -74,7 +76,7 @@ class ResumeHandoff:
                 "schema_version": 1,
                 "paths": self.describe_paths(),
                 "goal_state_path": str(ledger.current_goal_path),
-                "artifact_manifest_path": str(ArtifactStore(str(self.project_root)).manifest_path),
+                "artifact_manifest_path": str(ArtifactStore(str(self.project_root), thread_id=self.thread_id).manifest_path),
             },
         )
 
@@ -132,8 +134,8 @@ def render_handoff_markdown(snapshot: HandoffSnapshot) -> str:
     ])
 
 
-def _artifact_manifest_from_state(project_dir: str, goal_metadata: Dict[str, Any]) -> Dict[str, Any]:
-    manifest = ArtifactStore(project_dir).load_manifest().to_dict()
+def _artifact_manifest_from_state(project_dir: str, goal_metadata: Dict[str, Any], thread_id: str = "") -> Dict[str, Any]:
+    manifest = ArtifactStore(project_dir, thread_id=thread_id).load_manifest().to_dict()
     if manifest.get("workflow_id"):
         return manifest
     return dict(goal_metadata.get("artifact_manifest", {}))

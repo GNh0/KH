@@ -579,6 +579,45 @@ class WorkflowDispatchTests(unittest.TestCase):
         self.assertIn("release gate passed", result.metadata["goal"]["evidence"])
         self.assertEqual({gate["status"] for gate in result.gate_results}, {"passed"})
 
+    def test_workflow_runtime_state_is_external_by_default(self):
+        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                runtime_root = Path(tmp) / "runtime"
+                project_dir.mkdir()
+                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
+                metadata = build_default_role_metadata()
+                metadata["goal"] = {
+                    "objective": "build api",
+                    "status": "active",
+                    "evidence_required": ["design_doc", "workflow dispatch completed"],
+                    "evidence": [],
+                }
+
+                result = dispatch_project_workflow(
+                    project_dir=str(project_dir),
+                    file_list=[],
+                    design_doc="# design",
+                    platform_mode="local",
+                    metadata=metadata,
+                )
+
+                self.assertTrue(result.success)
+                self.assertFalse((project_dir / ".uaf").exists())
+                self.assertFalse((project_dir / ".snapshots").exists())
+                self.assertTrue(
+                    str(result.metadata["goal_ledger"]["current_goal_path"]).startswith(str(runtime_root))
+                )
+                self.assertTrue(
+                    str(result.metadata["resume_handoff"]["paths"]["json_path"]).startswith(str(runtime_root))
+                )
+        finally:
+            if original_runtime_root is None:
+                os.environ.pop("UAF_RUNTIME_ROOT", None)
+            else:
+                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
+
     def test_workflow_loads_memory_context_into_metadata_and_goal_ledger(self):
         metadata = build_default_role_metadata()
         metadata["enable_memory"] = True
