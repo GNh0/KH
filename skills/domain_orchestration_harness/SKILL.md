@@ -23,6 +23,9 @@ Use this harness when:
 3. Create a `WorkDesign` before execution. The design must name scope, assumptions, constraints, deliverables, roles, required artifacts, review gates, and risk/policy checks.
 4. Persist the `WorkDesign` and all supplied design artifacts through `ArtifactStore` in the UAF runtime store.
 5. Export user-facing Office deliverables to the target project's `docs/` folder.
+   - Export `사용_매뉴얼.docx` only when the workflow needs user/operations instructions, `export_manual` is true, or manual revision metadata is supplied.
+   - Do not export a manual by default for analysis/reporting-only topics such as investment, valuation, portfolio review, research, or generic analysis.
+   - When a manual is exported, put `리비전 버전 관리` first and include `manual_revision` / `manual_revision_note` metadata when available.
 6. Attach the resulting `ArtifactManifest` and `deliverable_exports` metadata to workflow metadata and `GoalState.metadata`.
 7. Dispatch bounded role tasks.
 8. Run review, analysis, QA/QC, risk, security, policy, and release gates against the manifest and export evidence.
@@ -43,12 +46,13 @@ The default design-stage evidence keys are:
 - `role task breakdown exported`
 - `evidence plan exported`
 - `risk policy checklist exported`
+- `manual exported` only when the manual file is actually written
 
 These keys should participate in `GoalState.evidence_required` whenever the workflow is intended to be evidence-complete.
 
 ## Domain Examples
 
-The artifact names are examples, not a fixed taxonomy. The default Office exports are domain-neutral (`요구정의서.docx`, `오케스트레이션_설계서.docx`, `산출물_정의서.docx`, `처리흐름도.docx`, `역할별_작업분해표.xlsx`, `증거계획서.xlsx`, `위험_정책_체크리스트.xlsx`) and should be filled from the current domain context.
+The artifact names are examples, not a fixed taxonomy. The default Office exports are domain-neutral (`요구정의서.docx`, `오케스트레이션_설계서.docx`, `산출물_정의서.docx`, `처리흐름도.docx`, `역할별_작업분해표.xlsx`, `증거계획서.xlsx`, `위험_정책_체크리스트.xlsx`) and should be filled from the current domain context. `사용_매뉴얼.docx` is a conditional operational/user-instruction artifact, not a universal artifact.
 
 - Software development: feature definition, architecture, DB design, API design, test strategy, security model.
 - Equipment design: equipment design document, drawings, parts list, control logic, safety review, manufacturing constraints.

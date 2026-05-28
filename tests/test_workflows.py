@@ -637,9 +637,12 @@ class WorkflowDispatchTests(unittest.TestCase):
                         "workflow dispatch completed",
                         "requirements brief exported",
                         "orchestration design exported",
+                        "manual exported",
                     ],
                     "evidence": [],
                 }
+                metadata["manual_revision"] = "Rev. 1.1"
+                metadata["manual_revision_note"] = "Workflow acceptance update."
 
                 result = dispatch_project_workflow(
                     project_dir=str(project_dir),
@@ -660,9 +663,15 @@ class WorkflowDispatchTests(unittest.TestCase):
                 self.assertTrue((project_dir / "docs" / "요구정의서.docx").exists())
                 self.assertTrue((project_dir / "docs" / "오케스트레이션_설계서.docx").exists())
                 self.assertTrue((project_dir / "docs" / "역할별_작업분해표.xlsx").exists())
+                self.assertTrue((project_dir / "docs" / "사용_매뉴얼.docx").exists())
                 self.assertTrue(zipfile.is_zipfile(exported_paths["오케스트레이션_설계서.docx"]))
+                with zipfile.ZipFile(exported_paths["사용_매뉴얼.docx"]) as package:
+                    manual_xml = package.read("word/document.xml").decode("utf-8")
                 self.assertIn("requirements brief exported", result.metadata["goal"]["evidence"])
                 self.assertIn("orchestration design exported", result.metadata["goal"]["evidence"])
+                self.assertIn("manual exported", result.metadata["goal"]["evidence"])
+                self.assertIn("리비전 버전 관리", manual_xml)
+                self.assertIn("Rev. 1.1", manual_xml)
                 self.assertEqual(
                     result.metadata["role_orchestration"]["execution_model"],
                     "dag-asyncio-role-waves",

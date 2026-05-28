@@ -34,6 +34,10 @@ def export_office_deliverables(
     export_dir.mkdir(parents=True, exist_ok=True)
     files = [str(item) for item in (file_list or [])]
     source_title = _first_heading(source_design_doc) or work_design.objective
+    manual_required = _should_export_manual(domain_profile, work_design, files, metadata)
+    evidence = list(DELIVERABLE_EVIDENCE)
+    if manual_required:
+        evidence.append("manual exported")
 
     deliverables = [
         _write_docx_deliverable(
@@ -82,7 +86,7 @@ def export_office_deliverables(
             "evidence-plan",
             "증거계획서",
             "evidence plan exported",
-            _evidence_rows(work_design),
+            _evidence_rows(work_design, evidence),
         ),
         _write_xlsx_deliverable(
             export_dir / "위험_정책_체크리스트.xlsx",
@@ -93,10 +97,22 @@ def export_office_deliverables(
             _risk_policy_rows(work_design),
         ),
     ]
+    if manual_required:
+        deliverables.append(
+            _write_docx_deliverable(
+                export_dir / "사용_매뉴얼.docx",
+                workflow_id,
+                "user-manual",
+                "사용 매뉴얼",
+                "manual exported",
+                _manual_sections(workflow_id, domain_profile, work_design, files, metadata),
+            )
+        )
+        evidence.append("manual exported")
     return {
         "export_dir": str(export_dir),
         "deliverables": deliverables,
-        "evidence": list(DELIVERABLE_EVIDENCE),
+        "evidence": evidence,
     }
 
 
@@ -151,6 +167,7 @@ def _deliverable_sections(design: WorkDesign, file_list: List[str]) -> List[Dict
                 "역할별_작업분해표.xlsx",
                 "증거계획서.xlsx",
                 "위험_정책_체크리스트.xlsx",
+                "사용_매뉴얼.docx",
             ],
         },
     ]
@@ -208,9 +225,9 @@ def _role_task_rows(
     return rows
 
 
-def _evidence_rows(design: WorkDesign) -> List[List[str]]:
+def _evidence_rows(design: WorkDesign, export_evidence: List[str]) -> List[List[str]]:
     rows = [["증거 키", "출처", "상태", "비고"]]
-    for item in _unique(list(design.evidence_required) + list(DELIVERABLE_EVIDENCE)):
+    for item in _unique(list(design.evidence_required) + list(export_evidence)):
         rows.append([item, "workflow/design-stage", "planned", "required when goal evidence asks for it"])
     for item in design.review_gates:
         rows.append([item, "review-gate", "planned", "review gate output"])
@@ -224,6 +241,105 @@ def _risk_policy_rows(design: WorkDesign) -> List[List[str]]:
     if len(rows) == 1:
         rows.append(["missing evidence checked", "risk-policy-reviewer", "planned", "required evidence is absent"])
     return rows
+
+
+def _manual_sections(
+    workflow_id: str,
+    profile: DomainProfile,
+    design: WorkDesign,
+    file_list: List[str],
+    metadata: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    revision = str(metadata.get("manual_revision", "Rev. 1.0"))
+    revision_note = str(metadata.get("manual_revision_note", "Initial generated manual."))
+    return [
+        {
+            "heading": "리비전 버전 관리",
+            "items": [
+                f"Revision: {revision}",
+                f"Workflow: {workflow_id}",
+                f"Change: {revision_note}",
+            ],
+        },
+        {"heading": "목적", "paragraphs": [design.objective or profile.objective]},
+        {
+            "heading": "운영 대상",
+            "items": list(design.deliverables) or file_list or ["final output"],
+        },
+        {
+            "heading": "사용 절차",
+            "items": [
+                "요구정의서에서 목표와 범위를 확인한다.",
+                "오케스트레이션 설계서에서 역할, 흐름, 게이트를 확인한다.",
+                "산출물 정의서에서 최종 결과물과 작업 대상을 확인한다.",
+                "역할별 작업분해표에 따라 담당 작업을 수행한다.",
+                "증거계획서와 위험 정책 체크리스트를 기준으로 완료 여부를 검증한다.",
+            ],
+        },
+        {"heading": "검증 기준", "items": design.evidence_required},
+        {"heading": "운영 중 차단 조건", "items": design.risk_policy_checks},
+        {
+            "heading": "인수 확인",
+            "items": [
+                "필수 산출물이 모두 존재한다.",
+                "필수 증거가 goal evidence에 기록되어 있다.",
+                "QA, 보안, release gate가 통과했거나 차단 사유가 명확하다.",
+            ],
+        },
+    ]
+
+
+def _should_export_manual(
+    profile: DomainProfile,
+    design: WorkDesign,
+    file_list: List[str],
+    metadata: Dict[str, Any],
+) -> bool:
+    if "export_manual" in metadata:
+        return bool(metadata.get("export_manual"))
+    if metadata.get("manual_revision") or metadata.get("manual_revision_note"):
+        return True
+
+    haystack = " ".join([
+        profile.domain_name,
+        design.domain,
+        design.scope,
+        " ".join(design.deliverables),
+        " ".join(file_list),
+    ]).lower()
+    skip_markers = [
+        "investment",
+        "finance",
+        "valuation",
+        "portfolio",
+        "research",
+        "analysis",
+        "리서치",
+        "분석",
+        "투자",
+    ]
+    if any(marker in haystack for marker in skip_markers):
+        return False
+
+    include_markers = [
+        "operation",
+        "ops",
+        "workflow",
+        "handoff",
+        "runbook",
+        "system",
+        "service",
+        "training",
+        "onboarding",
+        "process",
+        "운영",
+        "인수인계",
+        "절차",
+        "프로세스",
+        "시스템",
+        "서비스",
+    ]
+    return any(marker in haystack for marker in include_markers)
 
 
 def _write_docx_deliverable(

@@ -24,7 +24,7 @@ python -m src.skills.uaf_skill_catalog --check
 - `skills/`: packaged UAF skill and harness folders.
 - `src/`: Python contracts, dispatchers, DAG role orchestrator, goal ledger, memory store, and task runners.
 - `%LOCALAPPDATA%/KH-UAF/`: default runtime state for `.uaf` and snapshot data.
-- `docs/`: target-project user-facing Office deliverables such as 요구정의서, 오케스트레이션 설계서, 작업분해표, 증거계획서, and 위험/정책 체크리스트.
+- `docs/`: target-project user-facing Office deliverables such as 요구정의서, 오케스트레이션 설계서, 작업분해표, 증거계획서, 위험/정책 체크리스트, and conditional revision-managed 사용 매뉴얼.
 - `docs/skillbook/`: design notes, plans, and handoff decisions.
 
 ## UAF Commands

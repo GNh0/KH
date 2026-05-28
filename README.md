@@ -37,7 +37,7 @@ What works today:
 - Scoped persistent memory contracts for project and conversation namespaces.
 - DomainProfile, WorkDesign, DesignArtifact, and ArtifactManifest contracts for domain-neutral orchestration.
 - Mandatory workflow design-stage persistence under the project-scoped runtime `.uaf/artifacts/design/` and `.uaf/state/artifact_manifest.json`.
-- User-facing Office deliverable export under the target project's `docs/` folder: requirements brief, orchestration design, deliverable definition, process flow, role/task breakdown, evidence plan, and risk/policy checklist.
+- User-facing Office deliverable export under the target project's `docs/` folder: requirements brief, orchestration design, deliverable definition, process flow, role/task breakdown, evidence plan, risk/policy checklist, and conditional user manual.
 - Resume-safe handoff snapshots under the project-scoped runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
 - Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
 - DAG-based role orchestration with asyncio waves: CEO, advisor/product strategist, architect, planner, controller, implementers, review, QA/security, and release roles run as real `WorkflowTaskResult` producing stages when dependencies are satisfied.
@@ -240,7 +240,9 @@ understand objective
 - `docs/증거계획서.xlsx`
 - `docs/위험_정책_체크리스트.xlsx`
 
-The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. Office export adds `requirements brief exported`, `orchestration design exported`, `deliverable definition exported`, `process flow exported`, `role task breakdown exported`, `evidence plan exported`, and `risk policy checklist exported`. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
+`docs/사용_매뉴얼.docx` is conditional, not mandatory. It is generated when `export_manual` is true, when manual revision metadata is supplied, or when the workflow looks operational/procedural enough to need user or operations instructions. Analysis-style domains such as investment, valuation, portfolio review, research, or generic analysis skip the manual by default. When generated, the manual starts with a `리비전 버전 관리` section using `manual_revision` and `manual_revision_note` metadata, defaulting to `Rev. 1.0`.
+
+The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. Office export adds `requirements brief exported`, `orchestration design exported`, `deliverable definition exported`, `process flow exported`, `role task breakdown exported`, `evidence plan exported`, and `risk policy checklist exported`. Conditional manual export adds `manual exported` only when `사용_매뉴얼.docx` is actually written. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
 
 ## Persistent Memory
 

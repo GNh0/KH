@@ -60,6 +60,13 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_catalog --check` (23 valid / 0 invalid)
   - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (75 files)
   - `python -B -m unittest discover -s tests -v` (167 tests)
+- Latest full verification after conditional revision-managed manual export:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool .agents/plugins/marketplace.json`
+  - `python -m src.skills.uaf_skill_catalog --check` (23 valid / 0 invalid)
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (75 files)
+  - `python -B -m unittest discover -s tests -v` (168 tests)
 
 ## Completed
 
@@ -223,6 +230,7 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 - Added domain-neutral Office deliverable export:
   - workflow design stage writes user-facing deliverables to the target project's `docs/` folder, not runtime `.uaf/`
   - default files: `요구정의서.docx`, `오케스트레이션_설계서.docx`, `산출물_정의서.docx`, `처리흐름도.docx`, `역할별_작업분해표.xlsx`, `증거계획서.xlsx`, `위험_정책_체크리스트.xlsx`
+  - `사용_매뉴얼.docx` is conditional, includes front-loaded `리비전 버전 관리`, and is skipped by default for investment/analysis/reporting-only topics unless explicitly requested
   - export evidence is attached to workflow and goal evidence only after files are written
 - Added DAG-based role orchestration:
   - `src/orchestration/role_orchestrator.py`

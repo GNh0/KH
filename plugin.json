@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.5.2",
-  "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features domain profiles, work design artifacts, user-facing Office deliverable export, DAG-based parallel role waves, asyncio-based bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
+  "version": "2.5.3",
+  "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features domain profiles, work design artifacts, conditional user-facing Office deliverable export, DAG-based parallel role waves, asyncio-based bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "skills": [
@@ -32,7 +32,7 @@
     },
     {
       "name": "office-deliverable-export",
-      "description": "Export domain-neutral user-facing orchestration deliverables as DOCX/XLSX files under the target project's docs folder.",
+      "description": "Export domain-neutral user-facing orchestration deliverables as DOCX/XLSX files under the target project's docs folder, with conditional revision-managed manuals.",
       "module": "src.orchestration.deliverable_exports"
     },
     {

@@ -102,6 +102,8 @@ class ArtifactStoreTests(unittest.TestCase):
                     metadata={
                         "domain_hint": "operations",
                         "scope": "Coordinate a repeatable cross-team review workflow.",
+                        "manual_revision": "Rev. 1.0",
+                        "manual_revision_note": "Initial operations handoff manual.",
                     },
                 )
 
@@ -115,6 +117,7 @@ class ArtifactStoreTests(unittest.TestCase):
                     "역할별_작업분해표.xlsx",
                     "증거계획서.xlsx",
                     "위험_정책_체크리스트.xlsx",
+                    "사용_매뉴얼.docx",
                 }
 
                 self.assertEqual(set(exported_paths), expected_names)
@@ -129,10 +132,50 @@ class ArtifactStoreTests(unittest.TestCase):
                     document_xml = package.read("word/document.xml").decode("utf-8")
                 with zipfile.ZipFile(exported_paths["역할별_작업분해표.xlsx"]) as package:
                     sheet_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["사용_매뉴얼.docx"]) as package:
+                    manual_xml = package.read("word/document.xml").decode("utf-8")
 
                 self.assertIn("Warehouse Exception Review", document_xml)
                 self.assertIn("operator-handoff", sheet_xml)
+                self.assertIn("리비전 버전 관리", manual_xml)
+                self.assertIn("Rev. 1.0", manual_xml)
+                self.assertLess(manual_xml.index("리비전 버전 관리"), manual_xml.index("운영"))
+                self.assertIn("운영", manual_xml)
                 self.assertIn("requirements brief exported", result["evidence"])
+                self.assertIn("manual exported", result["evidence"])
+        finally:
+            if original_runtime_root is None:
+                os.environ.pop("UAF_RUNTIME_ROOT", None)
+            else:
+                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
+
+    def test_build_design_stage_skips_manual_for_investment_analysis_by_default(self):
+        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                runtime_root = Path(tmp) / "runtime"
+                project_dir.mkdir()
+                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
+
+                result = build_design_stage(
+                    project_dir=str(project_dir),
+                    workflow_id="workflow_demo",
+                    design_doc="# Portfolio Review\nAssess an investment thesis.",
+                    file_list=["investment-memo"],
+                    metadata={
+                        "domain_hint": "investment",
+                        "scope": "Analyze risk, valuation, and investment decision evidence.",
+                    },
+                )
+
+                exported_names = {
+                    Path(item["path"]).name
+                    for item in result["deliverable_exports"]["deliverables"]
+                }
+
+                self.assertNotIn("사용_매뉴얼.docx", exported_names)
+                self.assertNotIn("manual exported", result["evidence"])
         finally:
             if original_runtime_root is None:
                 os.environ.pop("UAF_RUNTIME_ROOT", None)
