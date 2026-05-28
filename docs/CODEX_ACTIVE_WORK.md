@@ -283,6 +283,16 @@ Latest user review found that the general DOCX/XLSX exports existed but read lik
 
 Tests now assert those document-quality markers instead of only checking that the files exist and are valid Office packages.
 
+Follow-up user review clarified that development work must not rely on the generic 요구정의서 alone because 기능정의서 is a standard required development artifact. UAF now has a `software-development` deliverable profile that exports:
+
+- `요구정의서.docx`
+- `기능정의서.docx` with 기능 목록, 기능 상세, 입출력 정의, 예외 및 검증 규칙, 인수 기준, traceability.
+- `개발설계서.docx` with architecture, module design, data flow, error handling, security, verification strategy.
+- `화면_API_정의서.docx` with screen definitions, user actions, API endpoints, request/response fields, errors.
+- `데이터_정의서.xlsx`, `역할별_작업분해표.xlsx`, `테스트_검증계획서.xlsx`, `위험_정책_체크리스트.xlsx`.
+
+Tests assert the mandatory 기능정의서 markers and prevent software prompts containing generic words like "product CRUD" from being misrouted to the product-design profile.
+
 Active task: none. Recommended next improvement is optional host package scaffolding or additional domain-specific artifact producers only when the actual runtime or domain dependency is explicit.
 
 There are two related layers:

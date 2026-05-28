@@ -37,7 +37,7 @@ What works today:
 - Scoped persistent memory contracts for project and conversation namespaces.
 - DomainProfile, WorkDesign, DesignArtifact, and ArtifactManifest contracts for domain-neutral orchestration.
 - Mandatory workflow design-stage persistence under the project-scoped runtime `.uaf/artifacts/design/` and `.uaf/state/artifact_manifest.json`.
-- User-facing deliverable export under the target project's `docs/` folder, routed by work type instead of a fixed DOCX/XLSX set. General orchestration still exports requirements, design, process, role/task, evidence, risk/policy, and conditional manual files; product design and investment analysis use their own artifact profiles.
+- User-facing deliverable export under the target project's `docs/` folder, routed by work type instead of a fixed DOCX/XLSX set. Software development exports 기능정의서/개발설계서/API/data/test artifacts; general orchestration still exports requirements, design, process, role/task, evidence, risk/policy, and conditional manual files; product design and investment analysis use their own artifact profiles.
 - Resume-safe handoff snapshots under the project-scoped runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
 - Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
 - DAG-based role orchestration with asyncio waves: CEO, advisor/product strategist, architect, planner, controller, implementers, review, QA/security, and release roles run as real `WorkflowTaskResult` producing stages when dependencies are satisfied.
@@ -236,7 +236,7 @@ Review gates are deliberately evidence-based. `spec-reviewer` fails if an implem
 
 `src.orchestration.deliverable_exports.export_office_deliverables(...)` keeps its historical function name for compatibility, but it now acts as a type-aware deliverable router. It writes user-facing work products directly into the target project's `docs/` folder. These are not internal `.uaf` state files and should not read like execution logs.
 
-The general orchestration profile remains domain-neutral and works for software, operations, research, planning, and other workflow topics:
+The general orchestration profile remains domain-neutral and works for operations, research, planning, and other non-specialized workflow topics:
 
 - `docs/요구정의서.docx`
 - `docs/오케스트레이션_설계서.docx`
@@ -252,13 +252,14 @@ General DOCX exports are documentation-grade templates, not simple status dumps.
 
 Specialized profiles can replace the general files with better-fitting artifacts:
 
+- Software/development work exports `docs/요구정의서.docx`, mandatory `docs/기능정의서.docx`, `docs/개발설계서.docx`, `docs/화면_API_정의서.docx`, `docs/데이터_정의서.xlsx`, `docs/역할별_작업분해표.xlsx`, `docs/테스트_검증계획서.xlsx`, and `docs/위험_정책_체크리스트.xlsx`.
 - Product/mechanical design exports `docs/제품_설계서.docx`, `docs/치수_BOM.xlsx`, `docs/개념_설계도.svg`, and `docs/개념_설계도.dxf`.
 - Investment/analysis work exports `docs/투자_분석보고서.docx`, `docs/가정_시나리오.xlsx`, and `docs/위험_정책_체크리스트.xlsx`, with no manual by default.
 - Custom profiles can be selected with `metadata["deliverable_profile"]` or inferred from the domain, work design, prompt, and file list.
 
 `deliverable_exports["plan"]` records the selected profile, artifact type, format, title, path, and evidence key for each exported artifact. This is the contract hosts should read when deciding whether the result is a report, spreadsheet model, technical drawing, CAD handoff, manual, checklist, or another future artifact type.
 
-The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. General export adds `requirements brief exported`, `orchestration design exported`, `deliverable definition exported`, `process flow exported`, `role task breakdown exported`, `evidence plan exported`, and `risk policy checklist exported`. Product design adds `product design document exported`, `dimension bom exported`, `technical drawing exported`, and `cad drawing exported`. Investment analysis adds `investment analysis report exported`, `scenario model exported`, and `risk policy checklist exported`. Conditional manual export adds `manual exported` only when `사용_매뉴얼.docx` is actually written. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
+The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. General export adds `requirements brief exported`, `orchestration design exported`, `deliverable definition exported`, `process flow exported`, `role task breakdown exported`, `evidence plan exported`, and `risk policy checklist exported`. Software development adds `functional specification exported`, `development design exported`, `screen api definition exported`, `data definition exported`, and `test verification plan exported`. Product design adds `product design document exported`, `dimension bom exported`, `technical drawing exported`, and `cad drawing exported`. Investment analysis adds `investment analysis report exported`, `scenario model exported`, and `risk policy checklist exported`. Conditional manual export adds `manual exported` only when `사용_매뉴얼.docx` is actually written. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
 
 ## Persistent Memory
 

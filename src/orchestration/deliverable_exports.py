@@ -35,6 +35,16 @@ def export_office_deliverables(
     files = [str(item) for item in (file_list or [])]
     source_title = _first_heading(source_design_doc) or work_design.objective
     profile_name = _deliverable_profile(domain_profile, work_design, files, metadata, source_design_doc)
+    if profile_name == "software-development":
+        return _export_software_development_deliverables(
+            export_dir=export_dir,
+            workflow_id=workflow_id,
+            domain_profile=domain_profile,
+            work_design=work_design,
+            source_design_doc=source_design_doc,
+            file_list=files,
+            profile_name=profile_name,
+        )
     if profile_name == "product-design":
         return _export_product_design_deliverables(
             export_dir=export_dir,
@@ -233,6 +243,109 @@ def _export_investment_analysis_deliverables(
             "scenario model exported",
             _scenario_model_rows(work_design, file_list),
             artifact_type="scenario-model",
+        ),
+        _write_xlsx_deliverable(
+            export_dir / "위험_정책_체크리스트.xlsx",
+            workflow_id,
+            "risk-policy-checklist",
+            "위험 정책 체크리스트",
+            "risk policy checklist exported",
+            _risk_policy_rows(work_design),
+            artifact_type="risk-policy-checklist",
+        ),
+    ]
+    return {
+        "export_dir": str(export_dir),
+        "profile": profile_name,
+        "plan": _plan_from_records(deliverables, profile_name),
+        "deliverables": deliverables,
+        "evidence": evidence,
+    }
+
+
+def _export_software_development_deliverables(
+    export_dir: Path,
+    workflow_id: str,
+    domain_profile: DomainProfile,
+    work_design: WorkDesign,
+    source_design_doc: str,
+    file_list: List[str],
+    profile_name: str,
+) -> Dict[str, Any]:
+    source_title = _first_heading(source_design_doc) or work_design.objective
+    evidence = [
+        "requirements brief exported",
+        "functional specification exported",
+        "development design exported",
+        "screen api definition exported",
+        "data definition exported",
+        "role task breakdown exported",
+        "test verification plan exported",
+        "risk policy checklist exported",
+    ]
+    deliverables = [
+        _write_docx_deliverable(
+            export_dir / "요구정의서.docx",
+            workflow_id,
+            "requirements-brief",
+            "요구정의서",
+            "requirements brief exported",
+            _requirements_sections(domain_profile, work_design, source_title, source_design_doc),
+            artifact_type="requirements-brief",
+        ),
+        _write_docx_deliverable(
+            export_dir / "기능정의서.docx",
+            workflow_id,
+            "functional-specification",
+            "기능정의서",
+            "functional specification exported",
+            _functional_spec_sections(domain_profile, work_design, source_design_doc, file_list),
+            artifact_type="functional-specification",
+        ),
+        _write_docx_deliverable(
+            export_dir / "개발설계서.docx",
+            workflow_id,
+            "development-design",
+            "개발설계서",
+            "development design exported",
+            _development_design_sections(domain_profile, work_design, source_design_doc, file_list),
+            artifact_type="development-design",
+        ),
+        _write_docx_deliverable(
+            export_dir / "화면_API_정의서.docx",
+            workflow_id,
+            "screen-api-definition",
+            "화면/API 정의서",
+            "screen api definition exported",
+            _screen_api_sections(work_design, source_design_doc, file_list),
+            artifact_type="screen-api-definition",
+        ),
+        _write_xlsx_deliverable(
+            export_dir / "데이터_정의서.xlsx",
+            workflow_id,
+            "data-definition",
+            "데이터 정의서",
+            "data definition exported",
+            _software_data_rows(work_design, source_design_doc, file_list),
+            artifact_type="data-definition",
+        ),
+        _write_xlsx_deliverable(
+            export_dir / "역할별_작업분해표.xlsx",
+            workflow_id,
+            "role-task-breakdown",
+            "역할별 작업분해표",
+            "role task breakdown exported",
+            _role_task_rows(domain_profile, work_design, file_list),
+            artifact_type="role-task-breakdown",
+        ),
+        _write_xlsx_deliverable(
+            export_dir / "테스트_검증계획서.xlsx",
+            workflow_id,
+            "test-verification-plan",
+            "테스트 검증계획서",
+            "test verification plan exported",
+            _software_test_rows(work_design, source_design_doc, file_list),
+            artifact_type="test-verification-plan",
         ),
         _write_xlsx_deliverable(
             export_dir / "위험_정책_체크리스트.xlsx",
@@ -558,6 +671,147 @@ def _manual_sections(
     ]
 
 
+def _functional_spec_sections(
+    profile: DomainProfile,
+    design: WorkDesign,
+    source_design_doc: str,
+    file_list: List[str],
+) -> List[Dict[str, Any]]:
+    features = _software_feature_names(design, source_design_doc, file_list)
+    return [
+        {
+            "heading": "문서 목적",
+            "paragraphs": [
+                "이 문서는 개발 작업의 기능 범위, 행위자, 기능 상세, 입출력, 예외, 검증 규칙, 인수 기준을 정의한다.",
+                "구현 로그가 아니라 개발자, 리뷰어, QA가 같은 기능 경계를 기준으로 작업하도록 만드는 기준 문서다.",
+            ],
+        },
+        {"heading": "제품/기능 개요", "paragraphs": [design.objective or profile.objective]},
+        {"heading": "범위", "paragraphs": [design.scope or "not specified"]},
+        {"heading": "대상 파일/컴포넌트", "items": file_list or ["to be determined from implementation plan"]},
+        {"heading": "사용자/행위자", "items": _software_actor_lines(source_design_doc)},
+        {"heading": "기능 목록", "items": _software_feature_list_lines(features)},
+        {"heading": "기능 상세", "items": _software_feature_detail_lines(features)},
+        {"heading": "입출력 정의", "items": _software_io_lines(features)},
+        {"heading": "예외 및 검증 규칙", "items": _software_validation_rule_lines(features)},
+        {"heading": "인수 기준", "items": _software_acceptance_lines(features, design)},
+        {"heading": "추적성", "items": _software_traceability_lines(features, design)},
+        {"heading": "미해결 확인사항", "items": _open_question_lines(design, source_design_doc)},
+        {"heading": "원본 요청", "paragraphs": [_compact_text(source_design_doc)]},
+    ]
+
+
+def _development_design_sections(
+    profile: DomainProfile,
+    design: WorkDesign,
+    source_design_doc: str,
+    file_list: List[str],
+) -> List[Dict[str, Any]]:
+    features = _software_feature_names(design, source_design_doc, file_list)
+    return [
+        {
+            "heading": "설계 목적",
+            "paragraphs": [
+                "기능정의서의 기능을 실제 구현 단위, 모듈, 데이터, 검증 흐름으로 변환한다.",
+                "구현자는 이 문서를 기준으로 파일 변경 범위와 모듈 책임을 나누고, 리뷰어는 설계 대비 누락을 확인한다.",
+            ],
+        },
+        {"heading": "아키텍처 구성", "items": _architecture_lines(profile, design, file_list)},
+        {"heading": "모듈 설계", "items": _module_design_lines(features, file_list)},
+        {"heading": "데이터 흐름", "items": _software_data_flow_lines(features)},
+        {"heading": "오류 처리 및 로깅", "items": _software_error_handling_lines(features)},
+        {"heading": "보안/권한 고려사항", "items": _software_security_lines(design)},
+        {"heading": "검증 전략", "items": _software_acceptance_lines(features, design)},
+    ]
+
+
+def _screen_api_sections(
+    design: WorkDesign,
+    source_design_doc: str,
+    file_list: List[str],
+) -> List[Dict[str, Any]]:
+    features = _software_feature_names(design, source_design_doc, file_list)
+    return [
+        {
+            "heading": "문서 목적",
+            "paragraphs": [
+                "화면, 사용자 동작, API endpoint, 요청/응답, 오류 상태를 한 문서에서 연결한다.",
+                "화면이 없는 백엔드 작업이면 화면 정의는 호출자/클라이언트 관점으로 대체한다.",
+            ],
+        },
+        {"heading": "화면 정의", "items": _screen_definition_lines(features)},
+        {"heading": "사용자 동작", "items": _user_action_lines(features)},
+        {"heading": "API 정의", "items": _api_definition_lines(features)},
+        {"heading": "요청/응답 필드", "items": _request_response_lines(features)},
+        {"heading": "상태 및 오류 메시지", "items": _screen_api_error_lines(features)},
+        {"heading": "관련 구현 파일", "items": file_list or ["to be mapped during implementation"]},
+    ]
+
+
+def _software_data_rows(
+    design: WorkDesign,
+    source_design_doc: str,
+    file_list: List[str],
+) -> List[List[str]]:
+    features = _software_feature_names(design, source_design_doc, file_list)
+    rows = [["엔티티", "필드명", "자료형", "필수", "기본값", "검증 규칙", "사용 기능", "비고"]]
+    rows.extend([
+        ["User", "id", "string", "Y", "", "unique, non-empty", "authentication/authorization", "caller identity"],
+        ["User", "role", "string", "Y", "viewer", "must match allowed role", "authorization", "permission boundary"],
+        ["Audit", "created_at", "datetime", "Y", "now", "server generated", "all write flows", "audit trail"],
+        ["Audit", "updated_at", "datetime", "N", "", "server generated", "update flows", "audit trail"],
+    ])
+    for index, feature in enumerate(features, start=1):
+        entity = _entity_name(feature, index)
+        rows.extend([
+            [entity, "id", "string", "Y", "", "unique, non-empty", feature, "primary key or stable identifier"],
+            [entity, "name", "string", "Y", "", "trimmed, max length checked", feature, "display/search label"],
+            [entity, "status", "string", "Y", "draft", "allowed status only", feature, "workflow state"],
+            [entity, "note", "string", "N", "", "sanitize unsupported content", feature, "optional context"],
+        ])
+    if file_list:
+        rows.append(["Implementation", "target_files", "list", "Y", "", "safe project-relative path", "; ".join(file_list), "planned implementation targets"])
+    return rows
+
+
+def _software_test_rows(
+    design: WorkDesign,
+    source_design_doc: str,
+    file_list: List[str],
+) -> List[List[str]]:
+    features = _software_feature_names(design, source_design_doc, file_list)
+    rows = [["테스트 ID", "기능", "검증 방법", "입력", "기대 결과", "증거 키", "차단 기준"]]
+    for index, feature in enumerate(features, start=1):
+        rows.extend([
+            [
+                f"TC-{index:03d}-happy",
+                feature,
+                "unit/integration test",
+                "valid request",
+                "expected output is produced and persisted when applicable",
+                "test verification passed",
+                "test failure blocks release",
+            ],
+            [
+                f"TC-{index:03d}-validation",
+                feature,
+                "negative test",
+                "missing or invalid required field",
+                "clear validation error without partial write",
+                "validation evidence recorded",
+                "unexpected success blocks release",
+            ],
+        ])
+    rows.extend([
+        ["TC-GATE-001", "review gate", "gate evaluator", "task evidence records", "spec review passes only with evidence", "spec review passed", "missing evidence blocks release"],
+        ["TC-GATE-002", "quality gate", "gate evaluator", "quality findings", "quality findings block release", "code quality review passed", "unresolved finding blocks release"],
+        ["TC-GATE-003", "runtime state", "filesystem check", "project output folder", "docs contain user files; runtime state stays external", "runtime isolation checked", ".uaf/.snapshots created in project root"],
+    ])
+    if file_list:
+        rows.append(["TC-FILES-001", "implementation targets", "path safety check", "; ".join(file_list), "all targets are project-relative and reviewable", "target files checked", "unsafe path blocks execution"])
+    return rows
+
+
 def _role_summary_lines(profile: DomainProfile, design: WorkDesign) -> List[str]:
     roles = profile.roles or [
         DomainRole(name=name, purpose="Execute assigned orchestration responsibility.")
@@ -690,6 +944,215 @@ def _risk_block_condition(item: str) -> str:
     return "missing or failed check blocks completion"
 
 
+def _software_feature_names(design: WorkDesign, source_design_doc: str, file_list: List[str]) -> List[str]:
+    import re
+
+    text = _compact_text(source_design_doc)
+    candidates: List[str] = []
+    build_match = re.search(r"\b(?:build|create|implement|develop)\s+(.+)", text, flags=re.IGNORECASE)
+    if build_match:
+        fragment = build_match.group(1)
+        fragment = re.split(r"\b(?:with|for|using|from)\b", fragment, maxsplit=1, flags=re.IGNORECASE)[0]
+        candidates.extend(re.split(r",|\band\b|그리고|및", fragment, flags=re.IGNORECASE))
+    if not candidates:
+        candidates.extend(design.deliverables)
+    if not candidates:
+        candidates.extend(file_list)
+    result = []
+    for item in candidates:
+        value = str(item).strip(" .;:-")
+        if value and value.lower() not in {"app", "application", "feature", "features"} and value not in result:
+            result.append(value)
+    return result or ["primary feature"]
+
+
+def _software_actor_lines(source_design_doc: str) -> List[str]:
+    lower = source_design_doc.lower()
+    actors = ["end user: uses the delivered feature through UI or API"]
+    if any(token in lower for token in ["admin", "관리", "approval", "승인"]):
+        actors.append("administrator/approver: manages records, workflow state, and approval decisions")
+    actors.extend([
+        "developer: implements feature behavior and records implementation evidence",
+        "reviewer/QA: verifies functional behavior, edge cases, and release evidence",
+    ])
+    return actors
+
+
+def _software_feature_list_lines(features: List[str]) -> List[str]:
+    return [
+        f"F-{index:03d}: {feature}"
+        for index, feature in enumerate(features, start=1)
+    ]
+
+
+def _software_feature_detail_lines(features: List[str]) -> List[str]:
+    lines = []
+    for index, feature in enumerate(features, start=1):
+        lines.extend([
+            f"F-{index:03d} 목적: {feature} 기능을 사용자가 명확한 입력과 결과로 수행할 수 있게 한다.",
+            f"F-{index:03d} 선행 조건: 사용자가 필요한 권한과 유효한 입력 데이터를 가진다.",
+            f"F-{index:03d} 정상 흐름: 입력 검증, 처리, 저장/조회, 결과 표시 또는 응답 반환 순서로 동작한다.",
+            f"F-{index:03d} 후행 조건: 결과가 사용자에게 확인 가능하고 evidence 또는 audit 정보가 남는다.",
+        ])
+    return lines
+
+
+def _software_io_lines(features: List[str]) -> List[str]:
+    lines = []
+    for index, feature in enumerate(features, start=1):
+        lines.extend([
+            f"F-{index:03d} 입력: 사용자 요청, 필수 식별자, 검색/필터 조건, 변경 데이터.",
+            f"F-{index:03d} 출력: 성공/실패 상태, 사용자 표시 메시지, 갱신된 데이터 또는 API response.",
+            f"F-{index:03d} 저장/조회: 관련 엔티티의 id, name, status, audit fields를 기준으로 추적 가능해야 한다.",
+        ])
+    return lines
+
+
+def _software_validation_rule_lines(features: List[str]) -> List[str]:
+    lines = [
+        "공통: 필수값 누락, 잘못된 자료형, 권한 부족, 중복 식별자, unsafe path는 명확한 오류로 처리한다.",
+        "공통: 실패 시 부분 저장을 방지하고 재시도 또는 재입력 가능한 상태를 유지한다.",
+    ]
+    for index, feature in enumerate(features, start=1):
+        lines.append(f"F-{index:03d}: {feature} 처리 전 입력 검증과 처리 후 결과 검증을 모두 수행한다.")
+    return lines
+
+
+def _software_acceptance_lines(features: List[str], design: WorkDesign) -> List[str]:
+    lines = [
+        "AC-DEV-001: 기능정의서의 모든 기능이 구현 대상 또는 명시적 제외 항목으로 추적된다.",
+        "AC-DEV-002: 각 기능은 정상 흐름과 검증 실패 흐름 테스트를 가진다.",
+        "AC-DEV-003: 코드 품질 finding, 실패한 테스트, 누락 evidence가 있으면 release가 차단된다.",
+    ]
+    for index, feature in enumerate(features, start=1):
+        lines.append(f"AC-F-{index:03d}: {feature} 기능은 입력, 처리, 출력, 오류 처리 기준을 만족한다.")
+    for evidence in design.evidence_required:
+        lines.append(f"AC-EVIDENCE: `{evidence}` evidence가 수집되거나 누락 사유가 blocked 상태에 기록된다.")
+    return lines
+
+
+def _software_traceability_lines(features: List[str], design: WorkDesign) -> List[str]:
+    return [
+        f"{feature} -> 요구사항 F-{index:03d} -> 테스트 TC-{index:03d}-happy/validation -> evidence gate"
+        for index, feature in enumerate(features, start=1)
+    ] + [
+        f"Gate -> {gate} -> release decision"
+        for gate in design.review_gates
+    ]
+
+
+def _architecture_lines(profile: DomainProfile, design: WorkDesign, file_list: List[str]) -> List[str]:
+    return [
+        f"Domain: {profile.domain_name or design.domain or 'software-development'}",
+        "Presentation/UI layer: 화면 상태, 사용자 입력, validation message를 담당한다.",
+        "Application/API layer: 기능 use case, 권한, transaction boundary, error mapping을 담당한다.",
+        "Data layer: entity persistence, query/filter, audit field 관리를 담당한다.",
+        "Verification layer: unit/integration/browser or command checks를 evidence로 변환한다.",
+        f"Target files: {'; '.join(file_list) if file_list else 'to be mapped during planning'}",
+    ]
+
+
+def _module_design_lines(features: List[str], file_list: List[str]) -> List[str]:
+    lines = []
+    for index, feature in enumerate(features, start=1):
+        target = file_list[min(index - 1, len(file_list) - 1)] if file_list else "implementation module TBD"
+        lines.append(f"MOD-{index:03d}: {feature} -> target={target} -> handler/service/test 책임을 분리한다.")
+    return lines
+
+
+def _software_data_flow_lines(features: List[str]) -> List[str]:
+    return [
+        f"{feature}: request -> validation -> use case/service -> data access -> response/view update -> evidence"
+        for feature in features
+    ]
+
+
+def _software_error_handling_lines(features: List[str]) -> List[str]:
+    return [
+        "ValidationError: 사용자 입력 문제로 분류하고 재입력 가능한 메시지를 반환한다.",
+        "PermissionError: 권한 부족으로 분류하고 데이터 변경 없이 차단한다.",
+        "ConflictError: 중복 또는 상태 충돌로 분류하고 최신 상태 확인을 요구한다.",
+        "UnhandledError: 사용자에게 내부 세부정보를 노출하지 않고 진단 evidence를 남긴다.",
+    ] + [
+        f"{feature}: 기능별 실패는 부분 저장 없이 rollback 또는 no-op 상태를 유지한다."
+        for feature in features
+    ]
+
+
+def _software_security_lines(design: WorkDesign) -> List[str]:
+    return [
+        "입력값은 UI/API boundary에서 검증하고 서버 측 검증을 생략하지 않는다.",
+        "권한이 필요한 기능은 role/permission check를 기능 흐름 앞단에 둔다.",
+        "secret, token, 개인정보는 로그, 문서 산출물, durable memory에 저장하지 않는다.",
+        "위험/정책 체크리스트의 차단 항목은 release gate에서 확인한다.",
+    ] + list(design.risk_policy_checks)
+
+
+def _screen_definition_lines(features: List[str]) -> List[str]:
+    return [
+        f"SCR-{index:03d}: {feature} 화면/뷰는 검색 또는 입력 영역, 결과 영역, 오류/상태 메시지 영역을 가진다."
+        for index, feature in enumerate(features, start=1)
+    ]
+
+
+def _user_action_lines(features: List[str]) -> List[str]:
+    return [
+        f"ACT-{index:03d}: 사용자는 {feature} 기능에서 조회, 입력/수정, 저장/실행, 결과 확인 흐름을 수행한다."
+        for index, feature in enumerate(features, start=1)
+    ]
+
+
+def _api_definition_lines(features: List[str]) -> List[str]:
+    lines = []
+    for index, feature in enumerate(features, start=1):
+        slug = _api_slug(feature, index)
+        lines.extend([
+            f"API-{index:03d}-LIST: GET /api/{slug} - list/search {feature}",
+            f"API-{index:03d}-SAVE: POST /api/{slug} - create/update {feature}",
+            f"API-{index:03d}-DETAIL: GET /api/{slug}/{{id}} - load one {feature}",
+        ])
+    return lines
+
+
+def _request_response_lines(features: List[str]) -> List[str]:
+    lines = []
+    for index, feature in enumerate(features, start=1):
+        lines.extend([
+            f"API-{index:03d} request: id(optional), name/title, status, payload fields, audit context.",
+            f"API-{index:03d} response: success flag, data, validation errors, message, evidence/debug id when available.",
+        ])
+    return lines
+
+
+def _screen_api_error_lines(features: List[str]) -> List[str]:
+    return [
+        "400 validation_error: required field or invalid value.",
+        "401/403 unauthorized_or_forbidden: missing login or insufficient permission.",
+        "404 not_found: requested entity does not exist.",
+        "409 conflict: duplicate value or stale workflow state.",
+        "500 internal_error: unexpected server failure with safe user message.",
+    ] + [
+        f"{feature}: screen/API must show recoverable error without hiding the failed field or action."
+        for feature in features
+    ]
+
+
+def _entity_name(feature: str, index: int) -> str:
+    import re
+
+    words = re.findall(r"[A-Za-z0-9가-힣]+", feature)
+    if not words:
+        return f"Feature{index}"
+    return "".join(word[:1].upper() + word[1:] for word in words[:3])
+
+
+def _api_slug(feature: str, index: int) -> str:
+    import re
+
+    words = re.findall(r"[A-Za-z0-9]+", feature.lower())
+    return "-".join(words[:4]) or f"feature-{index}"
+
+
 def _product_design_sections(
     profile: DomainProfile,
     design: WorkDesign,
@@ -809,9 +1272,22 @@ def _deliverable_profile(
     metadata: Dict[str, Any],
     source_design_doc: str,
 ) -> str:
-    explicit = str(metadata.get("deliverable_profile", "") or metadata.get("artifact_profile", "")).strip().lower()
+    explicit = str(
+        metadata.get("deliverable_profile", "")
+        or metadata.get("artifact_profile", "")
+        or metadata.get("domain_hint", "")
+    ).strip().lower()
     if explicit:
-        return explicit.replace("_", "-")
+        normalized = explicit.replace("_", "-")
+        if normalized in {"software", "development", "software-development", "app", "application"}:
+            return "software-development"
+        if normalized in {"product", "product-design", "mechanical", "mechanical-design"}:
+            return "product-design"
+        if normalized in {"investment", "finance", "valuation", "portfolio", "research", "analysis"}:
+            return "investment-analysis"
+        if normalized in {"operations", "ops", "workflow", "general", "generic"}:
+            return "general-orchestration"
+        return normalized
     haystack = " ".join([
         profile.domain_name,
         design.domain,
@@ -820,8 +1296,29 @@ def _deliverable_profile(
         " ".join(file_list),
         source_design_doc,
     ]).lower()
+    software_markers = [
+        "software",
+        "development",
+        "web app",
+        "application",
+        "api",
+        "crud",
+        "backend",
+        "frontend",
+        "database",
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".cs",
+        "개발",
+        "기능정의",
+        "화면",
+        "api",
+    ]
+    if any(marker in haystack for marker in software_markers):
+        return "software-development"
     product_markers = [
-        "product",
         "mechanical",
         "cad",
         "dxf",

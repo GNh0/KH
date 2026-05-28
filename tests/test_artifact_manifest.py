@@ -237,6 +237,78 @@ class ArtifactStoreTests(unittest.TestCase):
             else:
                 os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
 
+    def test_build_design_stage_routes_software_development_to_functional_spec(self):
+        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                runtime_root = Path(tmp) / "runtime"
+                project_dir.mkdir()
+                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
+
+                result = build_design_stage(
+                    project_dir=str(project_dir),
+                    workflow_id="workflow_demo",
+                    design_doc=(
+                        "# Inventory Admin App\n"
+                        "Build product CRUD, stock alert dashboard, and approval workflow."
+                    ),
+                    file_list=["src/app.py", "src/ui.js"],
+                    metadata={
+                        "domain_hint": "software-development",
+                        "scope": "Build a web application feature set with API, UI, data, and QA coverage.",
+                    },
+                )
+
+                exported = result["deliverable_exports"]["deliverables"]
+                exported_paths = {Path(item["path"]).name: Path(item["path"]) for item in exported}
+                expected_names = {
+                    "요구정의서.docx",
+                    "기능정의서.docx",
+                    "개발설계서.docx",
+                    "화면_API_정의서.docx",
+                    "데이터_정의서.xlsx",
+                    "역할별_작업분해표.xlsx",
+                    "테스트_검증계획서.xlsx",
+                    "위험_정책_체크리스트.xlsx",
+                }
+                plan_types = {item["artifact_type"] for item in result["deliverable_exports"]["plan"]}
+
+                self.assertEqual(set(exported_paths), expected_names)
+                self.assertIn("functional-specification", plan_types)
+                self.assertIn("development-design", plan_types)
+                self.assertIn("functional specification exported", result["evidence"])
+
+                with zipfile.ZipFile(exported_paths["기능정의서.docx"]) as package:
+                    functional_xml = package.read("word/document.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["개발설계서.docx"]) as package:
+                    design_xml = package.read("word/document.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["화면_API_정의서.docx"]) as package:
+                    screen_api_xml = package.read("word/document.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["데이터_정의서.xlsx"]) as package:
+                    data_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                with zipfile.ZipFile(exported_paths["테스트_검증계획서.xlsx"]) as package:
+                    test_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
+
+                self.assertIn("기능 목록", functional_xml)
+                self.assertIn("기능 상세", functional_xml)
+                self.assertIn("입출력 정의", functional_xml)
+                self.assertIn("예외 및 검증 규칙", functional_xml)
+                self.assertIn("인수 기준", functional_xml)
+                self.assertIn("아키텍처 구성", design_xml)
+                self.assertIn("모듈 설계", design_xml)
+                self.assertIn("화면 정의", screen_api_xml)
+                self.assertIn("API 정의", screen_api_xml)
+                self.assertIn("필드명", data_xml)
+                self.assertIn("검증 방법", test_xml)
+                self.assertGreaterEqual(data_xml.count("<row "), 8)
+                self.assertGreaterEqual(test_xml.count("<row "), 8)
+        finally:
+            if original_runtime_root is None:
+                os.environ.pop("UAF_RUNTIME_ROOT", None)
+            else:
+                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
+
     def test_build_design_stage_routes_product_design_to_drawing_artifacts(self):
         original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
         try:
