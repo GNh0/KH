@@ -86,6 +86,22 @@ class SnapshotManagerTests(unittest.TestCase):
             else:
                 os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
 
+    def test_prune_keeps_latest_snapshot_and_log_entry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = SnapshotManager(temp_dir)
+            first = manager.commit("app.py", "v1", "first")
+            second = manager.commit("app.py", "v2", "second")
+            third = manager.commit("app.py", "v3", "third")
+
+            summary = manager.prune(max_snapshots=1)
+
+            self.assertEqual(summary["kept"], [third])
+            self.assertEqual(summary["deleted"], [first, second])
+            self.assertFalse(os.path.exists(os.path.join(manager.snapshot_dir, first)))
+            self.assertFalse(os.path.exists(os.path.join(manager.snapshot_dir, second)))
+            self.assertTrue(os.path.exists(os.path.join(manager.snapshot_dir, third)))
+            self.assertEqual([entry["version_id"] for entry in manager._read_logs()], [third])
+
     def test_rejects_prefix_sibling_workspace_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base_dir = os.path.join(temp_dir, "app")

@@ -44,6 +44,16 @@ python -m src.skills.uaf_skill_catalog --read host-agent-orchestration
 python -m src.skills.uaf_skill_catalog --read command-output-harness
 ```
 
+## Execution Levels
+
+The catalog exposes `execution_level` for every skill:
+
+- `python-module`: backed by callable Python contracts or modules.
+- `hybrid-harness`: backed by Python contracts plus required workflow procedure.
+- `procedure-policy`: host-readable procedure or policy; not a standalone code module.
+
+Do not claim every packaged skill is executed the same way. A run can combine direct module calls, hybrid harness orchestration, and procedure/policy application, but the catalog must make that distinction explicit.
+
 ## UAF implementation targets
 
 - `skills/<skill-name>/SKILL.md`

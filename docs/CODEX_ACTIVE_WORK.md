@@ -67,6 +67,22 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_catalog --check` (23 valid / 0 invalid)
   - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (75 files)
   - `python -B -m unittest discover -s tests -v` (168 tests)
+- Latest full verification after type-aware deliverable routing:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool .agents/plugins/marketplace.json`
+  - `python -m src.skills.uaf_skill_catalog --check` (23 valid / 0 invalid)
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (75 files)
+  - `python -B -m unittest discover -s tests -v` (169 tests)
+  - `git diff --check`
+- Latest full verification after role artifact, evidence gate, and retention hardening:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool .agents/plugins/marketplace.json`
+  - `python -m src.skills.uaf_skill_catalog --check` (23 valid / 0 invalid)
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (75 files)
+  - `python -B -m unittest discover -s tests -v` (178 tests)
+  - `git diff --check`
 
 ## Completed
 
@@ -232,6 +248,20 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - default files: `요구정의서.docx`, `오케스트레이션_설계서.docx`, `산출물_정의서.docx`, `처리흐름도.docx`, `역할별_작업분해표.xlsx`, `증거계획서.xlsx`, `위험_정책_체크리스트.xlsx`
   - `사용_매뉴얼.docx` is conditional, includes front-loaded `리비전 버전 관리`, and is skipped by default for investment/analysis/reporting-only topics unless explicitly requested
   - export evidence is attached to workflow and goal evidence only after files are written
+- Added type-aware deliverable routing:
+  - `export_office_deliverables(...)` remains the compatibility entry point but now selects a deliverable profile before writing files
+  - general orchestration keeps the default DOCX/XLSX planning exports
+  - investment/analysis work exports `투자_분석보고서.docx`, `가정_시나리오.xlsx`, and `위험_정책_체크리스트.xlsx` without a manual by default
+  - product/mechanical design exports `제품_설계서.docx`, `치수_BOM.xlsx`, `개념_설계도.svg`, and `개념_설계도.dxf`
+  - `deliverable_exports["plan"]` records selected profile, artifact type, format, path, and evidence for each output
+- Addressed UAF usage-review findings:
+  - skill catalog now declares each packaged skill as `python-module`, `hybrid-harness`, or `procedure-policy`
+  - role orchestration now writes runtime role-stage artifacts under `.uaf/artifacts/roles/` when project context is available
+  - spec/code gates now require task evidence and fail on quality findings instead of accepting success status alone
+  - evidence records keep `metadata.evidence_key` as trace metadata, while only `record.evidence` grants goal evidence
+  - goal, artifact, memory, and snapshot stores have explicit trim/prune helpers; workflow metadata can request `retention_policy`
+  - snapshot and CLI user-facing command output was moved to ASCII/UTF-8-safe text to avoid Windows console mojibake
+  - current repo has no generated `app.js` / `data/kh-skills.json` dashboard duplication surface; future dashboards should derive from one source of truth
 - Added DAG-based role orchestration:
   - `src/orchestration/role_orchestrator.py`
   - dependency-ready roles run in asyncio waves
@@ -241,9 +271,9 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 
 ## Active Decision
 
-The persistent goal ledger exists. The local execution path now has DAG role orchestration, runner, check, QA, sidecar, evidence, registry, evidence-alias, scoped persistent-memory, domain profile, work design, artifact manifest, Office deliverable export, and resume handoff boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
+The persistent goal ledger exists. The local execution path now has DAG role orchestration, runner, check, QA, sidecar, evidence, registry, evidence-alias, scoped persistent-memory, domain profile, work design, artifact manifest, type-aware deliverable export, and resume handoff boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
 
-Active task: none. Recommended next improvement is optional host package scaffolding or domain-specific artifact producers only when the actual runtime or domain dependency is explicit.
+Active task: none. Recommended next improvement is optional host package scaffolding or additional domain-specific artifact producers only when the actual runtime or domain dependency is explicit.
 
 There are two related layers:
 

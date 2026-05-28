@@ -8,7 +8,8 @@ from typing import List
 import httpx
 
 from src.contracts import MemoryScope, WorkflowDispatchResult, WorkflowTaskResult
-from src.orchestration.artifacts import build_design_stage
+from src.core.snapshot_manager import SnapshotManager
+from src.orchestration.artifacts import ArtifactStore, build_design_stage
 from src.orchestration.evidence_producers import collect_metadata_evidence
 from src.orchestration.goal_evidence import (
     collect_workflow_goal_evidence,
@@ -272,6 +273,36 @@ def _workflow_memory_context(project_dir: str, metadata: dict) -> tuple:
         },
     )
     return context, store.describe_paths()
+
+
+def _apply_retention_policy(
+    project_dir: str,
+    thread_id: str,
+    metadata: dict,
+    memory_store_metadata: dict,
+) -> dict:
+    policy = metadata.get("retention_policy", {}) or metadata.get("uaf_retention", {}) or {}
+    if not policy:
+        return {}
+
+    summary = {}
+    if policy.get("goal_events") is not None:
+        summary["goal_events"] = GoalLedger(project_dir, thread_id=thread_id).trim_events(
+            int(policy["goal_events"])
+        )
+    if policy.get("artifact_events") is not None:
+        summary["artifact_events"] = ArtifactStore(project_dir, thread_id=thread_id).trim_events(
+            int(policy["artifact_events"])
+        )
+    if policy.get("memory_events") is not None and memory_store_metadata.get("memory_dir"):
+        summary["memory_events"] = MemoryStore(memory_store_metadata["memory_dir"]).trim_events(
+            int(policy["memory_events"])
+        )
+    if policy.get("snapshots") is not None:
+        summary["snapshots"] = SnapshotManager(project_dir, thread_id=thread_id).prune(
+            int(policy["snapshots"])
+        )
+    return summary
 
 
 async def _report_task_result_to_webhook(
@@ -550,6 +581,12 @@ async def async_project_workflow(
                 "workflow_id": workflow_id,
             },
         )
+    retention_summary = _apply_retention_policy(
+        project_dir=project_dir,
+        thread_id=thread_id,
+        metadata=metadata,
+        memory_store_metadata=memory_store_metadata,
+    )
     role_success = pre_role_orchestration.get("success") and review_role_orchestration.get("success")
     success = role_success and task_success and check_success
     if final_goal:
@@ -578,6 +615,7 @@ async def async_project_workflow(
             "role_orchestration": role_metadata.get("summary", {}),
             "role_orchestration_stages": role_metadata.get("stages", []),
             "role_task_results": role_metadata.get("results", []),
+            "retention": retention_summary,
             **check_results.to_metadata(),
             "gate_evidence": gate_evidence,
         },

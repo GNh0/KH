@@ -99,6 +99,18 @@ class GoalLedger:
             if line.strip()
         ]
 
+    def trim_events(self, max_events: int) -> Dict[str, int]:
+        if max_events < 0:
+            raise ValueError("max_events must be >= 0")
+        events = self.read_events()
+        kept = events[-max_events:] if max_events else []
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        with self.events_path.open("w", encoding="utf-8") as handle:
+            for event in kept:
+                handle.write(json.dumps(event, sort_keys=True))
+                handle.write("\n")
+        return {"before": len(events), "after": len(kept), "deleted": len(events) - len(kept)}
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()

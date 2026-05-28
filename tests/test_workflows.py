@@ -699,6 +699,10 @@ class WorkflowDispatchTests(unittest.TestCase):
                     if item["role"] == "system-architect"
                 )
                 self.assertIn("오케스트레이션_설계서.docx", architect["metadata"]["required_deliverables"])
+                architect_artifact = Path(architect["metadata"]["role_artifacts"][0]["path"])
+                self.assertTrue(str(architect_artifact).startswith(str(runtime_root)))
+                self.assertTrue(architect_artifact.exists())
+                self.assertIn("system-architect", architect_artifact.read_text(encoding="utf-8"))
                 self.assertIn("system architect role task completed", result.metadata["goal"]["evidence"])
                 self.assertIn(
                     "deliverable_exports",

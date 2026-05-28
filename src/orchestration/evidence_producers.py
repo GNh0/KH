@@ -49,6 +49,7 @@ def command_result_evidence(
         metadata={
             "command": command,
             "exit_code": int(exit_code),
+            "evidence_key": key,
             "stdout": stdout,
             "stderr": stderr,
         },
@@ -68,6 +69,7 @@ def review_result_evidence(
         evidence=_passed_evidence(passed, key),
         metadata={
             "role": role,
+            "evidence_key": key,
             "findings": list(findings or []),
         },
     )
@@ -83,6 +85,7 @@ def qa_result_evidence(
         status="passed" if passed else "failed",
         evidence=_passed_evidence(passed, evidence_key),
         metadata={
+            "evidence_key": evidence_key,
             "checks": list(checks or []),
         },
     )

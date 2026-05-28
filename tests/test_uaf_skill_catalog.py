@@ -73,6 +73,22 @@ class UafSkillCatalogTests(unittest.TestCase):
         self.assertEqual(result["validation"]["total_skills"], len(CORE_SKILLS))
         self.assertEqual(result["validation"]["invalid_skills"], 0)
 
+    def test_catalog_declares_harness_execution_levels(self):
+        result = collect_packaged_skills()
+        allowed = {"python-module", "hybrid-harness", "procedure-policy"}
+        levels = {skill["execution_level"] for skill in result["skills"]}
+
+        self.assertTrue(levels.issubset(allowed))
+        self.assertIn("python-module", levels)
+        self.assertIn("procedure-policy", levels)
+        self.assertIn("execution_levels", result)
+        self.assertEqual(sum(result["execution_levels"].values()), len(CORE_SKILLS))
+
+        skill_catalog = next(skill for skill in result["skills"] if skill["name"] == "skill-catalog")
+        command_policy = next(skill for skill in result["skills"] if skill["name"] == "command-hook-policy-harness")
+        self.assertEqual(skill_catalog["execution_level"], "python-module")
+        self.assertEqual(command_policy["execution_level"], "procedure-policy")
+
     def test_packaged_skill_targets_resolve_to_repo_code(self):
         for skill_dir in sorted(Path("skills").iterdir(), key=lambda path: path.name):
             if not skill_dir.is_dir():

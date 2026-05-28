@@ -55,6 +55,10 @@ def project_artifact_design_dir(project_dir: str, thread_id: Optional[str] = Non
     return project_uaf_root(project_dir, thread_id) / "artifacts" / "design"
 
 
+def project_artifact_role_dir(project_dir: str, thread_id: Optional[str] = None) -> Path:
+    return project_uaf_root(project_dir, thread_id) / "artifacts" / "roles"
+
+
 def project_memory_dir(project_dir: str, thread_id: Optional[str] = None) -> Path:
     return project_uaf_root(project_dir, thread_id) / "memory"
 

@@ -74,6 +74,20 @@ class GoalLedgerTests(unittest.TestCase):
             self.assertEqual(len(lines), 2)
             self.assertEqual(json.loads(lines[0])["event_type"], "goal_created")
 
+    def test_trim_events_keeps_latest_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = GoalLedger(tmp)
+            ledger.append_event("one", {"index": 1})
+            ledger.append_event("two", {"index": 2})
+            ledger.append_event("three", {"index": 3})
+
+            summary = ledger.trim_events(max_events=2)
+            events = ledger.read_events()
+
+            self.assertEqual(summary["before"], 3)
+            self.assertEqual(summary["after"], 2)
+            self.assertEqual([event["event_type"] for event in events], ["two", "three"])
+
     def test_resolve_project_path_rejects_paths_outside_project_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             ledger = GoalLedger(tmp)

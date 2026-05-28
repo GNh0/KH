@@ -107,7 +107,12 @@ class OrchestrationRoleGraphTests(unittest.TestCase):
 
     def test_role_gate_results_pass_when_implementer_tasks_succeed(self):
         gates = build_role_gate_results([
-            {"role": "implementer", "status": "success", "file_name": "main.py"},
+            {
+                "role": "implementer",
+                "status": "success",
+                "file_name": "main.py",
+                "metadata": {"evidence": ["task runner completed", "target file generated:main.py"]},
+            },
         ])
 
         self.assertEqual({gate["status"] for gate in gates}, {"passed"})
@@ -130,7 +135,14 @@ class OrchestrationRoleGraphTests(unittest.TestCase):
 
     def test_role_gate_results_block_qa_and_release_when_goal_evidence_is_missing(self):
         gates = build_role_gate_results(
-            [{"role": "implementer", "status": "success", "file_name": "main.py"}],
+            [
+                {
+                    "role": "implementer",
+                    "status": "success",
+                    "file_name": "main.py",
+                    "metadata": {"evidence": ["task runner completed", "target file generated:main.py"]},
+                }
+            ],
             goal={
                 "objective": "build api",
                 "status": "blocked",

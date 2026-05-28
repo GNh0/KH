@@ -61,6 +61,21 @@ class MemoryStoreTests(unittest.TestCase):
                     )
                 )
 
+    def test_trim_events_keeps_latest_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scope = MemoryScopeResolver.project_scope(tmp)
+            store = MemoryStore(MemoryScopeResolver.storage_path(scope), scope)
+            store.append_event("one", {"index": 1})
+            store.append_event("two", {"index": 2})
+            store.append_event("three", {"index": 3})
+
+            summary = store.trim_events(max_events=1)
+            events = store.read_events()
+
+            self.assertEqual(summary["before"], 3)
+            self.assertEqual(summary["after"], 1)
+            self.assertEqual([event["event_type"] for event in events], ["three"])
+
     def test_cleanup_preserves_archived_threads_and_quarantines_missing_threads(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

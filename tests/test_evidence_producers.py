@@ -69,6 +69,20 @@ class EvidenceProducerTests(unittest.TestCase):
             ["design doc", "tests passed", "qa passed"],
         )
 
+    def test_record_evidence_key_is_trace_only_without_passed_evidence(self):
+        metadata = {
+            "evidence_records": [
+                {
+                    "source": "command",
+                    "status": "failed",
+                    "evidence": [],
+                    "metadata": {"evidence_key": "tests passed"},
+                }
+            ]
+        }
+
+        self.assertEqual(collect_metadata_evidence(metadata), [])
+
     def test_workflow_task_evidence_consumes_producer_records(self):
         task_result = WorkflowTaskResult(
             task_id="task_main_py",

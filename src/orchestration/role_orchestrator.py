@@ -17,6 +17,7 @@ from src.orchestration.gate_evaluators import (
     evaluate_spec_review_gate,
 )
 from src.orchestration.roles import RoleProfile, default_role_profiles
+from src.orchestration.runtime_paths import project_artifact_role_dir
 
 
 PRE_IMPLEMENTATION_ROLES: Tuple[str, ...] = (
@@ -42,6 +43,7 @@ class DefaultRoleRunner:
         await asyncio.sleep(0)
         deliverable_names = _deliverable_names(context)
         evidence = _role_evidence_key(profile.name)
+        role_artifacts = _write_role_artifacts(profile, context)
         return WorkflowTaskResult(
             task_id=f"role_{_safe_id(profile.name)}",
             file_name=f"role:{profile.name}",
@@ -55,6 +57,7 @@ class DefaultRoleRunner:
                 "inputs": list(profile.inputs),
                 "outputs": list(profile.outputs),
                 "required_deliverables": _role_deliverables(profile.name, deliverable_names),
+                "role_artifacts": role_artifacts,
                 "evidence": [evidence],
                 "completed_at": _utc_now(),
             },
@@ -71,7 +74,10 @@ class GateRoleRunner(DefaultRoleRunner):
         if profile.name == "spec-reviewer":
             gate = evaluate_spec_review_gate(task_results)
         elif profile.name == "code-quality-reviewer":
-            gate = evaluate_code_quality_gate(role_gate_results.get("spec-reviewer", {}))
+            gate = evaluate_code_quality_gate(
+                role_gate_results.get("spec-reviewer", {}),
+                task_results=task_results,
+            )
         elif profile.name == "qa-verifier":
             gate = evaluate_qa_gate(role_gate_results.get("code-quality-reviewer", {}), goal=goal)
         elif profile.name == "security-reviewer":
@@ -94,6 +100,7 @@ class GateRoleRunner(DefaultRoleRunner):
             "execution_model": "parallel-role-stage",
             "stage": profile.stage,
             "gate": gate,
+            "role_artifacts": _write_role_artifacts(profile, context, gate=gate),
             "evidence_records": list(gate.get("evidence_records", [])),
             "completed_at": _utc_now(),
         }
@@ -352,6 +359,82 @@ def _blocked_role_result(profile: RoleProfile, pending_dependencies: List[str]) 
             "pending_dependencies": list(pending_dependencies),
         },
     )
+
+
+def _write_role_artifacts(
+    profile: RoleProfile,
+    context: Dict[str, Any],
+    gate: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, str]]:
+    project_dir = context.get("project_dir", "")
+    workflow_id = context.get("workflow_id", "")
+    if not project_dir or not workflow_id:
+        return []
+
+    metadata = context.get("metadata", {}) or {}
+    app_context = metadata.get("app_context", {}) or {}
+    thread_id = metadata.get("thread_id", "") or app_context.get("thread_id", "")
+    artifact_dir = project_artifact_role_dir(project_dir, thread_id=thread_id)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / f"{_safe_id(profile.name)}.md"
+    deliverable_names = _deliverable_names(context)
+    content = _role_artifact_markdown(profile, context, deliverable_names, gate)
+    artifact_path.write_text(content, encoding="utf-8")
+    return [
+        {
+            "workflow_id": workflow_id,
+            "role": profile.name,
+            "artifact_type": "role-stage-output",
+            "title": profile.title,
+            "path": str(artifact_path),
+            "evidence": _role_evidence_key(profile.name),
+        }
+    ]
+
+
+def _role_artifact_markdown(
+    profile: RoleProfile,
+    context: Dict[str, Any],
+    deliverable_names: List[str],
+    gate: Optional[Dict[str, Any]] = None,
+) -> str:
+    work_design = context.get("work_design", {}) or {}
+    objective = work_design.get("objective", "") or context.get("objective", "")
+    lines = [
+        f"# {profile.title}",
+        "",
+        f"- Role: {profile.name}",
+        f"- Stage: {profile.stage}",
+        f"- Purpose: {profile.purpose}",
+        f"- Objective: {objective or 'not specified'}",
+        "",
+        "## Responsibilities",
+    ]
+    lines.extend(f"- {item}" for item in profile.responsibilities)
+    lines.extend([
+        "",
+        "## Expected Outputs",
+    ])
+    lines.extend(f"- {item}" for item in profile.outputs)
+    if deliverable_names:
+        lines.extend([
+            "",
+            "## Available User Deliverables",
+        ])
+        lines.extend(f"- {item}" for item in deliverable_names)
+    if gate:
+        lines.extend([
+            "",
+            "## Gate Result",
+            f"- Status: {gate.get('status', '')}",
+            f"- Message: {gate.get('message', '')}",
+        ])
+        findings = gate.get("findings", []) or []
+        if findings:
+            lines.append("- Findings:")
+            lines.extend(f"  - {item}" for item in findings)
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _failed_role_result(profile: RoleProfile, exc: Exception) -> WorkflowTaskResult:

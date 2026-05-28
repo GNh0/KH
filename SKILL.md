@@ -5,7 +5,7 @@ description: "A pure-local, highly concurrent, and sandboxed AI/domain orchestra
 
 # Universal Agent Framework (UAF)
 
-This is a local-first, zero-dependency, and hyper-concurrent agentic orchestration framework. It uses a Pure Python `asyncio` architecture to bypass traditional broker limits, can carry domain-neutral design artifacts through workflows, exports user-facing Office deliverables to the target project's `docs/` folder, and can safely test Python code on Windows via `multiprocessing`-based sandboxing.
+This is a local-first, zero-dependency, and hyper-concurrent agentic orchestration framework. It uses a Pure Python `asyncio` architecture to bypass traditional broker limits, can carry domain-neutral design artifacts through workflows, routes user-facing deliverables to the target project's `docs/` folder by work type, and can safely test Python code on Windows via `multiprocessing`-based sandboxing.
 
 ## Requirements
 - Python 3.9+
@@ -45,13 +45,13 @@ If you need to extend or debug this framework, here is the structure:
 - **`src/orchestration/evidence_producers.py`**: Normalizes command, review, and QA results into `GoalState.evidence` keys.
 - **`src/orchestration/extension_registry.py`**: Shared registry for pluggable dispatchers, LLM providers, skill harnesses, and future host adapters.
 - **`src/orchestration/gate_evaluators.py`**: Focused spec, code-quality, QA, security, and release gate evaluators that emit structured findings and evidence records.
-- **`src/orchestration/role_orchestrator.py`**: DAG-based role runner that executes dependency-ready roles in parallel asyncio waves and records role `WorkflowTaskResult` metadata.
+- **`src/orchestration/role_orchestrator.py`**: DAG-based role runner that executes dependency-ready roles in parallel asyncio waves, writes runtime role-stage artifacts, and records role `WorkflowTaskResult` metadata.
 - **`src/orchestration/goal_evidence.py`**: Goal evidence normalization and complete/blocked evaluation for QA and release gates.
 - **`src/orchestration/goal_ledger.py`**: Project/chat-scoped runtime `.uaf/state/` persistence for resumable current goal state and append-only goal events.
 - **`src/orchestration/handoff.py`**: Resume-safe handoff builder that writes runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md` from goal, artifact, and memory state.
 - **`src/orchestration/domain_profiles.py`**: Domain-neutral profile and work-design builder for software, operations, analysis, design, and other topics.
 - **`src/orchestration/artifacts.py`**: WorkDesign and DesignArtifact store that writes internal `.uaf/artifacts/design/` files and `.uaf/state/artifact_manifest.json` under the UAF runtime store by default.
-- **`src/orchestration/deliverable_exports.py`**: Domain-neutral Office export for user-facing `docs/요구정의서.docx`, `docs/오케스트레이션_설계서.docx`, `docs/산출물_정의서.docx`, `docs/처리흐름도.docx`, `docs/역할별_작업분해표.xlsx`, `docs/증거계획서.xlsx`, `docs/위험_정책_체크리스트.xlsx`, and conditional `docs/사용_매뉴얼.docx` with front-loaded revision history.
+- **`src/orchestration/deliverable_exports.py`**: Type-aware user-facing export router. General orchestration writes `docs/요구정의서.docx`, `docs/오케스트레이션_설계서.docx`, `docs/산출물_정의서.docx`, `docs/처리흐름도.docx`, `docs/역할별_작업분해표.xlsx`, `docs/증거계획서.xlsx`, `docs/위험_정책_체크리스트.xlsx`, and conditional `docs/사용_매뉴얼.docx`; product design can write DOCX/XLSX plus SVG/DXF concept drawing artifacts; investment analysis writes analysis report and scenario/risk workbooks.
 - **`src/orchestration/memory_state.py`**: Project/conversation memory scope resolver for host-neutral persistent memory namespaces.
 - **`src/orchestration/memory_store.py`**: JSON/JSONL memory store for scoped records, candidates, events, and cleanup policy.
 - **`src/orchestration/llm_router.py`**: Built-in OpenAI-compatible and Anthropic routing plus custom LLM provider registration.
@@ -77,11 +77,12 @@ External agents should exchange structured data through the contracts module ins
 - Use `AntigravityNativeDispatchResult` and `AntigravityNativeSidecarAdapter` when bridging an Antigravity host-native adapter into UAF; keep no-adapter behavior as structured pending. Metadata can provide `antigravity_native_sidecar.command` to launch a sidecar without Python object injection.
 - Use `GoalState` metadata to carry objective, required evidence, collected evidence, and complete/blocked status through the workflow.
 - Use `MemoryScope`, `MemoryRecord`, and `MemoryEvent` for scoped persistent memory. Project memory lives under the UAF runtime `.uaf/memory/`; projectless chat memory must use a conversation namespace.
-- Use `DomainProfile`, `WorkDesign`, `DesignArtifact`, and `ArtifactManifest` for domain-general orchestration. Every substantial workflow should persist a work design, export domain-neutral Office deliverables into the target project's `docs/` folder, and attach both the artifact manifest and `deliverable_exports` to `WorkflowDispatchResult.metadata` and `GoalState.metadata`.
-- Use `DomainProfileBuilder`, `work_design_from_profile(...)`, `ArtifactStore`, and `export_office_deliverables(...)` when adding new domain or design-artifact producers. Do not hardcode one industry taxonomy into core orchestration. Manuals are conditional: export them for operational/user-instruction workflows or when `export_manual` / manual revision metadata requests them, and skip them for analysis-only outputs by default.
+- Use `DomainProfile`, `WorkDesign`, `DesignArtifact`, and `ArtifactManifest` for domain-general orchestration. Every substantial workflow should persist a work design, route type-appropriate deliverables into the target project's `docs/` folder, and attach both the artifact manifest and `deliverable_exports` to `WorkflowDispatchResult.metadata` and `GoalState.metadata`.
+- Use `DomainProfileBuilder`, `work_design_from_profile(...)`, `ArtifactStore`, and `export_office_deliverables(...)` when adding new domain or design-artifact producers. Do not hardcode one industry taxonomy into core orchestration. Deliverables should match the task type: reports for analysis, spreadsheet models for tabular/scenario work, drawings/CAD handoff files for product design, manuals only when user or operations instructions are actually needed. `deliverable_exports["plan"]` must describe profile, artifact type, format, path, and evidence.
 - Use `src.orchestration.evidence_producers` to convert command, review, and QA outputs into normalized evidence records before adding them to task or gate metadata.
 - Use `src.orchestration.gate_evaluators` for focused review/QA/security/release gate decisions; keep `src.orchestration.roles.build_role_gate_results(...)` as the public compatibility wrapper.
-- Use `src.orchestration.role_orchestrator.RoleOrchestrator` when roles must actually execute rather than only appear in metadata. Dependency-ready roles should run in parallel waves, blocked roles should produce structured results, and workflow metadata should expose `role_orchestration`, `role_orchestration_stages`, and `role_task_results`.
+- Use `src.orchestration.role_orchestrator.RoleOrchestrator` when roles must actually execute rather than only appear in metadata. Dependency-ready roles should run in parallel waves, blocked roles should produce structured results, and workflow metadata should expose `role_orchestration`, `role_orchestration_stages`, and `role_task_results`. Project-backed roles should also write role-stage artifacts under runtime `.uaf/artifacts/roles/`.
+- Do not treat a `success` status as review evidence by itself. Implementer tasks need normalized task evidence, and gate results should grant evidence only from passed `evidence_records[*].evidence`, not from trace-only `metadata.evidence_key`.
 - Use `GoalLedger` for runtime `.uaf/state/current_goal.json` and `.uaf/state/goal_events.jsonl` persistence when goal metadata is present.
 - Use `ResumeHandoff` when a future host session needs to continue without previous chat context. The workflow metadata key is `resume_handoff`, and the runtime files are `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
 - Use `MemoryScopeResolver` and `MemoryStore` when attaching `memory_context` to workflow metadata or `GoalState.metadata`; store uncertain facts as candidates before promotion.
@@ -91,6 +92,7 @@ External agents should exchange structured data through the contracts module ins
 - Use `CommandCheckInput`, `CommandCheckRunner`, and `command_check_presets(...)` for bounded local verification commands. Pass commands as argument lists; do not rely on shell parsing.
 - Use `BrowserQACheckInput`, `BrowserQACheckResult`, `BrowserQACheckRunner`, and `BrowserQASidecarAdapter` for browser/QA evidence boundaries. Inject a concrete browser adapter or configure `browser_qa_sidecar.command`; no-adapter mode should return a structured blocked result. Workflow metadata can pass `browser_qa_checks` so QA evidence participates in `GoalState` completion.
 - Use `WorkflowCheckStage` when adding workflow-level check sources. Keep planning, execution, required evidence, and evidence aggregation outside `src.tasks.workflows`.
+- Use workflow `metadata["retention_policy"]` to trim repeated-run state when requested: `goal_events`, `artifact_events`, `memory_events`, and `snapshots` are supported.
 - Use `WorkflowDispatchResult.task_results` and `WorkflowDispatchResult.gate_results` for worker status, optional webhook reporting metadata, and reviewer/QA/security/release gate results.
 - For Codex and Antigravity Windows app integrations, call `src.core.app_bridge.create_app_request(...)` and `dispatch_app_request(...)` directly instead of shelling through the CLI.
 - Add new UAF skills and harnesses as `skills/<skill-name>/SKILL.md`. The packaged skill folder is the source of truth.
@@ -103,7 +105,7 @@ External agents should exchange structured data through the contracts module ins
 - **Personal skillbook workflow**: `development-lifecycle-harness`, `subagent-review-pipeline`, and `quality-gates-harness` for planning, TDD, review roles, debugging, and evidence-based completion.
 - **Command operations**: `command-output-harness` and `command-hook-policy-harness` for compact command output, exit-code preservation, token-savings tracking, hook trust, and permission precedence.
 - **Review, state, and goal/memory workflow**: `review-gate-harness`, `qa-gate-harness`, `context-state-harness`, `goal-state-harness`, `memory-state-harness`, `guard-policy-harness`, and `health-check-harness` for structured review, QA, context handoff, objective tracking, scoped persistent memory, safety policy, and health reporting.
-- **Snapshot rollback**: `snapshot-state-harness` for project/chat-scoped runtime gzip checkpoints, rollback, and `.snapshots` metadata protection.
+- **Snapshot rollback**: `snapshot-state-harness` for project/chat-scoped runtime gzip checkpoints, rollback, retention pruning, and `.snapshots` metadata protection.
 
 ## Security Constraints
 When utilizing this framework, remember that the sandbox enforces strict checks via AST parsing. If you are generating AI code that requires `os`, `sys`, or `subprocess`, the framework will intentionally block it unless you run it with `--no-sandbox`. 

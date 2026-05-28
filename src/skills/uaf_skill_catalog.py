@@ -26,6 +26,33 @@ DESIGN_REFERENCES_CONSIDERED = {
 }
 
 
+SKILL_EXECUTION_LEVELS = {
+    "adapter-contract-harness": "python-module",
+    "architect-pipeline": "hybrid-harness",
+    "command-hook-policy-harness": "procedure-policy",
+    "command-output-harness": "procedure-policy",
+    "context-state-harness": "python-module",
+    "development-lifecycle-harness": "procedure-policy",
+    "domain-orchestration-harness": "hybrid-harness",
+    "goal-state-harness": "python-module",
+    "guard-policy-harness": "procedure-policy",
+    "harness-evaluator": "python-module",
+    "health-check-harness": "hybrid-harness",
+    "host-agent-orchestration": "hybrid-harness",
+    "memory-state-harness": "python-module",
+    "orchestration-role-graph": "python-module",
+    "parallel-orchestration-harness": "python-module",
+    "qa-gate-harness": "hybrid-harness",
+    "quality-gates-harness": "procedure-policy",
+    "review-gate-harness": "hybrid-harness",
+    "skill-catalog": "python-module",
+    "snapshot-state-harness": "python-module",
+    "subagent-review-pipeline": "hybrid-harness",
+    "token-optimizer": "procedure-policy",
+    "workflow-skill-distiller": "procedure-policy",
+}
+
+
 def parse_frontmatter(file_path: str, fallback_name: str) -> Dict[str, str]:
     name = fallback_name.replace("_", "-")
     description = ""
@@ -79,6 +106,7 @@ def _scan_skill_folders(skills_dir: str = PACKAGED_SKILLS_DIR, include_path: boo
             continue
 
         metadata = parse_frontmatter(skill_path, folder_name)
+        execution_level = SKILL_EXECUTION_LEVELS.get(metadata["name"], "procedure-policy")
         entry: Dict[str, Any] = {
             "name": metadata["name"],
             "description": metadata["description"],
@@ -86,6 +114,8 @@ def _scan_skill_folders(skills_dir: str = PACKAGED_SKILLS_DIR, include_path: boo
             "relative_path": f"{folder_name}/SKILL.md",
             "packaged": True,
             "external_runtime_dependency": False,
+            "execution_level": execution_level,
+            "execution_note": _execution_note(execution_level),
         }
         if include_path:
             entry["path"] = skill_path
@@ -98,14 +128,32 @@ def collect_packaged_skills(skills_dir: str = PACKAGED_SKILLS_DIR) -> Dict[str, 
     """Return packaged UAF skills and harnesses from skills/<name>/SKILL.md folders."""
     skills = _scan_skill_folders(skills_dir)
     validation = validate_skill_folders(skills_dir)
+    execution_levels: Dict[str, int] = {}
+    for skill in skills:
+        level = skill.get("execution_level", "procedure-policy")
+        execution_levels[level] = execution_levels.get(level, 0) + 1
     return {
         "external_runtime_dependency": False,
         "packaged_skill_folder_available": bool(skills),
         "total_skills_found": len(skills),
+        "execution_levels": execution_levels,
+        "execution_contract": {
+            "python-module": "Backed by callable Python contracts or modules.",
+            "hybrid-harness": "Backed by Python contracts plus required workflow procedure.",
+            "procedure-policy": "Host-readable procedure or policy skill; not a standalone code module.",
+        },
         "references_considered": DESIGN_REFERENCES_CONSIDERED,
         "validation": validation.to_dict(),
         "skills": skills,
     }
+
+
+def _execution_note(execution_level: str) -> str:
+    return {
+        "python-module": "callable Python-backed harness",
+        "hybrid-harness": "Python-assisted workflow harness",
+        "procedure-policy": "Markdown procedure/policy applied by the host agent",
+    }.get(execution_level, "host-readable skill")
 
 
 def read_packaged_skill(skill_name: str, skills_dir: str = PACKAGED_SKILLS_DIR) -> str:

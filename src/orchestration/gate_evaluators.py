@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 
 from src.orchestration.evidence_producers import (
+    collect_metadata_evidence,
     qa_result_evidence,
     review_result_evidence,
 )
@@ -32,11 +33,39 @@ def _failed_tasks(task_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ]
 
 
+def _task_label(task: Dict[str, Any]) -> str:
+    return task.get("file_name", task.get("task_id", "unknown task"))
+
+
+def _missing_task_evidence(task_results: List[Dict[str, Any]]) -> List[str]:
+    findings: List[str] = []
+    for task in task_results:
+        if task.get("status") != "success":
+            continue
+        if task.get("role", "implementer") != "implementer":
+            continue
+        evidence = collect_metadata_evidence(task.get("metadata", {}) or {})
+        if not evidence:
+            findings.append(f"{_task_label(task)} missing implementation evidence")
+    return findings
+
+
+def _quality_findings(task_results: List[Dict[str, Any]]) -> List[str]:
+    findings: List[str] = []
+    for task in task_results:
+        metadata = task.get("metadata", {}) or {}
+        task_findings = list(metadata.get("quality_findings", []) or [])
+        task_findings.extend(metadata.get("code_quality_findings", []) or [])
+        for finding in task_findings:
+            findings.append(f"{_task_label(task)}: {finding}")
+    return findings
+
+
 def evaluate_spec_review_gate(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
     failed_tasks = _failed_tasks(task_results)
     if failed_tasks:
         findings = [
-            f"{task.get('file_name', task.get('task_id', 'unknown task'))} failed"
+            f"{_task_label(task)} failed"
             for task in failed_tasks
         ]
         blocked_reason = f"{len(failed_tasks)} implementer task(s) failed"
@@ -58,10 +87,30 @@ def evaluate_spec_review_gate(task_results: List[Dict[str, Any]]) -> Dict[str, A
             ],
         }
 
+    missing_evidence = _missing_task_evidence(task_results)
+    if missing_evidence:
+        return {
+            "role": "spec-reviewer",
+            "status": "failed",
+            "message": f"missing implementation evidence for {len(missing_evidence)} task(s)",
+            "blocks_on": ["implementer"],
+            "findings": missing_evidence,
+            "evidence_records": [
+                _evidence_record(
+                    review_result_evidence(
+                        role="spec-reviewer",
+                        passed=False,
+                        evidence_key="spec review passed",
+                        findings=missing_evidence,
+                    )
+                )
+            ],
+        }
+
     return {
         "role": "spec-reviewer",
         "status": "passed",
-        "message": "all implementer tasks reported success",
+        "message": "all implementer tasks reported success with evidence",
         "blocks_on": ["implementer"],
         "findings": [],
         "evidence_records": [
@@ -76,7 +125,10 @@ def evaluate_spec_review_gate(task_results: List[Dict[str, Any]]) -> Dict[str, A
     }
 
 
-def evaluate_code_quality_gate(spec_gate: Dict[str, Any]) -> Dict[str, Any]:
+def evaluate_code_quality_gate(
+    spec_gate: Dict[str, Any],
+    task_results: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     if spec_gate.get("status") != "passed":
         return {
             "role": "code-quality-reviewer",
@@ -95,10 +147,30 @@ def evaluate_code_quality_gate(spec_gate: Dict[str, Any]) -> Dict[str, Any]:
             ],
         }
 
+    findings = _quality_findings(task_results or [])
+    if findings:
+        return {
+            "role": "code-quality-reviewer",
+            "status": "failed",
+            "message": f"{len(findings)} quality finding(s) reported",
+            "blocks_on": ["spec-reviewer"],
+            "findings": findings,
+            "evidence_records": [
+                _evidence_record(
+                    review_result_evidence(
+                        role="code-quality-reviewer",
+                        passed=False,
+                        evidence_key="code quality review passed",
+                        findings=findings,
+                    )
+                )
+            ],
+        }
+
     return {
         "role": "code-quality-reviewer",
         "status": "passed",
-        "message": "no failed task output to block quality review",
+        "message": "no failed task output or quality findings to block review",
         "blocks_on": ["spec-reviewer"],
         "findings": [],
         "evidence_records": [
@@ -286,7 +358,7 @@ def build_gate_results(
     goal: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     spec_gate = evaluate_spec_review_gate(task_results)
-    quality_gate = evaluate_code_quality_gate(spec_gate)
+    quality_gate = evaluate_code_quality_gate(spec_gate, task_results=task_results)
     qa_gate = evaluate_qa_gate(quality_gate, goal=goal)
     security_gate = evaluate_security_gate(quality_gate, task_results, goal=goal)
     release_gate = evaluate_release_gate(qa_gate, security_gate, goal=goal)

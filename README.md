@@ -37,11 +37,12 @@ What works today:
 - Scoped persistent memory contracts for project and conversation namespaces.
 - DomainProfile, WorkDesign, DesignArtifact, and ArtifactManifest contracts for domain-neutral orchestration.
 - Mandatory workflow design-stage persistence under the project-scoped runtime `.uaf/artifacts/design/` and `.uaf/state/artifact_manifest.json`.
-- User-facing Office deliverable export under the target project's `docs/` folder: requirements brief, orchestration design, deliverable definition, process flow, role/task breakdown, evidence plan, risk/policy checklist, and conditional user manual.
+- User-facing deliverable export under the target project's `docs/` folder, routed by work type instead of a fixed DOCX/XLSX set. General orchestration still exports requirements, design, process, role/task, evidence, risk/policy, and conditional manual files; product design and investment analysis use their own artifact profiles.
 - Resume-safe handoff snapshots under the project-scoped runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
 - Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
 - DAG-based role orchestration with asyncio waves: CEO, advisor/product strategist, architect, planner, controller, implementers, review, QA/security, and release roles run as real `WorkflowTaskResult` producing stages when dependencies are satisfied.
-- Focused review, QA, security, and release gate evaluators.
+- Runtime role artifacts under the UAF runtime store, so `system-architect`, `implementation-planner`, reviewers, QA, security, and release roles leave inspectable role-stage outputs instead of only metadata.
+- Focused review, QA, security, and release gate evaluators that require implementation evidence and preserve quality/security findings instead of accepting task success status alone.
 - Local and Antigravity dispatcher contracts.
 - Antigravity native dispatch boundary with injected and JSON process sidecar adapters, plus pending fallback when no host adapter is configured.
 - Extension registry for custom host dispatchers and LLM providers.
@@ -53,7 +54,7 @@ What works today:
 - Evidence producer helpers for command, review, and QA result metadata.
 - Python sandbox and evaluator.
 - Gzip snapshot manager with work-level multi-file snapshot bundles.
-- Packaged skill catalog with validation.
+- Packaged skill catalog with validation and per-skill execution levels (`python-module`, `hybrid-harness`, or `procedure-policy`) so hosts do not treat every harness as the same kind of callable module.
 - GoalState metadata attached to dispatch requests and workflow results.
 - Goal evidence evaluation, including conservative aliases, that blocks QA/release gates when required evidence is missing.
 - Workflow GoalState metadata now carries domain profile, work design, artifact manifest context, and user-facing deliverable export paths.
@@ -61,6 +62,7 @@ What works today:
 - Gate results carry structured findings and evidence records for downstream goal/release checks.
 - Persistent project-scoped goal ledger under the UAF runtime store for resumable workflow state.
 - Project/chat-scoped persistent memory store under the UAF runtime store, with JSON records, JSONL events, memory candidates, and cleanup policy.
+- Retention helpers for goal, artifact, memory, and snapshot event stores; workflow metadata can request `retention_policy` limits for repeated runs.
 - Optional Codex desktop thread registry reader for active/archived conversation memory cleanup when the local registry is available.
 - Codex plugin manifest under `.codex-plugin/plugin.json`.
 - Antigravity workspace plugin bootstrap under `.agents/plugins/kh-uaf/`.
@@ -70,7 +72,7 @@ What is still intentionally incomplete:
 
 - The default `LocalTaskRunner` remains deterministic when used alone, but `AgentLoop` local runs now pass the active `LLMRouter` into `LLMCodeGenerationAdapter` for file generation.
 - The Antigravity dispatcher can consume an injected native adapter or JSON process sidecar, but no concrete external Antigravity host SDK package is bundled yet.
-- Browser/QA execution has a Python contract boundary, workflow evidence integration, and JSON process sidecar adapter, but no bundled Playwright implementation yet.
+- Browser/QA execution has a Python contract boundary, workflow evidence integration, and JSON process sidecar adapter, but no bundled Playwright implementation yet. This is intentional until the host/browser runtime dependency is explicit.
 - Workflow metadata can run bounded command checks, named presets, or browser/QA checks and feed the resulting evidence into `GoalState`.
 - External memory providers such as Hermes or OpenClaw are not bundled; UAF now has the local contracts and store that a provider adapter can implement later.
 - TypeScript tooling is not part of the core package yet.
@@ -228,9 +230,13 @@ understand objective
 
 `src.orchestration.artifacts.ArtifactStore` saves the work design and any supplied design artifacts under the UAF runtime store, normally `%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/artifacts/design/`, then writes `.uaf/state/artifact_manifest.json` in the same project-scoped runtime slot. Set `UAF_RUNTIME_ROOT` to choose another runtime root, or set `UAF_PROJECT_LOCAL_STATE=1` only when you explicitly want `.uaf/` inside the target project. The manifest is attached to `WorkflowDispatchResult.metadata["artifact_manifest"]` and to `GoalState.metadata["artifact_manifest"]`, so resume-safe goal ledger state can prove which design artifacts existed when the workflow completed or blocked.
 
-`src.orchestration.role_orchestrator.RoleOrchestrator` executes the role graph as a dependency DAG. Ready roles in the same wave are launched with `asyncio.create_task(...)`; the default graph now runs `advisor` and `product-strategist` in parallel after `ceo`, runs file implementers through the existing bounded worker queue, and runs `qa-verifier` and `security-reviewer` in parallel before `release-manager`. The workflow metadata records `role_orchestration`, `role_orchestration_stages`, and `role_task_results` so a host can see which roles actually executed, which roles were blocked, and how many parallel waves ran.
+`src.orchestration.role_orchestrator.RoleOrchestrator` executes the role graph as a dependency DAG. Ready roles in the same wave are launched with `asyncio.create_task(...)`; the default graph runs `advisor` and `product-strategist` in parallel after `ceo`, runs file implementers through the existing bounded worker queue, and runs `qa-verifier` and `security-reviewer` in parallel before `release-manager`. Each role returns a real `WorkflowTaskResult` and, when project context is available, writes a role-stage Markdown artifact under the runtime `.uaf/artifacts/roles/` folder. The workflow metadata records `role_orchestration`, `role_orchestration_stages`, `role_task_results`, and role artifact paths so a host can see which roles actually executed, which roles were blocked, and how many parallel waves ran.
 
-`src.orchestration.deliverable_exports.export_office_deliverables(...)` writes user-facing work products directly into the target project's `docs/` folder. These are not internal `.uaf` state files. The default export is domain-neutral and works for software, operations, research, planning, analysis, or any other orchestration topic:
+Review gates are deliberately evidence-based. `spec-reviewer` fails if an implementer reports success without task evidence, `code-quality-reviewer` fails on task-level quality findings, and QA/release gates remain blocked when required `GoalState` evidence is missing. Evidence records keep both the granted `evidence` list and trace metadata such as `metadata.evidence_key`; only the granted `evidence` list satisfies goals.
+
+`src.orchestration.deliverable_exports.export_office_deliverables(...)` keeps its historical function name for compatibility, but it now acts as a type-aware deliverable router. It writes user-facing work products directly into the target project's `docs/` folder. These are not internal `.uaf` state files.
+
+The general orchestration profile remains domain-neutral and works for software, operations, research, planning, and other workflow topics:
 
 - `docs/요구정의서.docx`
 - `docs/오케스트레이션_설계서.docx`
@@ -242,7 +248,15 @@ understand objective
 
 `docs/사용_매뉴얼.docx` is conditional, not mandatory. It is generated when `export_manual` is true, when manual revision metadata is supplied, or when the workflow looks operational/procedural enough to need user or operations instructions. Analysis-style domains such as investment, valuation, portfolio review, research, or generic analysis skip the manual by default. When generated, the manual starts with a `리비전 버전 관리` section using `manual_revision` and `manual_revision_note` metadata, defaulting to `Rev. 1.0`.
 
-The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. Office export adds `requirements brief exported`, `orchestration design exported`, `deliverable definition exported`, `process flow exported`, `role task breakdown exported`, `evidence plan exported`, and `risk policy checklist exported`. Conditional manual export adds `manual exported` only when `사용_매뉴얼.docx` is actually written. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
+Specialized profiles can replace the general files with better-fitting artifacts:
+
+- Product/mechanical design exports `docs/제품_설계서.docx`, `docs/치수_BOM.xlsx`, `docs/개념_설계도.svg`, and `docs/개념_설계도.dxf`.
+- Investment/analysis work exports `docs/투자_분석보고서.docx`, `docs/가정_시나리오.xlsx`, and `docs/위험_정책_체크리스트.xlsx`, with no manual by default.
+- Custom profiles can be selected with `metadata["deliverable_profile"]` or inferred from the domain, work design, prompt, and file list.
+
+`deliverable_exports["plan"]` records the selected profile, artifact type, format, title, path, and evidence key for each exported artifact. This is the contract hosts should read when deciding whether the result is a report, spreadsheet model, technical drawing, CAD handoff, manual, checklist, or another future artifact type.
+
+The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. General export adds `requirements brief exported`, `orchestration design exported`, `deliverable definition exported`, `process flow exported`, `role task breakdown exported`, `evidence plan exported`, and `risk policy checklist exported`. Product design adds `product design document exported`, `dimension bom exported`, `technical drawing exported`, and `cad drawing exported`. Investment analysis adds `investment analysis report exported`, `scenario model exported`, and `risk policy checklist exported`. Conditional manual export adds `manual exported` only when `사용_매뉴얼.docx` is actually written. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
 
 ## Persistent Memory
 
@@ -328,6 +342,19 @@ When goal metadata is present, local workflow dispatch also writes a resume-safe
     current_goal.json
     goal_events.jsonl
 ```
+
+Repeated runs can opt into retention cleanup through workflow metadata:
+
+```python
+metadata["retention_policy"] = {
+    "goal_events": 200,
+    "artifact_events": 200,
+    "memory_events": 500,
+    "snapshots": 20,
+}
+```
+
+The policy trims JSONL event logs and prunes older gzip snapshots after the workflow has written its final state. Without this metadata, UAF preserves history.
 
 `current_goal.json` stores the latest objective, status, task buckets, evidence, blocked reason, and next recommended action. `goal_events.jsonl` is append-only history for `goal_created`, `goal_updated`, `evidence_added`, `goal_completed`, and `goal_blocked` events. Runtime `.uaf/` folders are outside the target project by default; if `UAF_PROJECT_LOCAL_STATE=1` is used, local `.uaf/` should be ignored by git.
 

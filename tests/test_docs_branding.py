@@ -43,6 +43,49 @@ class DocsBrandingTests(unittest.TestCase):
 
         self.assertEqual([], findings)
 
+    def test_public_project_surface_has_no_mojibake_markers(self):
+        checked_roots = [
+            Path("README.md"),
+            Path("SKILL.md"),
+            Path("plugin.json"),
+            Path(".codex-plugin/plugin.json"),
+            Path(".agents/plugins"),
+            Path("docs"),
+            Path("skills"),
+            Path("src"),
+            Path("tests"),
+        ]
+        marker_codes = (
+            0x00C3,
+            0x00C2,
+            0xFFFD,
+            0xF9E3,
+            0xBD89,
+            0xBEA4,
+            0x314C,
+            0xAC57,
+            0xAFAA,
+            0x8E42,
+            0x7230,
+            0x6028,
+        )
+        mojibake_markers = tuple(chr(code) for code in marker_codes)
+        findings = []
+
+        for root in checked_roots:
+            paths = [root] if root.is_file() else [path for path in root.rglob("*") if path.is_file()]
+            for path in paths:
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+
+                for marker in mojibake_markers:
+                    if marker in content:
+                        findings.append(f"{path.as_posix()}:{marker}")
+
+        self.assertEqual([], findings)
+
 
 if __name__ == "__main__":
     unittest.main()

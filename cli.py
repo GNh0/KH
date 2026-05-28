@@ -2,14 +2,22 @@ import argparse
 import multiprocessing
 import time
 import os
+import sys
 import urllib.request
 import urllib.error
 
 
+def configure_utf8_stdio():
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except Exception:
+                pass
+
+
 def start_server_process(port: int, verbose: bool):
-    """uvicorn 서버를 독립된 프로세스에서 실행합니다."""
-    # 버그 수정: 최상단 import를 제거하고 실제로 서버가 필요한 이 함수 안에서만 import
-    # 이렇게 하면 uvicorn 미설치 환경에서도 cli.py 임포트 자체는 성공함
+    """Run the uvicorn server in a separate process."""
     from src.api.server import app
     import uvicorn
     log_level = "info" if verbose else "warning"
@@ -17,24 +25,20 @@ def start_server_process(port: int, verbose: bool):
 
 
 def wait_for_server(port: int, max_retries: int = 30, delay: float = 0.1) -> bool:
-    """[V2.5] 서버가 구동될 때까지 스마트 폴링으로 기다립니다.
-    
-    최대 max_retries * delay 초(기본 3초) 안에 응답이 없으면 False를 반환하고
-    CLI가 즉시 종료합니다. 무한 대기 없음.
-    """
+    """Poll until the local webhook server is ready."""
     url = f"http://127.0.0.1:{port}/api/health"
-    print(f"📡 [CLI] 서버 응답 대기 중... (최대 {max_retries * delay:.1f}초)")
+    print(f"[CLI] Waiting for server response for up to {max_retries * delay:.1f}s.")
     for i in range(max_retries):
         try:
             req = urllib.request.urlopen(url, timeout=0.5)
             if req.getcode() == 200:
                 elapsed = (i + 1) * delay
-                print(f"📡 [CLI] 서버 연결 성공! ({elapsed:.1f}초 소요)")
+                print(f"[CLI] Server connection established in {elapsed:.1f}s.")
                 return True
         except (urllib.error.URLError, ConnectionResetError):
             time.sleep(delay)
-    print(f"❌ [CLI] 서버가 {max_retries * delay:.1f}초 내에 응답하지 않았습니다.")
-    print(f"   → 포트 {port}가 이미 사용 중이거나, uvicorn/fastapi가 설치되지 않은 것일 수 있습니다.")
+    print(f"[CLI] Server did not respond within {max_retries * delay:.1f}s.")
+    print(f"[CLI] Port {port} may be in use, or uvicorn/fastapi may be unavailable.")
     return False
 
 
@@ -56,6 +60,7 @@ def build_agent_loop(router, project: str, platform_mode: str):
 
 
 def main():
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="Antigravity Universal Agent Framework CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -107,14 +112,14 @@ def main():
     os.environ["AG_PLATFORM_MODE"] = args.platform
 
     if args.command == "server":
-        print(f"🚀 웹훅 서버 단독 모드 (포트: {args.port})")
+        print(f"[CLI] Webhook server mode on port {args.port}.")
         start_server_process(args.port, args.verbose)
 
     elif args.command == "run":
         if args.no_sandbox:
-            print("⚠️  [CLI] --no-sandbox 활성화 됨: 코드 보안 검사가 비활성화 상태입니다.")
+            print("[CLI] --no-sandbox is enabled. Code safety checks are disabled.")
 
-        print(f"🚀 [CLI] 백그라운드 Webhook 서버 시작 중... (포트: {args.port})")
+        print(f"[CLI] Starting background webhook server on port {args.port}.")
         server_process = multiprocessing.Process(
             target=start_server_process,
             args=(args.port, args.verbose),
@@ -127,7 +132,8 @@ def main():
             return
 
         try:
-            print(f"🤖 [CLI] 에이전트 루프 가동 (워커: {args.workers}개 / 샌드박스: {'OFF ⚠️' if args.no_sandbox else 'ON ✅'})...")
+            sandbox_status = "OFF" if args.no_sandbox else "ON"
+            print(f"[CLI] Starting agent loop. workers={args.workers}, sandbox={sandbox_status}.")
 
             from src.harness.sandbox import set_allowed_workspace, add_allowed_workspace, CodeSandbox
 
@@ -144,24 +150,22 @@ def main():
             loop.run(requirement=args.prompt, framework="vanilla")
 
         except KeyboardInterrupt:
-            print("\n⚠️  [CLI] 작업이 사용자에 의해 중단되었습니다.")
+            print("\n[CLI] Interrupted by user.")
         except Exception as e:
-            print(f"\n❌ [CLI] 런타임 에러 발생: {e}")
+            print(f"\n[CLI] Runtime error: {e}")
         finally:
-            # [V2.5] 작업 폴더 내 임시 찌꺼기 파일 자동 청소
             try:
                 sandbox = CodeSandbox()
                 sandbox.cleanup_workspace_temps()
             except Exception:
                 pass
-            # 백그라운드 서버 종료 (좀비 방지)
-            print("🧹 [CLI] 백그라운드 서버를 안전하게 종료합니다...")
+            print("[CLI] Stopping background server.")
             server_process.terminate()
             server_process.join()
-            print("✅ [CLI] 모든 프로세스 종료 완료.")
+            print("[CLI] All processes stopped.")
 
 
 if __name__ == "__main__":
-    # Windows에서 multiprocessing fork bomb 방지 필수 가드
+    configure_utf8_stdio()
     multiprocessing.freeze_support()
     main()

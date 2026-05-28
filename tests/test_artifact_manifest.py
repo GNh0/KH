@@ -85,6 +85,33 @@ class ArtifactStoreTests(unittest.TestCase):
             self.assertEqual(result["manifest"]["design_artifacts"][0]["artifact_id"], "risk_matrix")
             self.assertTrue(Path(result["manifest"]["design_artifacts"][0]["path"]).exists())
 
+    def test_store_trims_artifact_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ArtifactStore(tmp)
+            profile = DomainProfileBuilder.build(objective="Design a plan", domain_hint="ops")
+            design = work_design_from_profile(profile, deliverables=["plan"])
+
+            store.save_work_design("workflow_demo", design, "# Source")
+            store.save_design_artifacts(
+                workflow_id="workflow_demo",
+                domain="generic",
+                artifact_specs=[
+                    {
+                        "artifact_id": "risk_matrix",
+                        "kind": "risk-matrix",
+                        "title": "Risk Matrix",
+                        "content": "# Risks\n",
+                    }
+                ],
+            )
+
+            summary = store.trim_events(max_events=1)
+            lines = Path(store.events_path).read_text(encoding="utf-8").splitlines()
+
+            self.assertEqual(summary["before"], 2)
+            self.assertEqual(summary["after"], 1)
+            self.assertEqual(json.loads(lines[0])["event_type"], "design_artifact_saved")
+
     def test_build_design_stage_exports_domain_neutral_office_deliverables_to_docs(self):
         original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
         try:
@@ -174,8 +201,58 @@ class ArtifactStoreTests(unittest.TestCase):
                     for item in result["deliverable_exports"]["deliverables"]
                 }
 
+                self.assertIn("투자_분석보고서.docx", exported_names)
+                self.assertIn("가정_시나리오.xlsx", exported_names)
                 self.assertNotIn("사용_매뉴얼.docx", exported_names)
+                self.assertNotIn("요구정의서.docx", exported_names)
                 self.assertNotIn("manual exported", result["evidence"])
+        finally:
+            if original_runtime_root is None:
+                os.environ.pop("UAF_RUNTIME_ROOT", None)
+            else:
+                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
+
+    def test_build_design_stage_routes_product_design_to_drawing_artifacts(self):
+        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                runtime_root = Path(tmp) / "runtime"
+                project_dir.mkdir()
+                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
+
+                result = build_design_stage(
+                    project_dir=str(project_dir),
+                    workflow_id="workflow_demo",
+                    design_doc="# 22kW CABLE GLAND PLATE 389\nCreate a design drawing from the supplied specification guide.",
+                    file_list=["CABLE GLAND PLATE 389"],
+                    metadata={
+                        "domain_hint": "product-design",
+                        "scope": "Create concept drawing and CAD handoff artifacts for cable gland plate specification.",
+                    },
+                )
+
+                exported = result["deliverable_exports"]["deliverables"]
+                exported_paths = {Path(item["path"]).name: Path(item["path"]) for item in exported}
+                plan = result["deliverable_exports"]["plan"]
+                plan_types = {item["artifact_type"] for item in plan}
+
+                self.assertIn("제품_설계서.docx", exported_paths)
+                self.assertIn("치수_BOM.xlsx", exported_paths)
+                self.assertIn("개념_설계도.svg", exported_paths)
+                self.assertIn("개념_설계도.dxf", exported_paths)
+                self.assertNotIn("요구정의서.docx", exported_paths)
+                self.assertIn("technical-drawing", plan_types)
+                self.assertIn("cad-drawing", plan_types)
+                self.assertIn("technical drawing exported", result["evidence"])
+                self.assertIn("cad drawing exported", result["evidence"])
+
+                svg_text = exported_paths["개념_설계도.svg"].read_text(encoding="utf-8")
+                dxf_text = exported_paths["개념_설계도.dxf"].read_text(encoding="utf-8")
+
+                self.assertIn("CABLE GLAND PLATE 389", svg_text)
+                self.assertIn("SECTION", dxf_text)
+                self.assertIn("ENTITIES", dxf_text)
         finally:
             if original_runtime_root is None:
                 os.environ.pop("UAF_RUNTIME_ROOT", None)

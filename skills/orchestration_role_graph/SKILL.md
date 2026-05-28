@@ -39,7 +39,8 @@ This is the UAF-native role contract for multi-agent orchestration. It makes lea
 - `src.orchestration.role_orchestrator.RoleOrchestrator` executes selected roles as a dependency DAG.
 - Ready roles in the same wave must be launched concurrently with `asyncio.create_task(...)`.
 - Blocked roles must produce structured `WorkflowTaskResult` records instead of disappearing from the run.
-- Workflow metadata must include `role_orchestration`, `role_orchestration_stages`, and `role_task_results`.
+- Project-backed roles must write runtime role-stage artifacts under `.uaf/artifacts/roles/`, outside the target project root unless `UAF_PROJECT_LOCAL_STATE=1` is explicit.
+- Workflow metadata must include `role_orchestration`, `role_orchestration_stages`, and `role_task_results`; each role task should expose `metadata.role_artifacts` when a role-stage artifact was written.
 - `AgentLoop` appends a role graph brief to the design content before dispatch.
 - Local and Antigravity dispatchers preserve role metadata in `AdapterResult.metadata`.
 - File workers execute as bounded parallel `implementer` tasks.

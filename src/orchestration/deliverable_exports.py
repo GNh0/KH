@@ -34,10 +34,30 @@ def export_office_deliverables(
     export_dir.mkdir(parents=True, exist_ok=True)
     files = [str(item) for item in (file_list or [])]
     source_title = _first_heading(source_design_doc) or work_design.objective
+    profile_name = _deliverable_profile(domain_profile, work_design, files, metadata, source_design_doc)
+    if profile_name == "product-design":
+        return _export_product_design_deliverables(
+            export_dir=export_dir,
+            workflow_id=workflow_id,
+            domain_profile=domain_profile,
+            work_design=work_design,
+            source_design_doc=source_design_doc,
+            file_list=files,
+            profile_name=profile_name,
+        )
+    if profile_name == "investment-analysis":
+        return _export_investment_analysis_deliverables(
+            export_dir=export_dir,
+            workflow_id=workflow_id,
+            domain_profile=domain_profile,
+            work_design=work_design,
+            source_design_doc=source_design_doc,
+            file_list=files,
+            profile_name=profile_name,
+        )
+
     manual_required = _should_export_manual(domain_profile, work_design, files, metadata)
     evidence = list(DELIVERABLE_EVIDENCE)
-    if manual_required:
-        evidence.append("manual exported")
 
     deliverables = [
         _write_docx_deliverable(
@@ -98,6 +118,7 @@ def export_office_deliverables(
         ),
     ]
     if manual_required:
+        evidence.append("manual exported")
         deliverables.append(
             _write_docx_deliverable(
                 export_dir / "사용_매뉴얼.docx",
@@ -108,9 +129,125 @@ def export_office_deliverables(
                 _manual_sections(workflow_id, domain_profile, work_design, files, metadata),
             )
         )
-        evidence.append("manual exported")
     return {
         "export_dir": str(export_dir),
+        "profile": profile_name,
+        "plan": _plan_from_records(deliverables, profile_name),
+        "deliverables": deliverables,
+        "evidence": evidence,
+    }
+
+
+def _export_product_design_deliverables(
+    export_dir: Path,
+    workflow_id: str,
+    domain_profile: DomainProfile,
+    work_design: WorkDesign,
+    source_design_doc: str,
+    file_list: List[str],
+    profile_name: str,
+) -> Dict[str, Any]:
+    product_name = _product_name(work_design, source_design_doc, file_list)
+    evidence = [
+        "product design document exported",
+        "dimension bom exported",
+        "technical drawing exported",
+        "cad drawing exported",
+    ]
+    deliverables = [
+        _write_docx_deliverable(
+            export_dir / "제품_설계서.docx",
+            workflow_id,
+            "product-design-document",
+            "제품 설계서",
+            "product design document exported",
+            _product_design_sections(domain_profile, work_design, source_design_doc, product_name),
+            artifact_type="design-document",
+        ),
+        _write_xlsx_deliverable(
+            export_dir / "치수_BOM.xlsx",
+            workflow_id,
+            "dimension-bom",
+            "치수 BOM",
+            "dimension bom exported",
+            _dimension_bom_rows(work_design, source_design_doc, product_name),
+            artifact_type="table-model",
+        ),
+        _write_svg_deliverable(
+            export_dir / "개념_설계도.svg",
+            workflow_id,
+            "concept-drawing-svg",
+            "개념 설계도",
+            "technical drawing exported",
+            _concept_svg(product_name, work_design),
+            artifact_type="technical-drawing",
+        ),
+        _write_dxf_deliverable(
+            export_dir / "개념_설계도.dxf",
+            workflow_id,
+            "concept-drawing-dxf",
+            "개념 설계도 DXF",
+            "cad drawing exported",
+            _concept_dxf(product_name),
+            artifact_type="cad-drawing",
+        ),
+    ]
+    return {
+        "export_dir": str(export_dir),
+        "profile": profile_name,
+        "plan": _plan_from_records(deliverables, profile_name),
+        "deliverables": deliverables,
+        "evidence": evidence,
+    }
+
+
+def _export_investment_analysis_deliverables(
+    export_dir: Path,
+    workflow_id: str,
+    domain_profile: DomainProfile,
+    work_design: WorkDesign,
+    source_design_doc: str,
+    file_list: List[str],
+    profile_name: str,
+) -> Dict[str, Any]:
+    evidence = [
+        "investment analysis report exported",
+        "scenario model exported",
+        "risk policy checklist exported",
+    ]
+    deliverables = [
+        _write_docx_deliverable(
+            export_dir / "투자_분석보고서.docx",
+            workflow_id,
+            "investment-analysis-report",
+            "투자 분석보고서",
+            "investment analysis report exported",
+            _investment_analysis_sections(domain_profile, work_design, source_design_doc),
+            artifact_type="analysis-report",
+        ),
+        _write_xlsx_deliverable(
+            export_dir / "가정_시나리오.xlsx",
+            workflow_id,
+            "scenario-model",
+            "가정 시나리오",
+            "scenario model exported",
+            _scenario_model_rows(work_design, file_list),
+            artifact_type="scenario-model",
+        ),
+        _write_xlsx_deliverable(
+            export_dir / "위험_정책_체크리스트.xlsx",
+            workflow_id,
+            "risk-policy-checklist",
+            "위험 정책 체크리스트",
+            "risk policy checklist exported",
+            _risk_policy_rows(work_design),
+            artifact_type="risk-policy-checklist",
+        ),
+    ]
+    return {
+        "export_dir": str(export_dir),
+        "profile": profile_name,
+        "plan": _plan_from_records(deliverables, profile_name),
         "deliverables": deliverables,
         "evidence": evidence,
     }
@@ -289,6 +426,169 @@ def _manual_sections(
     ]
 
 
+def _product_design_sections(
+    profile: DomainProfile,
+    design: WorkDesign,
+    source_design_doc: str,
+    product_name: str,
+) -> List[Dict[str, Any]]:
+    return [
+        {"heading": "제품/규격 식별", "paragraphs": [product_name]},
+        {"heading": "설계 목표", "paragraphs": [design.objective or profile.objective]},
+        {"heading": "적용 범위", "paragraphs": [design.scope or "not specified"]},
+        {
+            "heading": "도면 산출물",
+            "items": [
+                "제품_설계서.docx: 설계 기준과 가정",
+                "치수_BOM.xlsx: 치수, 부품, 가공 데이터",
+                "개념_설계도.svg: 검토용 개념 도면",
+                "개념_설계도.dxf: CAD handoff용 2D 개념 도면",
+            ],
+        },
+        {
+            "heading": "주의",
+            "items": [
+                "입력 가이드에 정확한 치수, 공차, 재질이 없으면 제조용 최종 도면이 아니라 개념 도면으로 취급한다.",
+                "제조 전에는 원 규격서, 실측 데이터, 승인 도면 번호를 확인해야 한다.",
+            ],
+        },
+        {"heading": "원본 규격/요청", "paragraphs": [_compact_text(source_design_doc)]},
+    ]
+
+
+def _dimension_bom_rows(
+    design: WorkDesign,
+    source_design_doc: str,
+    product_name: str,
+) -> List[List[str]]:
+    return [
+        ["분류", "항목", "값", "근거", "비고"],
+        ["제품", "식별명", product_name, "user input", ""],
+        ["전기", "용량", _extract_power_rating(source_design_doc), "user input", "전기 용량은 기구 치수 확정 근거가 아님"],
+        ["기구", "판넬/플레이트", "CABLE GLAND PLATE", "user input", "정확 치수는 규격 가이드 필요"],
+        ["도면", "도면 수준", "concept", "UAF export", "제조용 최종 도면 전 검토 필요"],
+        ["검증", "필요 증거", "; ".join(design.evidence_required), "work design", ""],
+    ]
+
+
+def _investment_analysis_sections(
+    profile: DomainProfile,
+    design: WorkDesign,
+    source_design_doc: str,
+) -> List[Dict[str, Any]]:
+    return [
+        {"heading": "분석 목적", "paragraphs": [design.objective or profile.objective]},
+        {"heading": "분석 범위", "paragraphs": [design.scope or "not specified"]},
+        {"heading": "핵심 산출물", "items": ["투자_분석보고서.docx", "가정_시나리오.xlsx", "위험_정책_체크리스트.xlsx"]},
+        {"heading": "검토 기준", "items": design.evidence_required},
+        {"heading": "위험 및 정책 체크", "items": design.risk_policy_checks},
+        {"heading": "원본 요청", "paragraphs": [_compact_text(source_design_doc)]},
+    ]
+
+
+def _scenario_model_rows(design: WorkDesign, file_list: List[str]) -> List[List[str]]:
+    return [
+        ["분류", "항목", "기준/값", "비고"],
+        ["시나리오", "Base", "to be filled from source data", "기본 가정"],
+        ["시나리오", "Upside", "to be filled from source data", "긍정 가정"],
+        ["시나리오", "Downside", "to be filled from source data", "보수 가정"],
+        ["입력", "대상", "; ".join(file_list) or "investment thesis", ""],
+        ["증거", "필수 증거", "; ".join(design.evidence_required), ""],
+    ]
+
+
+def _concept_svg(product_name: str, design: WorkDesign) -> str:
+    title = escape(product_name)
+    note = escape(design.scope or "Concept drawing; verify dimensions against supplied guide.")
+    return (
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"900\" height=\"620\" viewBox=\"0 0 900 620\">"
+        "<rect width=\"900\" height=\"620\" fill=\"#ffffff\"/>"
+        "<text x=\"40\" y=\"50\" font-family=\"Arial\" font-size=\"26\" font-weight=\"700\">"
+        f"{title}</text>"
+        "<rect x=\"180\" y=\"140\" width=\"540\" height=\"300\" fill=\"none\" stroke=\"#111827\" stroke-width=\"4\"/>"
+        "<circle cx=\"330\" cy=\"290\" r=\"42\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"4\"/>"
+        "<circle cx=\"450\" cy=\"290\" r=\"42\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"4\"/>"
+        "<circle cx=\"570\" cy=\"290\" r=\"42\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"4\"/>"
+        "<line x1=\"180\" y1=\"470\" x2=\"720\" y2=\"470\" stroke=\"#374151\" stroke-width=\"2\"/>"
+        "<text x=\"360\" y=\"505\" font-family=\"Arial\" font-size=\"18\">overall width TBD</text>"
+        "<line x1=\"750\" y1=\"140\" x2=\"750\" y2=\"440\" stroke=\"#374151\" stroke-width=\"2\"/>"
+        "<text x=\"770\" y=\"300\" font-family=\"Arial\" font-size=\"18\" transform=\"rotate(90 770 300)\">height TBD</text>"
+        "<text x=\"40\" y=\"560\" font-family=\"Arial\" font-size=\"16\">"
+        f"{note}</text>"
+        "</svg>"
+    )
+
+
+def _concept_dxf(product_name: str) -> str:
+    title = _ascii_dxf_text(product_name)
+    return "\n".join([
+        "0", "SECTION", "2", "ENTITIES",
+        "0", "LWPOLYLINE", "8", "PLATE", "90", "4", "70", "1",
+        "10", "0", "20", "0",
+        "10", "540", "20", "0",
+        "10", "540", "20", "300",
+        "10", "0", "20", "300",
+        "0", "CIRCLE", "8", "GLAND_HOLES", "10", "150", "20", "150", "40", "42",
+        "0", "CIRCLE", "8", "GLAND_HOLES", "10", "270", "20", "150", "40", "42",
+        "0", "CIRCLE", "8", "GLAND_HOLES", "10", "390", "20", "150", "40", "42",
+        "0", "TEXT", "8", "NOTES", "10", "0", "20", "340", "40", "18", "1", title,
+        "0", "TEXT", "8", "NOTES", "10", "0", "20", "365", "40", "12", "1",
+        "CONCEPT ONLY - VERIFY DIMENSIONS AND TOLERANCES AGAINST SOURCE GUIDE",
+        "0", "ENDSEC", "0", "EOF", "",
+    ])
+
+
+def _deliverable_profile(
+    profile: DomainProfile,
+    design: WorkDesign,
+    file_list: List[str],
+    metadata: Dict[str, Any],
+    source_design_doc: str,
+) -> str:
+    explicit = str(metadata.get("deliverable_profile", "") or metadata.get("artifact_profile", "")).strip().lower()
+    if explicit:
+        return explicit.replace("_", "-")
+    haystack = " ".join([
+        profile.domain_name,
+        design.domain,
+        design.scope,
+        " ".join(design.deliverables),
+        " ".join(file_list),
+        source_design_doc,
+    ]).lower()
+    product_markers = [
+        "product",
+        "mechanical",
+        "cad",
+        "dxf",
+        "drawing",
+        "gland plate",
+        "cable gland",
+        "specification guide",
+        "제품",
+        "기구",
+        "도면",
+        "설계도",
+        "규격",
+    ]
+    if any(marker in haystack for marker in product_markers):
+        return "product-design"
+    investment_markers = [
+        "investment",
+        "finance",
+        "valuation",
+        "portfolio",
+        "research",
+        "analysis",
+        "투자",
+        "분석",
+        "리서치",
+    ]
+    if any(marker in haystack for marker in investment_markers):
+        return "investment-analysis"
+    return "general-orchestration"
+
+
 def _should_export_manual(
     profile: DomainProfile,
     design: WorkDesign,
@@ -349,9 +649,10 @@ def _write_docx_deliverable(
     title: str,
     evidence: str,
     sections: List[Dict[str, Any]],
+    artifact_type: str = "",
 ) -> Dict[str, str]:
     _write_docx(path, title, sections)
-    return _deliverable_record(path, workflow_id, kind, title, "docx", evidence)
+    return _deliverable_record(path, workflow_id, kind, title, "docx", evidence, artifact_type)
 
 
 def _write_xlsx_deliverable(
@@ -361,9 +662,36 @@ def _write_xlsx_deliverable(
     title: str,
     evidence: str,
     rows: List[List[str]],
+    artifact_type: str = "",
 ) -> Dict[str, str]:
     _write_xlsx(path, title, rows)
-    return _deliverable_record(path, workflow_id, kind, title, "xlsx", evidence)
+    return _deliverable_record(path, workflow_id, kind, title, "xlsx", evidence, artifact_type)
+
+
+def _write_svg_deliverable(
+    path: Path,
+    workflow_id: str,
+    kind: str,
+    title: str,
+    evidence: str,
+    content: str,
+    artifact_type: str = "",
+) -> Dict[str, str]:
+    path.write_text(content, encoding="utf-8")
+    return _deliverable_record(path, workflow_id, kind, title, "svg", evidence, artifact_type)
+
+
+def _write_dxf_deliverable(
+    path: Path,
+    workflow_id: str,
+    kind: str,
+    title: str,
+    evidence: str,
+    content: str,
+    artifact_type: str = "",
+) -> Dict[str, str]:
+    path.write_text(content, encoding="ascii")
+    return _deliverable_record(path, workflow_id, kind, title, "dxf", evidence, artifact_type)
 
 
 def _write_docx(path: Path, title: str, sections: List[Dict[str, Any]]) -> None:
@@ -541,15 +869,32 @@ def _deliverable_record(
     title: str,
     file_format: str,
     evidence: str,
+    artifact_type: str = "",
 ) -> Dict[str, str]:
     return {
         "workflow_id": workflow_id,
         "kind": kind,
+        "artifact_type": artifact_type or kind,
         "title": title,
         "format": file_format,
         "path": str(path),
         "evidence": evidence,
     }
+
+
+def _plan_from_records(deliverables: List[Dict[str, str]], profile_name: str) -> List[Dict[str, str]]:
+    return [
+        {
+            "profile": profile_name,
+            "kind": item.get("kind", ""),
+            "artifact_type": item.get("artifact_type", item.get("kind", "")),
+            "format": item.get("format", ""),
+            "title": item.get("title", ""),
+            "path": item.get("path", ""),
+            "evidence": item.get("evidence", ""),
+        }
+        for item in deliverables
+    ]
 
 
 def _first_heading(text: str) -> str:
@@ -563,6 +908,28 @@ def _first_heading(text: str) -> str:
 def _compact_text(text: str) -> str:
     compact = " ".join((text or "").split())
     return compact or "not specified"
+
+
+def _product_name(
+    design: WorkDesign,
+    source_design_doc: str,
+    file_list: List[str],
+) -> str:
+    if file_list:
+        return file_list[0]
+    return _first_heading(source_design_doc) or design.objective or "Product Design"
+
+
+def _extract_power_rating(text: str) -> str:
+    import re
+
+    match = re.search(r"\b\d+(?:\.\d+)?\s*kW\b", text or "", flags=re.IGNORECASE)
+    return match.group(0) if match else "not specified"
+
+
+def _ascii_dxf_text(text: str) -> str:
+    value = text.encode("ascii", errors="ignore").decode("ascii").strip()
+    return value or "CONCEPT DRAWING"
 
 
 def _resolve_project_path(project_root: Path, relative_path: str) -> Path:
