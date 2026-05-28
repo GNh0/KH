@@ -21,6 +21,25 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn("Skill", " ".join(interface["capabilities"]))
         self.assertIn("https://github.com/GNh0/KH", manifest["repository"])
 
+    def test_repo_marketplace_exposes_git_backed_plugin(self):
+        marketplace_path = Path(".agents") / "plugins" / "marketplace.json"
+
+        self.assertTrue(marketplace_path.is_file())
+        marketplace = json.loads(marketplace_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(marketplace["name"], "kh-uaf-marketplace")
+        self.assertEqual(marketplace["interface"]["displayName"], "KH UAF")
+        self.assertEqual(len(marketplace["plugins"]), 1)
+
+        entry = marketplace["plugins"][0]
+        self.assertEqual(entry["name"], "kh-uaf")
+        self.assertEqual(entry["source"]["source"], "url")
+        self.assertEqual(entry["source"]["url"], "https://github.com/GNh0/KH.git")
+        self.assertEqual(entry["source"]["ref"], "main")
+        self.assertEqual(entry["policy"]["installation"], "AVAILABLE")
+        self.assertEqual(entry["policy"]["authentication"], "ON_INSTALL")
+        self.assertEqual(entry["category"], "Productivity")
+
     def test_antigravity_workspace_plugin_wrapper_is_available(self):
         plugin_root = Path(".agents") / "plugins" / "kh-uaf"
         manifest_path = plugin_root / "plugin.json"
@@ -49,6 +68,7 @@ class PluginPackagingTests(unittest.TestCase):
 
         self.assertIn("## Codex Plugin Install", content)
         self.assertIn(".codex-plugin/plugin.json", content)
+        self.assertIn(".agents/plugins/marketplace.json", content)
         self.assertIn("## Antigravity Plugin Install", content)
         self.assertIn("~/.gemini/config/plugins/kh-uaf", content)
         self.assertIn(".agents/plugins/kh-uaf", content)

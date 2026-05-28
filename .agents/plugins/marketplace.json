@@ -1,0 +1,21 @@
+{
+  "name": "kh-uaf-marketplace",
+  "interface": {
+    "displayName": "KH UAF"
+  },
+  "plugins": [
+    {
+      "name": "kh-uaf",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/GNh0/KH.git",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -176,6 +176,9 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 - Fixed file operation skill path boundary:
   - `src.skills.file_ops` now uses `os.path.commonpath` instead of string-prefix checks.
   - Added regression coverage for prefix-sibling workspace paths such as `workspace` vs `workspace_evil`.
+- Added Codex repo marketplace packaging:
+  - `.agents/plugins/marketplace.json` exposes `kh-uaf` as a Git-backed installable plugin source.
+  - README now documents the Codex app Add marketplace fields for `GNh0/KH`, `main`, and `.agents/plugins`.
 
 ## Active Decision
 

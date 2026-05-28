@@ -100,7 +100,23 @@ python -m unittest discover -s tests -v
 
 ## Codex Plugin Install
 
-This repo can be installed as a local Codex plugin because it includes `.codex-plugin/plugin.json` and points Codex at the packaged `skills/` directory.
+This repo can be installed as a Codex plugin because it includes `.codex-plugin/plugin.json`, points Codex at the packaged `skills/` directory, and exposes a repo marketplace at `.agents/plugins/marketplace.json`.
+
+In the Codex app, open Plugins -> Manage -> Add marketplace and use:
+
+```text
+Source: GNh0/KH
+Git ref: main
+Sparse path: .agents/plugins
+```
+
+The sparse path is optional, but it keeps the marketplace checkout focused on the Codex marketplace file. After adding the marketplace, install `KH UAF` from the plugin directory and start a new thread.
+
+The same marketplace can be added from the CLI:
+
+```bash
+codex plugin marketplace add GNh0/KH --ref main --sparse .agents/plugins
+```
 
 Recommended clone path on another PC:
 
