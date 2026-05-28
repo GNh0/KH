@@ -1,6 +1,6 @@
 ---
 name: harness-evaluator
-description: A secure code sandbox that executes and tests python code to catch syntax, runtime, and module errors. Use this to verify any code you write before presenting it to the user.
+description: Use when Python code needs isolated syntax, runtime, or module verification before presenting results.
 ---
 # Harness Evaluator Skill
 

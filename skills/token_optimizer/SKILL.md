@@ -1,6 +1,6 @@
 ---
 name: token-optimizer
-description: Compresses very long terminal logs or minifies python code to save LLM context window tokens. Use this when you are dealing with huge files or massive error outputs.
+description: Use when terminal logs, command output, or Python code are too large for efficient LLM context handling.
 ---
 # Token Optimizer Skill
 

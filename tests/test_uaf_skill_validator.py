@@ -14,7 +14,7 @@ def write_skill(root: str, folder: str, content: str) -> None:
 
 VALID_SKILL = """---
 name: valid-harness
-description: Valid UAF harness.
+description: Use when validating a UAF harness.
 ---
 
 # Valid Harness
@@ -49,6 +49,35 @@ class UafSkillValidatorTests(unittest.TestCase):
 
         self.assertFalse(report.success)
         self.assertIn("missing_frontmatter", {issue.code for issue in report.issues})
+
+    def test_description_must_be_trigger_focused(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            write_skill(
+                temp_dir,
+                "description",
+                VALID_SKILL.replace(
+                    "description: Use when validating a UAF harness.",
+                    "description: Valid UAF harness.",
+                ),
+            )
+
+            report = validate_skill_folders(skills_dir=temp_dir)
+
+        self.assertFalse(report.success)
+        self.assertIn("description_not_trigger_focused", {issue.code for issue in report.issues})
+
+    def test_missing_behavior_section_is_reported(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            write_skill(
+                temp_dir,
+                "behavior",
+                VALID_SKILL.replace("## Workflow\n\n1. Do the work.\n\n", ""),
+            )
+
+            report = validate_skill_folders(skills_dir=temp_dir)
+
+        self.assertFalse(report.success)
+        self.assertIn("missing_behavior_section", {issue.code for issue in report.issues})
 
     def test_duplicate_skill_names_are_reported(self):
         with tempfile.TemporaryDirectory() as temp_dir:

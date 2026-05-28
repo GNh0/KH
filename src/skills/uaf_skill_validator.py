@@ -9,6 +9,10 @@ PACKAGED_SKILLS_DIR = os.path.join(PROJECT_ROOT, "skills")
 
 NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PLACEHOLDER_PATTERN = re.compile(r"\{\{[^{}]+\}\}")
+BEHAVIOR_SECTION_PATTERN = re.compile(
+    r"^##\s+(Workflow|Instructions|Core Flow|Command lifecycle|Hook workflow|Add a skill|Required default roles)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 @dataclass
@@ -147,9 +151,20 @@ def _validate_skill_file(skills_dir: str, folder_name: str, skill_path: str) -> 
 
     if not result.description:
         result.add_issue("missing_description", "Frontmatter must include a non-empty description.")
+    elif not result.description.startswith("Use when "):
+        result.add_issue(
+            "description_not_trigger_focused",
+            "Frontmatter description must start with 'Use when ' and describe trigger conditions.",
+        )
 
     if not re.search(r"^#\s+\S", content, re.MULTILINE):
         result.add_issue("missing_h1", "Skill body must include an H1 heading.")
+
+    if not BEHAVIOR_SECTION_PATTERN.search(content):
+        result.add_issue(
+            "missing_behavior_section",
+            "Skill body must include a behavior section such as Workflow, Instructions, Core Flow, or equivalent.",
+        )
 
     if "## UAF implementation targets" not in content:
         result.add_issue(

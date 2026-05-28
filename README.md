@@ -367,10 +367,12 @@ Every packaged skill is expected to have:
 
 - valid YAML frontmatter
 - a unique `name`
-- a useful `description`
+- a trigger-focused `description` that starts with `Use when`
 - one top-level H1
+- a behavior section such as `## Workflow`, `## Instructions`, `## Core Flow`, or equivalent
 - a `## UAF implementation targets` section
 - no unresolved `{{placeholder}}` tokens
+- repository code references under implementation targets that resolve to importable modules, classes, functions, or existing skill files
 
 Run:
 
@@ -378,7 +380,7 @@ Run:
 python -m src.skills.uaf_skill_catalog --check
 ```
 
-The check is intentionally simple and repo-local. It gives UAF the same kind of skill hygiene that larger skill packs rely on, without adding another runtime dependency.
+The check is repo-local and dependency-free. It now verifies both skill hygiene and the minimum behavior contract needed before treating a skill as installable.
 
 ## Windows App Integration
 

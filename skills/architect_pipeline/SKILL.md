@@ -1,6 +1,6 @@
 ---
 name: architect-pipeline
-description: Generates a system architecture and design document (design_doc.md) based on user requirements. Use this before writing any code to ensure maintainability and correct design patterns.
+description: Use when designing an application, system, or codebase before implementation requires an architecture blueprint.
 ---
 # Architect Pipeline Skill
 

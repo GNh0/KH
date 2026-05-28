@@ -1,9 +1,12 @@
 import os
 import json
+import importlib
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 from src.skills.uaf_skill_catalog import collect_packaged_skills, read_packaged_skill
 
@@ -70,6 +73,46 @@ class UafSkillCatalogTests(unittest.TestCase):
         self.assertEqual(result["validation"]["total_skills"], len(CORE_SKILLS))
         self.assertEqual(result["validation"]["invalid_skills"], 0)
 
+    def test_packaged_skill_targets_resolve_to_repo_code(self):
+        for skill_dir in sorted(Path("skills").iterdir(), key=lambda path: path.name):
+            if not skill_dir.is_dir():
+                continue
+            content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+            target_section = content.split("## UAF implementation targets", 1)[1]
+            target_section = target_section.split("\n## ", 1)[0]
+            code_refs = re.findall(r"`([^`]+)`", target_section)
+
+            with self.subTest(skill=skill_dir.name):
+                self.assertTrue(code_refs, f"{skill_dir} has no code references")
+                for ref in code_refs:
+                    if "<" in ref or ">" in ref:
+                        continue
+                    if ref.startswith(("src.", "tests.")):
+                        self.assert_importable_ref(ref)
+                    elif ref.startswith("skills/"):
+                        self.assertTrue(Path(ref).exists(), ref)
+
+    def assert_importable_ref(self, ref: str) -> None:
+        parts = ref.split(".")
+        last_error = None
+        for index in range(len(parts), 0, -1):
+            module_name = ".".join(parts[:index])
+            try:
+                module = importlib.import_module(module_name)
+            except ModuleNotFoundError as exc:
+                if exc.name != module_name:
+                    raise
+                last_error = exc
+                continue
+
+            current = module
+            for attr in parts[index:]:
+                self.assertTrue(hasattr(current, attr), f"{ref} missing attribute {attr}")
+                current = getattr(current, attr)
+            return
+
+        self.fail(f"{ref} could not be imported: {last_error}")
+
     def test_check_command_outputs_validation_json(self):
         completed = subprocess.run(
             [sys.executable, "-m", "src.skills.uaf_skill_catalog", "--check"],
@@ -135,12 +178,16 @@ class UafSkillCatalogTests(unittest.TestCase):
                 handle.write(
                     "---\n"
                     "name: custom-harness\n"
-                    "description: Custom portable harness.\n"
+                    "description: Use when testing custom portable harness loading.\n"
                     "---\n"
                     "# Custom Harness\n"
                     "\n"
+                    "## Workflow\n"
+                    "\n"
+                    "1. Load the custom harness.\n"
+                    "\n"
                     "## UAF implementation targets\n"
-                    "- src.skills.custom_harness\n"
+                    "- src.skills.uaf_skill_catalog\n"
                 )
 
             result = collect_packaged_skills(skills_dir=temp_dir)

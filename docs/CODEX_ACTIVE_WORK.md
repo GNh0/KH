@@ -32,6 +32,13 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_catalog --check`
   - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"`
   - `python -B -m unittest discover -s tests -v` (153 tests)
+- Latest full verification after packaged skill behavior validation:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool .agents/plugins/marketplace.json`
+  - `python -m src.skills.uaf_skill_catalog --check`
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"`
+  - `python -B -m unittest discover -s tests -v` (157 tests)
 
 ## Completed
 
@@ -179,6 +186,9 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 - Added Codex repo marketplace packaging:
   - `.agents/plugins/marketplace.json` exposes `kh-uaf` as a Git-backed installable plugin source.
   - README now documents the Codex app Add marketplace fields for `GNh0/KH`, `main`, and `.agents/plugins`.
+- Strengthened packaged skill behavior validation:
+  - `src.skills.uaf_skill_validator` now requires trigger-focused `Use when` descriptions and an explicit behavior section.
+  - `tests.test_uaf_skill_catalog` verifies packaged skill implementation target references resolve to repo modules, symbols, or skill files.
 
 ## Active Decision
 
