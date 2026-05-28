@@ -3,10 +3,45 @@ import os
 import tempfile
 import unittest
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from src.orchestration.artifacts import ArtifactStore, build_design_stage
 from src.orchestration.domain_profiles import DomainProfileBuilder, work_design_from_profile
+
+
+def _docx_xml(path: Path) -> str:
+    with zipfile.ZipFile(path) as package:
+        return package.read("word/document.xml").decode("utf-8")
+
+
+def _xlsx_xml(path: Path) -> str:
+    with zipfile.ZipFile(path) as package:
+        return package.read("xl/worksheets/sheet1.xml").decode("utf-8")
+
+
+def _xlsx_row_widths(path: Path):
+    with zipfile.ZipFile(path) as package:
+        root = ET.fromstring(package.read("xl/worksheets/sheet1.xml"))
+    widths = []
+    for row in root.iter():
+        if row.tag == "row" or row.tag.endswith("}row"):
+            widths.append(sum(1 for cell in row if cell.tag == "c" or cell.tag.endswith("}c")))
+    return widths
+
+
+def _assert_xlsx_rows_match_header(test_case: unittest.TestCase, path: Path):
+    widths = _xlsx_row_widths(path)
+    test_case.assertGreater(len(widths), 1, path.name)
+    test_case.assertTrue(
+        all(width == widths[0] for width in widths),
+        f"{path.name} row widths must match header: {widths}",
+    )
+
+
+def _assert_contains_all(test_case: unittest.TestCase, text: str, markers):
+    for marker in markers:
+        test_case.assertIn(marker, text)
 
 
 class ArtifactStoreTests(unittest.TestCase):
@@ -155,37 +190,53 @@ class ArtifactStoreTests(unittest.TestCase):
                     self.assertTrue(path.exists())
                     self.assertTrue(zipfile.is_zipfile(path))
 
-                with zipfile.ZipFile(exported_paths["요구정의서.docx"]) as package:
-                    document_xml = package.read("word/document.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["오케스트레이션_설계서.docx"]) as package:
-                    orchestration_xml = package.read("word/document.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["산출물_정의서.docx"]) as package:
-                    deliverable_xml = package.read("word/document.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["처리흐름도.docx"]) as package:
-                    process_xml = package.read("word/document.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["역할별_작업분해표.xlsx"]) as package:
-                    sheet_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["증거계획서.xlsx"]) as package:
-                    evidence_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["위험_정책_체크리스트.xlsx"]) as package:
-                    risk_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["사용_매뉴얼.docx"]) as package:
-                    manual_xml = package.read("word/document.xml").decode("utf-8")
+                document_xml = _docx_xml(exported_paths["요구정의서.docx"])
+                orchestration_xml = _docx_xml(exported_paths["오케스트레이션_설계서.docx"])
+                deliverable_xml = _docx_xml(exported_paths["산출물_정의서.docx"])
+                process_xml = _docx_xml(exported_paths["처리흐름도.docx"])
+                sheet_xml = _xlsx_xml(exported_paths["역할별_작업분해표.xlsx"])
+                evidence_xml = _xlsx_xml(exported_paths["증거계획서.xlsx"])
+                risk_xml = _xlsx_xml(exported_paths["위험_정책_체크리스트.xlsx"])
+                manual_xml = _docx_xml(exported_paths["사용_매뉴얼.docx"])
+                _assert_xlsx_rows_match_header(self, exported_paths["역할별_작업분해표.xlsx"])
+                _assert_xlsx_rows_match_header(self, exported_paths["증거계획서.xlsx"])
+                _assert_xlsx_rows_match_header(self, exported_paths["위험_정책_체크리스트.xlsx"])
 
                 self.assertIn("Warehouse Exception Review", document_xml)
-                self.assertIn("기능 요구사항", document_xml)
-                self.assertIn("인수 기준", document_xml)
-                self.assertIn("미해결 확인사항", document_xml)
-                self.assertIn("역할 DAG", orchestration_xml)
-                self.assertIn("병렬 실행 전략", orchestration_xml)
-                self.assertIn("재작업 루프", process_xml)
-                self.assertIn("단계별 처리 흐름", process_xml)
-                self.assertIn("산출물 품질 기준", deliverable_xml)
-                self.assertIn("생성 조건", deliverable_xml)
-                self.assertIn("operator-handoff", sheet_xml)
-                self.assertIn("완료 기준", sheet_xml)
-                self.assertIn("검증 방법", evidence_xml)
-                self.assertIn("차단 기준", risk_xml)
+                _assert_contains_all(self, document_xml, [
+                    "문서 정보", "개정 이력", "배경 및 목적", "범위",
+                    "용어 및 약어", "이해관계자", "기능 요구사항",
+                    "비기능 요구사항", "인수 기준", "미해결 확인사항",
+                ])
+                _assert_contains_all(self, orchestration_xml, [
+                    "문서 정보", "설계 원칙", "역할 DAG", "의존성",
+                    "병렬 실행 전략", "상태 저장소", "게이트 설계",
+                    "장애 및 재작업 절차",
+                ])
+                _assert_contains_all(self, deliverable_xml, [
+                    "산출물 목록", "산출물별 정의", "입력 자료",
+                    "품질 기준", "승인 기준", "보관 위치",
+                ])
+                _assert_contains_all(self, process_xml, [
+                    "프로세스 개요", "스윔레인", "단계별 처리 흐름",
+                    "의사결정 지점", "예외 흐름", "재작업 루프",
+                ])
+                _assert_contains_all(self, sheet_xml, [
+                    "WBS ID", "작업명", "입력", "출력", "완료 기준",
+                    "의존성", "우선순위", "증거",
+                ])
+                _assert_contains_all(self, evidence_xml, [
+                    "증거 ID", "증거 키", "산출물", "검증 방법",
+                    "수집 시점", "담당", "통과 기준", "차단 기준",
+                ])
+                _assert_contains_all(self, risk_xml, [
+                    "위험 ID", "분류", "위험 항목", "영향도",
+                    "발생 가능성", "위험 수준", "완화 방안", "담당", "차단 기준",
+                ])
+                _assert_contains_all(self, manual_xml, [
+                    "개정 이력", "사용 대상", "사전 준비", "사용 절차",
+                    "문제 해결", "문의/지원",
+                ])
                 self.assertGreaterEqual(sheet_xml.count("<row "), 10)
                 self.assertGreaterEqual(evidence_xml.count("<row "), 10)
                 self.assertGreaterEqual(risk_xml.count("<row "), 8)
@@ -225,12 +276,30 @@ class ArtifactStoreTests(unittest.TestCase):
                     Path(item["path"]).name
                     for item in result["deliverable_exports"]["deliverables"]
                 }
+                exported_paths = {
+                    Path(item["path"]).name: Path(item["path"])
+                    for item in result["deliverable_exports"]["deliverables"]
+                }
 
                 self.assertIn("투자_분석보고서.docx", exported_names)
                 self.assertIn("가정_시나리오.xlsx", exported_names)
                 self.assertNotIn("사용_매뉴얼.docx", exported_names)
                 self.assertNotIn("요구정의서.docx", exported_names)
                 self.assertNotIn("manual exported", result["evidence"])
+
+                report_xml = _docx_xml(exported_paths["투자_분석보고서.docx"])
+                scenario_xml = _xlsx_xml(exported_paths["가정_시나리오.xlsx"])
+                _assert_xlsx_rows_match_header(self, exported_paths["가정_시나리오.xlsx"])
+                _assert_xlsx_rows_match_header(self, exported_paths["위험_정책_체크리스트.xlsx"])
+                _assert_contains_all(self, report_xml, [
+                    "문서 정보", "Executive Summary", "투자 개요",
+                    "핵심 가정", "시나리오 분석", "수익/위험 분석",
+                    "리스크", "최종 의견", "면책/주의",
+                ])
+                _assert_contains_all(self, scenario_xml, [
+                    "시나리오", "가정 항목", "기준값", "상승",
+                    "기준", "하락", "민감도", "근거", "비고",
+                ])
         finally:
             if original_runtime_root is None:
                 os.environ.pop("UAF_RUNTIME_ROOT", None)
@@ -279,28 +348,41 @@ class ArtifactStoreTests(unittest.TestCase):
                 self.assertIn("development-design", plan_types)
                 self.assertIn("functional specification exported", result["evidence"])
 
-                with zipfile.ZipFile(exported_paths["기능정의서.docx"]) as package:
-                    functional_xml = package.read("word/document.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["개발설계서.docx"]) as package:
-                    design_xml = package.read("word/document.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["화면_API_정의서.docx"]) as package:
-                    screen_api_xml = package.read("word/document.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["데이터_정의서.xlsx"]) as package:
-                    data_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
-                with zipfile.ZipFile(exported_paths["테스트_검증계획서.xlsx"]) as package:
-                    test_xml = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
+                functional_xml = _docx_xml(exported_paths["기능정의서.docx"])
+                design_xml = _docx_xml(exported_paths["개발설계서.docx"])
+                screen_api_xml = _docx_xml(exported_paths["화면_API_정의서.docx"])
+                data_xml = _xlsx_xml(exported_paths["데이터_정의서.xlsx"])
+                test_xml = _xlsx_xml(exported_paths["테스트_검증계획서.xlsx"])
+                _assert_xlsx_rows_match_header(self, exported_paths["데이터_정의서.xlsx"])
+                _assert_xlsx_rows_match_header(self, exported_paths["역할별_작업분해표.xlsx"])
+                _assert_xlsx_rows_match_header(self, exported_paths["테스트_검증계획서.xlsx"])
+                _assert_xlsx_rows_match_header(self, exported_paths["위험_정책_체크리스트.xlsx"])
 
-                self.assertIn("기능 목록", functional_xml)
-                self.assertIn("기능 상세", functional_xml)
-                self.assertIn("입출력 정의", functional_xml)
-                self.assertIn("예외 및 검증 규칙", functional_xml)
-                self.assertIn("인수 기준", functional_xml)
-                self.assertIn("아키텍처 구성", design_xml)
-                self.assertIn("모듈 설계", design_xml)
-                self.assertIn("화면 정의", screen_api_xml)
-                self.assertIn("API 정의", screen_api_xml)
-                self.assertIn("필드명", data_xml)
-                self.assertIn("검증 방법", test_xml)
+                _assert_contains_all(self, functional_xml, [
+                    "문서 정보", "개정 이력", "기능 개요", "기능 목록",
+                    "기능 상세", "화면/메뉴", "권한", "입출력 정의",
+                    "처리 규칙", "예외 및 검증 규칙", "인수 기준", "추적성",
+                ])
+                _assert_contains_all(self, design_xml, [
+                    "문서 정보", "시스템 구성도", "아키텍처 구성",
+                    "모듈 설계", "인터페이스 설계", "데이터베이스 설계",
+                    "처리 흐름", "오류 처리 및 로깅", "보안/권한",
+                    "배포/운영", "테스트 전략",
+                ])
+                _assert_contains_all(self, screen_api_xml, [
+                    "화면 목록", "화면 레이아웃", "화면 항목 정의",
+                    "이벤트 정의", "API 목록", "API 정의",
+                    "요청/응답", "상태 코드", "권한",
+                ])
+                _assert_contains_all(self, data_xml, [
+                    "테이블명", "컬럼명", "필드명", "자료형", "길이",
+                    "PK", "FK", "필수", "기본값", "설명", "검증 규칙",
+                ])
+                _assert_contains_all(self, test_xml, [
+                    "테스트 ID", "테스트 유형", "기능", "시나리오",
+                    "선행 조건", "입력값", "수행 절차", "기대 결과",
+                    "검증 방법", "증거 키", "담당", "차단 기준",
+                ])
                 self.assertGreaterEqual(data_xml.count("<row "), 8)
                 self.assertGreaterEqual(test_xml.count("<row "), 8)
         finally:
@@ -344,9 +426,21 @@ class ArtifactStoreTests(unittest.TestCase):
                 self.assertIn("technical drawing exported", result["evidence"])
                 self.assertIn("cad drawing exported", result["evidence"])
 
+                product_doc_xml = _docx_xml(exported_paths["제품_설계서.docx"])
+                bom_xml = _xlsx_xml(exported_paths["치수_BOM.xlsx"])
                 svg_text = exported_paths["개념_설계도.svg"].read_text(encoding="utf-8")
                 dxf_text = exported_paths["개념_설계도.dxf"].read_text(encoding="utf-8")
+                _assert_xlsx_rows_match_header(self, exported_paths["치수_BOM.xlsx"])
 
+                _assert_contains_all(self, product_doc_xml, [
+                    "문서 정보", "개정 이력", "설계 개요", "규격 요약",
+                    "설계 요구사항", "치수 기준", "BOM", "도면 목록",
+                    "검증 방법", "제조 전 확인사항", "승인 기준",
+                ])
+                _assert_contains_all(self, bom_xml, [
+                    "품번", "품명", "재질", "규격", "치수",
+                    "수량", "공차", "근거", "비고",
+                ])
                 self.assertIn("CABLE GLAND PLATE 389", svg_text)
                 self.assertIn("SECTION", dxf_text)
                 self.assertIn("ENTITIES", dxf_text)

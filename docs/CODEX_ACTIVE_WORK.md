@@ -293,6 +293,8 @@ Follow-up user review clarified that development work must not rely on the gener
 
 Tests assert the mandatory 기능정의서 markers and prevent software prompts containing generic words like "product CRUD" from being misrouted to the product-design profile.
 
+Latest template-quality review requires each exported document to follow broadly recognizable document shapes rather than only containing plausible sections. Tests now assert common markers for requirements documents, orchestration design, deliverable definition, process flow, operations manual, software FSD/SDD/screen-API/data dictionary/test plan, product design/BOM, investment report/scenario workbook, WBS, evidence plan, and risk register headers.
+
 Active task: none. Recommended next improvement is optional host package scaffolding or additional domain-specific artifact producers only when the actual runtime or domain dependency is explicit.
 
 There are two related layers:

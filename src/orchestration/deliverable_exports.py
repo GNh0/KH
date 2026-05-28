@@ -373,8 +373,10 @@ def _requirements_sections(
     source_design_doc: str,
 ) -> List[Dict[str, Any]]:
     return [
+        {"heading": "문서 정보", "items": _document_info_lines("요구정의서", design)},
+        {"heading": "개정 이력", "items": _revision_history_lines()},
         {
-            "heading": "문서 목적",
+            "heading": "배경 및 목적",
             "paragraphs": [
                 "이 문서는 현재 요청을 실행 가능한 요구사항, 인수 기준, 제약, 확인 필요 항목으로 정리한 사용자 산출물이다.",
                 "로그나 내부 상태 기록이 아니라 후속 작업자가 같은 목표를 재현하고 검증할 수 있는 기준 문서로 사용한다.",
@@ -384,10 +386,11 @@ def _requirements_sections(
         {"heading": "목표", "paragraphs": [design.objective or profile.objective]},
         {"heading": "도메인", "paragraphs": [profile.domain_name or design.domain or "generic"]},
         {"heading": "범위", "paragraphs": [design.scope or "not specified"]},
+        {"heading": "용어 및 약어", "items": _glossary_lines()},
         {"heading": "이해관계자 및 역할", "items": _role_summary_lines(profile, design)},
         {"heading": "기능 요구사항", "items": _functional_requirement_lines(design)},
         {
-            "heading": "비기능/품질 요구사항",
+            "heading": "비기능 요구사항",
             "items": [
                 "NFR-001: 산출물은 사용자가 바로 열어 검토할 수 있는 파일 형식으로 생성한다.",
                 "NFR-002: 내부 작업 상태와 사용자 산출물을 분리해 프로젝트 루트 오염을 방지한다.",
@@ -406,6 +409,15 @@ def _requirements_sections(
 
 def _orchestration_sections(profile: DomainProfile, design: WorkDesign) -> List[Dict[str, Any]]:
     return [
+        {"heading": "문서 정보", "items": _document_info_lines("오케스트레이션 설계서", design)},
+        {
+            "heading": "설계 원칙",
+            "items": [
+                "역할, 산출물, evidence, gate를 분리해 추적 가능하게 한다.",
+                "독립 작업은 병렬 실행하고 공유 상태 충돌이 있는 작업은 의존성으로 묶는다.",
+                "완료 판정은 산출물 존재와 evidence gate 통과를 함께 본다.",
+            ],
+        },
         {
             "heading": "설계 개요",
             "paragraphs": [
@@ -417,6 +429,7 @@ def _orchestration_sections(profile: DomainProfile, design: WorkDesign) -> List[
         {"heading": "하위 도메인", "items": design.subdomains},
         {"heading": "필요 역할", "items": design.roles_required},
         {"heading": "역할 DAG", "items": _role_dag_lines(profile, design)},
+        {"heading": "의존성", "items": _dependency_lines(profile, design)},
         {
             "heading": "병렬 실행 전략",
             "items": [
@@ -430,15 +443,16 @@ def _orchestration_sections(profile: DomainProfile, design: WorkDesign) -> List[
         {"heading": "검토 게이트", "items": design.review_gates},
         {"heading": "위험 및 정책 게이트", "items": design.risk_policy_checks},
         {
-            "heading": "상태 및 산출물 경로",
+            "heading": "상태 저장소",
             "items": [
                 "사용자 산출물은 project/docs 아래에 생성한다.",
                 "runtime role artifacts, goal ledger, memory, manifest는 UAF runtime root 아래에 저장한다.",
                 "프로젝트 루트에는 .uaf 또는 .snapshots 같은 내부 작업 폴더를 기본 생성하지 않는다.",
             ],
         },
+        {"heading": "게이트 설계", "items": _gate_design_lines(design)},
         {
-            "heading": "실패 및 차단 처리",
+            "heading": "장애 및 재작업 절차",
             "items": [
                 "필수 evidence가 없으면 spec/QA/release gate를 통과시키지 않는다.",
                 "quality finding 또는 failed task가 있으면 code-quality gate에서 차단한다.",
@@ -457,6 +471,7 @@ def _orchestration_sections(profile: DomainProfile, design: WorkDesign) -> List[
 
 def _deliverable_sections(design: WorkDesign, file_list: List[str]) -> List[Dict[str, Any]]:
     return [
+        {"heading": "문서 정보", "items": _document_info_lines("산출물 정의서", design)},
         {
             "heading": "산출물 정의 원칙",
             "paragraphs": [
@@ -464,11 +479,11 @@ def _deliverable_sections(design: WorkDesign, file_list: List[str]) -> List[Dict
                 "파일 형식은 고정 목록이 아니라 작업 유형과 evidence 요구에 맞춰 선택한다.",
             ],
         },
-        {"heading": "사용자 산출물", "items": design.deliverables},
-        {"heading": "작업 대상", "items": file_list or ["final output"]},
-        {"heading": "산출물 상세", "items": _deliverable_detail_lines(design, file_list)},
+        {"heading": "산출물 목록", "items": design.deliverables},
+        {"heading": "입력 자료", "items": file_list or ["final output"]},
+        {"heading": "산출물별 정의", "items": _deliverable_detail_lines(design, file_list)},
         {
-            "heading": "산출물 품질 기준",
+            "heading": "품질 기준",
             "items": [
                 "각 산출물은 목적, 입력, 생성 조건, 검증 방법, 차단 기준을 포함한다.",
                 "문서형 산출물은 요구/설계/흐름/검증 기준을 분리해 작성한다.",
@@ -485,6 +500,8 @@ def _deliverable_sections(design: WorkDesign, file_list: List[str]) -> List[Dict
                 "사용 매뉴얼은 운영/인수인계/절차 목적이 있거나 metadata로 명시된 경우에만 생성한다.",
             ],
         },
+        {"heading": "승인 기준", "items": _acceptance_criteria_lines(design)},
+        {"heading": "보관 위치", "items": ["사용자 산출물: project/docs", "내부 runtime artifact: UAF runtime root"]},
         {"heading": "증거 요구사항", "items": design.evidence_required},
         {
             "heading": "기본 export 파일",
@@ -504,6 +521,22 @@ def _deliverable_sections(design: WorkDesign, file_list: List[str]) -> List[Dict
 
 def _process_flow_sections(design: WorkDesign) -> List[Dict[str, Any]]:
     return [
+        {"heading": "문서 정보", "items": _document_info_lines("처리흐름도", design)},
+        {
+            "heading": "프로세스 개요",
+            "paragraphs": [
+                "이 문서는 요청 접수부터 산출물 생성, 검토, QA, 위험 점검, 완료 또는 차단 결정까지의 흐름을 정의한다.",
+            ],
+        },
+        {
+            "heading": "스윔레인",
+            "items": [
+                "User/Requester: 목표와 제약 제공, 산출물 승인.",
+                "Controller/Planner: 작업 분해, 역할 할당, 진행 상태 관리.",
+                "Implementer/Specialist: 산출물 작성과 evidence 기록.",
+                "Reviewer/QA/Risk: 검토, 테스트, 정책 점검, release 판단.",
+            ],
+        },
         {
             "heading": "단계별 처리 흐름",
             "items": [
@@ -527,12 +560,20 @@ def _process_flow_sections(design: WorkDesign) -> List[Dict[str, Any]]:
             ],
         },
         {
-            "heading": "결정 지점",
+            "heading": "의사결정 지점",
             "items": [
                 "입력이 충분한가: 부족하면 확인사항을 문서화하고 확정 산출물 대신 초안/개념 산출물로 표시한다.",
                 "병렬 실행 가능한가: 공유 상태 충돌이 없으면 bounded worker로 fan-out한다.",
                 "사용자 매뉴얼이 필요한가: 운영/반복 사용/인수인계 목적일 때만 생성한다.",
                 "완료 가능한가: 필수 evidence와 gate 통과 여부로 complete 또는 blocked를 결정한다.",
+            ],
+        },
+        {
+            "heading": "예외 흐름",
+            "items": [
+                "입력 부족: 미해결 확인사항에 기록하고 blocked 또는 draft 상태로 유지한다.",
+                "검증 실패: 실패 evidence와 finding을 기록하고 재작업 루프로 되돌린다.",
+                "정책 위험: 위험/정책 체크리스트의 차단 기준에 따라 release를 중단한다.",
             ],
         },
         {"heading": "검토 게이트", "items": design.review_gates},
@@ -545,32 +586,39 @@ def _role_task_rows(
     design: WorkDesign,
     file_list: List[str],
 ) -> List[List[str]]:
-    rows = [["역할", "단계", "작업", "입력", "생성물", "완료 기준", "증거", "병렬성", "책임"]]
+    rows = [["WBS ID", "단계", "역할", "작업명", "입력", "출력", "완료 기준", "의존성", "우선순위", "증거", "병렬성", "책임"]]
     roles = profile.roles or [
         DomainRole(name=name, purpose="Execute assigned orchestration responsibility.")
         for name in design.roles_required
     ]
-    for role in roles:
+    for index, role in enumerate(roles, start=1):
         rows.append([
-            role.name,
+            f"WBS-{index:03d}",
             role.stage,
+            role.name,
             role.purpose,
             "; ".join(role.required_artifacts),
             "; ".join(role.produces),
             _role_done_definition(role, design),
+            "; ".join(role.required_artifacts) or "work-design",
+            _role_priority(role),
             _role_evidence_text(role, design),
             _role_parallelism(role),
             "; ".join(role.responsibilities),
         ])
     if file_list:
-        for index, target in enumerate(file_list, start=1):
+        start = len(rows)
+        for index, target in enumerate(file_list, start=start):
             rows.append([
-                "implementer",
+                f"WBS-{index:03d}",
                 "execution",
+                "implementer",
                 f"Produce requested target deliverable {index}.",
                 "work-design; role-task-plan; source request",
                 target,
                 "target deliverable exists, is reviewable, and has implementation evidence",
+                "work-design; role-task-plan",
+                "high",
                 "generated code written; implementation evidence recorded",
                 "parallel with other independent targets",
                 "execute assigned output; record evidence; surface blockers",
@@ -579,24 +627,33 @@ def _role_task_rows(
 
 
 def _evidence_rows(design: WorkDesign, export_evidence: List[str]) -> List[List[str]]:
-    rows = [["증거 키", "출처", "검증 방법", "필수 여부", "상태", "실패/차단 처리", "비고"]]
-    for item in _unique(list(design.evidence_required) + list(export_evidence)):
+    rows = [["증거 ID", "증거 키", "산출물", "검증 방법", "수집 시점", "담당", "필수 여부", "상태", "통과 기준", "차단 기준", "비고"]]
+    for index, item in enumerate(_unique(list(design.evidence_required) + list(export_evidence)), start=1):
         rows.append([
+            f"EV-{index:03d}",
             item,
-            "workflow/design-stage",
+            "design/export artifact",
             "Check goal evidence and artifact metadata for the exact evidence key.",
+            "design/export stage",
+            "controller or producing role",
             "required when listed by goal",
             "planned",
+            "evidence key is present and attached to goal or artifact metadata",
             "missing evidence blocks release or marks the goal incomplete",
             "required when goal evidence asks for it",
         ])
-    for item in design.review_gates:
+    start = len(rows)
+    for index, item in enumerate(design.review_gates, start=start):
         rows.append([
+            f"EV-{index:03d}",
             item,
-            "review-gate",
+            "review gate result",
             "Inspect gate status, findings, and evidence_records.",
+            "review/QA/release stage",
+            "reviewer/qa/release-manager",
             "required for governed workflow",
             "planned",
+            "gate status is passed and evidence_records grant evidence",
             "failed gate blocks downstream roles",
             "review gate output",
         ])
@@ -604,7 +661,7 @@ def _evidence_rows(design: WorkDesign, export_evidence: List[str]) -> List[List[
 
 
 def _risk_policy_rows(design: WorkDesign) -> List[List[str]]:
-    rows = [["체크 항목", "담당 역할", "위험 수준", "상태", "완화 방법", "차단 기준", "확인 증거"]]
+    rows = [["위험 ID", "분류", "위험 항목", "영향도", "발생 가능성", "위험 수준", "완화 방안", "담당", "상태", "차단 기준", "확인 증거"]]
     checks = _unique(list(design.risk_policy_checks) + [
         "user deliverable completeness checked",
         "runtime state isolation checked",
@@ -612,13 +669,17 @@ def _risk_policy_rows(design: WorkDesign) -> List[List[str]]:
         "manual export necessity checked",
         "format suitability checked",
     ])
-    for item in checks:
+    for index, item in enumerate(checks, start=1):
         rows.append([
+            f"RISK-{index:03d}",
+            _risk_category(item),
             item,
-            "risk-policy-reviewer",
+            _risk_impact(item),
+            _risk_probability(item),
             _risk_level(item),
-            "planned",
             _risk_mitigation(item),
+            "risk-policy-reviewer",
+            "planned",
             _risk_block_condition(item),
             "risk policy evidence record or reviewer finding",
         ])
@@ -636,8 +697,9 @@ def _manual_sections(
     revision_note = str(metadata.get("manual_revision_note", "Initial generated manual."))
     return [
         {
-            "heading": "리비전 버전 관리",
+            "heading": "개정 이력",
             "items": [
+                "리비전 버전 관리",
                 f"Revision: {revision}",
                 f"Workflow: {workflow_id}",
                 f"Change: {revision_note}",
@@ -645,8 +707,16 @@ def _manual_sections(
         },
         {"heading": "목적", "paragraphs": [design.objective or profile.objective]},
         {
-            "heading": "운영 대상",
+            "heading": "사용 대상",
             "items": list(design.deliverables) or file_list or ["final output"],
+        },
+        {
+            "heading": "사전 준비",
+            "items": [
+                "요구정의서, 오케스트레이션 설계서, 산출물 정의서를 먼저 확인한다.",
+                "필수 입력 자료, 권한, 검증 도구, 산출물 저장 위치를 준비한다.",
+                "운영 대상 사용자는 최신 리비전의 매뉴얼을 기준으로 절차를 수행한다.",
+            ],
         },
         {
             "heading": "사용 절차",
@@ -660,6 +730,21 @@ def _manual_sections(
         },
         {"heading": "검증 기준", "items": design.evidence_required},
         {"heading": "운영 중 차단 조건", "items": design.risk_policy_checks},
+        {
+            "heading": "문제 해결",
+            "items": [
+                "필수 산출물이 없으면 산출물 정의서의 생성 조건을 확인한다.",
+                "evidence가 부족하면 증거계획서의 증거 키와 수집 시점을 확인한다.",
+                "gate가 실패하면 해당 finding과 재작업 역할을 확인한다.",
+            ],
+        },
+        {
+            "heading": "문의/지원",
+            "items": [
+                "담당 역할: controller 또는 final-decision-manager",
+                "지원 기준: blocked reason, missing evidence, risk finding을 함께 전달한다.",
+            ],
+        },
         {
             "heading": "인수 확인",
             "items": [
@@ -679,6 +764,8 @@ def _functional_spec_sections(
 ) -> List[Dict[str, Any]]:
     features = _software_feature_names(design, source_design_doc, file_list)
     return [
+        {"heading": "문서 정보", "items": _document_info_lines("기능정의서", design)},
+        {"heading": "개정 이력", "items": _revision_history_lines()},
         {
             "heading": "문서 목적",
             "paragraphs": [
@@ -686,13 +773,16 @@ def _functional_spec_sections(
                 "구현 로그가 아니라 개발자, 리뷰어, QA가 같은 기능 경계를 기준으로 작업하도록 만드는 기준 문서다.",
             ],
         },
-        {"heading": "제품/기능 개요", "paragraphs": [design.objective or profile.objective]},
+        {"heading": "기능 개요", "paragraphs": [design.objective or profile.objective]},
         {"heading": "범위", "paragraphs": [design.scope or "not specified"]},
         {"heading": "대상 파일/컴포넌트", "items": file_list or ["to be determined from implementation plan"]},
         {"heading": "사용자/행위자", "items": _software_actor_lines(source_design_doc)},
+        {"heading": "화면/메뉴", "items": _screen_definition_lines(features)},
+        {"heading": "권한", "items": _software_permission_lines(source_design_doc)},
         {"heading": "기능 목록", "items": _software_feature_list_lines(features)},
         {"heading": "기능 상세", "items": _software_feature_detail_lines(features)},
         {"heading": "입출력 정의", "items": _software_io_lines(features)},
+        {"heading": "처리 규칙", "items": _software_processing_rule_lines(features)},
         {"heading": "예외 및 검증 규칙", "items": _software_validation_rule_lines(features)},
         {"heading": "인수 기준", "items": _software_acceptance_lines(features, design)},
         {"heading": "추적성", "items": _software_traceability_lines(features, design)},
@@ -709,6 +799,7 @@ def _development_design_sections(
 ) -> List[Dict[str, Any]]:
     features = _software_feature_names(design, source_design_doc, file_list)
     return [
+        {"heading": "문서 정보", "items": _document_info_lines("개발설계서", design)},
         {
             "heading": "설계 목적",
             "paragraphs": [
@@ -716,12 +807,17 @@ def _development_design_sections(
                 "구현자는 이 문서를 기준으로 파일 변경 범위와 모듈 책임을 나누고, 리뷰어는 설계 대비 누락을 확인한다.",
             ],
         },
+        {"heading": "시스템 구성도", "items": _system_context_lines(profile, design, file_list)},
         {"heading": "아키텍처 구성", "items": _architecture_lines(profile, design, file_list)},
         {"heading": "모듈 설계", "items": _module_design_lines(features, file_list)},
+        {"heading": "인터페이스 설계", "items": _api_definition_lines(features)},
+        {"heading": "데이터베이스 설계", "items": _database_design_lines(features)},
+        {"heading": "처리 흐름", "items": _software_data_flow_lines(features)},
         {"heading": "데이터 흐름", "items": _software_data_flow_lines(features)},
         {"heading": "오류 처리 및 로깅", "items": _software_error_handling_lines(features)},
         {"heading": "보안/권한 고려사항", "items": _software_security_lines(design)},
-        {"heading": "검증 전략", "items": _software_acceptance_lines(features, design)},
+        {"heading": "배포/운영", "items": _deployment_operation_lines()},
+        {"heading": "테스트 전략", "items": _software_acceptance_lines(features, design)},
     ]
 
 
@@ -732,6 +828,7 @@ def _screen_api_sections(
 ) -> List[Dict[str, Any]]:
     features = _software_feature_names(design, source_design_doc, file_list)
     return [
+        {"heading": "문서 정보", "items": _document_info_lines("화면/API 정의서", design)},
         {
             "heading": "문서 목적",
             "paragraphs": [
@@ -739,10 +836,17 @@ def _screen_api_sections(
                 "화면이 없는 백엔드 작업이면 화면 정의는 호출자/클라이언트 관점으로 대체한다.",
             ],
         },
+        {"heading": "화면 목록", "items": _screen_definition_lines(features)},
+        {"heading": "화면 레이아웃", "items": _screen_layout_lines(features)},
+        {"heading": "화면 항목 정의", "items": _screen_field_lines(features)},
+        {"heading": "이벤트 정의", "items": _user_action_lines(features)},
         {"heading": "화면 정의", "items": _screen_definition_lines(features)},
         {"heading": "사용자 동작", "items": _user_action_lines(features)},
+        {"heading": "API 목록", "items": _api_definition_lines(features)},
         {"heading": "API 정의", "items": _api_definition_lines(features)},
-        {"heading": "요청/응답 필드", "items": _request_response_lines(features)},
+        {"heading": "요청/응답", "items": _request_response_lines(features)},
+        {"heading": "상태 코드", "items": _screen_api_error_lines(features)},
+        {"heading": "권한", "items": _software_permission_lines(source_design_doc)},
         {"heading": "상태 및 오류 메시지", "items": _screen_api_error_lines(features)},
         {"heading": "관련 구현 파일", "items": file_list or ["to be mapped during implementation"]},
     ]
@@ -754,23 +858,23 @@ def _software_data_rows(
     file_list: List[str],
 ) -> List[List[str]]:
     features = _software_feature_names(design, source_design_doc, file_list)
-    rows = [["엔티티", "필드명", "자료형", "필수", "기본값", "검증 규칙", "사용 기능", "비고"]]
+    rows = [["테이블명", "컬럼명", "필드명", "자료형", "길이", "PK", "FK", "필수", "기본값", "설명", "검증 규칙", "사용 기능", "비고"]]
     rows.extend([
-        ["User", "id", "string", "Y", "", "unique, non-empty", "authentication/authorization", "caller identity"],
-        ["User", "role", "string", "Y", "viewer", "must match allowed role", "authorization", "permission boundary"],
-        ["Audit", "created_at", "datetime", "Y", "now", "server generated", "all write flows", "audit trail"],
-        ["Audit", "updated_at", "datetime", "N", "", "server generated", "update flows", "audit trail"],
+        ["User", "user_id", "id", "string", "64", "Y", "", "Y", "", "caller identity", "unique, non-empty", "authentication/authorization", ""],
+        ["User", "role_cd", "role", "string", "40", "", "", "Y", "viewer", "permission boundary", "must match allowed role", "authorization", ""],
+        ["Audit", "created_at", "created_at", "datetime", "", "", "", "Y", "now", "audit trail", "server generated", "all write flows", ""],
+        ["Audit", "updated_at", "updated_at", "datetime", "", "", "", "N", "", "audit trail", "server generated", "update flows", ""],
     ])
     for index, feature in enumerate(features, start=1):
         entity = _entity_name(feature, index)
         rows.extend([
-            [entity, "id", "string", "Y", "", "unique, non-empty", feature, "primary key or stable identifier"],
-            [entity, "name", "string", "Y", "", "trimmed, max length checked", feature, "display/search label"],
-            [entity, "status", "string", "Y", "draft", "allowed status only", feature, "workflow state"],
-            [entity, "note", "string", "N", "", "sanitize unsupported content", feature, "optional context"],
+            [entity, "id", "id", "string", "64", "Y", "", "Y", "", "primary key or stable identifier", "unique, non-empty", feature, ""],
+            [entity, "name", "name", "string", "200", "", "", "Y", "", "display/search label", "trimmed, max length checked", feature, ""],
+            [entity, "status", "status", "string", "40", "", "", "Y", "draft", "workflow state", "allowed status only", feature, ""],
+            [entity, "note", "note", "string", "1000", "", "", "N", "", "optional context", "sanitize unsupported content", feature, ""],
         ])
     if file_list:
-        rows.append(["Implementation", "target_files", "list", "Y", "", "safe project-relative path", "; ".join(file_list), "planned implementation targets"])
+        rows.append(["Implementation", "target_files", "target_files", "list", "", "", "", "Y", "", "planned implementation targets", "safe project-relative path", "; ".join(file_list), ""])
     return rows
 
 
@@ -780,36 +884,201 @@ def _software_test_rows(
     file_list: List[str],
 ) -> List[List[str]]:
     features = _software_feature_names(design, source_design_doc, file_list)
-    rows = [["테스트 ID", "기능", "검증 방법", "입력", "기대 결과", "증거 키", "차단 기준"]]
+    rows = [["테스트 ID", "테스트 유형", "기능", "시나리오", "선행 조건", "입력값", "수행 절차", "기대 결과", "검증 방법", "증거 키", "담당", "차단 기준"]]
     for index, feature in enumerate(features, start=1):
         rows.extend([
             [
                 f"TC-{index:03d}-happy",
+                "정상",
                 feature,
-                "unit/integration test",
+                "valid request succeeds",
+                "authorized user and valid data",
                 "valid request",
+                "submit request and inspect result",
                 "expected output is produced and persisted when applicable",
+                "unit/integration test",
                 "test verification passed",
+                "qa-verifier",
                 "test failure blocks release",
             ],
             [
                 f"TC-{index:03d}-validation",
+                "예외",
                 feature,
-                "negative test",
+                "invalid request is rejected",
+                "authorized user",
                 "missing or invalid required field",
+                "submit invalid request",
                 "clear validation error without partial write",
+                "negative test",
                 "validation evidence recorded",
+                "qa-verifier",
                 "unexpected success blocks release",
             ],
         ])
     rows.extend([
-        ["TC-GATE-001", "review gate", "gate evaluator", "task evidence records", "spec review passes only with evidence", "spec review passed", "missing evidence blocks release"],
-        ["TC-GATE-002", "quality gate", "gate evaluator", "quality findings", "quality findings block release", "code quality review passed", "unresolved finding blocks release"],
-        ["TC-GATE-003", "runtime state", "filesystem check", "project output folder", "docs contain user files; runtime state stays external", "runtime isolation checked", ".uaf/.snapshots created in project root"],
+        ["TC-GATE-001", "게이트", "review gate", "spec review requires evidence", "task evidence records exist", "task evidence records", "run gate evaluator", "spec review passes only with evidence", "gate evaluator", "spec review passed", "spec-reviewer", "missing evidence blocks release"],
+        ["TC-GATE-002", "게이트", "quality gate", "quality finding blocks release", "quality findings provided", "quality findings", "run gate evaluator", "quality findings block release", "gate evaluator", "code quality review passed", "code-quality-reviewer", "unresolved finding blocks release"],
+        ["TC-GATE-003", "파일시스템", "runtime state", "runtime state isolation", "project output folder exists", "project output folder", "inspect project root and runtime root", "docs contain user files; runtime state stays external", "filesystem check", "runtime isolation checked", "controller", ".uaf/.snapshots created in project root"],
     ])
     if file_list:
-        rows.append(["TC-FILES-001", "implementation targets", "path safety check", "; ".join(file_list), "all targets are project-relative and reviewable", "target files checked", "unsafe path blocks execution"])
+        rows.append(["TC-FILES-001", "경로", "implementation targets", "target files are safe", "file list provided", "; ".join(file_list), "validate safe project-relative paths", "all targets are project-relative and reviewable", "path safety check", "target files checked", "controller", "unsafe path blocks execution"])
     return rows
+
+
+def _document_info_lines(title: str, design: WorkDesign) -> List[str]:
+    return [
+        f"문서명: {title}",
+        f"작성 주체: KH UAF",
+        f"대상 도메인: {design.domain or 'generic'}",
+        f"작성 기준: {datetime.now(timezone.utc).date().isoformat()}",
+        "상태: draft",
+    ]
+
+
+def _revision_history_lines() -> List[str]:
+    return [
+        "Rev. 1.0 / Initial generated draft / KH UAF",
+        "변경 시에는 변경일, 변경자, 변경 사유, 승인자를 기록한다.",
+    ]
+
+
+def _glossary_lines() -> List[str]:
+    return [
+        "UAF: Universal Agent Framework",
+        "Evidence: 완료 또는 gate 통과를 증명하는 구조화된 기록",
+        "Gate: 산출물 품질, QA, 위험, release 여부를 판단하는 검토 단계",
+        "Runtime state: 사용자 산출물이 아닌 내부 작업 상태와 메모리",
+    ]
+
+
+def _dependency_lines(profile: DomainProfile, design: WorkDesign) -> List[str]:
+    roles = profile.roles or [
+        DomainRole(name=name, purpose="Execute assigned orchestration responsibility.")
+        for name in design.roles_required
+    ]
+    lines = []
+    for role in roles:
+        dependency = "; ".join(role.required_artifacts) or "prior stage output"
+        output = "; ".join(role.produces) or "role result"
+        lines.append(f"{role.name}: depends on {dependency} -> produces {output}")
+    return lines
+
+
+def _gate_design_lines(design: WorkDesign) -> List[str]:
+    return [
+        f"Review gate: {gate} must report passed or actionable findings."
+        for gate in design.review_gates
+    ] + [
+        f"Risk/policy gate: {check} blocks release when failed or missing."
+        for check in design.risk_policy_checks
+    ]
+
+
+def _role_priority(role: DomainRole) -> str:
+    if role.stage in {"governance", "design", "planning", "review", "qa", "risk", "final"}:
+        return "high"
+    return "normal"
+
+
+def _risk_category(item: str) -> str:
+    lower = item.lower()
+    if "sensitive" in lower or "secret" in lower or "policy" in lower:
+        return "policy/security"
+    if "evidence" in lower or "missing" in lower:
+        return "evidence"
+    if "runtime" in lower or "state" in lower:
+        return "state-management"
+    if "format" in lower or "deliverable" in lower:
+        return "deliverable-quality"
+    return "workflow-risk"
+
+
+def _risk_impact(item: str) -> str:
+    lower = item.lower()
+    if "secret" in lower or "sensitive" in lower:
+        return "high"
+    if "missing" in lower or "evidence" in lower or "policy" in lower:
+        return "medium"
+    return "medium"
+
+
+def _risk_probability(item: str) -> str:
+    lower = item.lower()
+    if "missing" in lower or "unsupported" in lower:
+        return "medium"
+    return "low"
+
+
+def _software_permission_lines(source_design_doc: str) -> List[str]:
+    lower = source_design_doc.lower()
+    lines = [
+        "viewer/end user: 조회와 결과 확인 권한",
+        "operator: 생성/수정/실행 권한",
+        "administrator: 설정, 권한, 데이터 보정 권한",
+    ]
+    if "approval" in lower or "승인" in lower:
+        lines.append("approver: 승인, 반려, 보류 처리 권한")
+    return lines
+
+
+def _software_processing_rule_lines(features: List[str]) -> List[str]:
+    lines = [
+        "공통 처리 순서: 권한 확인 -> 입력 검증 -> use case 실행 -> 저장/조회 -> 응답 반환 -> evidence 기록",
+        "트랜잭션 경계: 쓰기 작업은 성공 시 commit, 실패 시 rollback 또는 no-op 처리한다.",
+        "중복/상태 충돌: 최신 상태를 다시 읽고 사용자에게 재시도 가능 메시지를 제공한다.",
+    ]
+    lines.extend(
+        f"{feature}: 정상/예외/권한 부족/중복 입력 흐름을 기능별 테스트로 검증한다."
+        for feature in features
+    )
+    return lines
+
+
+def _system_context_lines(profile: DomainProfile, design: WorkDesign, file_list: List[str]) -> List[str]:
+    return [
+        "Client/UI -> API/Application -> Domain Service -> Data Store -> Evidence/Gate",
+        f"Domain: {profile.domain_name or design.domain or 'software-development'}",
+        f"Target files: {'; '.join(file_list) if file_list else 'to be mapped during planning'}",
+    ]
+
+
+def _database_design_lines(features: List[str]) -> List[str]:
+    return [
+        f"{_entity_name(feature, index)}: id, name, status, note, created_at, updated_at"
+        for index, feature in enumerate(features, start=1)
+    ] + [
+        "Audit fields: created_by, created_at, updated_by, updated_at",
+        "Index strategy: primary key on id, search index on name/status when needed",
+    ]
+
+
+def _deployment_operation_lines() -> List[str]:
+    return [
+        "Configuration: runtime secrets and environment values are kept outside generated docs.",
+        "Migration: data schema changes require backup, migration, rollback notes.",
+        "Monitoring: errors, failed validation, and gate failures should be observable.",
+        "Rollback: release is blocked or reverted when critical tests or evidence gates fail.",
+    ]
+
+
+def _screen_layout_lines(features: List[str]) -> List[str]:
+    return [
+        f"{feature}: header/title, search/filter area, main content grid/form, action buttons, status/error area"
+        for feature in features
+    ]
+
+
+def _screen_field_lines(features: List[str]) -> List[str]:
+    lines = []
+    for index, feature in enumerate(features, start=1):
+        lines.extend([
+            f"SCR-{index:03d}-id: 식별자 / read-only or hidden / required for update/delete",
+            f"SCR-{index:03d}-name: 표시명 또는 제목 / text / required",
+            f"SCR-{index:03d}-status: 상태 / select or badge / required",
+            f"SCR-{index:03d}-message: 오류 및 안내 메시지 / display / optional",
+        ])
+    return lines
 
 
 def _role_summary_lines(profile: DomainProfile, design: WorkDesign) -> List[str]:
@@ -1160,11 +1429,16 @@ def _product_design_sections(
     product_name: str,
 ) -> List[Dict[str, Any]]:
     return [
+        {"heading": "문서 정보", "items": _document_info_lines("제품 설계서", design)},
+        {"heading": "개정 이력", "items": _revision_history_lines()},
+        {"heading": "설계 개요", "paragraphs": [design.objective or profile.objective]},
         {"heading": "제품/규격 식별", "paragraphs": [product_name]},
-        {"heading": "설계 목표", "paragraphs": [design.objective or profile.objective]},
-        {"heading": "적용 범위", "paragraphs": [design.scope or "not specified"]},
+        {"heading": "규격 요약", "items": _product_spec_summary_lines(source_design_doc, product_name)},
+        {"heading": "설계 요구사항", "items": _product_requirement_lines(design, source_design_doc)},
+        {"heading": "치수 기준", "items": _dimension_basis_lines(source_design_doc)},
+        {"heading": "BOM", "items": _product_bom_summary_lines(product_name)},
         {
-            "heading": "도면 산출물",
+            "heading": "도면 목록",
             "items": [
                 "제품_설계서.docx: 설계 기준과 가정",
                 "치수_BOM.xlsx: 치수, 부품, 가공 데이터",
@@ -1172,13 +1446,15 @@ def _product_design_sections(
                 "개념_설계도.dxf: CAD handoff용 2D 개념 도면",
             ],
         },
+        {"heading": "검증 방법", "items": _product_verification_lines(design)},
         {
-            "heading": "주의",
+            "heading": "제조 전 확인사항",
             "items": [
                 "입력 가이드에 정확한 치수, 공차, 재질이 없으면 제조용 최종 도면이 아니라 개념 도면으로 취급한다.",
                 "제조 전에는 원 규격서, 실측 데이터, 승인 도면 번호를 확인해야 한다.",
             ],
         },
+        {"heading": "승인 기준", "items": _product_approval_lines()},
         {"heading": "원본 규격/요청", "paragraphs": [_compact_text(source_design_doc)]},
     ]
 
@@ -1189,12 +1465,12 @@ def _dimension_bom_rows(
     product_name: str,
 ) -> List[List[str]]:
     return [
-        ["분류", "항목", "값", "근거", "비고"],
-        ["제품", "식별명", product_name, "user input", ""],
-        ["전기", "용량", _extract_power_rating(source_design_doc), "user input", "전기 용량은 기구 치수 확정 근거가 아님"],
-        ["기구", "판넬/플레이트", "CABLE GLAND PLATE", "user input", "정확 치수는 규격 가이드 필요"],
-        ["도면", "도면 수준", "concept", "UAF export", "제조용 최종 도면 전 검토 필요"],
-        ["검증", "필요 증거", "; ".join(design.evidence_required), "work design", ""],
+        ["품번", "품명", "재질", "규격", "치수", "수량", "공차", "근거", "비고"],
+        ["P-001", product_name, "TBD", "CABLE GLAND PLATE", "TBD", "1", "TBD", "user input", "정확 치수는 규격 가이드 필요"],
+        ["E-001", "Power rating reference", "N/A", _extract_power_rating(source_design_doc), "N/A", "1", "N/A", "user input", "전기 용량은 기구 치수 확정 근거가 아님"],
+        ["D-001", "Concept SVG drawing", "N/A", "review drawing", "concept", "1", "N/A", "UAF export", "제조용 최종 도면 전 검토 필요"],
+        ["D-002", "Concept DXF drawing", "N/A", "CAD handoff", "concept", "1", "N/A", "UAF export", "제조용 최종 도면 전 검토 필요"],
+        ["Q-001", "Verification evidence", "N/A", "; ".join(design.evidence_required), "N/A", "1", "N/A", "work design", "제조 전 승인 필요"],
     ]
 
 
@@ -1204,23 +1480,120 @@ def _investment_analysis_sections(
     source_design_doc: str,
 ) -> List[Dict[str, Any]]:
     return [
-        {"heading": "분석 목적", "paragraphs": [design.objective or profile.objective]},
+        {"heading": "문서 정보", "items": _document_info_lines("투자 분석보고서", design)},
+        {
+            "heading": "Executive Summary",
+            "paragraphs": [
+                "투자 판단에 필요한 핵심 결론, 주요 가정, 시나리오, 위험, 의사결정 조건을 요약한다.",
+            ],
+        },
+        {"heading": "투자 개요", "paragraphs": [design.objective or profile.objective]},
         {"heading": "분석 범위", "paragraphs": [design.scope or "not specified"]},
+        {"heading": "핵심 가정", "items": _investment_assumption_lines(source_design_doc)},
+        {"heading": "시나리오 분석", "items": _investment_scenario_lines()},
+        {"heading": "수익/위험 분석", "items": _investment_risk_return_lines(design)},
         {"heading": "핵심 산출물", "items": ["투자_분석보고서.docx", "가정_시나리오.xlsx", "위험_정책_체크리스트.xlsx"]},
         {"heading": "검토 기준", "items": design.evidence_required},
-        {"heading": "위험 및 정책 체크", "items": design.risk_policy_checks},
+        {"heading": "리스크", "items": design.risk_policy_checks},
+        {"heading": "최종 의견", "items": ["Proceed, hold, reject, or request more evidence based on collected data."]},
+        {"heading": "면책/주의", "items": ["이 산출물은 의사결정 보조 문서이며, 확정 투자 조언이나 법률/세무 자문이 아니다."]},
         {"heading": "원본 요청", "paragraphs": [_compact_text(source_design_doc)]},
     ]
 
 
 def _scenario_model_rows(design: WorkDesign, file_list: List[str]) -> List[List[str]]:
     return [
-        ["분류", "항목", "기준/값", "비고"],
-        ["시나리오", "Base", "to be filled from source data", "기본 가정"],
-        ["시나리오", "Upside", "to be filled from source data", "긍정 가정"],
-        ["시나리오", "Downside", "to be filled from source data", "보수 가정"],
-        ["입력", "대상", "; ".join(file_list) or "investment thesis", ""],
-        ["증거", "필수 증거", "; ".join(design.evidence_required), ""],
+        ["시나리오", "가정 항목", "기준값", "상승", "기준", "하락", "민감도", "근거", "비고"],
+        ["Upside", "growth / return", "to be filled from source data", "high", "", "", "high", "source data", "긍정 가정"],
+        ["Base", "growth / return", "to be filled from source data", "", "base", "", "medium", "source data", "기본 가정"],
+        ["Downside", "growth / return", "to be filled from source data", "", "", "low", "high", "source data", "보수 가정"],
+        ["Input", "target", "; ".join(file_list) or "investment thesis", "", "base", "", "medium", "user input", "분석 대상"],
+        ["Evidence", "required evidence", "; ".join(design.evidence_required), "", "required", "", "high", "work design", "누락 시 차단"],
+    ]
+
+
+def _product_spec_summary_lines(source_design_doc: str, product_name: str) -> List[str]:
+    return [
+        f"제품명/규격명: {product_name}",
+        f"전기 용량: {_extract_power_rating(source_design_doc)}",
+        "적용 기준: supplied specification guide 또는 사용자 제공 규격",
+        "도면 수준: 입력 치수와 공차가 부족하면 concept handoff",
+    ]
+
+
+def _product_requirement_lines(design: WorkDesign, source_design_doc: str) -> List[str]:
+    return [
+        "REQ-MECH-001: 제품 식별명, 규격명, 입력 가이드 출처를 기록한다.",
+        "REQ-MECH-002: 치수, 공차, 재질, 수량은 확정값과 TBD를 구분한다.",
+        "REQ-MECH-003: SVG/DXF 도면은 제조용 최종 도면인지 개념 도면인지 명시한다.",
+        f"REQ-MECH-004: source request trace = {_compact_text(source_design_doc)}",
+    ] + [
+        f"Evidence: {item}"
+        for item in design.evidence_required
+    ]
+
+
+def _dimension_basis_lines(source_design_doc: str) -> List[str]:
+    return [
+        "전체 외형 치수: source guide에서 확인 필요",
+        "hole/punch 위치: source guide 또는 승인 도면에서 확인 필요",
+        "공차: 제조 표준 또는 고객 승인 기준 필요",
+        f"입력 용량 참조: {_extract_power_rating(source_design_doc)}",
+    ]
+
+
+def _product_bom_summary_lines(product_name: str) -> List[str]:
+    return [
+        f"P-001 {product_name}: main plate or assembly",
+        "E-001 power/spec reference: non-mechanical reference",
+        "D-001/D-002 concept drawing outputs: SVG/DXF",
+    ]
+
+
+def _product_verification_lines(design: WorkDesign) -> List[str]:
+    return [
+        "규격서 대조: 모든 치수와 공차가 source guide와 일치하는지 확인한다.",
+        "도면 검토: SVG/DXF의 형상, hole count, label, scale note를 확인한다.",
+        "BOM 검토: 품번, 품명, 재질, 수량, 공차, 근거가 채워졌는지 확인한다.",
+    ] + [
+        f"Evidence required: {item}"
+        for item in design.evidence_required
+    ]
+
+
+def _product_approval_lines() -> List[str]:
+    return [
+        "치수, 공차, 재질이 source guide와 trace되어야 한다.",
+        "제조용 release 전 승인 도면 번호 또는 승인자가 기록되어야 한다.",
+        "TBD 항목이 남아 있으면 제조용 최종 산출물로 승인하지 않는다.",
+    ]
+
+
+def _investment_assumption_lines(source_design_doc: str) -> List[str]:
+    return [
+        "시장/사업 가정: source data 또는 사용자 제공 자료로 보강 필요",
+        "재무 가정: 매출, 비용, 성장률, 할인율 또는 수익률을 명시해야 한다.",
+        "기간 가정: 분석 기준일과 투자/회수 기간을 명시해야 한다.",
+        f"원본 요청 요약: {_compact_text(source_design_doc)}",
+    ]
+
+
+def _investment_scenario_lines() -> List[str]:
+    return [
+        "Upside: 긍정 가정과 민감도를 분리한다.",
+        "Base: 기준 가정과 핵심 판단 근거를 기록한다.",
+        "Downside: 손실 가능성과 방어 조건을 기록한다.",
+    ]
+
+
+def _investment_risk_return_lines(design: WorkDesign) -> List[str]:
+    return [
+        "Expected return: source data가 제공되면 수익률 또는 현금흐름으로 계산한다.",
+        "Risk: 시장, 실행, 유동성, 규제, 정보 부족 위험을 분리한다.",
+        "Decision gate: evidence와 risk policy check가 부족하면 결론을 보류한다.",
+    ] + [
+        f"Risk/policy check: {item}"
+        for item in design.risk_policy_checks
     ]
 
 
