@@ -1,12 +1,17 @@
 import json
+import time
 import unittest
+from dataclasses import dataclass
 
 from src.orchestration.roles import (
+    RoleProfile,
     build_role_gate_results,
     build_default_role_metadata,
     default_role_graph,
     default_role_profiles,
 )
+from src.orchestration.role_orchestrator import RoleOrchestrator
+from src.contracts import WorkflowTaskResult
 
 
 REQUIRED_ROLES = {
@@ -23,6 +28,31 @@ REQUIRED_ROLES = {
     "security-reviewer",
     "release-manager",
 }
+
+
+@dataclass
+class TimedRoleRunner:
+    delay_seconds: float = 0.05
+
+    async def run_role(self, profile, context):
+        import asyncio
+
+        started_at = time.perf_counter()
+        await asyncio.sleep(self.delay_seconds)
+        finished_at = time.perf_counter()
+        context.setdefault("timings", {})[profile.name] = (started_at, finished_at)
+        return WorkflowTaskResult(
+            task_id=f"role_{profile.name}",
+            file_name=f"role:{profile.name}",
+            role=profile.name,
+            status="success",
+            message=f"{profile.name} completed",
+            metadata={
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "execution_model": "parallel-role-stage",
+            },
+        )
 
 
 class OrchestrationRoleGraphTests(unittest.TestCase):
@@ -121,6 +151,64 @@ class OrchestrationRoleGraphTests(unittest.TestCase):
         self.assertEqual(qa_gate["missing_evidence"], ["tests"])
         self.assertEqual(release_gate["missing_evidence"], ["tests"])
         self.assertIn("missing goal evidence", qa_gate["message"])
+
+    def test_role_orchestrator_runs_ready_roles_in_parallel_waves(self):
+        profiles = (
+            RoleProfile(
+                name="root",
+                title="Root",
+                stage="planning",
+                purpose="start",
+                responsibilities=("start",),
+                inputs=(),
+                outputs=("root output",),
+            ),
+            RoleProfile(
+                name="parallel-a",
+                title="Parallel A",
+                stage="review",
+                purpose="branch a",
+                responsibilities=("branch",),
+                inputs=("root output",),
+                outputs=("a",),
+                blocks_on=("root",),
+            ),
+            RoleProfile(
+                name="parallel-b",
+                title="Parallel B",
+                stage="review",
+                purpose="branch b",
+                responsibilities=("branch",),
+                inputs=("root output",),
+                outputs=("b",),
+                blocks_on=("root",),
+            ),
+            RoleProfile(
+                name="join",
+                title="Join",
+                stage="release",
+                purpose="join",
+                responsibilities=("join",),
+                inputs=("a", "b"),
+                outputs=("done",),
+                blocks_on=("parallel-a", "parallel-b"),
+            ),
+        )
+        runner = TimedRoleRunner(delay_seconds=0.08)
+        started_at = time.perf_counter()
+        result = RoleOrchestrator(profiles, runner=runner).run_sync({})
+        elapsed = time.perf_counter() - started_at
+
+        self.assertTrue(result["success"])
+        self.assertLess(elapsed, 0.30)
+        self.assertEqual(
+            [[item["role"] for item in wave["results"]] for wave in result["waves"]],
+            [["root"], ["parallel-a", "parallel-b"], ["join"]],
+        )
+        timing_a = result["context"]["timings"]["parallel-a"]
+        timing_b = result["context"]["timings"]["parallel-b"]
+        self.assertLess(abs(timing_a[0] - timing_b[0]), 0.04)
+        self.assertLess(max(timing_a[1], timing_b[1]) - min(timing_a[0], timing_b[0]), 0.14)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from src.orchestration.domain_profiles import (
     render_work_design_markdown,
     work_design_from_profile,
 )
+from src.orchestration.deliverable_exports import export_office_deliverables
 from src.orchestration.runtime_paths import project_artifact_design_dir, project_state_dir
 
 
@@ -257,11 +258,25 @@ def build_design_stage(
         source_design_doc=design_doc,
         artifact_specs=metadata.get("design_artifacts", []) or [],
     )
-    return {
+    deliverable_exports = export_office_deliverables(
+        project_dir=project_dir,
+        workflow_id=workflow_id,
+        domain_profile=profile,
+        work_design=work_design,
+        source_design_doc=design_doc,
+        file_list=file_list,
+        metadata=metadata,
+    )
+    stage_result = {
         "domain_profile": profile.to_dict(),
         "work_design": work_design.to_dict(),
         **result,
+        "deliverable_exports": deliverable_exports,
     }
+    stage_result["evidence"] = _unique_evidence(
+        list(result.get("evidence", [])) + list(deliverable_exports.get("evidence", []))
+    )
+    return stage_result
 
 
 def _domain_profile_from_metadata(metadata: Dict[str, Any], design_doc: str) -> DomainProfile:
@@ -336,6 +351,15 @@ def _safe_artifact_id(artifact_id: str) -> str:
     if not safe:
         raise ValueError(f"unsafe artifact_id: {artifact_id}")
     return safe
+
+
+def _unique_evidence(items: Iterable[str]) -> List[str]:
+    result: List[str] = []
+    for item in items:
+        value = str(item).strip()
+        if value and value not in result:
+            result.append(value)
+    return result
 
 
 def _utc_now() -> str:

@@ -18,7 +18,10 @@ from src.orchestration.goal_ledger import GoalLedger
 from src.orchestration.handoff import ResumeHandoff
 from src.orchestration.memory_state import MemoryScopeResolver
 from src.orchestration.memory_store import MemoryStore
-from src.orchestration.roles import build_role_gate_results
+from src.orchestration.role_orchestrator import (
+    run_pre_implementation_roles,
+    run_review_release_roles,
+)
 from src.tasks.workflow_checks import WorkflowCheckStage, goal_with_check_requirements
 from src.tasks.runners import (
     LLMCodeGenerationAdapter,
@@ -181,8 +184,62 @@ def _goal_with_design_stage(goal: dict, design_stage: dict) -> dict:
     metadata["domain_profile"] = json.loads(json.dumps(design_stage.get("domain_profile", {})))
     metadata["work_design"] = json.loads(json.dumps(design_stage.get("work_design", {})))
     metadata["artifact_manifest"] = json.loads(json.dumps(design_stage.get("manifest", {})))
+    metadata["deliverable_exports"] = json.loads(json.dumps(design_stage.get("deliverable_exports", {})))
     updated_goal["metadata"] = metadata
     return updated_goal
+
+
+def _goal_with_role_orchestration(goal: dict, role_metadata: dict) -> dict:
+    if not goal or not role_metadata:
+        return goal
+
+    updated_goal = dict(goal)
+    metadata = dict(updated_goal.get("metadata", {}))
+    metadata["role_orchestration"] = json.loads(json.dumps(role_metadata.get("summary", {})))
+    metadata["role_task_results"] = json.loads(json.dumps(role_metadata.get("results", [])))
+    updated_goal["metadata"] = metadata
+    return updated_goal
+
+
+def _role_task_results(role_orchestration: dict) -> List[WorkflowTaskResult]:
+    return [
+        WorkflowTaskResult.from_dict(result)
+        for result in role_orchestration.get("results", []) or []
+    ]
+
+
+def _role_orchestration_metadata(*stages: dict) -> dict:
+    stage_metadata = []
+    role_results = []
+    parallel_wave_count = 0
+    wave_count = 0
+    success = True
+    for stage in stages:
+        if not stage:
+            continue
+        waves = list(stage.get("waves", []))
+        results = list(stage.get("results", []))
+        parallel_wave_count += sum(1 for wave in waves if wave.get("parallel"))
+        wave_count += len(waves)
+        success = success and bool(stage.get("success"))
+        stage_metadata.append({
+            "success": bool(stage.get("success")),
+            "wave_count": len(waves),
+            "parallel_wave_count": sum(1 for wave in waves if wave.get("parallel")),
+            "waves": waves,
+        })
+        role_results.extend(results)
+    return {
+        "summary": {
+            "execution_model": "dag-asyncio-role-waves",
+            "success": success,
+            "stage_count": len(stage_metadata),
+            "wave_count": wave_count,
+            "parallel_wave_count": parallel_wave_count,
+        },
+        "stages": stage_metadata,
+        "results": role_results,
+    }
 
 
 def _workflow_memory_context(project_dir: str, metadata: dict) -> tuple:
@@ -351,7 +408,20 @@ async def async_project_workflow(
         file_list=file_list,
         metadata=metadata,
     )
+    role_context = {
+        "workflow_id": workflow_id,
+        "project_dir": project_dir,
+        "domain_profile": design_stage.get("domain_profile", {}),
+        "work_design": design_stage.get("work_design", {}),
+        "artifact_manifest": design_stage.get("manifest", {}),
+        "deliverable_exports": design_stage.get("deliverable_exports", {}),
+        "metadata": metadata,
+    }
+    pre_role_orchestration = await run_pre_implementation_roles(role_context)
+    pre_role_task_results = _role_task_results(pre_role_orchestration)
     goal_metadata = _goal_with_design_stage(goal_metadata, design_stage)
+    role_metadata = _role_orchestration_metadata(pre_role_orchestration)
+    goal_metadata = _goal_with_role_orchestration(goal_metadata, role_metadata)
     task_runner = _local_task_runner_from_metadata(metadata)
     results: List[WorkflowTaskResult] = []
     thread_id = _thread_id_from_metadata(metadata)
@@ -419,18 +489,37 @@ async def async_project_workflow(
         file_list=file_list,
         workflow_completed=True,
     )
+    workflow_evidence.extend(_task_result_evidence(pre_role_task_results))
     workflow_evidence.extend(_task_result_evidence(ordered_results))
     workflow_evidence.extend(design_stage.get("evidence", []))
     workflow_evidence.extend(check_results.evidence)
     evaluated_goal = evaluate_goal_evidence(
         goal_metadata,
         workflow_evidence=workflow_evidence,
-        workflow_success=task_success and check_success,
+        workflow_success=pre_role_orchestration.get("success") and task_success and check_success,
     )
-    gate_results = build_role_gate_results([
+    review_role_context = dict(role_context)
+    review_role_context["implementation_task_results"] = [
         result.to_dict()
         for result in ordered_results
-    ], goal=evaluated_goal)
+    ]
+    review_role_context["goal"] = evaluated_goal
+    review_role_orchestration = await run_review_release_roles(review_role_context)
+    review_role_task_results = _role_task_results(review_role_orchestration)
+    role_metadata = _role_orchestration_metadata(pre_role_orchestration, review_role_orchestration)
+    evaluated_goal = _goal_with_role_orchestration(evaluated_goal, role_metadata)
+    gate_results_by_role = review_role_context.get("role_gate_results", {})
+    gate_results = [
+        gate_results_by_role[role]
+        for role in [
+            "spec-reviewer",
+            "code-quality-reviewer",
+            "qa-verifier",
+            "security-reviewer",
+            "release-manager",
+        ]
+        if role in gate_results_by_role
+    ]
     gate_evidence = _gate_result_evidence(gate_results)
     final_goal = _goal_with_added_evidence(evaluated_goal, gate_evidence)
     if ledger and final_goal:
@@ -461,9 +550,10 @@ async def async_project_workflow(
                 "workflow_id": workflow_id,
             },
         )
-    success = task_success and check_success
+    role_success = pre_role_orchestration.get("success") and review_role_orchestration.get("success")
+    success = role_success and task_success and check_success
     if final_goal:
-        success = task_success and check_success and final_goal.get("status") == "complete"
+        success = role_success and task_success and check_success and final_goal.get("status") == "complete"
 
     print("[Master] async workflow completed.")
     return WorkflowDispatchResult(
@@ -484,6 +574,10 @@ async def async_project_workflow(
             "work_design": design_stage.get("work_design", {}),
             "artifact_manifest": design_stage.get("manifest", {}),
             "artifact_store": design_stage.get("store", {}),
+            "deliverable_exports": design_stage.get("deliverable_exports", {}),
+            "role_orchestration": role_metadata.get("summary", {}),
+            "role_orchestration_stages": role_metadata.get("stages", []),
+            "role_task_results": role_metadata.get("results", []),
             **check_results.to_metadata(),
             "gate_evidence": gate_evidence,
         },

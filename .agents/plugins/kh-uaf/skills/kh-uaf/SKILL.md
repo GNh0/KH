@@ -9,7 +9,7 @@ This workspace includes KH UAF, a personal skillbook and Python-first orchestrat
 
 ## How to Use
 
-1. Treat the repository root as the UAF runtime root.
+1. Treat the repository root as the packaged UAF source, not as the target project's runtime state folder.
 2. Read the packaged skills under `skills/` when a task needs a specific workflow.
 3. Use `README.md` for install and host integration instructions.
 4. Use `SKILL.md` for the root UAF operating guide.
@@ -22,8 +22,9 @@ python -m src.skills.uaf_skill_catalog --check
 ## Useful Entry Points
 
 - `skills/`: packaged UAF skill and harness folders.
-- `src/`: Python contracts, dispatchers, goal ledger, memory store, and task runners.
-- `.uaf/`: project-local runtime state created during workflow runs.
+- `src/`: Python contracts, dispatchers, DAG role orchestrator, goal ledger, memory store, and task runners.
+- `%LOCALAPPDATA%/KH-UAF/`: default runtime state for `.uaf` and snapshot data.
+- `docs/`: target-project user-facing Office deliverables such as 요구정의서, 오케스트레이션 설계서, 작업분해표, 증거계획서, and 위험/정책 체크리스트.
 - `docs/skillbook/`: design notes, plans, and handoff decisions.
 
 ## UAF Commands

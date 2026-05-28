@@ -37,8 +37,10 @@ What works today:
 - Scoped persistent memory contracts for project and conversation namespaces.
 - DomainProfile, WorkDesign, DesignArtifact, and ArtifactManifest contracts for domain-neutral orchestration.
 - Mandatory workflow design-stage persistence under the project-scoped runtime `.uaf/artifacts/design/` and `.uaf/state/artifact_manifest.json`.
+- User-facing Office deliverable export under the target project's `docs/` folder: requirements brief, orchestration design, deliverable definition, process flow, role/task breakdown, evidence plan, and risk/policy checklist.
 - Resume-safe handoff snapshots under the project-scoped runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
 - Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
+- DAG-based role orchestration with asyncio waves: CEO, advisor/product strategist, architect, planner, controller, implementers, review, QA/security, and release roles run as real `WorkflowTaskResult` producing stages when dependencies are satisfied.
 - Focused review, QA, security, and release gate evaluators.
 - Local and Antigravity dispatcher contracts.
 - Antigravity native dispatch boundary with injected and JSON process sidecar adapters, plus pending fallback when no host adapter is configured.
@@ -54,7 +56,7 @@ What works today:
 - Packaged skill catalog with validation.
 - GoalState metadata attached to dispatch requests and workflow results.
 - Goal evidence evaluation, including conservative aliases, that blocks QA/release gates when required evidence is missing.
-- Workflow GoalState metadata now carries domain profile, work design, and artifact manifest context.
+- Workflow GoalState metadata now carries domain profile, work design, artifact manifest context, and user-facing deliverable export paths.
 - Workflow task metadata can carry normalized evidence records into `GoalState.evidence`.
 - Gate results carry structured findings and evidence records for downstream goal/release checks.
 - Persistent project-scoped goal ledger under the UAF runtime store for resumable workflow state.
@@ -214,6 +216,7 @@ UAF now treats design as a mandatory workflow stage, not a software-only convent
 understand objective
   -> identify domain and subdomains
   -> assign roles
+  -> run ready role tasks through DAG-based asyncio waves
   -> create WorkDesign
   -> persist required design artifacts
   -> execute bounded tasks
@@ -225,7 +228,19 @@ understand objective
 
 `src.orchestration.artifacts.ArtifactStore` saves the work design and any supplied design artifacts under the UAF runtime store, normally `%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/artifacts/design/`, then writes `.uaf/state/artifact_manifest.json` in the same project-scoped runtime slot. Set `UAF_RUNTIME_ROOT` to choose another runtime root, or set `UAF_PROJECT_LOCAL_STATE=1` only when you explicitly want `.uaf/` inside the target project. The manifest is attached to `WorkflowDispatchResult.metadata["artifact_manifest"]` and to `GoalState.metadata["artifact_manifest"]`, so resume-safe goal ledger state can prove which design artifacts existed when the workflow completed or blocked.
 
-The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
+`src.orchestration.role_orchestrator.RoleOrchestrator` executes the role graph as a dependency DAG. Ready roles in the same wave are launched with `asyncio.create_task(...)`; the default graph now runs `advisor` and `product-strategist` in parallel after `ceo`, runs file implementers through the existing bounded worker queue, and runs `qa-verifier` and `security-reviewer` in parallel before `release-manager`. The workflow metadata records `role_orchestration`, `role_orchestration_stages`, and `role_task_results` so a host can see which roles actually executed, which roles were blocked, and how many parallel waves ran.
+
+`src.orchestration.deliverable_exports.export_office_deliverables(...)` writes user-facing work products directly into the target project's `docs/` folder. These are not internal `.uaf` state files. The default export is domain-neutral and works for software, operations, research, planning, analysis, or any other orchestration topic:
+
+- `docs/요구정의서.docx`
+- `docs/오케스트레이션_설계서.docx`
+- `docs/산출물_정의서.docx`
+- `docs/처리흐름도.docx`
+- `docs/역할별_작업분해표.xlsx`
+- `docs/증거계획서.xlsx`
+- `docs/위험_정책_체크리스트.xlsx`
+
+The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. Office export adds `requirements brief exported`, `orchestration design exported`, `deliverable definition exported`, `process flow exported`, `role task breakdown exported`, `evidence plan exported`, and `risk policy checklist exported`. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
 
 ## Persistent Memory
 
@@ -322,10 +337,10 @@ The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_
 
 | Skill | Purpose |
 |-------|---------|
-| `orchestration-role-graph` | Default CEO, advisor, planner, implementer, reviewer, QA, security, and release role contracts. |
+| `orchestration-role-graph` | Default CEO, advisor, planner, implementer, reviewer, QA, security, and release role contracts plus DAG execution metadata. |
 | `adapter-contract-harness` | Shared request/result expectations for Codex, Antigravity, Claude, and local adapters. |
 | `host-agent-orchestration` | Personal host agent/subagent/tool permission, hook, and observability patterns for Codex, Antigravity-style, Claude Code, and local runtimes. |
-| `parallel-orchestration-harness` | Fan-out/fan-in task dispatch, worker limits, and aggregation rules. |
+| `parallel-orchestration-harness` | DAG role waves, fan-out/fan-in task dispatch, worker limits, and aggregation rules. |
 | `subagent-review-pipeline` | Implementer -> spec reviewer -> code quality reviewer flow. |
 
 ### Planning and Lifecycle

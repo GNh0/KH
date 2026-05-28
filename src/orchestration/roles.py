@@ -72,14 +72,14 @@ def default_role_profiles() -> Tuple[RoleProfile, ...]:
             name="product-strategist",
             title="Product Strategist",
             stage="advisory",
-            purpose="Translate business intent into user outcomes, feature boundaries, and acceptance criteria.",
+            purpose="Translate business intent into user outcomes, scope boundaries, and acceptance criteria.",
             responsibilities=(
-                "Define user-facing behavior and scope boundaries.",
+                "Define user-facing outcomes and scope boundaries.",
                 "Prepare acceptance criteria that reviewers can check later.",
             ),
-            inputs=("approved objective", "risk register"),
+            inputs=("approved objective", "success criteria"),
             outputs=("feature scope", "acceptance criteria"),
-            blocks_on=("ceo", "advisor"),
+            blocks_on=("ceo",),
         ),
         RoleProfile(
             name="system-architect",

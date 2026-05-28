@@ -53,6 +53,13 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_catalog --check`
   - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (73 files)
   - `python -B -m unittest discover -s tests -v` (164 tests)
+- Latest full verification after Office deliverable export and DAG role orchestration:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool .agents/plugins/marketplace.json`
+  - `python -m src.skills.uaf_skill_catalog --check` (23 valid / 0 invalid)
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (75 files)
+  - `python -B -m unittest discover -s tests -v` (167 tests)
 
 ## Completed
 
@@ -213,10 +220,20 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `UAF_RUNTIME_ROOT` overrides the runtime base.
   - `UAF_PROJECT_LOCAL_STATE=1` is the explicit opt-in for project-local runtime folders.
   - `SnapshotManager.commit_many(...)` creates one work-level snapshot bundle for multi-file tasks.
+- Added domain-neutral Office deliverable export:
+  - workflow design stage writes user-facing deliverables to the target project's `docs/` folder, not runtime `.uaf/`
+  - default files: `요구정의서.docx`, `오케스트레이션_설계서.docx`, `산출물_정의서.docx`, `처리흐름도.docx`, `역할별_작업분해표.xlsx`, `증거계획서.xlsx`, `위험_정책_체크리스트.xlsx`
+  - export evidence is attached to workflow and goal evidence only after files are written
+- Added DAG-based role orchestration:
+  - `src/orchestration/role_orchestrator.py`
+  - dependency-ready roles run in asyncio waves
+  - default graph now has real parallel waves for advisor/product strategy and QA/security
+  - role task results are stored in workflow metadata and goal metadata
+  - blocked downstream roles are preserved as structured results and gate metadata
 
 ## Active Decision
 
-The persistent goal ledger exists. The local execution path now has runner, check, QA, sidecar, evidence, registry, evidence-alias, scoped persistent-memory, domain profile, work design, artifact manifest, and resume handoff boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
+The persistent goal ledger exists. The local execution path now has DAG role orchestration, runner, check, QA, sidecar, evidence, registry, evidence-alias, scoped persistent-memory, domain profile, work design, artifact manifest, Office deliverable export, and resume handoff boundaries. Antigravity and Browser/QA both have dependency-free JSON sidecar protocols, so host-specific packages can live outside the Python core.
 
 Active task: none. Recommended next improvement is optional host package scaffolding or domain-specific artifact producers only when the actual runtime or domain dependency is explicit.
 
