@@ -31,6 +31,18 @@ This is the portable UAF replacement for host and personal skillbook parallel di
 - `role_task_results[]`
 - per-result `metadata.execution_model = parallel-role-stage`
 
+## External Benchmark Recipe
+
+Use this harness only when work is actually independent:
+
+1. Identify independent role or file tasks and shared-state conflicts before dispatch.
+2. Run dependency-ready role waves with `asyncio.create_task(...)`.
+3. Run file/task work through a bounded queue and worker count.
+4. Fan in every result before completion.
+5. Preserve partial failures and blocked records in the aggregate.
+
+Pressure scenario: if the implementation loops over tasks sequentially, the result may be valid work but must not be reported as parallel orchestration.
+
 ## Required outputs
 
 - Bounded worker count and queue size for file/task fan-out.

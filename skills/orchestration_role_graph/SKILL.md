@@ -61,6 +61,18 @@ This is the UAF-native role contract for multi-agent orchestration. It makes lea
 - `qa-verifier` and `security-reviewer` can run in the same wave after code quality review.
 - `release-manager` runs after QA and security are complete or records a blocked result when they are not.
 
+## External Benchmark Recipe
+
+Use this harness to prove role-based orchestration actually happened:
+
+1. Build role metadata from `default_role_profiles()`.
+2. Execute roles through the DAG orchestrator, not a sequential role-name list.
+3. Record waves, dependencies, role task results, and role artifacts.
+4. Require reviewer, QA, security, and release roles to produce task results or blocked records.
+5. Surface `parallel_wave_count` and missing-role findings in final metadata.
+
+Pressure scenario: if only file-level implementers ran, the workflow cannot claim CEO/advisor/architect/reviewer orchestration.
+
 ## Required outputs
 
 - Default role metadata with role ids, stages, responsibilities, dependencies, and execution flags.

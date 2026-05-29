@@ -35,6 +35,18 @@ This is a UAF-native context harness for context-save and context-restore patter
 - `remaining_work`: next tasks and verification commands.
 - `resume_handoff`: JSON and Markdown paths for a future host session.
 
+## External Benchmark Recipe
+
+Use this harness like a resumability contract:
+
+1. Before a long handoff, write `HandoffSnapshot` with objective, current status, decisions, remaining work, git state, and evidence keys.
+2. Save both machine-readable JSON and human-readable Markdown through `src.orchestration.handoff`.
+3. On resume, compare project path, goal id, git state, and latest user instruction before trusting the handoff.
+4. Mark stale items as advisory and require fresh verification for any claim that affects output or code.
+5. Record what was restored, ignored, or superseded.
+
+Pressure scenario: if a handoff says tests passed but the current git state differs, the restored status is `needs fresh verification`, not `complete`.
+
 ## Common mistakes
 
 - Do not store resumable runtime state in the target project root unless project-local state was explicitly requested.

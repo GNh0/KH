@@ -29,6 +29,18 @@ This is a UAF-native review harness for structured review workflow patterns. It 
 7. Produce a gate result for `spec-reviewer`, `code-quality-reviewer`, and `release-manager`.
 8. Preserve partial failures instead of collapsing them into a single text log.
 
+## External Benchmark Recipe
+
+Use this harness like a code-review protocol:
+
+1. Start with spec compliance: user request, design output, changed files, and evidence.
+2. Normalize every finding with severity, owner role, file/path when available, reason, and suggested fix.
+3. Run quality review only after required spec gaps are resolved or explicitly waived.
+4. Run security/release gates last and preserve upstream findings in blocked release output.
+5. Return "no findings" only after naming the evidence reviewed.
+
+Pressure scenario: if a task result is `success` but contains no changed files, test output, or manual evidence, review remains blocked for missing evidence.
+
 ## Required outputs
 
 - `status`: `passed`, `failed`, or `blocked`.

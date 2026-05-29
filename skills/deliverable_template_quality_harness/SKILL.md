@@ -30,6 +30,18 @@ This harness checks user-facing deliverables against recognizable document and s
 | `technical-drawing`, `cad-drawing` | Render structure is checked, template markers are not applicable. |
 | Unknown artifact type | Fails by default unless the record explicitly sets `template_not_applicable` or `template_optional`. |
 
+## External Benchmark Recipe
+
+Use this harness when a user-facing deliverable must be more than a file that opens:
+
+1. Identify the artifact type before export: requirements, design, process flow, workbook, manual, drawing, or report.
+2. Load the required marker policy for that type and check the generated file contents.
+3. For DOCX/XLSX, run structural render QA as a separate gate; template pass does not imply the file is readable.
+4. For SVG/DXF or other non-template artifacts, mark template-not-applicable and require format-specific structure evidence.
+5. Fail unknown types until a policy or explicit exemption is provided.
+
+Pressure scenario: if a DOCX exists but lacks required sections such as scope, assumptions, and acceptance criteria, the deliverable fails template quality even if render QA passes.
+
 ## Required outputs
 
 - `quality.status`: `passed` or `failed`.

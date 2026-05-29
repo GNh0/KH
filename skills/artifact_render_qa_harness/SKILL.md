@@ -30,6 +30,18 @@ This harness verifies that generated files can be opened or parsed enough for de
 - DXF must include `SECTION` and `ENTITIES`.
 - A malformed-file probe should fail with `artifact render qa failed`, not a template pass.
 
+## External Benchmark Recipe
+
+Use this harness before presenting generated files as usable:
+
+1. Read the export manifest and open every listed artifact path.
+2. Validate package structure for DOCX/XLSX before checking template content.
+3. Validate SVG/DXF structural markers and reject empty or partial drawings.
+4. Record per-file findings with artifact type, missing part, and suggested regeneration step.
+5. Keep QA details in metadata unless the user asks for a separate QA report.
+
+Pressure scenario: if an XLSX zip contains `xl/workbook.xml` but no worksheet part, render QA fails even if the filename and template type look correct.
+
 ## Required outputs
 
 - `artifact render qa passed` when every artifact is readable and structurally consistent.

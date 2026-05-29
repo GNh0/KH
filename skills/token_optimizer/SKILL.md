@@ -24,6 +24,18 @@ Large arbitrary prose also passes through by default; this is intentional becaus
 4. If command output needs a reusable UAF evidence record, call `src.skills.token_optimizer.summarize_command_output` so the exit code, command family, raw size, filtered size, and token savings metadata are preserved in `HarnessResult`.
 5. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
 
+## External Benchmark Recipe
+
+Use this skill as a quality-first context gate:
+
+1. Route uncertain large content through `optimize_context_content`.
+2. Compress logs through command-family filtering and required-fact preservation.
+3. Minify Python only when comments, docstrings, and exact wording are not part of the contract.
+4. Pass through SQL, stored procedures, license/security/business comments, contract text, and ordinary prose that cannot be safely classified.
+5. Report token savings only when compression was actually applied.
+
+Pressure scenario: if compression would remove the only assertion value or a business rule comment, return passthrough or append the missing fact; do not trade answer quality for token savings.
+
 ## Required outputs
 
 - Compact log or code text that preserves errors, file paths, test names, and exit status context.

@@ -29,6 +29,18 @@ This is a personal UAF host orchestration harness. It packages reusable agent, s
 
 Use the default UAF role graph for orchestration: `ceo`, `advisor`, `product-strategist`, `system-architect`, `implementation-planner`, `controller`, `implementer`, `spec-reviewer`, `code-quality-reviewer`, `qa-verifier`, `security-reviewer`, and `release-manager`.
 
+## External Benchmark Recipe
+
+Use this harness when host differences could otherwise be hidden behind vague "agent ran" claims:
+
+1. Normalize the host request into `AdapterRequest(project_dir, files, design_doc, platform_mode, metadata)`.
+2. Put role graph, tool policy, goal id, memory scope, evidence requirements, and budget in `metadata`.
+3. Dispatch through the selected adapter or mark `status="blocked"` with the missing host capability.
+4. Store host-specific fields inside `AdapterResult.metadata`; keep top-level status/message portable.
+5. Report the controller aggregate with every subagent result, partial failure, and blocked reason.
+
+Pressure scenario: if Codex, Antigravity-style, Claude Code, or local runner lacks a tool, do not silently fall back to another host. Return a blocked result that names the missing tool, affected role, and recovery path.
+
 ## Required outputs
 
 - `AdapterRequest` containing `project_dir`, `files`, `design_doc`, `platform_mode`, and metadata for role graph, goal, memory, evidence, tools, budget, and safety policy.

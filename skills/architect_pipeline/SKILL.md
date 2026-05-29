@@ -23,6 +23,18 @@ When the user asks you to design or execute a substantial workflow, you MUST fol
 6. Follow the exact design patterns, orchestration boundaries, evidence requirements, and domain constraints written in the design outputs.
 7. If there are license, policy, safety, or missing-evidence warnings, do NOT proceed as complete until alternatives or blockers are recorded.
 
+## External Benchmark Recipe
+
+Use this skill like a science-style analysis recipe:
+
+1. Capture the objective, domain, constraints, source inputs, and expected deliverables before drafting.
+2. Call `run_architect_pipeline(project_dir, requirements, framework)` for one cohesive output bundle.
+3. Inspect `design_doc`, `work_design`, `manifest`, `deliverable_exports`, and `quality` before dispatching implementation.
+4. Reject the design if roles, assumptions, evidence keys, or deliverable routing are missing.
+5. Route domain outputs to `docs/` only when they are useful to the user; keep internal UAF evidence in runtime state.
+
+Pressure scenario: if the design is a short paragraph with no assumptions, constraints, roles, artifacts, or review gates, the architect stage has failed even if a file exists.
+
 ## Required outputs
 
 - `design_doc.md` or equivalent design text with objective, scope, assumptions, constraints, roles, and deliverables.

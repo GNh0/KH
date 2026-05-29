@@ -27,6 +27,18 @@ This is a UAF-native health harness for quality dashboard workflow patterns. It 
 5. Score health dimensions such as tests, syntax, skill catalog validity, sandbox policy, and documentation freshness.
 6. Return both machine-readable JSON and a concise human summary.
 
+## External Benchmark Recipe
+
+Use this harness as a release dashboard, not a single "tests passed" line:
+
+1. Build a check matrix with command, required/optional status, expected artifact, and failure owner.
+2. Run each deterministic command fresh; do not reuse old terminal output.
+3. For this repository, include catalog check, target audit, external benchmark review, and unit tests.
+4. Convert every failed or skipped required check into a `failures[]` item with command, exit code, and next action.
+5. Set `release_ready=false` unless every required check passed or was explicitly waived by policy.
+
+Pressure scenario: if unit tests pass but `uaf_skill_audit --summary` reports a failed target, the dashboard is not release-ready.
+
 ## Required outputs
 
 - `score`: numeric readiness score from 0 to 10.

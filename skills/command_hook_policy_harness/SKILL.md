@@ -48,6 +48,18 @@ The default should be conservative for destructive actions and non-blocking for 
 - exit code
 - fallback reason
 
+## External Benchmark Recipe
+
+Use this harness like a command firewall:
+
+1. Call `classify_command` to identify read, write, destructive, network, credential, or unknown behavior.
+2. Load the supplied/default policy with `load_command_policy`; record the policy hash.
+3. Call `evaluate_command_hook_policy` before rewriting or executing.
+4. If rewriting is allowed, record original command, redacted command, rewritten command, decision, and reason.
+5. Treat policy ambiguity as `ask` or `deny`, never as silent allow.
+
+Pressure scenario: if a command contains a token or deletes outside the workspace, the audit record must redact the secret and block or ask before execution.
+
 ## Required outputs
 
 - Command classification: read, write, network, destructive, credential-bearing, or unknown.

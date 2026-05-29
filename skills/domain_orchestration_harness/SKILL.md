@@ -60,6 +60,18 @@ The default design-stage evidence keys are:
 
 These keys should participate in `GoalState.evidence_required` whenever the workflow is intended to be evidence-complete.
 
+## External Benchmark Recipe
+
+Use this harness like an Antigravity science skill adapted to arbitrary domains:
+
+1. Classify the objective first: software, product/mechanical, analysis/reporting, operations, education, or generic.
+2. Build `DomainProfile` and `WorkDesign` before producing user-facing files.
+3. Select artifact types by objective, not by a fixed DOCX/XLSX/PDF/DXF/SVG checklist.
+4. Export only useful user deliverables to `docs/`; keep internal UAF state, traceability, and harness evidence in runtime metadata.
+5. Run role, review, QA, policy, traceability, template, and render gates before claiming the workflow is complete.
+
+Pressure scenario: if the user asks for a product drawing from dimensions, the router should produce drawing/design artifacts such as SVG/DXF/BOM when supported, not generic software feature documents. If the input is insufficient for a drawing, block with missing dimensions instead of fabricating geometry.
+
 ## Domain Examples
 
 The artifact names are examples, not a fixed taxonomy. The router should choose artifacts by objective and evidence needs, not by a mandatory extension list. The default general exports are domain-neutral (`요구정의서.docx`, `오케스트레이션_설계서.docx`, `산출물_정의서.docx`, `처리흐름도.docx`, `역할별_작업분해표.xlsx`, `증거계획서.xlsx`, `위험_정책_체크리스트.xlsx`) and should be filled from the current domain context. `사용_매뉴얼.docx` is a conditional operational/user-instruction artifact, not a universal artifact.

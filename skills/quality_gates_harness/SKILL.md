@@ -34,6 +34,18 @@ This is a personal UAF quality harness for testing, debugging, and verification 
 - `regression`: the original bug or requested behavior has a direct check when practical.
 - `security`: new command execution, file writes, network calls, and secrets handling are reviewed.
 
+## External Benchmark Recipe
+
+Use the gates as a red/green evidence chain:
+
+1. Name the behavior or risk being protected.
+2. Run the smallest check that should fail before the fix, or document why RED is impossible.
+3. Apply the change and re-run the same check.
+4. Run the broader relevant suite.
+5. Normalize findings with `build_review_finding`, QA evidence with `build_qa_check`, and completion with the release gate.
+
+Pressure scenario: if a reviewer finds missing regression coverage, the release gate must preserve that finding and block completion until evidence is added or explicitly waived.
+
 ## Required outputs
 
 - Failing-first evidence for behavior changes when practical.

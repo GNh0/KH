@@ -32,6 +32,18 @@ This is a UAF-native rollback harness. It packages snapshot behavior inside this
 - Keep snapshot version IDs unique even when multiple snapshots are created within the same second.
 - Use fresh verification after rollback before claiming the workspace is restored.
 
+## External Benchmark Recipe
+
+Use this harness before risky generated edits:
+
+1. Prefer one `commit_many` work snapshot for a related edit batch.
+2. Record version id, file list, message, timestamp, and runtime storage path.
+3. On rollback, use `rollback_result` and inspect restored, removed, and failed files.
+4. Treat partial restore as blocked until failed files are resolved.
+5. Run fresh verification after rollback before reporting recovery.
+
+Pressure scenario: if rollback restores two files but fails one locked file, report partial restore with the failed file and error instead of claiming rollback succeeded.
+
 ## Required outputs
 
 - Work-level snapshot bundle for related multi-file changes, or single-file snapshot for isolated edits.

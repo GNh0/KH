@@ -29,6 +29,18 @@ This is a UAF-native QA harness for regression and verification workflow pattern
 7. Require fresh verification evidence after a fix or rollback.
 8. Support report-only mode where findings are returned without modifying files.
 
+## External Benchmark Recipe
+
+Use this harness as an acceptance-check map:
+
+1. Convert every acceptance criterion into one QA check with owner, scope, and evidence source.
+2. For automated checks, record command, exit code, and relevant output.
+3. For manual checks, record steps, observed result, expected result, and reviewer.
+4. Use scoped `QA-SKIP` only when QA is not applicable; include scope, notes, and evidence.
+5. Fail the gate when a required check is missing, failed, blocked, or unsupported by evidence.
+
+Pressure scenario: if browser QA was expected but no browser/app adapter ran, the QA result is blocked, not passed.
+
 ## Required outputs
 
 - `status`: `passed`, `failed`, or `blocked`.

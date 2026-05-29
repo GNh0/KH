@@ -27,6 +27,18 @@ This is a UAF-native safety harness for careful execution, edit boundary, guard,
 5. Record guard decisions in workflow metadata for later review.
 6. Provide an unlock path that removes temporary boundaries with an audit note.
 
+## External Benchmark Recipe
+
+Use this harness before any risky command or file write:
+
+1. Resolve the intended workspace root to an absolute path.
+2. Classify the command and target path before execution.
+3. Run write-boundary checks for every generated or modified path.
+4. Return `allow`, `ask`, or `deny` with a reason and matched policy.
+5. Store only redacted command text in audit metadata.
+
+Pressure scenario: if a generated path resolves outside the workspace through `..` or symlinks, the guard must deny the write even when the raw string looked relative.
+
 ## Required outputs
 
 - `verdict`: `allow`, `ask`, or `deny`.

@@ -60,6 +60,18 @@ The catalog exposes `execution_level` for every skill:
 
 Do not claim every packaged skill is executed the same way. A run can combine direct module calls, hybrid harness orchestration, and procedure/policy application, but the catalog must make that distinction explicit.
 
+## External Benchmark Recipe
+
+Use this skill as the source of truth for packaged UAF skills:
+
+1. List packaged skills from this repository only.
+2. Read a skill by canonical name and return the packaged `SKILL.md` body.
+3. Validate frontmatter, support-file wiring, implementation targets, and execution level.
+4. Treat local Gemini, Antigravity, Claude, or Codex user folders as references only, not runtime dependencies.
+5. Fail packaging when an execution level is missing or a target cannot resolve.
+
+Pressure scenario: if a skill exists in a user's local Antigravity folder but not under this repository's `skills/`, it must not appear as a packaged KH skill.
+
 ## Required outputs
 
 - Skill list with name, description, relative path, packaging source, external dependency flag, and execution level.

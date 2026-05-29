@@ -20,6 +20,18 @@ This skill acts as a Tester/Evaluator for your code. It runs the code in an isol
 4. If the evaluation output contains `[Fail]`, read the Stderr logs carefully.
 5. Fix the errors in the code based on the Stderr feedback, and re-run the evaluator until it passes `[Success]`.
 
+## External Benchmark Recipe
+
+Use this harness for small, isolated runtime proof:
+
+1. Keep the evaluated code minimal and dependency-free unless the dependency is part of the harness contract.
+2. Put assertions in the test code, not in the final explanation.
+3. Prefer `Evaluator.evaluate_code_result` so callers get `HarnessResult(success, stdout, stderr, exit_code, metadata)`.
+4. Treat syntax errors, import errors, runtime errors, and missing cleanup as separate failure classes.
+5. Include the failing snippet or command in evidence when the evaluator blocks completion.
+
+Pressure scenario: if generated Python compiles but fails at import time, the evaluator result is failed with stderr and exit code; do not report "syntax OK" as runtime success.
+
 ## Required outputs
 
 - `HarnessResult` with status, stdout, stderr, execution time, and failure reason.

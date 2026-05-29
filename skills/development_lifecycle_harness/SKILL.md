@@ -34,6 +34,18 @@ This is a personal UAF development workflow. It packages the useful planning, TD
 - No completion claim without fresh verification output.
 - No branch finishing until the working tree diff matches the requested scope.
 
+## External Benchmark Recipe
+
+Use this harness like a Superpowers-style execution guard, not just as lifecycle advice:
+
+1. Write a three-line plan: target files, first failing check, final verification command.
+2. Create a snapshot or record why no snapshot is needed before editing shared files.
+3. Run the narrow check before implementation and record RED, skipped-with-reason, or not-applicable.
+4. Implement, then run the narrow check and the broader verification suite.
+5. Finish with one integration state: local only, committed, pushed, or PR-ready.
+
+Pressure scenario: if the agent says "small change, no test needed", it must produce a smoke check, manual evidence, or an explicit no-test rationale before editing. If it cannot, the lifecycle gate is blocked.
+
 ## Required outputs
 
 - Implementation plan for multi-step work, including files, tests, and verification commands.

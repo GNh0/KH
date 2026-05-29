@@ -23,6 +23,18 @@ This skill defines how UAF captures workflows as portable skills. A new skill sh
 6. Add tests or smoke checks when the skill is surfaced through Python or MCP.
 7. For generated skills, run the generated `scripts/smoke_check.py` from the generated skill folder and pass `UAF_REPO_ROOT` when the skill is outside the repository tree.
 
+## External Benchmark Recipe
+
+Use this skill like Superpowers `writing-skills` adapted for UAF:
+
+1. Write the pressure scenario first: what mistake should the future agent stop making?
+2. Call `should_distill_workflow` and reject the candidate if reuse, trigger, or evidence is weak.
+3. Generate the scaffold with `build_skill_scaffold`.
+4. Replace generic wording with one runnable example, expected evidence, and failure handling.
+5. Run the generated smoke check from inside the generated skill folder and from the repository root.
+
+Pressure scenario: if the proposed skill only describes one completed conversation, the distiller must return candidate/blocked rather than publish it as reusable.
+
 ## Required outputs
 
 - New or updated `skills/<skill-name>/SKILL.md` with trigger-focused frontmatter.

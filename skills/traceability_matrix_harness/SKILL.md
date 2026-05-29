@@ -21,6 +21,18 @@ This harness builds an internal traceability matrix linking requirements, delive
 4. Do not create `docs/추적성_매트릭스.xlsx` unless a user explicitly asks for that as a deliverable.
 5. Emit `traceability matrix passed` or `traceability matrix failed` evidence.
 
+## External Benchmark Recipe
+
+Use this harness to prove every important output has an owner and evidence:
+
+1. Assign a stable requirement id before export.
+2. Link each requirement to one deliverable, one artifact type, one evidence key, and one gate.
+3. Use typed rows (`as_dict=True`) when another harness must inspect named fields.
+4. Mark rows failed when the deliverable file is missing or the evidence key was not produced.
+5. Keep the matrix internal unless the user explicitly requests a traceability workbook.
+
+Pressure scenario: if a generated DOCX exists but no requirement row maps to it, the workflow is not evidence-complete.
+
 ## Required outputs
 
 - `traceability_matrix.rows`: internal rows with requirement-to-evidence mapping.

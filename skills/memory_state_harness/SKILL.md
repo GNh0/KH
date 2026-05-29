@@ -39,6 +39,18 @@ This is the UAF-native persistent memory harness. It keeps long-lived project or
 
 Do not create `.uaf/` in the target project root by default. Use `%LOCALAPPDATA%/KH-UAF/` or `UAF_RUNTIME_ROOT` for project/chat-scoped memory. `UAF_PROJECT_LOCAL_STATE=1` is the explicit opt-in for project-local runtime files.
 
+## External Benchmark Recipe
+
+Use this harness only for durable, scoped facts:
+
+1. Resolve scope before reading memory: project, project/chat, conversation, or explicit global.
+2. Load only bounded records relevant to the current objective.
+3. Save verified decisions as records and uncertain observations as candidates.
+4. Record event type, source, scope, and retention action in `memory_events.jsonl`.
+5. Revalidate memory-derived facts when they can drift.
+
+Pressure scenario: if a fact came from an older conversation and the source may have changed, report it as memory-derived and require fresh verification before using it as completion evidence.
+
 ## Required outputs
 
 - `memory_scope`: project, conversation, or global scope with namespace and status.

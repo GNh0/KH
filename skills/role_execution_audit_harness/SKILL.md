@@ -21,6 +21,18 @@ This harness audits role orchestration evidence after DAG execution. It answers 
 4. Verify each required role records `metadata.role_artifacts` when project context is available; implementer task results may satisfy this with explicit completion evidence.
 5. Attach audit findings to metadata and goal evidence rather than creating user-facing audit documents.
 
+## External Benchmark Recipe
+
+Use this harness after any claimed role-DAG run:
+
+1. Read `role_orchestration`, `role_orchestration_stages`, and `role_task_results` from workflow metadata.
+2. Check execution model, wave count, parallel waves, required role coverage, and role artifacts.
+3. Require `product-strategist` and all default governance/review/release roles.
+4. Require `implementer` when implementation work exists.
+5. Emit failed findings for static-only role graphs or missing runtime artifacts.
+
+Pressure scenario: if a report lists roles but `role_task_results` is empty, role execution audit fails even when the static role graph is complete.
+
 ## Required outputs
 
 - `role_execution_audit.status`: `passed` or `failed`.

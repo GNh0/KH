@@ -42,6 +42,18 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 5. Preserve every reviewer finding in the aggregated result.
 6. Run final review across the combined implementation before finishing.
 
+## External Benchmark Recipe
+
+Use this harness when an implementation needs independent roles to produce reviewable evidence:
+
+1. Controller creates one task packet per implementer: objective, owned files, forbidden files, checks, and expected artifacts.
+2. Implementer returns `WorkflowTaskResult` with changed files, commands run, evidence, and status.
+3. Spec reviewer compares the result to the task packet and user constraints before code quality review starts.
+4. Code-quality reviewer records structured findings with severity, file/path when available, and required fix.
+5. Controller aggregates all statuses and blocks release if any task is failed, blocked, or has unresolved required findings.
+
+Pressure scenario: if an implementer says "done" but did not report changed files or checks, spec review must fail for missing evidence before quality review.
+
 ## Required outputs
 
 - Implementer result per bounded task with status, changed files, checks, and evidence.

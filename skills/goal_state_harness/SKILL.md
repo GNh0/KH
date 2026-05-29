@@ -50,6 +50,18 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 
 By default, do not create `.uaf/` in the target project root. Store runtime state under the UAF runtime root, normally `%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/`, or under `projects/<project-key>/chats/<thread-id>/.uaf/` when a host thread id is available. `UAF_RUNTIME_ROOT` may override the base directory. `UAF_PROJECT_LOCAL_STATE=1` is the explicit opt-in for project-local `.uaf/`.
 
+## External Benchmark Recipe
+
+Use this harness as the final authority for completion:
+
+1. Create or update `GoalState` with objective, success criteria, and required evidence.
+2. Add evidence only from passed checks, saved artifacts, gate records, or explicit manual verification.
+3. Persist current goal and event records in the runtime state store.
+4. Before completion, compute missing evidence and accepted evidence aliases.
+5. Mark blocked when evidence, tools, credentials, context, or external state are missing.
+
+Pressure scenario: if task dispatch succeeded but QA evidence is missing, the goal remains active or blocked; it is not complete.
+
 ## Common mistakes
 
 - Do not mark a goal complete from task success alone; required evidence must be present.
