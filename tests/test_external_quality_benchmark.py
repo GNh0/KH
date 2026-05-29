@@ -25,6 +25,7 @@ EXTERNAL_BENCHMARK_TARGETS = [
     "qa_gate_harness",
     "quality_gates_harness",
     "review_gate_harness",
+    "request_complexity_router",
     "role_execution_audit_harness",
     "skill_catalog",
     "snapshot_state_harness",

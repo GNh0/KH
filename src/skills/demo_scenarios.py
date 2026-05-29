@@ -35,6 +35,7 @@ from src.orchestration.gate_evaluators import (
     evaluate_qa_checks,
 )
 from src.orchestration.quality_harnesses import audit_role_execution
+from src.orchestration.request_classifier import classify_request
 from src.orchestration.role_orchestrator import (
     PRE_IMPLEMENTATION_ROLES,
     RoleOrchestrator,
@@ -94,6 +95,10 @@ SKILL_OPS_SKILLS = {
     "harness-evaluator",
     "skill-catalog",
     "workflow-skill-distiller",
+}
+
+ROUTING_SKILLS = {
+    "request-complexity-router",
 }
 
 
@@ -185,6 +190,8 @@ def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]
         return _gate_scenario
     if skill_name in SKILL_OPS_SKILLS:
         return _skill_ops_scenario
+    if skill_name in ROUTING_SKILLS:
+        return _routing_scenario
     return _gate_scenario
 
 
@@ -591,6 +598,45 @@ def _skill_ops_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> D
         blocked_payload=blocked_distill,
         blocked_reason="one-off workflow lacks repeatability and clear failure modes",
         missing_inputs=["repeat count", "cross-project reuse", "failure modes"],
+        contracts=contracts,
+        artifacts=[],
+    )
+
+
+def _routing_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    light = classify_request("PER이 뭐야?")
+    medium = classify_request("엔비디아 최근 실적을 요약해줘")
+    high_risk = classify_request("엔비디아 지금 사도 돼? 내 포트폴리오를 바꿔야 할까?")
+    ambiguous = classify_request("삼성 괜찮아?")
+    success_payload = {
+        "samples": [
+            light.to_dict(),
+            medium.to_dict(),
+            high_risk.to_dict(),
+            ambiguous.to_dict(),
+        ],
+        "routing_policy": "classify first, escalate only when evidence or risk requires it",
+    }
+    contracts = [
+        _mapping_contract("RequestClassification", "src.orchestration.request_classifier", light.to_dict(), "policy-result"),
+        _mapping_contract("RequestClassification", "src.orchestration.request_classifier", medium.to_dict(), "policy-result"),
+        _mapping_contract("RequestClassification", "src.orchestration.request_classifier", high_risk.to_dict(), "policy-result"),
+    ]
+    return _scenario_result(
+        success_contract="RequestClassification",
+        success_payload=success_payload,
+        success_evidence=[
+            "light request stayed direct",
+            "medium analysis requested source summary",
+            "high-risk request escalated to role DAG",
+            "ambiguous request asked for clarification",
+        ],
+        success_behavior="Route requests to the lightest sufficient UAF execution depth.",
+        success_side_effects=["writes demo evidence JSON only"],
+        blocked_contract="RequestClassification",
+        blocked_payload=ambiguous.to_dict(),
+        blocked_reason="request is too ambiguous to choose a safe execution depth",
+        missing_inputs=["domain or artifact context"],
         contracts=contracts,
         artifacts=[],
     )

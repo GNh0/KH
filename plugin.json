@@ -120,6 +120,11 @@
       "description": "Audit packaged skill support files, SKILL.md wiring, smoke script execution, implementation target resolution, test evidence, and 10-point practical readiness thresholds before publishing.",
       "usage": "python -m src.skills.uaf_skill_quality"
     },
+    {
+      "name": "request-complexity-router",
+      "description": "Classify user requests as light, medium, heavy, high-risk, or ambiguous before choosing direct answer, skill/module, or role-DAG execution depth.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read request-complexity-router"
+    },
         {
             "name": "kh-bench-verified",
             "description": "Run the fixed KH-Bench Verified practical task benchmark with clean workspaces, sealed external candidate task views, pre-validation, fail-to-pass, pass-to-pass, artifact validators, and JSON scoring.",

@@ -49,6 +49,7 @@ SKILL_EXECUTION_LEVELS = {
     "qa-gate-harness": "hybrid-harness",
     "quality-gates-harness": "hybrid-harness",
     "review-gate-harness": "hybrid-harness",
+    "request-complexity-router": "python-module",
     "skill-catalog": "python-module",
     "snapshot-state-harness": "python-module",
     "subagent-review-pipeline": "hybrid-harness",

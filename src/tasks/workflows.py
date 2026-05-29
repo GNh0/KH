@@ -5,8 +5,6 @@ import multiprocessing
 import os
 from typing import List
 
-import httpx
-
 from src.contracts import MemoryScope, WorkflowDispatchResult, WorkflowTaskResult
 from src.core.snapshot_manager import SnapshotManager
 from src.orchestration.artifacts import ArtifactStore, build_design_stage
@@ -431,7 +429,6 @@ def _apply_retention_policy(
 
 
 async def _report_task_result_to_webhook(
-    client: httpx.AsyncClient,
     webhook_url: str,
     api_key: str,
     project_id: str,
@@ -458,11 +455,14 @@ async def _report_task_result_to_webhook(
     }
 
     try:
-        response = await client.post(
-            webhook_url,
-            json=payload,
-            headers={"X-API-Key": api_key},
-        )
+        import httpx
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                webhook_url,
+                json=payload,
+                headers={"X-API-Key": api_key},
+            )
         response.raise_for_status()
         return {
             "status": "success",
@@ -487,59 +487,57 @@ async def code_generation_worker(
     api_key = os.environ.get("AG_API_KEY", "antigravity-secret-key-v2")
     task_runner = runner or LocalTaskRunner()
 
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                task_data = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
+    while True:
+        try:
+            task_data = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
 
-            file_name = task_data["file_name"]
-            role = task_data.get("role", "implementer")
-            task_id = _task_id(file_name)
+        file_name = task_data["file_name"]
+        role = task_data.get("role", "implementer")
+        task_id = _task_id(file_name)
 
-            print(f"[Worker] '{file_name}' task started as {role}.")
+        print(f"[Worker] '{file_name}' task started as {role}.")
 
-            try:
-                task_input = WorkflowTaskInput(
-                    project_dir=project_dir,
-                    file_name=file_name,
-                    design_doc=task_data["design_doc"],
-                    platform_mode=task_data["platform_mode"],
-                    role=role,
-                    metadata={
-                        "role_graph": task_data.get("role_graph", {}),
-                    },
-                )
-                runner_result = await task_runner.run(task_input)
-                webhook_report = await _report_task_result_to_webhook(
-                    client,
-                    webhook_url,
-                    api_key,
-                    project_id,
+        try:
+            task_input = WorkflowTaskInput(
+                project_dir=project_dir,
+                file_name=file_name,
+                design_doc=task_data["design_doc"],
+                platform_mode=task_data["platform_mode"],
+                role=role,
+                metadata={
+                    "role_graph": task_data.get("role_graph", {}),
+                },
+            )
+            runner_result = await task_runner.run(task_input)
+            webhook_report = await _report_task_result_to_webhook(
+                webhook_url,
+                api_key,
+                project_id,
+                runner_result,
+            )
+            results.append(
+                _merge_task_metadata(
                     runner_result,
+                    {"webhook_report": webhook_report},
                 )
-                results.append(
-                    _merge_task_metadata(
-                        runner_result,
-                        {"webhook_report": webhook_report},
-                    )
+            )
+            print(f"[Worker] '{file_name}' task completed.")
+        except Exception as exc:
+            results.append(
+                WorkflowTaskResult(
+                    task_id=task_id,
+                    file_name=file_name,
+                    role=role,
+                    status="failed",
+                    message=str(exc),
+                    metadata={"error_type": type(exc).__name__},
                 )
-                print(f"[Worker] '{file_name}' task completed.")
-            except Exception as exc:
-                results.append(
-                    WorkflowTaskResult(
-                        task_id=task_id,
-                        file_name=file_name,
-                        role=role,
-                        status="failed",
-                        message=str(exc),
-                        metadata={"error_type": type(exc).__name__},
-                    )
-                )
-                print(f"[Worker] '{file_name}' failed: {exc}")
-            finally:
-                queue.task_done()
+            )
+            print(f"[Worker] '{file_name}' failed: {exc}")
+        finally:
+            queue.task_done()
 
 
 async def async_project_workflow(

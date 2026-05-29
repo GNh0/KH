@@ -29,6 +29,7 @@ CORE_PRODUCTION_SKILLS = {
     "parallel-orchestration-harness",
     "qa-gate-harness",
     "review-gate-harness",
+    "request-complexity-router",
     "role-execution-audit-harness",
     "snapshot-state-harness",
     "subagent-review-pipeline",

@@ -14,7 +14,7 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 
 ## What It Includes
 
-- 27 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 28 packaged skills/harnesses with support files, smoke checks, and runnable demos.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - DAG role orchestration with CEO, advisor, architect, planner, controller, implementer, reviewers, QA, security, and release roles.

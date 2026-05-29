@@ -10,7 +10,7 @@ class UafSkillQualityTests(unittest.TestCase):
     def test_repository_skills_have_science_style_support_files(self):
         report = audit_skill_packaging_quality(run_smoke_scripts=True)
 
-        self.assertEqual(report["total_skills"], 27)
+        self.assertEqual(report["total_skills"], 28)
         self.assertTrue(report["success"], report)
         self.assertTrue(report["smoke_scripts_executed"])
         self.assertTrue(
