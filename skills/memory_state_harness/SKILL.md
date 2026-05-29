@@ -7,6 +7,12 @@ description: Use when a UAF workflow needs scoped persistent memory, memory cand
 
 This is the UAF-native persistent memory harness. It keeps long-lived project or conversation knowledge separate from short-lived goal state and context compression.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Reference basis
 
 - UAF `MemoryScope`, `MemoryRecord`, and `MemoryEvent` contracts.

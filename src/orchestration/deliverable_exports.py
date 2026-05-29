@@ -48,6 +48,7 @@ def export_office_deliverables(
             source_design_doc=source_design_doc,
             file_list=files,
             profile_name=profile_name,
+            metadata=metadata,
         )
     if profile_name == "product-design":
         return _export_product_design_deliverables(
@@ -278,6 +279,7 @@ def _export_software_development_deliverables(
     source_design_doc: str,
     file_list: List[str],
     profile_name: str,
+    metadata: Dict[str, Any],
 ) -> Dict[str, Any]:
     source_title = _first_heading(source_design_doc) or work_design.objective
     evidence = [
@@ -364,6 +366,19 @@ def _export_software_development_deliverables(
             artifact_type="risk-policy-checklist",
         ),
     ]
+    if _should_export_manual(domain_profile, work_design, file_list, metadata):
+        evidence.append("manual exported")
+        deliverables.append(
+            _write_docx_deliverable(
+                export_dir / "사용_매뉴얼.docx",
+                workflow_id,
+                "manual",
+                "사용 매뉴얼",
+                "manual exported",
+                _manual_sections(workflow_id, domain_profile, work_design, file_list, metadata),
+                artifact_type="manual",
+            )
+        )
     return _final_export_result(
         export_dir=export_dir,
         workflow_id=workflow_id,

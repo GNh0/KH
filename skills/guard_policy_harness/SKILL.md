@@ -7,6 +7,12 @@ description: Use when a UAF workflow needs destructive-command warnings, directo
 
 This is a UAF-native safety harness for careful execution, edit boundary, guard, and unlock workflow patterns. It defines guard policy without installing shell hooks.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Pattern basis
 
 - Guard workflow: destructive command warnings, directory edit locks, full guard mode, and explicit override behavior.

@@ -7,6 +7,12 @@ description: Use when UAF deliverables must prove generated DOCX, XLSX, SVG, or 
 
 This harness verifies that generated files can be opened or parsed enough for deterministic QA. It is a runtime evidence harness, so its detailed findings stay in UAF metadata unless the user explicitly asks for a user-facing QA report.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Workflow
 
 1. Read each generated artifact from the deliverable export records.

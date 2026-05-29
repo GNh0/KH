@@ -7,6 +7,12 @@ description: Use when adding or normalizing dispatch adapters for Codex, Antigra
 
 This is a UAF-native harness. It does not call an installed external agent skill. Use external systems only as design references, then implement the portable behavior through UAF contracts.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Workflow
 
 1. Represent incoming work with `AdapterRequest`.

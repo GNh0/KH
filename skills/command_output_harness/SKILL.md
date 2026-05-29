@@ -7,6 +7,12 @@ description: Use when compressing command output for agents, preserving exit cod
 
 This is a personal UAF command output harness. It provides compact command output behavior without requiring any external command proxy at runtime.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Reference basis
 
 - Command output patterns: command proxying, smart filtering, grouping, truncation, deduplication, raw passthrough, token-savings tracking, and exit-code preservation.

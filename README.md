@@ -426,8 +426,12 @@ Every packaged skill is expected to have:
 - a unique `name`
 - a trigger-focused `description` that starts with `Use when`
 - one top-level H1
+- a `## Support files` section that wires bundled resources from `SKILL.md`
 - a behavior section such as `## Workflow`, `## Instructions`, `## Core Flow`, or equivalent
 - a `## UAF implementation targets` section
+- `references/usage.md` with trigger boundary, inputs, execution pattern, evidence, failure handling, and quality bar
+- `examples/minimal-workflow.md` with a compact scenario, expected steps, expected evidence, failure cases, and done criteria
+- `scripts/smoke_check.py` that validates support-file wiring and resolves implementation targets from the repository
 - no unresolved `{{placeholder}}` tokens
 - repository code references under implementation targets that resolve to importable modules, classes, functions, or existing skill files
 
@@ -435,9 +439,10 @@ Run:
 
 ```bash
 python -m src.skills.uaf_skill_catalog --check
+python -m src.skills.uaf_skill_quality
 ```
 
-The check is repo-local and dependency-free. It now verifies both skill hygiene and the minimum behavior contract needed before treating a skill as installable.
+The catalog check is repo-local and dependency-free. The quality check additionally executes every packaged skill's `scripts/smoke_check.py`, so it proves the support files are present, wired from `SKILL.md`, and able to resolve implementation targets. Treat both checks as release gates before publishing the plugin.
 
 ## Windows App Integration
 
@@ -505,9 +510,13 @@ src/
     evaluator.py
   skills/
     uaf_skill_catalog.py
+    uaf_skill_quality.py
     uaf_skill_validator.py
 skills/
   <skill-folder>/SKILL.md
+  <skill-folder>/references/usage.md
+  <skill-folder>/examples/minimal-workflow.md
+  <skill-folder>/scripts/smoke_check.py
 tests/
 ```
 

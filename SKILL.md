@@ -67,8 +67,9 @@ If you need to extend or debug this framework, here is the structure:
 - **`src/harness/sandbox.py`**: A secure code runner. Uses `multiprocessing` for absolute timeout guarantees on Windows.
 - **`src/core/snapshot_manager.py`**: State rollback system utilizing pure `gzip` for 90% disk space reduction.
 - **`src/skills/uaf_skill_audit.py`**: Deep packaged skill/harness audit helper. Resolves each `SKILL.md` implementation target and maps executable skills to test evidence.
+- **`src/skills/uaf_skill_quality.py`**: Packaged skill quality gate. Verifies each skill's support-file wiring, bundled usage reference, minimal workflow example, executable smoke script, and implementation target resolution.
 - **`src/api/server.py`**: An optional FastAPI webhook receiver using `aiosqlite` with WAL mode for external host callbacks.
-- **`skills/`**: Packaged UAF-native skill and harness catalog. Add a new skill by creating `skills/<skill-folder>/SKILL.md`.
+- **`skills/`**: Packaged UAF-native skill and harness catalog. Add a new skill by creating `skills/<skill-folder>/SKILL.md`, `references/usage.md`, `examples/minimal-workflow.md`, and `scripts/smoke_check.py`.
 
 ## Integration Contracts
 External agents should exchange structured data through the contracts module instead of ad-hoc dictionaries:
@@ -98,7 +99,7 @@ External agents should exchange structured data through the contracts module ins
 - Use workflow `metadata["retention_policy"]` to trim repeated-run state when requested: `goal_events`, `artifact_events`, `memory_events`, and `snapshots` are supported.
 - Use `WorkflowDispatchResult.task_results` and `WorkflowDispatchResult.gate_results` for worker status, optional webhook reporting metadata, and reviewer/QA/security/release gate results.
 - For Codex and Antigravity Windows app integrations, call `src.core.app_bridge.create_app_request(...)` and `dispatch_app_request(...)` directly instead of shelling through the CLI.
-- Add new UAF skills and harnesses as `skills/<skill-name>/SKILL.md`. The packaged skill folder is the source of truth.
+- Add new UAF skills and harnesses as `skills/<skill-name>/SKILL.md` plus support files under `references/`, `examples/`, and `scripts/`. The packaged skill folder is the source of truth.
 - Keep each packaged `SKILL.md` operational: include behavior steps, `Required outputs`, `Common mistakes`, and `UAF implementation targets` so the catalog rejects shallow notes.
 - Use `src.skills.uaf_skill_catalog` to list/read packaged UAF skill folders. External systems are development references only, not runtime dependencies.
 

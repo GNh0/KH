@@ -7,6 +7,12 @@ description: Use when a UAF workflow needs failing-test-first implementation, sy
 
 This is a personal UAF quality harness for testing, debugging, and verification workflows. It complements the sandbox evaluator by defining when evidence is required.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Reference basis
 
 - Personal quality workflow: test-driven development, systematic debugging, requesting code review, receiving code review, and verification before completion.

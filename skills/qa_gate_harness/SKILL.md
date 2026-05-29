@@ -7,6 +7,12 @@ description: Use when a UAF workflow needs QA checks, regression evidence, manua
 
 This is a UAF-native QA harness for regression and verification workflow patterns. It describes portable QA gates without requiring bundled browser tooling.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Pattern basis
 
 - QA workflow: lead review, reproduce-fix-verify loops, regression test creation, and report-only QA mode.

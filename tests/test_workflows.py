@@ -725,6 +725,99 @@ class WorkflowDispatchTests(unittest.TestCase):
             else:
                 os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
 
+    def test_role_execution_audit_requirement_is_satisfied_after_review_roles(self):
+        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                runtime_root = Path(tmp) / "runtime"
+                project_dir.mkdir()
+                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
+                metadata = build_default_role_metadata()
+                metadata["thread_id"] = "role-audit-required"
+                metadata["goal"] = {
+                    "objective": "prove role audit evidence can close a workflow",
+                    "status": "active",
+                    "evidence_required": [
+                        "design_doc",
+                        "workflow dispatch completed",
+                        "role execution audited",
+                    ],
+                    "evidence": [],
+                }
+
+                result = dispatch_project_workflow(
+                    project_dir=str(project_dir),
+                    file_list=["README.md"],
+                    design_doc="# Role Audit Trial\nVerify post-review role audit evidence.",
+                    platform_mode="local",
+                    metadata=metadata,
+                )
+
+                self.assertTrue(result.success, result.to_dict())
+                self.assertEqual(result.metadata["goal"]["status"], "complete")
+                self.assertIn("role execution audited", result.metadata["goal"]["evidence"])
+                self.assertEqual(result.metadata["role_execution_audit"]["status"], "passed")
+                self.assertEqual(result.metadata["role_orchestration"]["execution_model"], "dag-asyncio-role-waves")
+        finally:
+            if original_runtime_root is None:
+                os.environ.pop("UAF_RUNTIME_ROOT", None)
+            else:
+                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
+
+    def test_software_profile_exports_manual_when_explicitly_requested(self):
+        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "software"
+                runtime_root = Path(tmp) / "runtime"
+                project_dir.mkdir()
+                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
+                metadata = build_default_role_metadata()
+                metadata.update({
+                    "thread_id": "software-manual-required",
+                    "domain_hint": "software development",
+                    "deliverable_profile": "software-development",
+                    "export_manual": True,
+                    "manual_revision": "Rev. 1.2",
+                    "manual_revision_note": "Regression coverage for explicit manual export.",
+                    "goal": {
+                        "objective": "export software manual when requested",
+                        "status": "active",
+                        "evidence_required": [
+                            "design_doc",
+                            "workflow dispatch completed",
+                            "functional specification exported",
+                            "development design exported",
+                            "manual exported",
+                            "role execution audited",
+                        ],
+                        "evidence": [],
+                    },
+                })
+
+                result = dispatch_project_workflow(
+                    project_dir=str(project_dir),
+                    file_list=["src/app.py"],
+                    design_doc="# Software Manual Trial\nExport functional and operator documents.",
+                    platform_mode="local",
+                    metadata=metadata,
+                )
+                deliverables = result.metadata["deliverable_exports"]["deliverables"]
+                manual_records = [item for item in deliverables if item["kind"] == "manual"]
+
+                self.assertTrue(result.success, result.to_dict())
+                self.assertEqual(result.metadata["goal"]["status"], "complete")
+                self.assertIn("manual exported", result.metadata["goal"]["evidence"])
+                self.assertIn("role execution audited", result.metadata["goal"]["evidence"])
+                self.assertEqual(len(manual_records), 1)
+                self.assertTrue(zipfile.is_zipfile(manual_records[0]["path"]))
+        finally:
+            if original_runtime_root is None:
+                os.environ.pop("UAF_RUNTIME_ROOT", None)
+            else:
+                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
+
     def test_workflow_loads_memory_context_into_metadata_and_goal_ledger(self):
         metadata = build_default_role_metadata()
         metadata["enable_memory"] = True

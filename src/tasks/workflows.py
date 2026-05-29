@@ -33,6 +33,11 @@ from src.tasks.runners import (
 )
 
 
+POST_REVIEW_EVIDENCE_KEYS = {
+    "role execution audited",
+}
+
+
 def _task_id(file_name: str) -> str:
     return task_id_for_file(file_name)
 
@@ -200,6 +205,36 @@ def _goal_with_role_orchestration(goal: dict, role_metadata: dict) -> dict:
     metadata["role_orchestration"] = json.loads(json.dumps(role_metadata.get("summary", {})))
     metadata["role_task_results"] = json.loads(json.dumps(role_metadata.get("results", [])))
     updated_goal["metadata"] = metadata
+    return updated_goal
+
+
+def _goal_for_review_gates(goal: dict) -> dict:
+    """Remove post-review evidence from pre-release gate blocking checks."""
+    if not goal:
+        return goal
+
+    updated_goal = dict(goal)
+    metadata = dict(updated_goal.get("metadata", {}))
+    missing = list(metadata.get("missing_evidence", []) or [])
+    deferred = [
+        item for item in missing
+        if item in POST_REVIEW_EVIDENCE_KEYS
+    ]
+    if not deferred:
+        return goal
+
+    remaining = [
+        item for item in missing
+        if item not in POST_REVIEW_EVIDENCE_KEYS
+    ]
+    metadata["missing_evidence"] = remaining
+    metadata["deferred_post_review_evidence"] = deferred
+    updated_goal["metadata"] = metadata
+    if not remaining and updated_goal.get("status") == "blocked":
+        blocked_reason = updated_goal.get("blocked_reason", "")
+        if blocked_reason.startswith("missing required evidence:"):
+            updated_goal["status"] = "complete"
+            updated_goal["blocked_reason"] = ""
     return updated_goal
 
 
@@ -535,7 +570,7 @@ async def async_project_workflow(
         result.to_dict()
         for result in ordered_results
     ]
-    review_role_context["goal"] = evaluated_goal
+    review_role_context["goal"] = _goal_for_review_gates(evaluated_goal)
     review_role_orchestration = await run_review_release_roles(review_role_context)
     review_role_task_results = _role_task_results(review_role_orchestration)
     role_metadata = _role_orchestration_metadata(pre_role_orchestration, review_role_orchestration)
@@ -556,6 +591,16 @@ async def async_project_workflow(
     gate_evidence = _gate_result_evidence(gate_results)
     post_gate_evidence = gate_evidence + list(role_execution_audit.get("evidence", []))
     final_goal = _goal_with_added_evidence(evaluated_goal, post_gate_evidence)
+    role_success = (
+        pre_role_orchestration.get("success")
+        and review_role_orchestration.get("success")
+        and role_execution_audit.get("status") == "passed"
+    )
+    final_goal = evaluate_goal_evidence(
+        final_goal,
+        workflow_evidence=[],
+        workflow_success=role_success and task_success and check_success,
+    )
     if ledger and final_goal:
         ledger.append_event(
             "evidence_added",
@@ -589,11 +634,6 @@ async def async_project_workflow(
         thread_id=thread_id,
         metadata=metadata,
         memory_store_metadata=memory_store_metadata,
-    )
-    role_success = (
-        pre_role_orchestration.get("success")
-        and review_role_orchestration.get("success")
-        and role_execution_audit.get("status") == "passed"
     )
     success = role_success and task_success and check_success
     if final_goal:

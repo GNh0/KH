@@ -7,6 +7,12 @@ description: Use when a UAF workflow needs structured pre-landing review gates, 
 
 This is a UAF-native review harness for structured review workflow patterns. It must not call or require an external review runtime at execution time.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Pattern basis
 
 - Review workflow: pre-landing review, completeness checks, severity-ranked findings, auto-fix separation, and final readiness dashboards.

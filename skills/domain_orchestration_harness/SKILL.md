@@ -7,6 +7,12 @@ description: Use when a UAF workflow must handle a non-code or cross-domain obje
 
 This harness makes UAF domain orchestration portable beyond software development. Every objective should be classified into a `DomainProfile`, converted into a mandatory `WorkDesign`, backed by internal design artifacts, and exported as user-facing deliverables that match the task type before execution or final release decisions.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## When To Use
 
 Use this harness when:

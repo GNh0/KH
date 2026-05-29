@@ -7,6 +7,12 @@ description: Use when a UAF workflow needs a code quality dashboard, test health
 
 This is a UAF-native health harness for quality dashboard workflow patterns. It turns verification commands into a compact quality dashboard.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Pattern basis
 
 - Health workflow: quality dashboard, type checker, linter, tests, dead code checks, weighted scores, and trend-friendly summaries.

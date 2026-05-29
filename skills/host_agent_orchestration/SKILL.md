@@ -7,6 +7,12 @@ description: Use when designing portable UAF host agent loops, subagent delegati
 
 This is a personal UAF host orchestration harness. It packages reusable agent, subagent, permission, hook, persistence, structured output, and observability patterns without requiring any installed vendor SDK, Gemini plugin directory, or local user configuration at runtime.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Reference basis
 
 - Host orchestration patterns: agent profiles, conversation records, connections, subagents, MCP tools, tool permissions, safety policies, hooks, error recovery, persistence, structured output, and observability.

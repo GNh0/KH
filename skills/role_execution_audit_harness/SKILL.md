@@ -7,6 +7,12 @@ description: Use when UAF role DAG execution must prove roles actually ran, prod
 
 This harness audits role orchestration evidence after DAG execution. It answers whether roles such as CEO, advisor, architect, controller, reviewers, QA, security, and release actually produced role task results and artifacts.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Workflow
 
 1. Inspect `WorkflowDispatchResult.metadata["role_orchestration"]` and `role_task_results`.

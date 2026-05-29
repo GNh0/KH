@@ -7,6 +7,12 @@ description: Use when UAF workflows need requirements, deliverables, evidence ke
 
 This harness builds an internal traceability matrix linking requirements, deliverables, evidence, and gates. The matrix is stored in metadata by default because it is workflow evidence, not automatically a user-facing deliverable.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Workflow
 
 1. Build rows from `WorkDesign.deliverables`, exported deliverable records, evidence keys, and review gates.

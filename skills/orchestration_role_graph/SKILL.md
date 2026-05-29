@@ -7,6 +7,12 @@ description: Use when inspecting or extending the default UAF orchestration role
 
 This is the UAF-native role contract for multi-agent orchestration. It makes leadership, advisory, design, implementation, review, verification, and release responsibilities explicit and executable instead of leaving them as prompt-only assumptions.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Required default roles
 
 - `ceo`: owns business intent, priority, success criteria, and tradeoff approval.

@@ -8,6 +8,12 @@ description: Use when listing, reading, or adding packaged UAF skills and harnes
 UAF skills are packaged inside this repository under `skills/<skill-name>/SKILL.md`.
 Do not depend on installed external skill folders at runtime.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Add a skill
 
 1. Create `skills/<skill-name>/`.

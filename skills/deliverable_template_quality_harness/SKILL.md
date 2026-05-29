@@ -7,6 +7,12 @@ description: Use when UAF-generated user deliverables need template completeness
 
 This harness checks user-facing deliverables against recognizable document and spreadsheet templates. It is for quality evidence, not for creating extra user documents about UAF internals.
 
+## Support files
+
+- Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+
 ## Workflow
 
 1. Inspect the deliverable export plan from `WorkflowDispatchResult.metadata["deliverable_exports"]`.
