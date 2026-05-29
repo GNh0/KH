@@ -169,21 +169,21 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
             "development-flow",
             1,
             "Build login with tests, review, verification, and branch finishing.",
-            "Run this through the lifecycle: design first, isolated work area, failing test, implementation, review gates, verification evidence, then branch finishing.",
+            "Run this through the lifecycle: design first, choose workspace_strategy such as project-local-worktree or host-worktree before implementation, then failing test, implementation, review gates, verification evidence, and branch finishing.",
             "development-lifecycle-harness",
-            ["tdd", "verification"],
+            ["workspace_strategy", "tdd", "verification"],
             "procedure_policy",
-            ["test", "verification"],
+            ["workspace_strategy", "worktree", "test", "verification"],
         ),
         _skill_turn(
             "development-flow",
             2,
             "Split the login work across independent workers and aggregate results.",
-            "Fan out only independent tasks, keep write scopes bounded, then fan in task results with evidence before deciding whether the workflow can continue.",
+            "Fan out only independent tasks after selecting project-local-worktree or host-worktree for concurrent write workers, keep write scopes bounded, then fan in task results with evidence before deciding whether the workflow can continue.",
             "parallel-orchestration-harness",
-            ["fan_out", "fan_in"],
+            ["workspace_strategy", "fan_out", "fan_in"],
             "skill_call",
-            ["fan", "evidence"],
+            ["worktree", "fan", "evidence"],
         ),
         _skill_turn(
             "development-flow",
@@ -507,8 +507,8 @@ def _stress_skill_side_extras() -> List[SkillSideTurn]:
     add(_skill_turn(
         "live-dev-lifecycle", 1,
         "We are building auth. Start from design, TDD, review, verification, and branch finish.",
-        "Run the development lifecycle with design, TDD, review, verification, and branch finishing evidence before completion.",
-        "development-lifecycle-harness", ["work_design", "tdd_red_green", "verification"], "procedure_policy", ["design", "verification"],
+        "Run the development lifecycle with design, workspace_strategy, TDD, review, verification, and branch finishing evidence before completion.",
+        "development-lifecycle-harness", ["workspace_strategy", "work_design", "tdd_red_green", "verification"], "procedure_policy", ["workspace_strategy", "design", "verification"],
     ))
     add(_skill_turn(
         "live-dev-lifecycle", 2,

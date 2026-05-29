@@ -38,7 +38,7 @@ KH UAF separates reusable skills from per-project workflow artifacts.
 - User-facing design and delivery artifacts should go under the target project's `docs/` folder.
 - Runtime state, goal ledger, memory candidates, snapshots, traces, and handoff metadata default to the external KH-UAF runtime store.
 - Set `UAF_PROJECT_LOCAL_STATE=1` when a project should carry its own `.uaf/` state for portable project memory or resume handoff.
-- Git worktrees should live under `.worktrees/` when isolated implementation or parallel file-editing workers are useful.
+- Git-backed implementation should prefer an isolated workspace by default. Use host worktrees when the host provides them; otherwise use project-local `.worktrees/<task>` or an isolated branch. Git worktrees should live under `.worktrees/` when KH creates project-local isolation. Use the current checkout only for docs-only edits, a single-file small patch, or explicit in-place user instruction, and report `workspace_strategy` in the final status.
 
 KH does not require `.superpowers/` or `docs/superpowers/` paths. If Superpowers is also installed, those folders are Superpowers-owned project artifacts; KH-owned local state should use `.uaf/` and KH deliverables should use `docs/`.
 

@@ -67,6 +67,36 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("same mutable checkout", subagent)
         self.assertIn("No concurrent file-editing workers", lifecycle)
 
+    def test_worktree_first_policy_is_visible_to_hosts(self):
+        lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
+        parallel = read_text("skills/parallel_orchestration_harness/SKILL.md")
+        router = read_text("skills/request_complexity_router/SKILL.md")
+        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
+        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+
+        self.assertIn(
+            "Default to an isolated workspace before implementation in a Git-backed project.",
+            lifecycle,
+        )
+        self.assertIn(
+            "In-place edits are allowed only for documentation-only changes, a single-file small patch, or explicit user instruction.",
+            lifecycle,
+        )
+        self.assertIn(
+            "`workspace_strategy`: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`",
+            lifecycle,
+        )
+        self.assertIn(
+            "For concurrent write workers, `project-local-worktree` is the default safe strategy.",
+            parallel,
+        )
+        self.assertIn(
+            "Workspace strategy is a cross-cutting output for implementation routes.",
+            router,
+        )
+        self.assertIn("Before implementation in a Git-backed project", prompts)
+        self.assertIn("Report `workspace_strategy`", prompts)
+
     def test_plan_work_review_compound_is_visible_to_plugin_users(self):
         readme = read_text("README.md")
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")

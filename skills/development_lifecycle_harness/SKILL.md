@@ -18,10 +18,18 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 
 - Personal skillbook workflow: brainstorming, isolated workspaces, writing plans, subagent-driven development, executing plans, test-driven development, requesting code review, receiving code review, and finishing a development branch.
 
+## Workspace Strategy Policy
+
+- Default to an isolated workspace before implementation in a Git-backed project.
+- Prefer a host-provided worktree when Codex, Antigravity-style, Claude Code, or another host exposes one; otherwise use project-local `.worktrees/<task-or-branch>` or an isolated branch.
+- Treat TDD implementation, multi-file edits, large changes, parallel implementers, and user-work protection as strong triggers for `project-local-worktree` or `host-worktree`.
+- In-place edits are allowed only for documentation-only changes, a single-file small patch, or explicit user instruction.
+- Final status must include `workspace_strategy`: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch` plus path, branch, host workspace, or in-place rationale.
+
 ## Workflow
 
 1. Clarify the intended outcome and constraints before changing behavior.
-2. Create or select an isolated workspace when the task can disturb unrelated work; for parallel edits prefer project-local `.worktrees/<task-or-branch>` or an equivalent isolated workspace.
+2. Choose and record `workspace_strategy` before editing; for implementation in a Git-backed project, prefer isolated workspace unless an in-place exception applies.
 3. Write a short implementation plan for multi-step work with exact files, tests, and verification commands.
 4. For behavior changes, add or update a failing test before production edits.
 5. Implement the smallest change that satisfies the test and the user requirement.
@@ -34,6 +42,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 
 - No broad refactor unless the plan requires it.
 - No completion claim without fresh verification output.
+- No implementation in the current checkout unless the task matches an in-place exception or the user explicitly requested it.
 - No concurrent file-editing workers in one mutable checkout without a non-overlap proof.
 - No branch finishing until the working tree diff matches the requested scope.
 
@@ -52,6 +61,7 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 ## Required outputs
 
 - Implementation plan for multi-step work, including files, tests, and verification commands.
+- `workspace_strategy` with path, branch, host workspace, or in-place rationale.
 - Failing-first test or smoke evidence for behavior changes when practical.
 - Review findings or an explicit no-findings review note.
 - Fresh verification output and final integration status: local only, committed, pushed, or PR-ready.

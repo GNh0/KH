@@ -14,7 +14,7 @@ Do not use this skill only because it is available. Use it when the current task
 
 - User objective, success criteria, and any explicit completion conditions.
 - Target workspace, write boundaries, and whether user-facing deliverables are expected.
-- Isolation strategy for parallel edits: same checkout only for read-only or proven non-overlapping writes; otherwise use `.worktrees/<task>`, an isolated branch, or an external workspace.
+- Isolation strategy for parallel edits: same checkout only for read-only or proven non-overlapping writes; otherwise use `.worktrees/<task>`, an isolated branch, or an external workspace. For concurrent write workers, `project-local-worktree` is the default safe strategy.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
 - Execution level: `python-module`.
@@ -41,6 +41,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Skill name and execution level used for the run.
 - Concrete input summary and target workspace or artifact paths.
 - Isolation evidence: worktree root, branch/workspace names, or explicit same-checkout read-only/non-overlap rationale.
+- Final `workspace_strategy`: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Verification command or review evidence, including failures and blocked states.

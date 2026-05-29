@@ -24,7 +24,8 @@ Source label: Request complexity routing.
 5. Escalate to GoalState, role DAG, and review/QA gates for implementation, deliverables, persistent state, or high-impact decisions.
 6. For ambiguous prompts, ask a short clarification instead of starting a full workflow.
 7. Keep `token-optimizer` available as cross-cutting infrastructure, but only apply compression when content is large or log-like.
-8. Do not grow this into a large keyword dictionary. Prefer intent order: conceptual questions stay light, concrete build/review/design work becomes heavy, and destructive or regulated advice overrides to high-risk.
+8. Workspace strategy is a cross-cutting output for implementation routes. Prefer `host-worktree`, `project-local-worktree`, or `isolated-branch` for Git-backed implementation unless the task is documentation-only, a single-file small patch, or explicitly in-place.
+9. Do not grow this into a large keyword dictionary. Prefer intent order: conceptual questions stay light, concrete build/review/design work becomes heavy, and destructive or regulated advice overrides to high-risk.
 
 ## External Benchmark Recipe
 
@@ -42,6 +43,7 @@ Pressure scenario: a user asks "삼성 괜찮아?" without context. The host mus
 
 - A classification with `complexity`, `domain`, `recommended_execution`, and confidence.
 - Any required harnesses and evidence keys when the task escalates.
+- For implementation routes, a `workspace_strategy` recommendation: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`.
 - A clarification path when context is insufficient.
 - A short reason for the chosen depth.
 

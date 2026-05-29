@@ -19,6 +19,7 @@ Keep the router principle-based. Keyword rules are only guardrails for obvious d
 - Whether the domain is investment, legal, medical, security, software, product design, operations, or general.
 - Whether the request has external impact: money, health, law, credentials, destructive commands, file edits, long-running work, or published deliverables.
 - Whether the prompt is ambiguous enough to require a clarification before choosing an execution depth.
+- Whether implementation should use `host-worktree`, `project-local-worktree`, `isolated-branch`, or an allowed `current-checkout` exception.
 - Execution level: `python-module`.
 - Implementation targets:
   - `src.orchestration.request_classifier.classify_request`
@@ -35,14 +36,16 @@ Keep the router principle-based. Keyword rules are only guardrails for obvious d
 4. If the result is `medium`, use only the needed skill, source check, or small Python module; gather narrow evidence such as `source_summary` or `comparison_basis`.
 5. If the result is `heavy`, create objective/evidence state and use the relevant domain, quality, review, and QA harnesses.
 6. For software implementation or bugfix work, include TDD evidence such as `tdd_red_green` and `test_evidence`; review, QC, and QA are quality gates, not substitutes for TDD.
-7. If the result is `high_risk`, require explicit scope, evidence, risk disclosure, scenario analysis, and review gates before presenting a decision.
-8. If the result is `ambiguous`, ask for the missing domain or artifact context instead of guessing.
-9. Keep `token-optimizer` as cross-cutting infrastructure; only compress when the content is long, log-like, or token-expensive.
+7. For Git-backed implementation routes, recommend `host-worktree`, `project-local-worktree`, or `isolated-branch` unless the task is documentation-only, a single-file small patch, or explicitly in-place.
+8. If the result is `high_risk`, require explicit scope, evidence, risk disclosure, scenario analysis, and review gates before presenting a decision.
+9. If the result is `ambiguous`, ask for the missing domain or artifact context instead of guessing.
+10. Keep `token-optimizer` as cross-cutting infrastructure; only compress when the content is long, log-like, or token-expensive.
 
 ## Evidence to produce
 
 - Skill name and execution level used for the run.
 - Classification JSON or concise equivalent: `complexity`, `domain`, `recommended_execution`, `required_harnesses`, `evidence_required`, and confidence.
+- Workspace strategy is a cross-cutting output for implementation routes.
 - Trigger reason: conceptual, summary/comparison, implementation/design, high-risk, or ambiguous.
 - If escalated, the actual runtime path and required harnesses.
 - If not escalated, a note that the request stayed light or medium intentionally.

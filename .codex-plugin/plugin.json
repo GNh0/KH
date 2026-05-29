@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.4",
+  "version": "2.9.5",
   "description": "KH Universal Agent Framework skills, brainstorming handoff, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
@@ -43,6 +43,8 @@
     "defaultPrompt": [
       "Use KH UAF to plan and run this project.",
       "For new product, SaaS, feature, or unclear design requests, start with KH brainstorming-harness.",
+      "Before implementation in a Git-backed project, prefer a KH isolated workspace or `.worktrees/<task>` unless the change is docs-only, single-file, or explicitly in-place.",
+      "Report `workspace_strategy` as `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch` in final status for implementation work.",
       "After Plan, Work, and Review, run KH compound-engineering-harness when reusable learning, scoped memory, or regression checks may be needed.",
       "When a workflow produces a reusable lesson, finish with KH workflow-skill-distiller, memory-state-harness, or a scenario regression.",
       "List the KH UAF skills available here.",

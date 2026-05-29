@@ -18,12 +18,13 @@ This is the portable UAF replacement for host and personal skillbook parallel di
 
 1. Split the project goal into role responsibilities and independent work items.
 2. Decide isolation before dispatch: use project-local `.worktrees/<task-or-branch>` or a separate branch/workspace when parallel workers may edit files.
-3. Build a role dependency DAG from the default or supplied role profiles.
-4. Run all dependency-ready role tasks in the same wave concurrently.
-5. Enqueue file/task work with a bounded worker count.
-6. Dispatch each item through an adapter contract.
-7. Collect all `WorkflowTaskResult` or `AdapterResult` values before reporting completion.
-8. Preserve partial failures and blocked roles as structured results instead of hiding them in logs.
+3. For concurrent write workers, `project-local-worktree` is the default safe strategy.
+4. Build a role dependency DAG from the default or supplied role profiles.
+5. Run all dependency-ready role tasks in the same wave concurrently.
+6. Enqueue file/task work with a bounded worker count.
+7. Dispatch each item through an adapter contract.
+8. Collect all `WorkflowTaskResult` or `AdapterResult` values before reporting completion.
+9. Preserve partial failures and blocked roles as structured results instead of hiding them in logs.
 
 ## Required metadata
 
@@ -34,6 +35,7 @@ This is the portable UAF replacement for host and personal skillbook parallel di
 - per-result `metadata.execution_model = parallel-role-stage`
 - `isolation.workspace_strategy` when workers edit files: `same-worktree-readonly`, `isolated-branch`, `project-local-worktree`, or `external-workspace`
 - `isolation.worktree_root = .worktrees` when project-local worktrees are used
+- final report `workspace_strategy`: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`
 
 ## External Benchmark Recipe
 

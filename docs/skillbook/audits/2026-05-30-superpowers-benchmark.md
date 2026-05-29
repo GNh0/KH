@@ -70,3 +70,10 @@ Superpowers is strong at agent behavior activation: short trigger descriptions, 
 - Updated plugin prompts so post-review learning routes through KH `compound-engineering-harness`.
 - Documented the KH loop as Plan -> Work -> Review -> Compound with scoped memory and regression capture.
 - Documented role-stack coverage for discovery, CEO/advisor challenge, engineering/design/DX review, browser/QA/release, security guardrails, learning, cross-model review, and checkpoint/restore.
+
+## Current 2.9.5 Changes
+
+- Strengthened KH worktree isolation from optional guidance to the default expectation for Git-backed implementation.
+- Added a plugin-level prompt requiring isolated workspaces before implementation unless the task is docs-only, a single-file small patch, or explicitly in-place.
+- Required final implementation status to report `workspace_strategy`: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`.
+- Clarified that concurrent write workers should treat `project-local-worktree` as the default safe strategy.
