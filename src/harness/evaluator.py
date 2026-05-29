@@ -1,3 +1,4 @@
+from src.contracts import HarnessResult
 from src.harness.sandbox import CodeSandbox
 
 class Evaluator:
@@ -39,6 +40,24 @@ class Evaluator:
             feedback["message"] = "[FAIL] 테스트 실패. 제공된 에러 메시지(stderr)를 분석하여 코드를 수정하세요."
             
         return feedback
+
+    def evaluate_code_result(self, agent_code: str, test_code: str) -> HarnessResult:
+        """
+        Evaluate code and return the standard UAF HarnessResult contract.
+        """
+        feedback = self.evaluate_code(agent_code, test_code)
+        return HarnessResult(
+            success=bool(feedback["passed"]),
+            stdout=feedback["stdout"],
+            stderr=feedback["stderr"],
+            exit_code=0 if feedback["passed"] else 1,
+            execution_time=float(feedback["execution_time"]),
+            metadata={
+                "message": feedback["message"],
+                "passed": bool(feedback["passed"]),
+                "harness": "Evaluator.evaluate_code_result",
+            },
+        )
 
 if __name__ == "__main__":
     # 자체 테스트

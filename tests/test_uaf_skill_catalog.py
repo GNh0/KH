@@ -8,7 +8,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.skills.uaf_skill_catalog import collect_packaged_skills, read_packaged_skill
+from src.skills.uaf_skill_catalog import (
+    _validated_execution_levels,
+    collect_packaged_skills,
+    read_packaged_skill,
+)
 
 
 CORE_SKILLS = {
@@ -91,7 +95,14 @@ class UafSkillCatalogTests(unittest.TestCase):
         skill_catalog = next(skill for skill in result["skills"] if skill["name"] == "skill-catalog")
         command_policy = next(skill for skill in result["skills"] if skill["name"] == "command-hook-policy-harness")
         self.assertEqual(skill_catalog["execution_level"], "python-module")
-        self.assertEqual(command_policy["execution_level"], "procedure-policy")
+        self.assertEqual(command_policy["execution_level"], "python-module")
+
+    def test_catalog_has_execution_level_for_every_packaged_skill(self):
+        result = collect_packaged_skills()
+        levels = _validated_execution_levels()
+        names = {skill["name"] for skill in result["skills"]}
+
+        self.assertEqual(set(levels).intersection(names), names)
 
     def test_packaged_skill_targets_resolve_to_repo_code(self):
         for skill_dir in sorted(Path("skills").iterdir(), key=lambda path: path.name):

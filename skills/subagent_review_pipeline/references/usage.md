@@ -21,6 +21,8 @@ Do not use this skill only because it is available. Use it when the current task
   - `src.tasks.workflows`
   - `src.orchestration.roles`
   - `src.orchestration.agent_loop`
+  - `src.orchestration.role_orchestrator.RoleOrchestrator`
+  - `src.orchestration.gate_evaluators.normalize_review_findings`
   - `src.contracts.AdapterRequest`
   - `src.contracts.AdapterResult`
   - `src.skills.uaf_skill_catalog`
@@ -29,7 +31,7 @@ Do not use this skill only because it is available. Use it when the current task
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `subagent-review-pipeline`.
-3. Combine the listed Python implementation targets with the written workflow contract, then record which parts ran as code and which parts were applied procedurally.
+3. Dispatch or simulate bounded role tasks, preserve `success`, `failed`, and `blocked` status, and normalize reviewer findings before aggregation.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
 5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 6. Report the difference between capability available in the repository and behavior actually executed in the current run.

@@ -23,10 +23,11 @@ This is a UAF-native review harness for structured review workflow patterns. It 
 1. Read the design document, changed files, task results, and verification evidence.
 2. Check spec compliance before code quality.
 3. Require normalized implementation evidence; a successful task status alone is not enough to pass review.
-4. Report findings with severity, file path, line when available, reason, and suggested fix.
+4. Report findings with `src.orchestration.gate_evaluators.build_review_finding` so severity, file path, line when available, reason, and suggested fix are normalized.
 5. Separate findings that can be auto-fixed from findings that require user or owner approval.
-6. Produce a gate result for `spec-reviewer`, `code-quality-reviewer`, and `release-manager`.
-7. Preserve partial failures instead of collapsing them into a single text log.
+6. Fail `security-reviewer` when security findings are present so `release-manager` blocks release and preserves the upstream finding text.
+7. Produce a gate result for `spec-reviewer`, `code-quality-reviewer`, and `release-manager`.
+8. Preserve partial failures instead of collapsing them into a single text log.
 
 ## Required outputs
 
@@ -46,9 +47,13 @@ This is a UAF-native review harness for structured review workflow patterns. It 
 ## UAF implementation targets
 
 - `src.orchestration.roles`
-- `src.orchestration.gate_evaluators`
+- `src.orchestration.gate_evaluators.build_review_finding`
+- `src.orchestration.gate_evaluators.normalize_review_findings`
+- `src.orchestration.gate_evaluators.evaluate_spec_review_gate`
+- `src.orchestration.gate_evaluators.evaluate_code_quality_gate`
+- `src.orchestration.gate_evaluators.evaluate_release_gate`
 - `src.orchestration.evidence_producers`
 - `src.contracts.WorkflowDispatchResult`
 - `src.contracts.WorkflowTaskResult`
 - `src.platforms.dispatcher_factory`
-- `tests`
+- `tests.test_gate_evaluators`

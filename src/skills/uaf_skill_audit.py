@@ -1,4 +1,5 @@
 import importlib
+import argparse
 import json
 import os
 import re
@@ -61,12 +62,14 @@ def resolve_target(ref: str, project_root: Path = PROJECT_ROOT) -> Dict[str, Any
     }
 
 
-def audit_packaged_skills(project_root: Path = PROJECT_ROOT) -> Dict[str, Any]:
+def audit_packaged_skills(project_root: Path = PROJECT_ROOT, skill_name: str = "") -> Dict[str, Any]:
     catalog = collect_packaged_skills(str(project_root / "skills"))
     test_index = _build_test_index(project_root / "tests")
     skill_audits = []
 
     for skill in catalog["skills"]:
+        if skill_name and skill["name"] != skill_name:
+            continue
         skill_path = project_root / "skills" / skill["relative_path"]
         content = skill_path.read_text(encoding="utf-8")
         targets = extract_implementation_targets(content)
@@ -212,8 +215,33 @@ def _coverage_tokens(ref: str, target: Dict[str, Any]) -> List[str]:
 
 
 def main() -> int:
-    report = audit_packaged_skills()
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    parser = argparse.ArgumentParser(description="Audit packaged KH UAF skill implementation targets and tests.")
+    parser.add_argument("--summary", action="store_true", help="Print only aggregate audit status.")
+    parser.add_argument("--skill", default="", help="Audit one skill by frontmatter name.")
+    args = parser.parse_args()
+
+    report = audit_packaged_skills(skill_name=args.skill)
+    if args.skill and report["total_skills"] == 0:
+        payload = {
+            "success": False,
+            "total_skills": 0,
+            "failed_skills": [args.skill],
+            "error": f"skill not found: {args.skill}",
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 1
+    if args.summary:
+        print(json.dumps({
+            "success": report["success"],
+            "total_skills": report["total_skills"],
+            "failed_skills": [
+                skill["name"]
+                for skill in report["skills"]
+                if skill["status"] != "passed"
+            ],
+        }, ensure_ascii=False, indent=2))
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["success"] else 1
 
 

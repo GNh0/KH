@@ -11,19 +11,22 @@ The agent must decide whether `quality-gates-harness` applies, run or apply it a
 1. Load `SKILL.md` and confirm the trigger applies.
 2. Read `references/usage.md` before doing the work.
 3. Collect the user objective, workspace boundary, expected outputs, and evidence requirements.
-4. Follow the `procedure-policy` execution pattern for this skill.
-5. Write or report the resulting artifact, state entry, gate result, or decision evidence.
+4. Follow the `hybrid-harness` execution pattern: apply failing-first rules and use gate evaluator helpers for structured evidence.
+5. Write or report the resulting finding, QA check, gate result, or decision evidence.
 6. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
 
 - `skill`: `quality-gates-harness`.
-- `execution_level`: `procedure-policy`.
+- `execution_level`: `hybrid-harness`.
 - `support_reference_read`: `references/usage.md`.
 - `implementation_targets`:
   - `src.harness.evaluator`
   - `src.harness.sandbox`
   - `src.core.runner`
+  - `src.orchestration.gate_evaluators.build_review_finding`
+  - `src.orchestration.gate_evaluators.build_qa_check`
+  - `src.orchestration.gate_evaluators.evaluate_qa_checks`
   - `tests`
   - `src.skills.uaf_skill_catalog`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.

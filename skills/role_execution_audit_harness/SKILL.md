@@ -17,8 +17,8 @@ This harness audits role orchestration evidence after DAG execution. It answers 
 
 1. Inspect `WorkflowDispatchResult.metadata["role_orchestration"]` and `role_task_results`.
 2. Require `execution_model = dag-asyncio-role-waves`, successful summary state, execution waves, and at least one parallel wave for the default role graph.
-3. Verify required roles have successful task results.
-4. Verify each required role records `metadata.role_artifacts` when project context is available.
+3. Verify required roles from the default role graph have successful task results, including `product-strategist`; require `implementer` when implementation work was requested or implementer task results are present.
+4. Verify each required role records `metadata.role_artifacts` when project context is available; implementer task results may satisfy this with explicit completion evidence.
 5. Attach audit findings to metadata and goal evidence rather than creating user-facing audit documents.
 
 ## Required outputs

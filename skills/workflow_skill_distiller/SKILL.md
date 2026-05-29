@@ -15,17 +15,20 @@ This skill defines how UAF captures workflows as portable skills. A new skill sh
 
 ## Workflow
 
-1. Extract the trigger condition from the repeated workflow.
-2. Keep `SKILL.md` concise and procedural.
-3. Put heavy examples in `references/` and deterministic helpers in `scripts/`.
-4. Add tests or smoke checks when the skill is surfaced through Python or MCP.
+1. Call `src.skills.workflow_distiller.should_distill_workflow` to reject one-off workflows before writing a skill.
+2. Extract the trigger condition from the repeated workflow and keep it in `Use when...` form.
+3. Call `src.skills.workflow_distiller.build_skill_scaffold` when creating a new skill folder skeleton, passing the intended execution level when known.
+4. Keep `SKILL.md` concise and procedural.
+5. Put heavy examples in `references/` and deterministic helpers in `scripts/`.
+6. Add tests or smoke checks when the skill is surfaced through Python or MCP.
+7. For generated skills, run the generated `scripts/smoke_check.py` from the generated skill folder and pass `UAF_REPO_ROOT` when the skill is outside the repository tree.
 
 ## Required outputs
 
 - New or updated `skills/<skill-name>/SKILL.md` with trigger-focused frontmatter.
 - Explicit workflow, required outputs, common mistakes, and implementation targets.
 - Support-file guidance inside SKILL.md when `references/`, `scripts/`, or `assets/` are used.
-- Catalog validation and targeted tests for any Python-backed behavior.
+- Catalog validation, robust smoke target resolution, and targeted tests for any Python-backed behavior.
 
 ## Common mistakes
 
@@ -36,6 +39,9 @@ This skill defines how UAF captures workflows as portable skills. A new skill sh
 
 ## UAF implementation targets
 
+- `src.skills.workflow_distiller.should_distill_workflow`
+- `src.skills.workflow_distiller.build_skill_scaffold`
 - `skills/<skill-name>/SKILL.md`
 - `src.skills.catalog`
 - `src.skills.uaf_skill_catalog`
+- `tests.test_workflow_distiller_runtime`

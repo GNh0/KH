@@ -24,7 +24,8 @@ This is a personal UAF quality harness for testing, debugging, and verification 
 3. Change production code only after the failing check is observed.
 4. Re-run the targeted check, then the broader relevant suite.
 5. For unexpected failures, capture the exact error, form a root-cause hypothesis, test it, then patch.
-6. Before completion, map each user requirement to evidence from tests, build output, command output, or manual inspection.
+6. Use `build_review_finding`, `build_qa_check`, and gate evaluators when evidence must be normalized into a UAF gate record.
+7. Before completion, map each user requirement to evidence from tests, build output, command output, or manual inspection.
 
 ## Review gates
 
@@ -52,5 +53,8 @@ This is a personal UAF quality harness for testing, debugging, and verification 
 - `src.harness.evaluator`
 - `src.harness.sandbox`
 - `src.core.runner`
+- `src.orchestration.gate_evaluators.build_review_finding`
+- `src.orchestration.gate_evaluators.build_qa_check`
+- `src.orchestration.gate_evaluators.evaluate_qa_checks`
 - `tests`
 - `src.skills.uaf_skill_catalog`

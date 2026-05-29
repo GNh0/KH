@@ -105,6 +105,25 @@ class AntigravityDispatcherTests(unittest.TestCase):
         self.assertEqual(result.metadata["goal"]["objective"], "build api")
         self.assertEqual(result.metadata["goal"]["status"], "active")
 
+    def test_execute_request_preserves_memory_and_evidence_metadata_when_pending(self):
+        request = AdapterRequest(
+            project_dir="C:/work/demo",
+            files=["main.py"],
+            design_doc="# design",
+            platform_mode="antigravity",
+            metadata={
+                "memory_context": {"records": [{"record_id": "decision-1"}]},
+                "evidence": ["input evidence"],
+            },
+        )
+
+        with redirect_stdout(StringIO()):
+            result = AntigravityDispatcher().execute_request(request)
+
+        self.assertEqual(result.metadata["memory_context"]["records"][0]["record_id"], "decision-1")
+        self.assertEqual(result.metadata["evidence"], ["input evidence"])
+        self.assertEqual(result.metadata["request_metadata"]["memory_context"]["records"][0]["record_id"], "decision-1")
+
     def test_execute_request_uses_native_adapter_success(self):
         native_result = AntigravityNativeDispatchResult(
             status="success",

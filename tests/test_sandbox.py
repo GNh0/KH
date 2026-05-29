@@ -28,6 +28,17 @@ class SandboxTests(unittest.TestCase):
         self.assertEqual(result["stderr"], "")
         self.assertIn("windows utf8 ok", result["stdout"])
 
+    def test_evaluator_can_return_harness_result_contract(self):
+        result = Evaluator(timeout=2).evaluate_code_result(
+            "def add(a, b):\n    return a + b",
+            "assert add(2, 3) == 5\nprint('eval ok')",
+        )
+
+        self.assertIsInstance(result, HarnessResult)
+        self.assertTrue(result.success)
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("eval ok", result.stdout)
+
     def test_run_python_code_blocks_dangerous_builtin_calls(self):
         result = CodeSandbox(timeout=2).run_python_code("eval('1 + 1')")
 

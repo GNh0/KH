@@ -28,10 +28,10 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 
 ## Status contract
 
-- `DONE`: proceed to spec review.
-- `DONE_WITH_CONCERNS`: inspect concerns before review; resolve correctness or scope concerns first.
-- `NEEDS_CONTEXT`: add missing context and retry the task.
-- `BLOCKED`: diagnose whether the blocker is context, model capability, task size, or a flawed plan.
+- `success`: proceed to spec review when evidence is present.
+- `failed`: return the task to implementation or mark the plan failed.
+- `blocked`: diagnose whether the blocker is context, model capability, task size, or a flawed plan.
+- Optional reviewer substatus may use `done_with_concerns`, `needs_context`, or `approval_required` inside metadata, but `WorkflowTaskResult.status` remains `success`, `failed`, or `blocked`.
 
 ## Workflow
 
@@ -47,7 +47,7 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 - Implementer result per bounded task with status, changed files, checks, and evidence.
 - Spec-reviewer result for each implementer output before quality review.
 - Code-quality-reviewer result with findings, severity, and suggested fix.
-- Controller aggregate that preserves `DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, and `BLOCKED` states.
+- Controller aggregate that preserves `success`, `failed`, `blocked`, and optional reviewer substatus metadata.
 
 ## Common mistakes
 
@@ -61,6 +61,8 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 - `src.tasks.workflows`
 - `src.orchestration.roles`
 - `src.orchestration.agent_loop`
+- `src.orchestration.role_orchestrator.RoleOrchestrator`
+- `src.orchestration.gate_evaluators.normalize_review_findings`
 - `src.contracts.AdapterRequest`
 - `src.contracts.AdapterResult`
 - `src.skills.uaf_skill_catalog`

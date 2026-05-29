@@ -14,10 +14,11 @@ This skill acts as a Tester/Evaluator for your code. It runs the code in an isol
 
 ## Instructions
 1. After writing a python script or receiving a python script from the user, save it to a file, for example `./workspace/main.py`.
-2. Run the evaluator using the terminal:
+2. For direct UAF contracts, call `Evaluator.evaluate_code_result(...)` and attach the returned `HarnessResult` to gate evidence.
+3. Run the evaluator using the terminal when file-based evaluation is preferred:
    `python -m src.core.runner --mode evaluate --agent_code_path "./workspace/main.py" --test_code_path "./workspace/test.py"`
-3. If the evaluation output contains `[Fail]`, read the Stderr logs carefully.
-4. Fix the errors in the code based on the Stderr feedback, and re-run the evaluator until it passes `[Success]`.
+4. If the evaluation output contains `[Fail]`, read the Stderr logs carefully.
+5. Fix the errors in the code based on the Stderr feedback, and re-run the evaluator until it passes `[Success]`.
 
 ## Required outputs
 

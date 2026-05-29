@@ -11,8 +11,8 @@ The agent must decide whether `qa-gate-harness` applies, run or apply it accordi
 1. Load `SKILL.md` and confirm the trigger applies.
 2. Read `references/usage.md` before doing the work.
 3. Collect the user objective, workspace boundary, expected outputs, and evidence requirements.
-4. Follow the `hybrid-harness` execution pattern for this skill.
-5. Write or report the resulting artifact, state entry, gate result, or decision evidence.
+4. Build automated/manual/blocked QA checks and aggregate them with `evaluate_qa_checks`.
+5. Write or report the resulting QA check list, blocked reason, gate result, or decision evidence.
 6. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
@@ -23,9 +23,11 @@ The agent must decide whether `qa-gate-harness` applies, run or apply it accordi
 - `implementation_targets`:
   - `src.harness.evaluator`
   - `src.harness.sandbox`
+  - `src.orchestration.gate_evaluators.build_qa_check`
+  - `src.orchestration.gate_evaluators.evaluate_qa_checks`
   - `src.orchestration.roles`
   - `src.contracts.WorkflowDispatchResult`
-  - `tests`
+  - `tests.test_gate_evaluators`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.
 - `verification`: command output, test result, artifact path, or explicit blocked reason.
 

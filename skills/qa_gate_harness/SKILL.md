@@ -22,10 +22,12 @@ This is a UAF-native QA harness for regression and verification workflow pattern
 
 1. Map each user requirement and acceptance criterion to a QA check.
 2. Prefer automated checks when a deterministic test can prove the behavior.
-3. Record manual checks explicitly when automation is not available.
+3. Record manual checks explicitly with `src.orchestration.gate_evaluators.build_qa_check` when automation is not available.
 4. For each bug, capture reproduction steps, expected behavior, actual behavior, and severity.
-5. Require fresh verification evidence after a fix or rollback.
-6. Support report-only mode where findings are returned without modifying files.
+5. Call `src.orchestration.gate_evaluators.evaluate_qa_checks` to aggregate passed, failed, and blocked checks.
+6. Treat an empty QA check list as blocked; the role-DAG path must pass explicit check records or a scoped `QA-SKIP` record with scope, notes, and evidence before `qa-verifier` can pass.
+7. Require fresh verification evidence after a fix or rollback.
+8. Support report-only mode where findings are returned without modifying files.
 
 ## Required outputs
 
@@ -45,6 +47,9 @@ This is a UAF-native QA harness for regression and verification workflow pattern
 
 - `src.harness.evaluator`
 - `src.harness.sandbox`
+- `src.orchestration.gate_evaluators.build_qa_check`
+- `src.orchestration.gate_evaluators.evaluate_qa_checks`
+- `src.orchestration.role_orchestrator.GateRoleRunner`
 - `src.orchestration.roles`
 - `src.contracts.WorkflowDispatchResult`
-- `tests`
+- `tests.test_gate_evaluators`

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from src.contracts import WorkDesign
+from src.orchestration.roles import default_role_profiles
 
 
 QUALITY_EVIDENCE = {
@@ -16,6 +17,11 @@ QUALITY_EVIDENCE = {
     "traceability_failed": "traceability matrix failed",
     "role_audit_passed": "role execution audited",
     "role_audit_failed": "role execution audit failed",
+}
+
+NON_TEMPLATE_ARTIFACT_TYPES = {
+    "technical-drawing",
+    "cad-drawing",
 }
 
 
@@ -44,6 +50,9 @@ TEMPLATE_MARKERS = {
         "위험 ID", "분류", "위험 항목", "영향도", "발생 가능성", "완화 방안", "차단 기준",
     ],
     "user-manual": [
+        "개정 이력", "사용 대상", "사전 준비", "사용 절차", "문제 해결",
+    ],
+    "manual": [
         "개정 이력", "사용 대상", "사전 준비", "사용 절차", "문제 해결",
     ],
     "functional-specification": [
@@ -75,6 +84,9 @@ TEMPLATE_MARKERS = {
     "dimension-bom": [
         "품번", "품명", "재질", "규격", "치수", "수량", "공차", "근거",
     ],
+    "table-model": [
+        "품번", "품명", "재질", "규격", "치수", "수량", "공차", "근거",
+    ],
     "analysis-report": [
         "문서 정보", "Executive Summary", "투자 개요", "핵심 가정",
         "시나리오 분석", "수익/위험 분석", "리스크", "최종 의견",
@@ -92,7 +104,8 @@ TEMPLATE_MARKERS = {
 def build_traceability_matrix_rows(
     work_design: WorkDesign,
     deliverable_records: Iterable[Dict[str, Any]],
-) -> List[List[str]]:
+    as_dict: bool = False,
+) -> List[Any]:
     design = _as_work_design(work_design)
     records = [dict(record) for record in deliverable_records]
     header = [
@@ -107,12 +120,13 @@ def build_traceability_matrix_rows(
         "비고",
     ]
     rows = [header]
+    dict_rows: List[Dict[str, str]] = []
     requirements = list(design.deliverables) or ["final output"]
     gates = list(design.review_gates) or ["review gate", "qa gate", "release gate"]
     for index, record in enumerate(records, start=1):
         requirement = requirements[(index - 1) % len(requirements)]
         evidence_key = _record_evidence_key(record)
-        rows.append([
+        row = [
             f"TRACE-{index:03d}",
             f"REQ-{index:03d}",
             str(requirement),
@@ -120,11 +134,13 @@ def build_traceability_matrix_rows(
             str(record.get("artifact_type") or record.get("kind") or record.get("format") or "deliverable"),
             evidence_key,
             gates[(index - 1) % len(gates)],
-            "planned",
+            str(record.get("gate_status") or record.get("status") or "planned"),
             "source input, deliverable, evidence, and gate must stay aligned",
-        ])
+        ]
+        rows.append(row)
+        dict_rows.append(_traceability_dict_row(row))
     if len(rows) == 1:
-        rows.append([
+        row = [
             "TRACE-001",
             "REQ-001",
             design.objective or "final output",
@@ -134,14 +150,16 @@ def build_traceability_matrix_rows(
             gates[0],
             "planned",
             "fallback trace row",
-        ])
-    return rows
+        ]
+        rows.append(row)
+        dict_rows.append(_traceability_dict_row(row))
+    return dict_rows if as_dict else rows
 
 
 def evaluate_deliverable_quality(export_result: Dict[str, Any]) -> Dict[str, Any]:
     deliverables = [dict(item) for item in export_result.get("deliverables", [])]
     traceability_enabled = "traceability_rows" in export_result
-    traceability_rows = [list(row) for row in export_result.get("traceability_rows", []) or []]
+    traceability_rows = _normalize_traceability_rows(export_result.get("traceability_rows", []) or [])
     findings: List[str] = []
     checks: List[Dict[str, Any]] = []
     template_failed = False
@@ -155,12 +173,22 @@ def evaluate_deliverable_quality(export_result: Dict[str, Any]) -> Dict[str, Any
         render = _read_deliverable_text(path, str(record.get("format", "")))
         if render["status"] != "passed":
             render_failed = True
+            template_failed = True
             findings.append(f"{file_name}: {render['message']}")
             checks.append(_check(file_name, "render", "failed", render["message"]))
+            checks.append(_check(file_name, "template", "failed", "template markers were not evaluated because render failed"))
             continue
         checks.append(_check(file_name, "render", "passed", render["message"]))
 
         markers = TEMPLATE_MARKERS.get(artifact_type, [])
+        if not markers:
+            if artifact_type in NON_TEMPLATE_ARTIFACT_TYPES or record.get("template_not_applicable") or record.get("template_optional"):
+                checks.append(_check(file_name, "template", "skipped", f"no template marker policy for {artifact_type or 'unknown artifact type'}"))
+                continue
+            template_failed = True
+            findings.append(f"{file_name}: unknown artifact type `{artifact_type or 'unknown'}` has no template marker policy")
+            checks.append(_check(file_name, "template", "failed", "unknown artifact type has no template marker policy"))
+            continue
         missing = [marker for marker in markers if marker not in render["text"]]
         if missing:
             template_failed = True
@@ -224,18 +252,7 @@ def audit_role_execution(
 ) -> Dict[str, Any]:
     summary = dict(role_metadata.get("summary", {}) or {})
     results = [dict(item) for item in role_metadata.get("results", []) or []]
-    required = list(required_roles or [
-        "ceo",
-        "advisor",
-        "system-architect",
-        "implementation-planner",
-        "controller",
-        "spec-reviewer",
-        "code-quality-reviewer",
-        "qa-verifier",
-        "security-reviewer",
-        "release-manager",
-    ])
+    required = list(required_roles or _default_required_audit_roles(summary, results))
     by_role = {str(result.get("role", "")): result for result in results}
     findings: List[str] = []
     checks: List[Dict[str, Any]] = []
@@ -257,6 +274,8 @@ def audit_role_execution(
         if result.get("status") != "success":
             findings.append(f"{role} status is {result.get('status')}")
         metadata = dict(result.get("metadata", {}) or {})
+        if role == "implementer" and metadata.get("evidence"):
+            continue
         if not metadata.get("role_artifacts"):
             findings.append(f"{role} has no role_artifacts evidence")
 
@@ -276,6 +295,18 @@ def audit_role_execution(
             QUALITY_EVIDENCE["role_audit_passed" if passed else "role_audit_failed"]
         ],
     }
+
+
+def _default_required_audit_roles(summary: Dict[str, Any], results: List[Dict[str, Any]]) -> List[str]:
+    required = [
+        profile.name
+        for profile in default_role_profiles()
+        if profile.name != "implementer"
+    ]
+    roles_present = {str(result.get("role", "")) for result in results}
+    if summary.get("implementation_required") or "implementer" in roles_present:
+        required.insert(required.index("spec-reviewer"), "implementer")
+    return required
 
 
 def _as_work_design(work_design: Any) -> WorkDesign:
@@ -307,12 +338,28 @@ def _read_deliverable_text(path: Path, file_format: str) -> Dict[str, Any]:
             if not zipfile.is_zipfile(path):
                 return {"status": "failed", "message": "docx is not a zip package", "text": ""}
             with zipfile.ZipFile(path) as package:
+                missing_parts = _missing_package_parts(package, [
+                    "[Content_Types].xml",
+                    "_rels/.rels",
+                    "word/document.xml",
+                ])
+                if missing_parts:
+                    return {"status": "failed", "message": f"docx package missing required parts: {', '.join(missing_parts)}", "text": ""}
                 text = package.read("word/document.xml").decode("utf-8")
             return {"status": "passed", "message": "docx package readable", "text": text}
         if fmt == "xlsx":
             if not zipfile.is_zipfile(path):
                 return {"status": "failed", "message": "xlsx is not a zip package", "text": ""}
             with zipfile.ZipFile(path) as package:
+                missing_parts = _missing_package_parts(package, [
+                    "[Content_Types].xml",
+                    "_rels/.rels",
+                    "xl/workbook.xml",
+                    "xl/_rels/workbook.xml.rels",
+                    "xl/worksheets/sheet1.xml",
+                ])
+                if missing_parts:
+                    return {"status": "failed", "message": f"xlsx package missing required parts: {', '.join(missing_parts)}", "text": ""}
                 text = package.read("xl/worksheets/sheet1.xml").decode("utf-8")
             widths = _xlsx_row_widths(path)
             if not widths or any(width != widths[0] for width in widths):
@@ -342,6 +389,44 @@ def _xlsx_row_widths(path: Path) -> List[int]:
         if row.tag == "row" or row.tag.endswith("}row"):
             widths.append(sum(1 for cell in row if cell.tag == "c" or cell.tag.endswith("}c")))
     return widths
+
+
+def _missing_package_parts(package: zipfile.ZipFile, required_parts: List[str]) -> List[str]:
+    names = set(package.namelist())
+    return [part for part in required_parts if part not in names]
+
+
+def _normalize_traceability_rows(rows: Iterable[Any]) -> List[List[str]]:
+    rows = list(rows)
+    if not rows:
+        return []
+    if all(isinstance(row, dict) for row in rows):
+        header = [
+            "Trace ID",
+            "Requirement ID",
+            "요구사항",
+            "산출물",
+            "산출물 유형",
+            "증거 키",
+            "검토 게이트",
+            "상태",
+            "비고",
+        ]
+        normalized = [header]
+        for row in rows:
+            normalized.append([
+                str(row.get("trace_id", "")),
+                str(row.get("requirement_id", "")),
+                str(row.get("requirement", "")),
+                str(row.get("deliverable", "")),
+                str(row.get("deliverable_type", "")),
+                str(row.get("evidence_key", "")),
+                str(row.get("gate", "")),
+                str(row.get("status", "")),
+                str(row.get("notes", "")),
+            ])
+        return normalized
+    return [list(row) for row in rows]
 
 
 def _evaluate_traceability_text(text: str) -> Dict[str, Any]:
@@ -399,4 +484,18 @@ def _check(file_name: str, check_type: str, status: str, message: str) -> Dict[s
         "check_type": check_type,
         "status": status,
         "message": message,
+    }
+
+
+def _traceability_dict_row(row: List[str]) -> Dict[str, str]:
+    return {
+        "trace_id": row[0],
+        "requirement_id": row[1],
+        "requirement": row[2],
+        "deliverable": row[3],
+        "deliverable_type": row[4],
+        "evidence_key": row[5],
+        "gate": row[6],
+        "status": row[7],
+        "notes": row[8],
     }

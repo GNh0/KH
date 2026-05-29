@@ -15,6 +15,29 @@ The agent must decide whether `adapter-contract-harness` applies, run or apply i
 5. Write or report the resulting artifact, state entry, gate result, or decision evidence.
 6. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
+## Runnable probe
+
+```python
+from src.contracts import AdapterRequest
+from src.platforms.dispatcher_factory import AntigravityDispatcher
+
+request = AdapterRequest(
+    project_dir="C:/work/demo",
+    files=["main.py"],
+    design_doc="# design",
+    platform_mode="antigravity",
+    metadata={
+        "goal": {"objective": "build api", "status": "active"},
+        "memory_context": {"records": [{"record_id": "decision-1"}]},
+        "evidence": ["input evidence"],
+    },
+)
+result = AntigravityDispatcher().execute_request(request)
+assert result.status == "pending"
+assert result.metadata["memory_context"]["records"][0]["record_id"] == "decision-1"
+assert result.metadata["evidence"] == ["input evidence"]
+```
+
 ## Expected evidence
 
 - `skill`: `adapter-contract-harness`.

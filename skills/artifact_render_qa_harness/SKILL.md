@@ -21,6 +21,15 @@ This harness verifies that generated files can be opened or parsed enough for de
 4. For SVG and DXF, verify required structural markers such as `<svg>`, `SECTION`, and `ENTITIES`.
 5. Emit render QA evidence without adding harness-only files to `docs/`.
 
+## Structural Checks
+
+- DOCX requires `[Content_Types].xml`, `_rels/.rels`, and `word/document.xml`.
+- XLSX requires `[Content_Types].xml`, `_rels/.rels`, `xl/workbook.xml`, `xl/_rels/workbook.xml.rels`, and `xl/worksheets/sheet1.xml`.
+- XLSX rows must have the same cell count as the header row.
+- SVG must include an `<svg>` root and closing `</svg>`.
+- DXF must include `SECTION` and `ENTITIES`.
+- A malformed-file probe should fail with `artifact render qa failed`, not a template pass.
+
 ## Required outputs
 
 - `artifact render qa passed` when every artifact is readable and structurally consistent.

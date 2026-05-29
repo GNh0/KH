@@ -10,7 +10,9 @@ from src.orchestration.evidence_producers import (
     review_result_evidence,
 )
 from src.orchestration.gate_evaluators import (
+    build_qa_check,
     evaluate_code_quality_gate,
+    evaluate_qa_checks,
     evaluate_qa_gate,
     evaluate_release_gate,
     evaluate_security_gate,
@@ -79,7 +81,8 @@ class GateRoleRunner(DefaultRoleRunner):
                 task_results=task_results,
             )
         elif profile.name == "qa-verifier":
-            gate = evaluate_qa_gate(role_gate_results.get("code-quality-reviewer", {}), goal=goal)
+            checks = _qa_checks_from_context(context)
+            gate = evaluate_qa_checks(role_gate_results.get("code-quality-reviewer", {}), checks=checks, goal=goal)
         elif profile.name == "security-reviewer":
             gate = evaluate_security_gate(
                 role_gate_results.get("code-quality-reviewer", {}),
@@ -124,7 +127,12 @@ class GateRoleRunner(DefaultRoleRunner):
     ) -> WorkflowTaskResult:
         await asyncio.sleep(0)
         role_gate_results = context.setdefault("role_gate_results", {})
-        gate = _blocked_gate(profile, context.get("goal", {}), pending_dependencies)
+        gate = _blocked_gate(
+            profile,
+            context.get("goal", {}),
+            pending_dependencies,
+            role_gate_results=role_gate_results,
+        )
         role_gate_results[profile.name] = gate
         metadata = {
             "execution_model": "parallel-role-stage",
@@ -249,7 +257,9 @@ class RoleOrchestrator:
                         [
                             dependency
                             for dependency in self._profiles_by_name[name].blocks_on
-                            if dependency in failed
+                            if dependency in selected
+                            and dependency not in completed
+                            and dependency not in satisfied
                         ],
                     )
                     for name in role_names
@@ -456,8 +466,10 @@ def _blocked_gate(
     profile: RoleProfile,
     goal: Dict[str, Any],
     pending_dependencies: List[str],
+    role_gate_results: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     missing_evidence = list((goal or {}).get("metadata", {}).get("missing_evidence", []))
+    upstream_findings = _upstream_gate_findings(role_gate_results or {}, pending_dependencies)
     blocked_reason = (goal or {}).get("blocked_reason", "") or f"blocked by role dependency: {', '.join(pending_dependencies)}"
     message = "goal evidence gate did not pass" if profile.name == "release-manager" and missing_evidence else blocked_reason
     evidence_key = _gate_evidence_key(profile.name)
@@ -472,7 +484,7 @@ def _blocked_gate(
             role=profile.name,
             passed=False,
             evidence_key=evidence_key,
-            findings=missing_evidence or pending_dependencies,
+            findings=missing_evidence or upstream_findings or pending_dependencies,
         )
     gate = {
         "role": profile.name,
@@ -481,12 +493,51 @@ def _blocked_gate(
         "blocks_on": list(profile.blocks_on),
         "blocked_reason": blocked_reason,
         "missing_evidence": missing_evidence,
-        "findings": missing_evidence or list(pending_dependencies),
+        "findings": missing_evidence or upstream_findings or list(pending_dependencies),
         "evidence_records": [evidence_record.to_dict()],
     }
     if goal:
         gate["goal_status"] = goal.get("status")
     return gate
+
+
+def _qa_checks_from_context(context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    metadata = context.get("metadata", {}) or {}
+    goal = context.get("goal", {}) or {}
+    goal_metadata = goal.get("metadata", {}) or {}
+    checks = (
+        context.get("qa_checks")
+        or metadata.get("qa_checks")
+        or goal_metadata.get("qa_checks")
+        or []
+    )
+    if checks:
+        return [dict(check) for check in checks if isinstance(check, dict)]
+    if metadata.get("qa_skip_approved") or goal_metadata.get("qa_skip_approved"):
+        reason = str(metadata.get("qa_skip_reason") or goal_metadata.get("qa_skip_reason") or "QA explicitly marked not applicable")
+        return [
+            build_qa_check(
+                requirement_id="QA-SKIP",
+                check_type="approved-skip",
+                description=reason,
+                status="skipped",
+                evidence=["qa skip approved"],
+                scope="explicit-workflow-qa-skip",
+                notes="Completion is allowed because an explicit scoped QA skip record exists.",
+            )
+        ]
+    return []
+
+
+def _upstream_gate_findings(role_gate_results: Dict[str, Any], dependencies: List[str]) -> List[str]:
+    findings: List[str] = []
+    for dependency in dependencies:
+        gate = role_gate_results.get(dependency, {}) or {}
+        findings.extend(str(item) for item in gate.get("findings", []) or [])
+        for item in gate.get("structured_findings", []) or []:
+            if isinstance(item, dict):
+                findings.append(str(item.get("message", "")))
+    return [item for item in findings if item]
 
 
 def _gate_evidence_key(role_name: str) -> str:

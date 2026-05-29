@@ -52,6 +52,9 @@ class HandoffSnapshot:
     missing_evidence: List[str] = field(default_factory=list)
     artifact_manifest: Dict[str, Any] = field(default_factory=dict)
     memory_context: Dict[str, Any] = field(default_factory=dict)
+    git_state: Dict[str, Any] = field(default_factory=dict)
+    decisions: List[str] = field(default_factory=list)
+    remaining_work: List[str] = field(default_factory=list)
     goal: Dict[str, Any] = field(default_factory=dict)
     generated_at: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -69,6 +72,9 @@ class HandoffSnapshot:
             "missing_evidence": list(self.missing_evidence),
             "artifact_manifest": dict(self.artifact_manifest),
             "memory_context": dict(self.memory_context),
+            "git_state": dict(self.git_state),
+            "decisions": list(self.decisions),
+            "remaining_work": list(self.remaining_work),
             "goal": dict(self.goal),
             "generated_at": self.generated_at,
             "metadata": dict(self.metadata),
@@ -88,6 +94,9 @@ class HandoffSnapshot:
             missing_evidence=list(data.get("missing_evidence", [])),
             artifact_manifest=dict(data.get("artifact_manifest", {})),
             memory_context=dict(data.get("memory_context", {})),
+            git_state=dict(data.get("git_state", {})),
+            decisions=list(data.get("decisions", [])),
+            remaining_work=list(data.get("remaining_work", [])),
             goal=dict(data.get("goal", {})),
             generated_at=data.get("generated_at", ""),
             metadata=dict(data.get("metadata", {})),

@@ -27,7 +27,7 @@ Do not use this skill only because it is available. Use it when the current task
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `traceability-matrix-harness`.
-3. Call or inspect the listed Python implementation targets, then record the exact module/function path and test evidence used.
+3. Use `build_traceability_matrix_rows(..., as_dict=True)` when a typed row schema is needed for review or API evidence; use the list-of-lists form only for spreadsheet rendering.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
 5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 6. Report the difference between capability available in the repository and behavior actually executed in the current run.

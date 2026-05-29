@@ -26,7 +26,7 @@ The agent must decide whether `traceability-matrix-harness` applies, run or appl
   - `src.contracts.WorkDesign`
   - `tests.test_quality_harnesses`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.
-- `verification`: command output, test result, artifact path, or explicit blocked reason.
+- `verification`: typed traceability rows from `as_dict=True`, command output, test result, artifact path, or explicit blocked reason.
 
 ## Failure cases
 

@@ -20,15 +20,17 @@ Do not use this skill only because it is available. Use it when the current task
 - Implementation targets:
   - `src.harness.evaluator`
   - `src.harness.sandbox`
+  - `src.orchestration.gate_evaluators.build_qa_check`
+  - `src.orchestration.gate_evaluators.evaluate_qa_checks`
   - `src.orchestration.roles`
   - `src.contracts.WorkflowDispatchResult`
-  - `tests`
+  - `tests.test_gate_evaluators`
 
 ## Execution pattern
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `qa-gate-harness`.
-3. Combine the listed Python implementation targets with the written workflow contract, then record which parts ran as code and which parts were applied procedurally.
+3. Build QA checks for automated, manual, blocked, or skipped verification and aggregate them with `evaluate_qa_checks`.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
 5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 6. Report the difference between capability available in the repository and behavior actually executed in the current run.

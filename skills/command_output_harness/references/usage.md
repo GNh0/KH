@@ -16,19 +16,20 @@ Do not use this skill only because it is available. Use it when the current task
 - Target workspace, write boundaries, and whether user-facing deliverables are expected.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
-- Execution level: `procedure-policy`.
+- Execution level: `python-module`.
 - Implementation targets:
-  - `src.skills.token_optimizer`
-  - `src.skills.uaf_skill_catalog`
-  - `src.tasks.workflows`
-  - `src.core.runner`
+  - `src.skills.token_optimizer.summarize_command_output`
+  - `src.skills.token_optimizer.filter_command_output`
+  - `src.skills.token_optimizer.truncate_logs`
   - `src.contracts.HarnessResult`
+  - `tests.test_command_output_runtime`
 
 ## Execution pattern
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `command-output-harness`.
-3. Apply the written workflow as a host-agent policy, then record the decision, boundary, or gate evidence that proves the policy was actually used.
+3. Call `summarize_command_output` when command output must be compacted into a `HarnessResult`; it uses command-family filtering and appends required facts if preservation checks detect missing failure evidence.
+4. Treat `truncate_logs` as fallback, not the preferred path for pytest/build/linter/runtime output.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
 5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 6. Report the difference between capability available in the repository and behavior actually executed in the current run.

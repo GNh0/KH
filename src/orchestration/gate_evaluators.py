@@ -7,6 +7,10 @@ from src.orchestration.evidence_producers import (
 )
 
 
+SEVERITY_ORDER = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+VALID_QA_STATUSES = {"passed", "failed", "blocked", "skipped"}
+
+
 def _evidence_record(record) -> Dict[str, Any]:
     return record.to_dict()
 
@@ -57,8 +61,99 @@ def _quality_findings(task_results: List[Dict[str, Any]]) -> List[str]:
         task_findings = list(metadata.get("quality_findings", []) or [])
         task_findings.extend(metadata.get("code_quality_findings", []) or [])
         for finding in task_findings:
-            findings.append(f"{_task_label(task)}: {finding}")
+            if isinstance(finding, dict):
+                message = finding.get("message", "review finding")
+            else:
+                message = str(finding)
+            findings.append(f"{_task_label(task)}: {message}")
     return findings
+
+
+def _structured_quality_findings(task_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    for task in task_results:
+        metadata = task.get("metadata", {}) or {}
+        raw_findings = list(metadata.get("quality_findings", []) or [])
+        raw_findings.extend(metadata.get("code_quality_findings", []) or [])
+        default_file = task.get("file_name", "")
+        findings.extend(normalize_review_findings(raw_findings, default_file=default_file))
+    return findings
+
+
+def build_review_finding(
+    severity: str,
+    message: str,
+    file_path: str = "",
+    line: Optional[int] = None,
+    suggested_fix: str = "",
+    needs_approval: bool = False,
+    category: str = "quality",
+) -> Dict[str, Any]:
+    normalized_severity = severity if severity in SEVERITY_ORDER else "medium"
+    return {
+        "severity": normalized_severity,
+        "category": category,
+        "message": message,
+        "file_path": file_path,
+        "line": line,
+        "suggested_fix": suggested_fix,
+        "needs_approval": bool(needs_approval),
+        "next_action": "ask" if needs_approval else "fix",
+    }
+
+
+def normalize_review_findings(
+    findings: List[Any],
+    default_file: str = "",
+) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for finding in findings:
+        if isinstance(finding, dict):
+            normalized.append(
+                build_review_finding(
+                    severity=str(finding.get("severity", "medium")),
+                    message=str(finding.get("message", "review finding")),
+                    file_path=str(finding.get("file_path") or default_file),
+                    line=finding.get("line"),
+                    suggested_fix=str(finding.get("suggested_fix", "")),
+                    needs_approval=bool(finding.get("needs_approval", False)),
+                    category=str(finding.get("category", "quality")),
+                )
+            )
+        else:
+            normalized.append(
+                build_review_finding(
+                    severity="medium",
+                    message=str(finding),
+                    file_path=default_file,
+                )
+            )
+    return sorted(
+        normalized,
+        key=lambda item: SEVERITY_ORDER.get(item.get("severity", "medium"), 2),
+        reverse=True,
+    )
+
+
+def build_qa_check(
+    requirement_id: str,
+    check_type: str,
+    description: str,
+    status: str,
+    evidence: Optional[List[str]] = None,
+    notes: str = "",
+    scope: str = "",
+) -> Dict[str, Any]:
+    normalized_status = status if status in VALID_QA_STATUSES else "blocked"
+    return {
+        "requirement_id": requirement_id,
+        "check_type": check_type,
+        "description": description,
+        "status": normalized_status,
+        "evidence": list(evidence or []),
+        "notes": notes,
+        "scope": scope,
+    }
 
 
 def evaluate_spec_review_gate(task_results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -148,6 +243,7 @@ def evaluate_code_quality_gate(
         }
 
     findings = _quality_findings(task_results or [])
+    structured_findings = _structured_quality_findings(task_results or [])
     if findings:
         return {
             "role": "code-quality-reviewer",
@@ -155,6 +251,7 @@ def evaluate_code_quality_gate(
             "message": f"{len(findings)} quality finding(s) reported",
             "blocks_on": ["spec-reviewer"],
             "findings": findings,
+            "structured_findings": structured_findings,
             "evidence_records": [
                 _evidence_record(
                     review_result_evidence(
@@ -173,6 +270,7 @@ def evaluate_code_quality_gate(
         "message": "no failed task output or quality findings to block review",
         "blocks_on": ["spec-reviewer"],
         "findings": [],
+        "structured_findings": [],
         "evidence_records": [
             _evidence_record(
                 review_result_evidence(
@@ -183,6 +281,141 @@ def evaluate_code_quality_gate(
             )
         ],
     }
+
+
+def evaluate_qa_checks(
+    quality_gate: Dict[str, Any],
+    checks: List[Dict[str, Any]],
+    goal: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if quality_gate.get("status") != "passed":
+        return {
+            "role": "qa-verifier",
+            "status": "blocked",
+            "message": "quality review did not pass",
+            "blocks_on": ["code-quality-reviewer"],
+            "checks": list(checks),
+            "findings": [],
+            "evidence_records": [
+                _evidence_record(
+                    qa_result_evidence(
+                        passed=False,
+                        evidence_key="qa gate passed",
+                        checks=["quality review"],
+                    )
+                )
+            ],
+        }
+
+    if _goal_blocked_by_evidence(goal):
+        missing_evidence = _missing_goal_evidence(goal)
+        blocked_reason = goal.get("blocked_reason", "missing required goal evidence")
+        return {
+            "role": "qa-verifier",
+            "status": "blocked",
+            "message": f"missing goal evidence: {', '.join(missing_evidence)}",
+            "blocks_on": ["code-quality-reviewer"],
+            "blocked_reason": blocked_reason,
+            "missing_evidence": missing_evidence,
+            "goal_status": goal.get("status"),
+            "checks": list(checks),
+            "findings": list(missing_evidence),
+            "evidence_records": [
+                _evidence_record(
+                    qa_result_evidence(
+                        passed=False,
+                        evidence_key="qa gate passed",
+                        checks=missing_evidence,
+                    )
+                )
+            ],
+        }
+
+    if not checks:
+        return {
+            "role": "qa-verifier",
+            "status": "blocked",
+            "message": "no QA checks were supplied",
+            "blocks_on": ["code-quality-reviewer"],
+            "checks": [],
+            "findings": ["no QA checks were supplied"],
+            "evidence_records": [
+                _evidence_record(
+                    qa_result_evidence(
+                        passed=False,
+                        evidence_key="qa gate passed",
+                        checks=["no QA checks supplied"],
+                    )
+                )
+            ],
+        }
+
+    skip_findings = _invalid_skip_findings(checks)
+    if skip_findings:
+        return {
+            "role": "qa-verifier",
+            "status": "blocked",
+            "message": f"{len(skip_findings)} QA skip record(s) are not scoped or evidenced",
+            "blocks_on": ["code-quality-reviewer"],
+            "checks": list(checks),
+            "findings": skip_findings,
+            "evidence_records": [
+                _evidence_record(
+                    qa_result_evidence(
+                        passed=False,
+                        evidence_key="qa gate passed",
+                        checks=["invalid QA skip record"],
+                    )
+                )
+            ],
+        }
+
+    findings = [
+        f"{check.get('requirement_id', 'REQ')} {check.get('status')}: {check.get('description', 'qa check')}"
+        for check in checks
+        if check.get("status") in {"failed", "blocked"}
+    ]
+    status = "passed"
+    if any(check.get("status") == "failed" for check in checks):
+        status = "failed"
+    elif any(check.get("status") == "blocked" for check in checks):
+        status = "blocked"
+
+    gate = {
+        "role": "qa-verifier",
+        "status": status,
+        "message": "all QA checks passed" if status == "passed" else f"{len(findings)} QA check(s) need attention",
+        "blocks_on": ["code-quality-reviewer"],
+        "checks": list(checks),
+        "findings": findings,
+        "evidence_records": [
+            _evidence_record(
+                qa_result_evidence(
+                    passed=status == "passed",
+                    evidence_key="qa gate passed",
+                    checks=[check.get("requirement_id", "") for check in checks],
+                )
+            )
+        ],
+    }
+    if goal:
+        gate["goal_status"] = goal.get("status")
+    return gate
+
+
+def _invalid_skip_findings(checks: List[Dict[str, Any]]) -> List[str]:
+    findings: List[str] = []
+    for check in checks:
+        if check.get("status") != "skipped":
+            continue
+        evidence = list(check.get("evidence", []) or [])
+        notes = str(check.get("notes", "") or "")
+        scope = str(check.get("scope", "") or check.get("requirement_id", "") or "")
+        if not evidence or not notes or not scope:
+            findings.append(
+                f"{check.get('requirement_id', 'QA-SKIP')} skipped QA check requires scope, notes, and evidence"
+            )
+    return findings
 
 
 def evaluate_qa_gate(
@@ -279,17 +512,18 @@ def evaluate_security_gate(
         metadata = result.get("metadata", {}) or {}
         findings.extend(metadata.get("security_findings", []) or [])
 
+    status = "failed" if findings else "passed"
     gate = {
         "role": "security-reviewer",
-        "status": "passed",
-        "message": "no task-level security blocker reported",
+        "status": status,
+        "message": "no task-level security blocker reported" if not findings else f"{len(findings)} security finding(s) reported",
         "blocks_on": ["code-quality-reviewer"],
         "findings": findings,
         "evidence_records": [
             _evidence_record(
                 review_result_evidence(
                     role="security-reviewer",
-                    passed=True,
+                    passed=status == "passed",
                     evidence_key="security review passed",
                     findings=findings,
                 )

@@ -11,21 +11,21 @@ The agent must decide whether `command-output-harness` applies, run or apply it 
 1. Load `SKILL.md` and confirm the trigger applies.
 2. Read `references/usage.md` before doing the work.
 3. Collect the user objective, workspace boundary, expected outputs, and evidence requirements.
-4. Follow the `procedure-policy` execution pattern for this skill.
-5. Write or report the resulting artifact, state entry, gate result, or decision evidence.
+4. Call `src.skills.token_optimizer.summarize_command_output` for command output evidence.
+5. Write or report the resulting compact stdout/stderr, exit code, size metadata, or fallback reason.
 6. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
 
 - `skill`: `command-output-harness`.
-- `execution_level`: `procedure-policy`.
+- `execution_level`: `python-module`.
 - `support_reference_read`: `references/usage.md`.
 - `implementation_targets`:
-  - `src.skills.token_optimizer`
-  - `src.skills.uaf_skill_catalog`
-  - `src.tasks.workflows`
-  - `src.core.runner`
+  - `src.skills.token_optimizer.summarize_command_output`
+  - `src.skills.token_optimizer.filter_command_output`
+  - `src.skills.token_optimizer.truncate_logs`
   - `src.contracts.HarnessResult`
+  - `tests.test_command_output_runtime`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.
 - `verification`: command output, test result, artifact path, or explicit blocked reason.
 

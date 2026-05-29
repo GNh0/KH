@@ -86,6 +86,17 @@ class UafSkillQualityTests(unittest.TestCase):
 
         self.assertEqual(low_core, [])
 
+    def test_quality_cli_help_does_not_run_full_audit(self):
+        completed = subprocess.run(
+            [sys.executable, "-m", "src.skills.uaf_skill_quality", "--help"],
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertIn("usage:", completed.stdout.lower())
+        self.assertNotIn('"skills": [', completed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

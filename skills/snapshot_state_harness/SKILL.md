@@ -19,7 +19,7 @@ This is a UAF-native rollback harness. It packages snapshot behavior inside this
 2. Prefer one work-level checkpoint with `SnapshotManager.commit_many(file_names, message)` before a batch of related edits.
 3. Use `SnapshotManager.commit(file_name, code, message)` only for a truly single-file checkpoint.
 4. Keep snapshot metadata in the project/chat-scoped UAF runtime store, normally `%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.snapshots/commit_log.json`.
-5. Restore a known version with `SnapshotManager.rollback(version_id)` when a generated change fails review, tests, or user approval.
+5. Restore a known version with `SnapshotManager.rollback_result(version_id)` when a generated change fails review, tests, or user approval; use `rollback(version_id)` only when a boolean is enough.
 6. Prune old snapshots with `SnapshotManager.prune(max_snapshots)` when the workflow has an explicit retention policy.
 7. Never allow snapshots to target files outside the project root or inside `.snapshots`.
 
@@ -36,7 +36,7 @@ This is a UAF-native rollback harness. It packages snapshot behavior inside this
 
 - Work-level snapshot bundle for related multi-file changes, or single-file snapshot for isolated edits.
 - Snapshot metadata with version id, file list, message, timestamp, and compressed artifact path.
-- Restore result that identifies restored files and failed restores.
+- Restore result that identifies restored files, removed files, failed files, and partial-restore errors.
 - Retention/prune result when cleanup is requested.
 
 ## Common mistakes

@@ -6,6 +6,9 @@ description: Use when terminal logs, command output, or Python code are too larg
 
 This skill provides utilities to prevent token exhaustion during complex debugging or code reading loops.
 
+Default behavior is quality-first: the host may route any large or uncertain content through `optimize_context_content`, but the skill only compresses when required facts can be preserved. Contract-sensitive text such as SQL, stored procedures, license headers, security comments, business rules, exact source-of-truth prose, and ordinary text that cannot be classified safely must pass through unchanged.
+Large arbitrary prose also passes through by default; this is intentional because a generic summary can silently change meaning. Use command-family log filtering or explicit user-approved summarization when reduction is more important than exact wording.
+
 ## Support files
 
 - Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
@@ -13,16 +16,20 @@ This skill provides utilities to prevent token exhaustion during complex debuggi
 - Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
 
 ## Instructions
-1. If you run a command and it produces an extremely long error log (hundreds of lines) that clutters your context, you can run the python script directly to truncate it:
+1. For mixed content, call `src.skills.token_optimizer.optimize_context_content`; it classifies logs, Python code, and contract-sensitive text before deciding whether compression is safe.
+2. If you run a command and it produces an extremely long error log (hundreds of lines) that clutters your context, you can run the python script directly to truncate it:
    `python -c "from src.skills.token_optimizer import truncate_logs; print(truncate_logs('''<PASTE_LOG_HERE>'''))"`
-2. Alternatively, if you need to pass a large python file to another agent (or summarize it), minify it first by stripping comments and docstrings via AST:
+3. Alternatively, if you need to pass a large python file to another agent (or summarize it), minify it first by stripping comments and docstrings via AST:
    `python -c "from src.skills.token_optimizer import minify_code; print(minify_code(open('file.py').read()))"`
+4. If command output needs a reusable UAF evidence record, call `src.skills.token_optimizer.summarize_command_output` so the exit code, command family, raw size, filtered size, and token savings metadata are preserved in `HarnessResult`.
+5. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
 
 ## Required outputs
 
 - Compact log or code text that preserves errors, file paths, test names, and exit status context.
 - Token-savings estimate or before/after size when used inside a harness result.
 - Fallback note when truncation or minification cannot safely preserve actionable context.
+- Passthrough note when content is contract-sensitive and should not be compressed.
 
 ## Common mistakes
 
@@ -30,10 +37,15 @@ This skill provides utilities to prevent token exhaustion during complex debuggi
 - Do not minify code that must preserve comments, formatting, or license headers.
 - Do not use token optimization as a substitute for reading the relevant source.
 - Do not summarize command output in a way that hides a non-zero exit code.
+- Do not optimize SQL, stored procedures, contract text, license headers, security comments, or exact source-of-truth prose unless the user explicitly accepts loss.
 
 ## UAF implementation targets
 
-- `src.skills.token_optimizer`
-- `src.skills.catalog`
-- `src.skills.uaf_skill_catalog`
+- `src.skills.token_optimizer.truncate_logs`
+- `src.skills.token_optimizer.minify_code`
+- `src.skills.token_optimizer.optimize_context_content`
+- `src.skills.token_optimizer.is_contract_sensitive_text`
+- `src.skills.token_optimizer.filter_command_output`
+- `src.skills.token_optimizer.summarize_command_output`
 - `src.contracts.HarnessResult`
+- `tests.test_command_output_runtime`

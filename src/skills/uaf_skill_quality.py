@@ -1,3 +1,4 @@
+import argparse
 import ast
 import json
 import subprocess
@@ -645,7 +646,22 @@ def _run_smoke_script(skill_dir: Path) -> Dict[str, Any]:
 
 
 def main() -> int:
-    report = audit_skill_packaging_quality(run_smoke_scripts=True)
+    parser = argparse.ArgumentParser(description="Audit packaged UAF skills against the local quality gate.")
+    parser.add_argument("--no-smoke", action="store_true", help="Skip per-skill smoke_check.py execution.")
+    parser.add_argument("--summary", action="store_true", help="Print a compact summary instead of full JSON.")
+    args = parser.parse_args()
+
+    report = audit_skill_packaging_quality(run_smoke_scripts=not args.no_smoke)
+    if args.summary:
+        print(json.dumps({
+            "success": report["success"],
+            "total_skills": report["total_skills"],
+            "valid_skills": report["valid_skills"],
+            "invalid_skills": report["invalid_skills"],
+            "lowest_quality_score": report["lowest_quality_score"],
+            "low_quality_skills": report["low_quality_skills"],
+        }, ensure_ascii=False, indent=2))
+        return 0 if report["success"] else 1
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["success"] else 1
 

@@ -23,8 +23,9 @@ This is a UAF-native health harness for quality dashboard workflow patterns. It 
 1. Detect project-appropriate checks from repository files and explicit workflow metadata.
 2. Run only deterministic checks unless the user or adapter grants broader access.
 3. Preserve command exit codes and summarize stdout/stderr without hiding failures.
-4. Score health dimensions such as tests, syntax, skill catalog validity, sandbox policy, and documentation freshness.
-5. Return both machine-readable JSON and a concise human summary.
+4. Use `python -m src.skills.uaf_skill_audit --summary` or `--skill <name>` when auditing packaged skill targets without dumping the full JSON report.
+5. Score health dimensions such as tests, syntax, skill catalog validity, sandbox policy, and documentation freshness.
+6. Return both machine-readable JSON and a concise human summary.
 
 ## Required outputs
 

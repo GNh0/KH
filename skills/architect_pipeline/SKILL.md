@@ -14,13 +14,14 @@ This skill uses the Universal Agent Framework's architect and design-stage modul
 
 ## Instructions
 When the user asks you to design or execute a substantial workflow, you MUST follow these steps:
-1. Run the architect pipeline using the terminal:
+1. For a cohesive in-process run, call `src.core.architect.run_architect_pipeline`; it returns the design document, `DomainProfile`, `WorkDesign`, artifact manifest, deliverable exports, quality evidence, and evidence keys together.
+2. Run the architect pipeline using the terminal when CLI operation is preferred:
    `python -m src.core.runner --mode architect --project_dir ./workspace --reqs "<User Requirement>" --framework "<Framework Name>"`
-2. Read the generated `./workspace/design_doc.md` file carefully.
-3. Use the workflow design stage to create `DomainProfile`, `WorkDesign`, internal `ArtifactManifest`, and user-facing Office deliverables under the target project's `docs/` folder.
-4. **Parallel Dispatching Note**: The design must clearly outline bounded target outputs. For software these may be files; for other domains they may be reports, checklists, plans, or decision artifacts.
-5. Follow the exact design patterns, orchestration boundaries, evidence requirements, and domain constraints written in the design outputs.
-6. If there are license, policy, safety, or missing-evidence warnings, do NOT proceed as complete until alternatives or blockers are recorded.
+3. Read the generated `./workspace/design_doc.md` file carefully.
+4. Use the workflow design stage to create `DomainProfile`, `WorkDesign`, internal `ArtifactManifest`, and user-facing Office deliverables under the target project's `docs/` folder.
+5. **Parallel Dispatching Note**: The design must clearly outline bounded target outputs. For software these may be files; for other domains they may be reports, checklists, plans, or decision artifacts.
+6. Follow the exact design patterns, orchestration boundaries, evidence requirements, and domain constraints written in the design outputs.
+7. If there are license, policy, safety, or missing-evidence warnings, do NOT proceed as complete until alternatives or blockers are recorded.
 
 ## Required outputs
 
@@ -39,6 +40,7 @@ When the user asks you to design or execute a substantial workflow, you MUST fol
 ## UAF implementation targets
 
 - `src.core.architect.SystemArchitect`
+- `src.core.architect.run_architect_pipeline`
 - `src.core.runner`
 - `src.orchestration.agent_loop`
 - `src.orchestration.deliverable_exports`

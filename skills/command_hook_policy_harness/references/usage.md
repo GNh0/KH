@@ -16,22 +16,26 @@ Do not use this skill only because it is available. Use it when the current task
 - Target workspace, write boundaries, and whether user-facing deliverables are expected.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
-- Execution level: `procedure-policy`.
+- Execution level: `python-module`.
 - Implementation targets:
-  - `src.contracts.AdapterRequest`
-  - `src.contracts.AdapterResult`
+  - `src.skills.command_policy.classify_command`
+  - `src.skills.command_policy.evaluate_guard_policy`
+  - `src.skills.command_policy.evaluate_command_hook_policy`
+  - `src.skills.command_policy.load_command_policy`
+  - `src.skills.command_policy.build_command_audit_record`
+  - `src.skills.command_policy.redact_command`
   - `src.platforms.dispatcher_factory`
-  - `src.orchestration.agent_loop`
-  - `src.skills.uaf_skill_catalog`
+  - `tests.test_command_policy_runtime`
 
 ## Execution pattern
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `command-hook-policy-harness`.
-3. Apply the written workflow as a host-agent policy, then record the decision, boundary, or gate evidence that proves the policy was actually used.
-4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-6. Report the difference between capability available in the repository and behavior actually executed in the current run.
+3. Call `evaluate_command_hook_policy(command, policy=...)` when rewrite, integrity, and audit evidence are needed; use `classify_command` / `evaluate_guard_policy` for narrower guard checks.
+4. The current runtime loads a supplied policy source or packaged default. It does not automatically discover and merge project/user policy files unless the host passes that merged policy in.
+5. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
+6. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+7. Report the difference between capability available in the repository and behavior actually executed in the current run.
 
 ## Evidence to produce
 

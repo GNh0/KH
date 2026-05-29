@@ -34,6 +34,9 @@ class ResumeHandoffTests(unittest.TestCase):
                 metadata={
                     "missing_evidence": ["review passed"],
                     "memory_context": {"record_count": 0, "records": []},
+                    "git_state": {"branch": "feature/demo", "dirty": True},
+                    "decisions": ["Use local runtime storage"],
+                    "remaining_work": ["Collect review evidence"],
                 },
             )
             GoalLedger(tmp).save_current_goal(
@@ -58,6 +61,9 @@ class ResumeHandoffTests(unittest.TestCase):
         self.assertEqual(snapshot["workflow_id"], "workflow_demo")
         self.assertEqual(snapshot["success_criteria"], ["review evidence is available"])
         self.assertEqual(snapshot["missing_evidence"], ["review passed"])
+        self.assertEqual(snapshot["git_state"]["branch"], "feature/demo")
+        self.assertEqual(snapshot["decisions"], ["Use local runtime storage"])
+        self.assertEqual(snapshot["remaining_work"], ["Collect review evidence"])
         self.assertEqual(persisted["next_recommended_action"], "collect missing evidence: review passed")
         self.assertEqual(persisted["success_criteria"], ["review evidence is available"])
         self.assertIn("# UAF Resume Handoff", markdown)
@@ -65,6 +71,8 @@ class ResumeHandoffTests(unittest.TestCase):
         self.assertIn("## Success Criteria", markdown)
         self.assertIn("review evidence is available", markdown)
         self.assertIn("review passed", markdown)
+        self.assertIn("Use local runtime storage", markdown)
+        self.assertIn("Collect review evidence", markdown)
 
     def test_handoff_snapshot_handles_missing_state_as_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:

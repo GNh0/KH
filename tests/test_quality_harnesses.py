@@ -16,6 +16,8 @@ from src.orchestration.quality_harnesses import (
 
 def _write_docx_xml(path: Path, document_xml: str) -> None:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as package:
+        package.writestr("[Content_Types].xml", "<Types></Types>")
+        package.writestr("_rels/.rels", "<Relationships></Relationships>")
         package.writestr("word/document.xml", document_xml)
 
 
@@ -132,6 +134,25 @@ class QualityHarnessTests(unittest.TestCase):
         self.assertIn("deliverable template quality failed", result["evidence"])
         self.assertTrue(any("문서 정보" in finding for finding in result["findings"]))
 
+    def test_missing_artifact_does_not_emit_template_passed_evidence(self):
+        result = evaluate_deliverable_quality(
+            {
+                "profile": "general-orchestration",
+                "deliverables": [
+                    {
+                        "path": str(Path("missing.docx")),
+                        "file_name": "missing.docx",
+                        "artifact_type": "requirements-brief",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("artifact render qa failed", result["evidence"])
+        self.assertIn("deliverable template quality failed", result["evidence"])
+        self.assertNotIn("deliverable template quality passed", result["evidence"])
+
     def test_role_execution_audit_requires_artifacts_and_parallel_waves(self):
         role_metadata = {
             "summary": {
@@ -163,6 +184,126 @@ class QualityHarnessTests(unittest.TestCase):
         failed = audit_role_execution(missing_artifact, required_roles=["ceo", "advisor"])
         self.assertEqual(failed["status"], "failed")
         self.assertTrue(any("advisor" in finding for finding in failed["findings"]))
+
+    def test_role_execution_audit_default_requires_product_strategy_and_implementation_when_needed(self):
+        role_metadata = {
+            "summary": {
+                "execution_model": "dag-asyncio-role-waves",
+                "success": True,
+                "wave_count": 3,
+                "parallel_wave_count": 1,
+                "implementation_required": True,
+            },
+            "results": [
+                {
+                    "role": "ceo",
+                    "status": "success",
+                    "metadata": {"role_artifacts": [{"path": "runtime/ceo.md"}]},
+                },
+                {
+                    "role": "advisor",
+                    "status": "success",
+                    "metadata": {"role_artifacts": [{"path": "runtime/advisor.md"}]},
+                },
+            ],
+        }
+
+        result = audit_role_execution(role_metadata)
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("product-strategist" in finding for finding in result["findings"]))
+        self.assertTrue(any("implementer" in finding for finding in result["findings"]))
+
+    def test_traceability_matrix_dict_rows_have_named_schema_and_gate_status(self):
+        profile = DomainProfileBuilder.build(
+            objective="Build an inventory app",
+            domain_hint="software-development",
+        )
+        design = work_design_from_profile(profile, deliverables=["requirements brief"])
+        rows = build_traceability_matrix_rows(
+            design,
+            [
+                {
+                    "file_name": "requirements.docx",
+                    "artifact_type": "requirements-brief",
+                    "evidence_key": "requirements brief exported",
+                    "gate_status": "passed",
+                },
+            ],
+            as_dict=True,
+        )
+
+        self.assertEqual(rows[0]["trace_id"], "TRACE-001")
+        self.assertEqual(rows[0]["deliverable"], "requirements.docx")
+        self.assertEqual(rows[0]["status"], "passed")
+
+    def test_traceability_dict_rows_can_be_evaluated_directly(self):
+        profile = DomainProfileBuilder.build(
+            objective="Build an inventory app",
+            domain_hint="software-development",
+        )
+        design = work_design_from_profile(profile, deliverables=["requirements brief"])
+        rows = build_traceability_matrix_rows(
+            design,
+            [
+                {
+                    "file_name": "requirements.docx",
+                    "artifact_type": "requirements-brief",
+                    "evidence_key": "requirements brief exported",
+                    "gate_status": "passed",
+                },
+            ],
+            as_dict=True,
+        )
+
+        result = evaluate_deliverable_quality({"traceability_rows": rows, "deliverables": []})
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["traceability_matrix"]["status"], "passed")
+
+    def test_incomplete_office_package_fails_render_qa(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            xlsx_path = Path(tmp) / "fake.xlsx"
+            with zipfile.ZipFile(xlsx_path, "w", compression=zipfile.ZIP_DEFLATED) as package:
+                package.writestr("xl/worksheets/sheet1.xml", "<worksheet><sheetData></sheetData></worksheet>")
+
+            result = evaluate_deliverable_quality(
+                {
+                    "deliverables": [
+                        {
+                            "path": str(xlsx_path),
+                            "file_name": "fake.xlsx",
+                            "format": "xlsx",
+                            "artifact_type": "role-task-breakdown",
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("missing required parts" in finding for finding in result["findings"]))
+        self.assertIn("artifact render qa failed", result["evidence"])
+
+    def test_unknown_artifact_type_does_not_pass_template_quality_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text_path = Path(tmp) / "artifact.txt"
+            text_path.write_text("plain artifact", encoding="utf-8")
+
+            result = evaluate_deliverable_quality(
+                {
+                    "deliverables": [
+                        {
+                            "path": str(text_path),
+                            "file_name": "artifact.txt",
+                            "format": "txt",
+                            "artifact_type": "unknown-artifact",
+                        }
+                    ]
+                }
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("unknown artifact type" in finding for finding in result["findings"]))
 
 
 if __name__ == "__main__":

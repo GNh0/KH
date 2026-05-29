@@ -21,6 +21,15 @@ This harness checks user-facing deliverables against recognizable document and s
 4. Do not write harness-only reports into the target project's `docs/` folder.
 5. Block or mark findings when a required section, table column, owner, approval basis, or verification marker is missing.
 
+## Artifact Type Policy
+
+| Artifact type | Template policy |
+| --- | --- |
+| `requirements-brief`, `functional-specification`, `development-design`, `process-flow` | Required section markers must be present. |
+| `role-task-breakdown`, `evidence-plan`, `risk-policy-checklist`, `traceability-matrix` | Required spreadsheet columns must be present and row widths must match. |
+| `technical-drawing`, `cad-drawing` | Render structure is checked, template markers are not applicable. |
+| Unknown artifact type | Fails by default unless the record explicitly sets `template_not_applicable` or `template_optional`. |
+
 ## Required outputs
 
 - `quality.status`: `passed` or `failed`.

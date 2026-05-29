@@ -19,6 +19,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Execution level: `hybrid-harness`.
 - Implementation targets:
   - `src.core.architect.SystemArchitect`
+  - `src.core.architect.run_architect_pipeline`
   - `src.core.runner`
   - `src.orchestration.agent_loop`
   - `src.orchestration.deliverable_exports`
@@ -29,10 +30,11 @@ Do not use this skill only because it is available. Use it when the current task
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `architect-pipeline`.
-3. Combine the listed Python implementation targets with the written workflow contract, then record which parts ran as code and which parts were applied procedurally.
-4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-6. Report the difference between capability available in the repository and behavior actually executed in the current run.
+3. Prefer `run_architect_pipeline(project_dir, requirements, framework, libraries, metadata=...)`; expected output keys are `design_doc_path`, `design_doc`, `domain_profile`, `work_design`, `manifest`, `deliverable_exports`, `quality`, and `evidence`.
+4. Combine the listed Python implementation targets with the written workflow contract, then record which parts ran as code and which parts were applied procedurally.
+5. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
+6. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+7. Report the difference between capability available in the repository and behavior actually executed in the current run.
 
 ## Evidence to produce
 

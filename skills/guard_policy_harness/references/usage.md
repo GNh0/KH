@@ -16,19 +16,19 @@ Do not use this skill only because it is available. Use it when the current task
 - Target workspace, write boundaries, and whether user-facing deliverables are expected.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
-- Execution level: `procedure-policy`.
+- Execution level: `python-module`.
 - Implementation targets:
+  - `src.skills.command_policy.classify_command`
+  - `src.skills.command_policy.evaluate_guard_policy`
+  - `src.skills.command_policy.evaluate_write_boundary`
   - `src.harness.sandbox`
-  - `src.platforms.dispatcher_factory`
-  - `src.contracts.AdapterRequest`
-  - `src.contracts.AdapterResult`
-  - `skills/command_hook_policy_harness/SKILL.md`
+  - `tests.test_command_policy_runtime`
 
 ## Execution pattern
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `guard-policy-harness`.
-3. Apply the written workflow as a host-agent policy, then record the decision, boundary, or gate evidence that proves the policy was actually used.
+3. Call the command policy functions for command risk and path-boundary evidence, then record the decision, boundary, or gate evidence that proves the policy was actually used.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
 5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 6. Report the difference between capability available in the repository and behavior actually executed in the current run.

@@ -145,6 +145,10 @@ class SnapshotManager:
 
     def rollback(self, target_version_id: str) -> bool:
         """Restore a project file or work snapshot by version id."""
+        return self.rollback_result(target_version_id)["status"] == "restored"
+
+    def rollback_result(self, target_version_id: str) -> dict:
+        """Restore a project file or work snapshot and return a structured summary."""
         logs = self._read_logs()
             
         target_entry = None
@@ -155,10 +159,17 @@ class SnapshotManager:
                 
         if not target_entry:
             print(f"[Snapshot] version id not found: {target_version_id}")
-            return False
+            return {
+                "status": "missing",
+                "version_id": target_version_id,
+                "restored_files": [],
+                "removed_files": [],
+                "failed_files": [],
+                "message": "version id not found",
+            }
             
         if target_entry.get("kind") == "bundle":
-            return self._rollback_bundle(target_version_id)
+            return self._rollback_bundle_result(target_version_id)
 
         target_file = target_entry["file"]
         restore_path = self._sanitize_path(target_file)
@@ -169,7 +180,14 @@ class SnapshotManager:
         backup_path = os.path.join(self.snapshot_dir, target_version_id)
         if not os.path.exists(backup_path):
             print(f"[Snapshot] missing snapshot file: {backup_path}")
-            return False
+            return {
+                "status": "missing",
+                "version_id": target_version_id,
+                "restored_files": [],
+                "removed_files": [],
+                "failed_files": [target_file],
+                "message": "snapshot file missing",
+            }
             
         os.makedirs(os.path.dirname(restore_path), exist_ok=True)
         
@@ -179,32 +197,68 @@ class SnapshotManager:
                 dst.write(restored_code)
             
         print(f"[Snapshot] file snapshot restored: {target_file} <- {target_version_id}")
-        return True
+        return {
+            "status": "restored",
+            "version_id": target_version_id,
+            "restored_files": [target_file],
+            "removed_files": [],
+            "failed_files": [],
+            "message": "file snapshot restored",
+        }
 
     def _rollback_bundle(self, target_version_id: str) -> bool:
+        return self._rollback_bundle_result(target_version_id)["status"] == "restored"
+
+    def _rollback_bundle_result(self, target_version_id: str) -> dict:
         backup_path = os.path.join(self.snapshot_dir, target_version_id)
         if not os.path.exists(backup_path):
             print(f"[Snapshot] missing snapshot bundle: {backup_path}")
-            return False
+            return {
+                "status": "missing",
+                "version_id": target_version_id,
+                "restored_files": [],
+                "removed_files": [],
+                "failed_files": [],
+                "message": "snapshot bundle missing",
+            }
 
         with gzip.open(backup_path, "rt", encoding="utf-8") as handle:
             payload = json.load(handle)
 
+        restored = []
+        removed = []
+        failed = []
         for entry in payload.get("files", []):
             file_name = entry.get("file", "")
-            restore_path = self._sanitize_path(file_name)
-            if self._is_snapshot_path(restore_path):
-                raise PermissionError(f"[snapshot] protected snapshot metadata path: {file_name}")
-            if not entry.get("exists", False):
-                if os.path.exists(restore_path):
-                    os.remove(restore_path)
-                continue
-            os.makedirs(os.path.dirname(restore_path), exist_ok=True)
-            with open(restore_path, "w", encoding="utf-8") as handle:
-                handle.write(entry.get("content", ""))
+            try:
+                restore_path = self._sanitize_path(file_name)
+                if self._is_snapshot_path(restore_path):
+                    raise PermissionError(f"[snapshot] protected snapshot metadata path: {file_name}")
+                if not entry.get("exists", False):
+                    if os.path.exists(restore_path):
+                        os.remove(restore_path)
+                        removed.append(file_name)
+                    continue
+                os.makedirs(os.path.dirname(restore_path), exist_ok=True)
+                with open(restore_path, "w", encoding="utf-8") as handle:
+                    handle.write(entry.get("content", ""))
+                restored.append(file_name)
+            except Exception as exc:
+                failed.append({
+                    "file": file_name,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                })
 
         print(f"[Snapshot] work snapshot restored: {target_version_id}")
-        return True
+        return {
+            "status": "restored" if not failed else "partial",
+            "version_id": target_version_id,
+            "restored_files": restored,
+            "removed_files": removed,
+            "failed_files": failed,
+            "message": "work snapshot restored" if not failed else "work snapshot partially restored",
+        }
 
     def prune(self, max_snapshots: int) -> dict:
         """Keep the newest snapshot log entries and delete older snapshot files."""

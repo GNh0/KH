@@ -142,6 +142,9 @@ class AntigravityDispatcher:
                 "orchestration_roles": metadata.get("orchestration_roles", []),
                 "role_graph": metadata.get("role_graph", {}),
                 "goal": metadata.get("goal", {}),
+                "memory_context": metadata.get("memory_context", {}),
+                "evidence": list(metadata.get("evidence", []) or []),
+                "request_metadata": _portable_request_metadata(metadata),
                 "native_dispatch": {
                     "status": "pending",
                     "adapter": "",
@@ -188,6 +191,9 @@ class AntigravityDispatcher:
                 "orchestration_roles": metadata.get("orchestration_roles", []),
                 "role_graph": metadata.get("role_graph", {}),
                 "goal": evaluated_goal or metadata.get("goal", {}),
+                "memory_context": metadata.get("memory_context", {}),
+                "evidence": list(metadata.get("evidence", []) or []),
+                "request_metadata": _portable_request_metadata(metadata),
                 "task_results": [result.to_dict() for result in task_results],
                 "gate_results": gate_results,
                 "native_dispatch": {
@@ -222,6 +228,16 @@ def _antigravity_sidecar_adapter(metadata: dict):
     if sidecar.get("timeout_seconds") is not None:
         kwargs["timeout_seconds"] = float(sidecar.get("timeout_seconds"))
     return AntigravityNativeSidecarAdapter(**kwargs)
+
+
+def _portable_request_metadata(metadata: dict) -> dict:
+    try:
+        return json.loads(json.dumps(metadata, ensure_ascii=False, default=str))
+    except TypeError:
+        return {
+            key: str(value)
+            for key, value in (metadata or {}).items()
+        }
 
 
 def _adapter_status(native_status: str, task_success: bool, goal: dict) -> str:

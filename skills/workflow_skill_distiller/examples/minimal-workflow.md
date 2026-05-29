@@ -11,19 +11,22 @@ The agent must decide whether `workflow-skill-distiller` applies, run or apply i
 1. Load `SKILL.md` and confirm the trigger applies.
 2. Read `references/usage.md` before doing the work.
 3. Collect the user objective, workspace boundary, expected outputs, and evidence requirements.
-4. Follow the `procedure-policy` execution pattern for this skill.
-5. Write or report the resulting artifact, state entry, gate result, or decision evidence.
+4. Call `should_distill_workflow` before creating a skill and `build_skill_scaffold` with the intended execution level when a scaffold is justified.
+5. Write or report the resulting scaffold files, reject reason, state entry, gate result, or decision evidence.
 6. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
 
 - `skill`: `workflow-skill-distiller`.
-- `execution_level`: `procedure-policy`.
+- `execution_level`: `python-module`.
 - `support_reference_read`: `references/usage.md`.
 - `implementation_targets`:
+  - `src.skills.workflow_distiller.should_distill_workflow`
+  - `src.skills.workflow_distiller.build_skill_scaffold`
   - `skills/<skill-name>/SKILL.md`
   - `src.skills.catalog`
   - `src.skills.uaf_skill_catalog`
+  - `tests.test_workflow_distiller_runtime`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.
 - `verification`: command output, test result, artifact path, or explicit blocked reason.
 

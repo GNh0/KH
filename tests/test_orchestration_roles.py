@@ -10,7 +10,7 @@ from src.orchestration.roles import (
     default_role_graph,
     default_role_profiles,
 )
-from src.orchestration.role_orchestrator import RoleOrchestrator
+from src.orchestration.role_orchestrator import RoleOrchestrator, run_review_release_roles
 from src.contracts import WorkflowTaskResult
 
 
@@ -221,6 +221,92 @@ class OrchestrationRoleGraphTests(unittest.TestCase):
         timing_b = result["context"]["timings"]["parallel-b"]
         self.assertLess(abs(timing_a[0] - timing_b[0]), 0.04)
         self.assertLess(max(timing_a[1], timing_b[1]) - min(timing_a[0], timing_b[0]), 0.14)
+
+    def test_review_release_roles_block_qa_without_explicit_checks(self):
+        result = RoleOrchestrator().run_sync({})
+        self.assertTrue(result["success"])
+
+        import asyncio
+
+        review = asyncio.run(run_review_release_roles({
+            "implementation_task_results": [
+                {
+                    "role": "implementer",
+                    "status": "success",
+                    "file_name": "main.py",
+                    "metadata": {"evidence": ["task runner completed"]},
+                }
+            ],
+            "goal": {"status": "complete", "metadata": {}},
+        }))
+
+        statuses = {item["role"]: item["status"] for item in review["results"]}
+        self.assertEqual(statuses["qa-verifier"], "blocked")
+        self.assertEqual(statuses["release-manager"], "blocked")
+        qa_gate = review["context"]["role_gate_results"]["qa-verifier"]
+        self.assertIn("no QA checks", qa_gate["message"])
+
+    def test_release_blocked_by_security_preserves_security_findings(self):
+        import asyncio
+
+        review = asyncio.run(run_review_release_roles({
+            "implementation_task_results": [
+                {
+                    "role": "implementer",
+                    "status": "success",
+                    "file_name": "main.py",
+                    "metadata": {
+                        "evidence": ["task runner completed"],
+                        "security_findings": ["secret written to logs"],
+                    },
+                }
+            ],
+            "qa_checks": [
+                {
+                    "requirement_id": "QA-001",
+                    "check_type": "manual",
+                    "description": "manual verification",
+                    "status": "passed",
+                    "evidence": ["manual qa passed"],
+                }
+            ],
+            "goal": {"status": "complete", "metadata": {}},
+        }))
+
+        release = review["context"]["role_gate_results"]["release-manager"]
+        self.assertEqual(release["status"], "blocked")
+        self.assertIn("secret written to logs", release["findings"])
+
+    def test_release_blocked_after_quality_failure_preserves_quality_finding(self):
+        import asyncio
+
+        review = asyncio.run(run_review_release_roles({
+            "implementation_task_results": [
+                {
+                    "role": "implementer",
+                    "status": "success",
+                    "file_name": "main.py",
+                    "metadata": {
+                        "evidence": ["task runner completed"],
+                        "quality_findings": ["missing regression test"],
+                    },
+                }
+            ],
+            "qa_checks": [
+                {
+                    "requirement_id": "QA-001",
+                    "check_type": "manual",
+                    "description": "manual verification",
+                    "status": "passed",
+                    "evidence": ["manual qa passed"],
+                }
+            ],
+            "goal": {"status": "complete", "metadata": {}},
+        }))
+
+        release_result = next(item for item in review["results"] if item["role"] == "release-manager")
+        self.assertEqual(release_result["status"], "blocked")
+        self.assertIn("missing regression test", release_result["metadata"]["gate"]["findings"])
 
 
 if __name__ == "__main__":

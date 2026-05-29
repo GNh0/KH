@@ -31,11 +31,11 @@ The default should be conservative for destructive actions and non-blocking for 
 
 ## Hook workflow
 
-1. Load project-local policy, then user policy, then packaged defaults.
-2. Verify hook or policy integrity before trusting it.
-3. Classify the command as read, write, network, destructive, credential-bearing, or unknown.
-4. Apply the permission verdict and record the reason.
-5. Rewrite only when the rewritten command is semantically equivalent.
+1. Load a supplied project/user policy source with `load_command_policy`, or use packaged defaults when no policy is supplied.
+2. Call `src.skills.command_policy.load_command_policy` and verify the returned integrity digest before trusting it.
+3. Call `src.skills.command_policy.classify_command` to classify the command as read, write, network, destructive, credential-bearing, or unknown.
+4. Call `src.skills.command_policy.evaluate_command_hook_policy` to apply rewrite rules, guard verdicts, integrity status, and audit records in one decision.
+5. Rewrite only when the host-supplied rule is intended to be semantically equivalent and the decision records `rewrite.applied_rules`; this harness records and audits the rewrite, but the host owns semantic-equivalence approval for custom rules.
 6. On parse errors, unknown protocol input, or hook failure, passthrough with an audit note instead of blocking unrelated execution.
 
 ## Audit fields
@@ -64,8 +64,11 @@ The default should be conservative for destructive actions and non-blocking for 
 
 ## UAF implementation targets
 
-- `src.contracts.AdapterRequest`
-- `src.contracts.AdapterResult`
+- `src.skills.command_policy.classify_command`
+- `src.skills.command_policy.evaluate_guard_policy`
+- `src.skills.command_policy.evaluate_command_hook_policy`
+- `src.skills.command_policy.load_command_policy`
+- `src.skills.command_policy.build_command_audit_record`
+- `src.skills.command_policy.redact_command`
 - `src.platforms.dispatcher_factory`
-- `src.orchestration.agent_loop`
-- `src.skills.uaf_skill_catalog`
+- `tests.test_command_policy_runtime`

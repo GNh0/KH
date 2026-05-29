@@ -20,9 +20,9 @@ This is a UAF-native safety harness for careful execution, edit boundary, guard,
 
 ## Workflow
 
-1. Classify proposed actions as read, write, network, destructive, credential-bearing, or unknown.
-2. Apply permission precedence: deny, ask, allow, default.
-3. Enforce optional edit boundaries before generated code or adapter writes files.
+1. Classify proposed actions with `src.skills.command_policy.classify_command`.
+2. Apply permission precedence with `src.skills.command_policy.evaluate_guard_policy`: deny, ask, allow, default.
+3. Enforce optional edit boundaries with `src.skills.command_policy.evaluate_write_boundary` before generated code or adapter writes files.
 4. Require explicit approval for destructive actions such as recursive delete, force push, database drop, or secret exposure.
 5. Record guard decisions in workflow metadata for later review.
 6. Provide an unlock path that removes temporary boundaries with an audit note.
@@ -43,8 +43,8 @@ This is a UAF-native safety harness for careful execution, edit boundary, guard,
 
 ## UAF implementation targets
 
+- `src.skills.command_policy.classify_command`
+- `src.skills.command_policy.evaluate_guard_policy`
+- `src.skills.command_policy.evaluate_write_boundary`
 - `src.harness.sandbox`
-- `src.platforms.dispatcher_factory`
-- `src.contracts.AdapterRequest`
-- `src.contracts.AdapterResult`
-- `skills/command_hook_policy_harness/SKILL.md`
+- `tests.test_command_policy_runtime`

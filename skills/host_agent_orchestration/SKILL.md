@@ -31,8 +31,8 @@ Use the default UAF role graph for orchestration: `ceo`, `advisor`, `product-str
 
 ## Required outputs
 
-- `AdapterRequest` containing agent role, task text, allowed tools, budget, and safety policy.
-- `AdapterResult` containing status, normalized output, artifact paths, and metadata.
+- `AdapterRequest` containing `project_dir`, `files`, `design_doc`, `platform_mode`, and metadata for role graph, goal, memory, evidence, tools, budget, and safety policy.
+- `AdapterResult` containing top-level `status`, `message`, `workflow_id`, and `metadata`; artifact paths, evidence, task results, and blocked/failure reasons belong inside `metadata`.
 - A controller-level summary that includes every subagent result, including partial failures.
 
 ## Failure handling

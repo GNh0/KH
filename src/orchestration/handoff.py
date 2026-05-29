@@ -69,6 +69,9 @@ class ResumeHandoff:
             missing_evidence=missing_evidence,
             artifact_manifest=manifest,
             memory_context=dict(goal_metadata.get("memory_context", {})),
+            git_state=dict(goal_metadata.get("git_state", {})),
+            decisions=list(goal_metadata.get("decisions", []) or []),
+            remaining_work=list(goal_metadata.get("remaining_work", []) or []),
             goal=goal,
             generated_at=_utc_now(),
             metadata={
@@ -126,6 +129,15 @@ def render_handoff_markdown(snapshot: HandoffSnapshot) -> str:
         "## Memory Context",
         f"- Record count: {snapshot.memory_context.get('record_count', 0)}",
         "",
+        "## Git State",
+        _mapping_list(snapshot.git_state),
+        "",
+        "## Decisions",
+        _bullet_list(snapshot.decisions),
+        "",
+        "## Remaining Work",
+        _bullet_list(snapshot.remaining_work),
+        "",
         "## Runtime Paths",
         f"- Resume JSON: {snapshot.metadata.get('paths', {}).get('json_path', '')}",
         f"- Current goal: {snapshot.metadata.get('goal_state_path', '')}",
@@ -169,6 +181,12 @@ def _bullet_list(items: List[str]) -> str:
     if not items:
         return "- none"
     return "\n".join(f"- {item}" for item in items)
+
+
+def _mapping_list(items: Dict[str, Any]) -> str:
+    if not items:
+        return "- none"
+    return "\n".join(f"- {key}: {value}" for key, value in sorted(items.items()))
 
 
 def _utc_now() -> str:

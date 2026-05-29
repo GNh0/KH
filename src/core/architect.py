@@ -1,5 +1,8 @@
 import os
 import csv
+from typing import Any, Dict, List
+
+from src.orchestration.artifacts import build_design_stage
 from src.skills.pattern_analyzer import analyze_design_pattern
 from src.skills.license_checker import check_license
 
@@ -91,3 +94,45 @@ class SystemArchitect:
             f.write(design_doc)
             
         return doc_path
+
+
+def run_architect_pipeline(
+    project_dir: str,
+    requirements: str,
+    framework: str = "generic",
+    libraries: List[str] = None,
+    scale: str = "large",
+    metadata: Dict[str, Any] = None,
+    llm_router=None,
+) -> Dict[str, Any]:
+    """Run the architect pipeline and return design, domain, export, and quality evidence."""
+    os.makedirs(project_dir, exist_ok=True)
+    architect = SystemArchitect(project_dir, llm_router=llm_router)
+    design_doc_path = architect.draft_architecture(
+        requirements=requirements,
+        framework=framework,
+        libraries=list(libraries or []),
+        scale=scale,
+    )
+    with open(design_doc_path, "r", encoding="utf-8") as handle:
+        design_doc = handle.read()
+
+    stage_metadata = dict(metadata or {})
+    stage_metadata.setdefault("scope", requirements)
+    design_stage = build_design_stage(
+        project_dir=project_dir,
+        workflow_id=str(stage_metadata.get("workflow_id", "architect_pipeline")),
+        design_doc=design_doc,
+        file_list=list(stage_metadata.get("target_files", [])),
+        metadata=stage_metadata,
+    )
+    return {
+        "design_doc_path": design_doc_path,
+        "design_doc": design_doc,
+        "domain_profile": design_stage.get("domain_profile", {}),
+        "work_design": design_stage.get("work_design", {}),
+        "manifest": design_stage.get("manifest", {}),
+        "deliverable_exports": design_stage.get("deliverable_exports", {}),
+        "quality": design_stage.get("deliverable_exports", {}).get("quality", {}),
+        "evidence": list(design_stage.get("evidence", [])),
+    }

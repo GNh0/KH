@@ -16,11 +16,14 @@ Do not use this skill only because it is available. Use it when the current task
 - Target workspace, write boundaries, and whether user-facing deliverables are expected.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
-- Execution level: `procedure-policy`.
+- Execution level: `hybrid-harness`.
 - Implementation targets:
   - `src.harness.evaluator`
   - `src.harness.sandbox`
   - `src.core.runner`
+  - `src.orchestration.gate_evaluators.build_review_finding`
+  - `src.orchestration.gate_evaluators.build_qa_check`
+  - `src.orchestration.gate_evaluators.evaluate_qa_checks`
   - `tests`
   - `src.skills.uaf_skill_catalog`
 
@@ -28,7 +31,7 @@ Do not use this skill only because it is available. Use it when the current task
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `quality-gates-harness`.
-3. Apply the written workflow as a host-agent policy, then record the decision, boundary, or gate evidence that proves the policy was actually used.
+3. Apply failing-first and verification rules procedurally, and use gate evaluator helpers when review or QA evidence must be structured.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
 5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 6. Report the difference between capability available in the repository and behavior actually executed in the current run.

@@ -11,8 +11,8 @@ The agent must decide whether `subagent-review-pipeline` applies, run or apply i
 1. Load `SKILL.md` and confirm the trigger applies.
 2. Read `references/usage.md` before doing the work.
 3. Collect the user objective, workspace boundary, expected outputs, and evidence requirements.
-4. Follow the `hybrid-harness` execution pattern for this skill.
-5. Write or report the resulting artifact, state entry, gate result, or decision evidence.
+4. Preserve `success`, `failed`, and `blocked` task statuses, with optional reviewer substatus in metadata.
+5. Write or report the resulting role output, normalized reviewer finding, aggregate state, gate result, or decision evidence.
 6. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
@@ -24,6 +24,8 @@ The agent must decide whether `subagent-review-pipeline` applies, run or apply i
   - `src.tasks.workflows`
   - `src.orchestration.roles`
   - `src.orchestration.agent_loop`
+  - `src.orchestration.role_orchestrator.RoleOrchestrator`
+  - `src.orchestration.gate_evaluators.normalize_review_findings`
   - `src.contracts.AdapterRequest`
   - `src.contracts.AdapterResult`
   - `src.skills.uaf_skill_catalog`

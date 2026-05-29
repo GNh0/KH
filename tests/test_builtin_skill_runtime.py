@@ -88,7 +88,7 @@ def add_one(value):
 
         self.assertIn("line-0", result)
         self.assertIn("line-19", result)
-        self.assertIn("토큰 최적화됨", result)
+        self.assertIn("token optimized", result)
         self.assertNotIn("line-10\nline-11", result)
 
     def test_truncate_logs_preserves_failure_context_from_middle(self):
@@ -108,7 +108,7 @@ def add_one(value):
         self.assertIn("FAILED tests/test_token_optimizer.py::test_keeps_context", result)
         self.assertIn("ValueError: important middle failure", result)
         self.assertIn("exit code: 1", result)
-        self.assertIn("토큰 최적화됨", result)
+        self.assertIn("token optimized", result)
         self.assertLessEqual(len(result.splitlines()), 32)
 
 

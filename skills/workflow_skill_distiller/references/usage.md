@@ -16,17 +16,20 @@ Do not use this skill only because it is available. Use it when the current task
 - Target workspace, write boundaries, and whether user-facing deliverables are expected.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
-- Execution level: `procedure-policy`.
+- Execution level: `python-module`.
 - Implementation targets:
+  - `src.skills.workflow_distiller.should_distill_workflow`
+  - `src.skills.workflow_distiller.build_skill_scaffold`
   - `skills/<skill-name>/SKILL.md`
   - `src.skills.catalog`
   - `src.skills.uaf_skill_catalog`
+  - `tests.test_workflow_distiller_runtime`
 
 ## Execution pattern
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `workflow-skill-distiller`.
-3. Apply the written workflow as a host-agent policy, then record the decision, boundary, or gate evidence that proves the policy was actually used.
+3. Call `should_distill_workflow` before creating a skill and `build_skill_scaffold(..., execution_level="python-module" | "hybrid-harness" | "procedure-policy")` when producing a starter folder, then record the decision evidence.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
 5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 6. Report the difference between capability available in the repository and behavior actually executed in the current run.

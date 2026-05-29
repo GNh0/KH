@@ -1,4 +1,6 @@
 import unittest
+import subprocess
+import sys
 
 from src.skills.uaf_skill_audit import audit_packaged_skills, extract_implementation_targets
 
@@ -54,6 +56,27 @@ class UafSkillAuditTests(unittest.TestCase):
         report = audit_packaged_skills()
 
         self.assertTrue(report["success"], report)
+
+    def test_module_help_does_not_run_full_audit(self):
+        completed = subprocess.run(
+            [sys.executable, "-m", "src.skills.uaf_skill_audit", "--help"],
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("--summary", completed.stdout)
+        self.assertNotIn('"skills"', completed.stdout)
+
+    def test_missing_skill_filter_fails_clearly(self):
+        completed = subprocess.run(
+            [sys.executable, "-m", "src.skills.uaf_skill_audit", "--skill", "does-not-exist", "--summary"],
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("skill not found", completed.stdout)
 
 
 if __name__ == "__main__":

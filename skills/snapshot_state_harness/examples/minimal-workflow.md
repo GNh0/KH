@@ -26,7 +26,7 @@ The agent must decide whether `snapshot-state-harness` applies, run or apply it 
   - `src.harness.sandbox`
   - `tests.test_snapshot_manager`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.
-- `verification`: command output, test result, artifact path, or explicit blocked reason.
+- `verification`: `rollback_result` summary, command output, test result, artifact path, or explicit blocked reason.
 
 ## Failure cases
 

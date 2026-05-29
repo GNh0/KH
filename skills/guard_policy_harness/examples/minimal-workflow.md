@@ -11,21 +11,21 @@ The agent must decide whether `guard-policy-harness` applies, run or apply it ac
 1. Load `SKILL.md` and confirm the trigger applies.
 2. Read `references/usage.md` before doing the work.
 3. Collect the user objective, workspace boundary, expected outputs, and evidence requirements.
-4. Follow the `procedure-policy` execution pattern for this skill.
-5. Write or report the resulting artifact, state entry, gate result, or decision evidence.
+4. Call `classify_command`, `evaluate_guard_policy`, and `evaluate_write_boundary` when command or path evidence is needed.
+5. Write or report the resulting guard verdict, boundary decision, gate result, or decision evidence.
 6. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
 
 - `skill`: `guard-policy-harness`.
-- `execution_level`: `procedure-policy`.
+- `execution_level`: `python-module`.
 - `support_reference_read`: `references/usage.md`.
 - `implementation_targets`:
+  - `src.skills.command_policy.classify_command`
+  - `src.skills.command_policy.evaluate_guard_policy`
+  - `src.skills.command_policy.evaluate_write_boundary`
   - `src.harness.sandbox`
-  - `src.platforms.dispatcher_factory`
-  - `src.contracts.AdapterRequest`
-  - `src.contracts.AdapterResult`
-  - `skills/command_hook_policy_harness/SKILL.md`
+  - `tests.test_command_policy_runtime`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.
 - `verification`: command output, test result, artifact path, or explicit blocked reason.
 

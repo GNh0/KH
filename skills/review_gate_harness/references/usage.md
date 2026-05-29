@@ -19,18 +19,22 @@ Do not use this skill only because it is available. Use it when the current task
 - Execution level: `hybrid-harness`.
 - Implementation targets:
   - `src.orchestration.roles`
-  - `src.orchestration.gate_evaluators`
+  - `src.orchestration.gate_evaluators.build_review_finding`
+  - `src.orchestration.gate_evaluators.normalize_review_findings`
+  - `src.orchestration.gate_evaluators.evaluate_spec_review_gate`
+  - `src.orchestration.gate_evaluators.evaluate_code_quality_gate`
+  - `src.orchestration.gate_evaluators.evaluate_release_gate`
   - `src.orchestration.evidence_producers`
   - `src.contracts.WorkflowDispatchResult`
   - `src.contracts.WorkflowTaskResult`
   - `src.platforms.dispatcher_factory`
-  - `tests`
+  - `tests.test_gate_evaluators`
 
 ## Execution pattern
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `review-gate-harness`.
-3. Combine the listed Python implementation targets with the written workflow contract, then record which parts ran as code and which parts were applied procedurally.
+3. Normalize findings with severity, location, suggested fix, and next action before producing gate evidence.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
 5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 6. Report the difference between capability available in the repository and behavior actually executed in the current run.

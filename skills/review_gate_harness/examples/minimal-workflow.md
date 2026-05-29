@@ -11,8 +11,8 @@ The agent must decide whether `review-gate-harness` applies, run or apply it acc
 1. Load `SKILL.md` and confirm the trigger applies.
 2. Read `references/usage.md` before doing the work.
 3. Collect the user objective, workspace boundary, expected outputs, and evidence requirements.
-4. Follow the `hybrid-harness` execution pattern for this skill.
-5. Write or report the resulting artifact, state entry, gate result, or decision evidence.
+4. Normalize findings with severity, location, suggested fix, and next action before producing the gate result.
+5. Write or report the resulting structured finding, state entry, gate result, or decision evidence.
 6. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
@@ -22,12 +22,16 @@ The agent must decide whether `review-gate-harness` applies, run or apply it acc
 - `support_reference_read`: `references/usage.md`.
 - `implementation_targets`:
   - `src.orchestration.roles`
-  - `src.orchestration.gate_evaluators`
+  - `src.orchestration.gate_evaluators.build_review_finding`
+  - `src.orchestration.gate_evaluators.normalize_review_findings`
+  - `src.orchestration.gate_evaluators.evaluate_spec_review_gate`
+  - `src.orchestration.gate_evaluators.evaluate_code_quality_gate`
+  - `src.orchestration.gate_evaluators.evaluate_release_gate`
   - `src.orchestration.evidence_producers`
   - `src.contracts.WorkflowDispatchResult`
   - `src.contracts.WorkflowTaskResult`
   - `src.platforms.dispatcher_factory`
-  - `tests`
+  - `tests.test_gate_evaluators`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.
 - `verification`: command output, test result, artifact path, or explicit blocked reason.
 

@@ -39,6 +39,9 @@ class SnapshotManagerTests(unittest.TestCase):
                 handle.write("new")
 
             self.assertTrue(manager.rollback(version_id))
+            summary = manager.rollback_result(version_id)
+            self.assertEqual(summary["status"], "restored")
+            self.assertEqual(summary["restored_files"], ["app.py"])
             with open(file_path, "r", encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), "old")
 
@@ -67,7 +70,11 @@ class SnapshotManagerTests(unittest.TestCase):
                 with open(os.path.join(project_dir, "created_later.txt"), "w", encoding="utf-8") as handle:
                     handle.write("new file")
 
-                self.assertTrue(manager.rollback(version_id))
+                summary = manager.rollback_result(version_id)
+                self.assertEqual(summary["status"], "restored")
+                self.assertEqual(sorted(summary["restored_files"]), ["app.js", "index.html"])
+                self.assertEqual(summary["removed_files"], ["created_later.txt"])
+                self.assertEqual(summary["failed_files"], [])
 
                 snapshot_files = [
                     name

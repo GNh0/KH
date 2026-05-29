@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+from functools import lru_cache
 from typing import Any, Dict, List
 
 from src.skills.base import agent_skill
@@ -30,14 +31,14 @@ SKILL_EXECUTION_LEVELS = {
     "adapter-contract-harness": "python-module",
     "artifact-render-qa-harness": "python-module",
     "architect-pipeline": "hybrid-harness",
-    "command-hook-policy-harness": "procedure-policy",
-    "command-output-harness": "procedure-policy",
+    "command-hook-policy-harness": "python-module",
+    "command-output-harness": "python-module",
     "context-state-harness": "python-module",
     "development-lifecycle-harness": "procedure-policy",
     "deliverable-template-quality-harness": "python-module",
     "domain-orchestration-harness": "hybrid-harness",
     "goal-state-harness": "python-module",
-    "guard-policy-harness": "procedure-policy",
+    "guard-policy-harness": "python-module",
     "harness-evaluator": "python-module",
     "health-check-harness": "hybrid-harness",
     "host-agent-orchestration": "hybrid-harness",
@@ -46,15 +47,29 @@ SKILL_EXECUTION_LEVELS = {
     "parallel-orchestration-harness": "python-module",
     "role-execution-audit-harness": "python-module",
     "qa-gate-harness": "hybrid-harness",
-    "quality-gates-harness": "procedure-policy",
+    "quality-gates-harness": "hybrid-harness",
     "review-gate-harness": "hybrid-harness",
     "skill-catalog": "python-module",
     "snapshot-state-harness": "python-module",
     "subagent-review-pipeline": "hybrid-harness",
     "traceability-matrix-harness": "python-module",
-    "token-optimizer": "procedure-policy",
-    "workflow-skill-distiller": "procedure-policy",
+    "token-optimizer": "python-module",
+    "workflow-skill-distiller": "python-module",
 }
+
+
+@lru_cache(maxsize=8)
+def _validated_execution_levels(skills_dir: str = PACKAGED_SKILLS_DIR) -> Dict[str, str]:
+    names = set()
+    if os.path.isdir(skills_dir):
+        for folder_name in sorted(os.listdir(skills_dir)):
+            skill_path = os.path.join(skills_dir, folder_name, "SKILL.md")
+            if os.path.isfile(skill_path):
+                names.add(parse_frontmatter(skill_path, folder_name)["name"])
+    missing = sorted(name for name in names if name not in SKILL_EXECUTION_LEVELS)
+    if os.path.abspath(skills_dir) == os.path.abspath(PACKAGED_SKILLS_DIR) and missing:
+        raise ValueError(f"missing execution level(s): {', '.join(missing)}")
+    return dict(SKILL_EXECUTION_LEVELS)
 
 
 def parse_frontmatter(file_path: str, fallback_name: str) -> Dict[str, str]:
@@ -110,7 +125,7 @@ def _scan_skill_folders(skills_dir: str = PACKAGED_SKILLS_DIR, include_path: boo
             continue
 
         metadata = parse_frontmatter(skill_path, folder_name)
-        execution_level = SKILL_EXECUTION_LEVELS.get(metadata["name"], "procedure-policy")
+        execution_level = _validated_execution_levels(skills_dir).get(metadata["name"], "procedure-policy")
         entry: Dict[str, Any] = {
             "name": metadata["name"],
             "description": metadata["description"],

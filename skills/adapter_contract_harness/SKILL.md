@@ -17,13 +17,13 @@ This is a UAF-native harness. It does not call an installed external agent skill
 
 1. Represent incoming work with `AdapterRequest`.
 2. Dispatch through a platform adapter that owns runtime-specific behavior.
-3. Return `AdapterResult` with a stable `status`, `output`, and `metadata`.
+3. Return `AdapterResult` with a stable `status`, `message`, optional `workflow_id`, and `metadata`.
 4. Keep adapter-specific details outside orchestration code.
 
 ## Required outputs
 
-- `AdapterRequest`: normalized prompt, files, project root, platform mode, goal, role metadata, and safety metadata.
-- `AdapterResult`: stable status, output text, metadata, evidence, and blocked/failure reason when applicable.
+- `AdapterRequest`: `project_dir`, `files`, `design_doc`, `platform_mode`, and metadata containing goal, memory, role, evidence, and safety context.
+- `AdapterResult`: stable status, message, workflow id, metadata, evidence, and blocked/failure reason when applicable.
 - Adapter registration entry when a new runtime is added to `DispatcherFactory`.
 - Contract tests that prove serialization, blocked results, and metadata preservation.
 
