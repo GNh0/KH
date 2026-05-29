@@ -47,13 +47,13 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
   - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
   - `git diff --check`
-- Follow-up review target after Codex session `019e7441-eecf-7e23-b9ee-9aefa1c8fdf6` ends:
-  - Re-read the parent session and child/subagent logs.
-  - Check whether `large_work_orchestration_bundle.skill_statuses` was created and whether `application_mode` values were honest.
-  - Compare intended vs actual usage of `request-complexity-router`, `development-lifecycle-harness`, `goal-state-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller`.
-  - Measure token optimizer usage and savings without lowering answer quality.
-  - Audit worktree/subagent/review loop evidence, commits, final artifacts, and missing evidence.
-  - Record new pain points, useful patterns, and follow-up fixes as a new audit note.
+- Follow-up external benchmark target after Superpowers-run session `019e7441-eecf-7e23-b9ee-9aefa1c8fdf6` ends:
+  - Treat it as a large-project control sample for learning KH improvement directions, not as a KH compliance audit.
+  - Re-read the parent session and child/subagent logs to identify what Superpowers made easy or hard.
+  - Compare Superpowers' actual planning, worktree, subagent, review, verification, commit, and progress-tracking behavior against KH's `large_work_orchestration_bundle`, `application_mode`, GoalState, token, memory, parallel, role-audit, Compound, and distiller contracts.
+  - Measure where KH would need less friction, clearer triggers, better templates, or stronger automation to match or exceed that workflow.
+  - Check token optimizer usage and possible savings as a KH improvement signal, without judging the Superpowers run as required to use KH.
+  - Record transferable patterns, gaps, and follow-up fixes as a new external benchmark audit note.
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
   - `python -m json.tool .codex-plugin/plugin.json`
