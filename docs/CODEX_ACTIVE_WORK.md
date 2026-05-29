@@ -47,6 +47,13 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
   - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
   - `git diff --check`
+- Follow-up review target after Codex session `019e7441-eecf-7e23-b9ee-9aefa1c8fdf6` ends:
+  - Re-read the parent session and child/subagent logs.
+  - Check whether `large_work_orchestration_bundle.skill_statuses` was created and whether `application_mode` values were honest.
+  - Compare intended vs actual usage of `request-complexity-router`, `development-lifecycle-harness`, `goal-state-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller`.
+  - Measure token optimizer usage and savings without lowering answer quality.
+  - Audit worktree/subagent/review loop evidence, commits, final artifacts, and missing evidence.
+  - Record new pain points, useful patterns, and follow-up fixes as a new audit note.
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
   - `python -m json.tool .codex-plugin/plugin.json`
