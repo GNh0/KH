@@ -158,6 +158,8 @@ KH UAF maps the compound-engineering loop into explicit skills:
 
 For heavy, multi-step, or evidence-gated work, create or refresh `GoalState` before execution and keep the goal ledger updated through review, QA, and release. For a new product, SaaS, feature, or unclear design request, start with `brainstorming-harness` before architecture or implementation and write visible run artifacts under `.kh/<skill>/<run-id>/content/` plus `.kh/<skill>/<run-id>/state/`, with shareable summaries under `docs/kh/handoffs/` or the relevant `docs/kh/<type>/` folder. After Plan, Work, and Review, run `compound-engineering-harness` when reusable learning, scoped memory candidates, or regression checks may be needed. For a completed workflow that reveals a reusable pattern, finish by distilling the pattern, adding scoped memory, or adding a scenario regression instead of leaving the learning only in chat.
 
+For large or long-running work, KH treats `token-optimizer` as a context budget gate. If `estimated_context_tokens`, broad file reads, long command output, expected tool calls, or subagent transcripts are likely to cross the threshold, the workflow must report `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`. Compression is never allowed to lower answer quality or hide source-of-truth details; unsafe content stays `passthrough` or blocks the optimization path.
+
 The ongoing Superpowers benchmark notes live in `docs/skillbook/audits/2026-05-30-superpowers-benchmark.md`.
 
 ## Deliverables

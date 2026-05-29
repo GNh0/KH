@@ -10,6 +10,7 @@ from src.skills.token_optimizer import (
     minify_code,
     optimize_context_content,
     summarize_command_output,
+    summarize_agent_transcript,
     truncate_logs,
 )
 
@@ -302,6 +303,28 @@ SELECT @CUSTCD, @CUSTNM
         self.assertIn("command-output", summary["by_strategy"])
         self.assertIn("minify-code", summary["by_strategy"])
 
+    def test_agent_transcript_summary_preserves_lifecycle_quality_evidence(self):
+        transcript = _agent_lifecycle_transcript()
+
+        result = summarize_agent_transcript(transcript, max_lines=24, label="pipepilot-task-loop")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.metadata["strategy"], "agent-transcript")
+        self.assertGreater(result.metadata["token_usage"]["estimated_tokens_saved"], 0)
+        self.assertGreater(result.metadata["token_usage"]["token_savings_ratio"], 0.7)
+        for fact in [
+            "task_status: Task 4 in_progress",
+            "review_status: spec compliant; quality with fixes",
+            "commit_sha: 405edc2248dc57e44f4492fbf11b6d5a0124b2fb",
+            "next_task: Task 5 app shell",
+            "RED/GREEN: RED failed as expected, GREEN passed",
+            "Exit code: 1",
+            "sandbox retry: vitest esbuild Access is denied",
+            "file references: app/page.tsx:12",
+            "reviewer severity: P1 tenant boundary",
+        ]:
+            self.assertIn(fact, result.stdout)
+
 
 def _pytest_bulk_log() -> str:
     lines = [
@@ -358,6 +381,25 @@ def _agent_success_trace() -> str:
         "EVIDENCE: rendered DOCX and XLSX were structurally checked",
     ])
     lines.extend(f"[debug] completed node {index}: ok" for index in range(120))
+    return "\n".join(lines)
+
+
+def _agent_lifecycle_transcript() -> str:
+    lines = [f"[trace] worker chatter line {index}: scanned unchanged file" for index in range(180)]
+    lines.extend([
+        "workspace_strategy: project-local-worktree C:\\Users\\User\\Documents\\Codex\\SaaS Project\\.worktrees\\feat-pipepilot-mvp",
+        "task_status: Task 4 in_progress",
+        "RED/GREEN: RED failed as expected, GREEN passed",
+        "command: npm.cmd run test -- tests/integration/seed-smoke.test.ts",
+        "Exit code: 1",
+        "sandbox retry: vitest esbuild Access is denied; reran unrestricted",
+        "review_status: spec compliant; quality with fixes",
+        "reviewer severity: P1 tenant boundary",
+        "file references: app/page.tsx:12 prisma/schema.prisma:134",
+        "commit_sha: 405edc2248dc57e44f4492fbf11b6d5a0124b2fb",
+        "next_task: Task 5 app shell",
+    ])
+    lines.extend(f"[trace] worker chatter after evidence {index}: ok" for index in range(180))
     return "\n".join(lines)
 
 

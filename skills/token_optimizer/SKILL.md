@@ -1,13 +1,33 @@
 ---
 name: token-optimizer
-description: Use when terminal logs, command output, or Python code are too large for efficient LLM context handling.
+description: Use when large or long-running development workflows, subagent transcripts, terminal logs, command output, or Python code risk wasting LLM context.
 ---
 # Token Optimizer Skill
 
-This skill provides utilities to prevent token exhaustion during complex debugging or code reading loops.
+This skill is the UAF context budget gate. It prevents token exhaustion during large or long-running development workflows, complex debugging, subagent review loops, command validation, or code reading loops.
 
-Default behavior is quality-first: the host may route any large or uncertain content through `optimize_context_content`, but the skill only compresses when required facts can be preserved. Contract-sensitive text such as SQL, stored procedures, license headers, security comments, business rules, exact source-of-truth prose, and ordinary text that cannot be classified safely must pass through unchanged.
+Default behavior is quality-first: the host may route any large or uncertain content through `optimize_context_content`, but the skill only compresses when required facts can be preserved. Token optimization must never reduce answer quality. Contract-sensitive text such as SQL, stored procedures, license headers, security comments, business rules, exact source-of-truth prose, and ordinary text that cannot be classified safely must pass through unchanged.
 Large arbitrary prose also passes through by default; this is intentional because a generic summary can silently change meaning. Use command-family log filtering or explicit user-approved summarization when reduction is more important than exact wording.
+
+## Context budget gate
+
+Use this as an early gate for large work, not only as a rescue step after logs get too long. During heavy UAF development, design, review, QA, or subagent workflows, or whenever `estimated_context_tokens` is expected to cross the context budget threshold, the controller must decide whether the run needs optimization and record `token_optimizer_status`:
+
+- `used`: content was compressed, filtered, minified, or summarized with before/after statistics.
+- `considered_not_needed`: the workflow stayed small enough, but the gate was explicitly checked.
+- `passthrough`: content was large but contract-sensitive, source-of-truth, or unsafe to summarize without reducing answer quality.
+- `blocked`: optimization was required but could not preserve required facts or would reduce answer quality.
+
+## Development evidence quality bar
+
+For Superpowers-style or KH lifecycle work, compression must preserve the evidence that makes the run trustworthy:
+
+- task plan position, `task_status`, `review_status`, `commit_sha`, and `next_task`.
+- RED/GREEN state, failing-first check name, verification command, exit code, sandbox retry reason, and final pass/fail result.
+- subagent role, compact task packet fields, changed files, file references, line references, reviewer severity, required fixes, and unresolved concerns.
+- workspace strategy, worktree path or branch, approval/escalation reason, blocked reason, and release/integration state.
+
+If any of those facts would be lost, do not compress that item; use `passthrough` or `blocked`.
 
 ## Support files
 
@@ -17,14 +37,18 @@ Large arbitrary prose also passes through by default; this is intentional becaus
 - Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success/blocked mini-demo and verify contract-shaped JSON plus any demo artifacts.
 
 ## Instructions
-1. For mixed content, call `src.skills.token_optimizer.optimize_context_content`; it classifies logs, Python code, and contract-sensitive text before deciding whether compression is safe.
-2. If you run a command and it produces an extremely long error log (hundreds of lines) that clutters your context, you can run the python script directly to truncate it:
+1. At the start of large or long-running development workflows, decide whether command output, file reads, task plans, or subagent transcripts are likely to exceed the useful context budget. Use host metadata such as `estimated_context_tokens`, largest output size, expected tool calls, broad file reads, or subagent count when available.
+2. For mixed content, call `src.skills.token_optimizer.optimize_context_content`; it classifies logs, Python code, and contract-sensitive text before deciding whether compression is safe.
+3. For long agent transcripts or subagent transcripts, call `src.skills.token_optimizer.summarize_agent_transcript` so lifecycle quality evidence is preserved while chatter is removed.
+4. If you run a command and it produces an extremely long error log (hundreds of lines) that clutters your context, you can run the python script directly to truncate it:
    `python -c "from src.skills.token_optimizer import truncate_logs; print(truncate_logs('''<PASTE_LOG_HERE>'''))"`
-3. Alternatively, if you need to pass a large python file to another agent (or summarize it), minify it first by stripping comments and docstrings via AST:
+5. Alternatively, if you need to pass a large python file to another agent (or summarize it), minify it first by stripping comments and docstrings via AST:
    `python -c "from src.skills.token_optimizer import minify_code; print(minify_code(open('file.py').read()))"`
-4. If command output needs a reusable UAF evidence record, call `src.skills.token_optimizer.summarize_command_output` so the exit code, command family, raw size, filtered size, and token savings metadata are preserved in `HarnessResult`.
-5. For before/after reporting, call `src.skills.token_optimizer.compare_token_usage` for one item or `aggregate_token_usage_stats` for a workflow-level summary. Report `without_token_optimizer`, `with_token_optimizer`, `estimated_tokens_saved`, and `token_savings_ratio`.
-6. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
+6. If command output needs a reusable UAF evidence record, call `src.skills.token_optimizer.summarize_command_output` so the exit code, command family, raw size, filtered size, and token savings metadata are preserved in `HarnessResult`.
+7. For before/after reporting, call `src.skills.token_optimizer.compare_token_usage` for one item or `aggregate_token_usage_stats` for a workflow-level summary. Report `without_token_optimizer`, `with_token_optimizer`, `estimated_tokens_saved`, and `token_savings_ratio`.
+8. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
+9. Final workflow status must include `token_optimizer_status` and either token savings statistics, passthrough reason, blocked reason, or `considered_not_needed` rationale.
+10. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 
 ## External Benchmark Recipe
 
@@ -40,11 +64,13 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 
 ## Required outputs
 
+- `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 - Compact log or code text that preserves errors, file paths, test names, and exit status context.
 - Token-savings estimate or before/after size when used inside a harness result.
 - Token usage before/after statistics when the skill is used as workflow evidence.
 - Fallback note when truncation or minification cannot safely preserve actionable context.
 - Passthrough note when content is contract-sensitive and should not be compressed.
+- Preserved development evidence summary when optimizing a lifecycle run: `task_status`, `review_status`, `commit_sha`, `next_task`, exit code, sandbox retry, file references, and reviewer severity.
 
 ## Common mistakes
 
@@ -62,6 +88,7 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - `src.skills.token_optimizer.is_contract_sensitive_text`
 - `src.skills.token_optimizer.filter_command_output`
 - `src.skills.token_optimizer.summarize_command_output`
+- `src.skills.token_optimizer.summarize_agent_transcript`
 - `src.skills.token_optimizer.compare_token_usage`
 - `src.skills.token_optimizer.aggregate_token_usage_stats`
 - `src.skills.token_optimizer.estimate_token_count`

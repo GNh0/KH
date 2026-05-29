@@ -23,10 +23,11 @@ Source label: Request complexity routing.
 4. Use `skill_read` or a narrow Python module for bounded summaries, comparisons, and analysis.
 5. Escalate to GoalState, role DAG, and review/QA gates for implementation, deliverables, persistent state, or high-impact decisions.
 6. For ambiguous prompts, ask a short clarification instead of starting a full workflow.
-7. Keep `token-optimizer` available as cross-cutting infrastructure, but only apply compression when content is large or log-like.
+7. Keep `token-optimizer` available as cross-cutting infrastructure, but only apply compression when content is large, log-like, or expected to exceed the context budget. If `estimated_context_tokens`, broad file reads, expected tool calls, or subagent transcripts cross the threshold, the token gate must be applied even when the user-facing question sounds simple.
 8. Workspace strategy is a cross-cutting output for implementation routes. Prefer `host-worktree`, `project-local-worktree`, or `isolated-branch` for Git-backed implementation unless the task is documentation-only, a single-file small patch, or explicitly in-place.
 9. Heavy implementation routes should include `goal-state-harness` so completion criteria, evidence requirements, and blocked states survive context compaction.
-10. Do not grow this into a large keyword dictionary. Prefer intent order: conceptual questions stay light, concrete build/review/design work becomes heavy, and destructive or regulated advice overrides to high-risk.
+10. For heavy implementation routes or threshold-crossing contexts, final status must include `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`. Do not make a light request heavy just because this gate is considered.
+11. Do not grow this into a large keyword dictionary. Prefer intent order: conceptual questions stay light, concrete build/review/design work becomes heavy, and destructive or regulated advice overrides to high-risk.
 
 ## External Benchmark Recipe
 
@@ -46,6 +47,7 @@ Pressure scenario: a user asks "삼성 괜찮아?" without context. The host mus
 - Any required harnesses and evidence keys when the task escalates.
 - For implementation routes, a `workspace_strategy` recommendation: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`.
 - For heavy implementation routes, include `goal-state-harness` in `required_harnesses`.
+- For threshold-crossing contexts, include `token_optimization` in `evidence_required` and report `token_optimizer_status` without changing the request depth by itself.
 - A clarification path when context is insufficient.
 - A short reason for the chosen depth.
 

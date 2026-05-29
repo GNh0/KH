@@ -20,6 +20,7 @@ Keep the router principle-based. Keyword rules are only guardrails for obvious d
 - Whether the request has external impact: money, health, law, credentials, destructive commands, file edits, long-running work, or published deliverables.
 - Whether the prompt is ambiguous enough to require a clarification before choosing an execution depth.
 - Whether implementation should use `host-worktree`, `project-local-worktree`, `isolated-branch`, or an allowed `current-checkout` exception.
+- Expected context pressure: `estimated_context_tokens`, largest command output, expected tool calls, broad file reads, subagent count, or subagent transcript size.
 - Execution level: `python-module`.
 - Implementation targets:
   - `src.orchestration.request_classifier.classify_request`
@@ -41,12 +42,14 @@ Keep the router principle-based. Keyword rules are only guardrails for obvious d
 9. If the result is `high_risk`, require explicit scope, evidence, risk disclosure, scenario analysis, and review gates before presenting a decision.
 10. If the result is `ambiguous`, ask for the missing domain or artifact context instead of guessing.
 11. Keep `token-optimizer` as cross-cutting infrastructure; only compress when the content is long, log-like, or token-expensive.
+12. If expected context pressure crosses the threshold, require `token_optimization` evidence and final `token_optimizer_status`, but do not escalate a light request to a heavy route solely because the token gate ran.
 
 ## Evidence to produce
 
 - Skill name and execution level used for the run.
 - Classification JSON or concise equivalent: `complexity`, `domain`, `recommended_execution`, `required_harnesses`, `evidence_required`, and confidence.
 - Workspace strategy is a cross-cutting output for implementation routes.
+- Token optimizer status is a cross-cutting output for threshold-crossing contexts: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 - Heavy implementation routes include a GoalState activation note or `goal-state-harness` requirement.
 - Trigger reason: conceptual, summary/comparison, implementation/design, high-risk, or ambiguous.
 - If escalated, the actual runtime path and required harnesses.
@@ -57,6 +60,7 @@ Keep the router principle-based. Keyword rules are only guardrails for obvious d
 - If the classifier returns `ambiguous`, do not continue into a full workflow until the missing context is supplied.
 - If a high-risk request was initially treated as medium, reclassify and add missing evidence requirements.
 - If a light request triggered heavy orchestration, record an over-orchestration warning and downgrade future handling.
+- If token compression would hide exact requirements, errors, or source-of-truth facts, use `passthrough` or `blocked` instead of lowering answer quality.
 - If a keyword rule causes repeated over-escalation, prefer an intent-order fix over adding more exception keywords.
 - If keyword rules conflict with user-provided context, prefer the explicit context and record that override.
 - If the classifier cannot import, treat the skill as procedural guidance and do not claim Python-module evidence.

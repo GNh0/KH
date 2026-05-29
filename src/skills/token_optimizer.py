@@ -249,6 +249,70 @@ def summarize_command_output(
 
 
 @agent_skill(
+    name="summarize_agent_transcript",
+    description="Compress long agent workflow transcripts while preserving task, review, verification, and commit evidence.",
+)
+def summarize_agent_transcript(
+    transcript: str,
+    max_lines: int = 160,
+    label: str = "agent-transcript",
+) -> HarnessResult:
+    """Summarize agent transcripts without dropping lifecycle evidence."""
+    lines = transcript.splitlines()
+    raw_bytes = len(transcript.encode("utf-8"))
+    if len(lines) <= max_lines:
+        metadata = {
+            "strategy": "passthrough",
+            "content_kind": "agent-transcript",
+            "raw_bytes": raw_bytes,
+            "filtered_bytes": raw_bytes,
+            "raw_lines": len(lines),
+            "filtered_lines": len(lines),
+            "token_savings_ratio": 0.0,
+            "token_usage": compare_token_usage(
+                transcript,
+                transcript,
+                strategy="passthrough",
+                label=label,
+            ),
+        }
+        return HarnessResult(success=True, stdout=transcript, stderr="", exit_code=0, metadata=metadata)
+
+    selected = _agent_transcript_selected_indices(lines, max_lines=max_lines)
+    required = [index for index, line in enumerate(lines) if _agent_transcript_line_priority(line) >= 90]
+    selected = sorted(set(selected) | set(required))
+    omitted = len(lines) - len(selected)
+    sections = [f"... [agent-transcript optimized: {omitted} lines omitted] ..."]
+    sections.extend(lines[index] for index in selected)
+    optimized = "\n".join(sections)
+    missing = _missing_agent_transcript_facts(lines, optimized)
+    fallback_reason = ""
+    if missing:
+        optimized = _append_missing_facts(optimized, missing)
+        fallback_reason = "required lifecycle facts were appended after preservation check"
+    filtered_bytes = len(optimized.encode("utf-8"))
+    metadata = {
+        "strategy": "agent-transcript",
+        "content_kind": "agent-transcript",
+        "raw_bytes": raw_bytes,
+        "filtered_bytes": filtered_bytes,
+        "raw_lines": len(lines),
+        "filtered_lines": len(optimized.splitlines()),
+        "omitted_lines": omitted,
+        "token_savings_ratio": _savings_ratio(raw_bytes, filtered_bytes),
+        "fallback_reason": fallback_reason,
+        "preserved_fact_count": len(required),
+        "token_usage": compare_token_usage(
+            transcript,
+            optimized,
+            strategy="agent-transcript",
+            label=label,
+        ),
+    }
+    return HarnessResult(success=True, stdout=optimized, stderr="", exit_code=0, metadata=metadata)
+
+
+@agent_skill(
     name="compare_token_usage",
     description="Estimate token use before and after token optimization for reporting savings.",
 )
@@ -558,6 +622,74 @@ def _append_missing_facts(filtered: str, missing: list[str]) -> str:
     sections = [filtered.rstrip(), "... [required facts appended after preservation check] ..."]
     sections.extend(missing)
     return "\n".join(section for section in sections if section)
+
+
+def _agent_transcript_selected_indices(lines: list[str], max_lines: int) -> list[int]:
+    head_count = min(6, len(lines))
+    tail_count = min(6, max(0, len(lines) - head_count))
+    selected = set(range(head_count))
+    selected.update(range(max(head_count, len(lines) - tail_count), len(lines)))
+    weighted = []
+    for index, line in enumerate(lines):
+        if index in selected:
+            continue
+        priority = _agent_transcript_line_priority(line)
+        if priority > 0:
+            weighted.append((-priority, index))
+    budget = max(0, max_lines - len(selected))
+    selected.update(index for _, index in sorted(weighted)[:budget])
+    return sorted(selected)
+
+
+def _agent_transcript_line_priority(line: str) -> int:
+    lowered = line.lower()
+    if any(
+        marker in lowered
+        for marker in [
+            "task_status",
+            "review_status",
+            "commit_sha",
+            "next_task",
+            "token_optimizer_status",
+            "workspace_strategy",
+        ]
+    ):
+        return 110
+    if "red/green" in lowered or re.search(r"\b(red|green|tdd|failing-first)\b", lowered):
+        return 105
+    if re.search(r"\b(exit code|returncode)\s*[:=]\s*\d+", lowered):
+        return 105
+    if "sandbox retry" in lowered or ("sandbox" in lowered and "access is denied" in lowered):
+        return 102
+    if "reviewer severity" in lowered or re.search(r"\bp[0-3]\b", lowered):
+        return 100
+    if re.search(r"\b(important|critical|with fixes|approved|blocking issue)\b", lowered):
+        return 100
+    if "worktree" in lowered or ".worktrees" in lowered:
+        return 98
+    if "file references" in lowered or re.search(r"[A-Za-z0-9_./\\ -]+\.[A-Za-z0-9]+:\d+", line):
+        return 100
+    if re.search(r"\b[0-9a-f]{7,40}\b", lowered):
+        return 96
+    if re.search(r"\btask\s+\d+", lowered):
+        return 94
+    if any(marker in lowered for marker in ["spec compliant", "issues found", "quality with fixes", "approved"]):
+        return 92
+    if any(marker in lowered for marker in ["failed", "error", "assertionerror", "traceback", "access is denied"]):
+        return 90
+    if any(marker in lowered for marker in ["npm.cmd", "python -m", "git commit", "git status", "git diff"]):
+        return 80
+    if any(marker in lowered for marker in ["changed files", "commands run", "evidence", "blocked", "approval"]):
+        return 75
+    return 0
+
+
+def _missing_agent_transcript_facts(lines: list[str], optimized: str) -> list[str]:
+    missing = []
+    for line in lines:
+        if _agent_transcript_line_priority(line) >= 90 and line not in optimized:
+            missing.append(line)
+    return missing
 
 
 def main() -> int:

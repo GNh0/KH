@@ -37,12 +37,14 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 ## Workflow
 
 1. Split the plan into independent, bounded tasks.
-2. Dispatch one implementer per task with only the needed context.
-3. Run spec review first; send any gap back to implementation.
-4. Run quality review only after spec compliance passes.
-5. Preserve every reviewer finding in the aggregated result.
-6. When implementers can edit files concurrently, isolate them with `.worktrees/<task>`, an isolated branch, or a host-provided equivalent workspace.
-7. Run final review across the combined implementation before finishing.
+2. Build a compact task packet per implementer: objective, owned files, forbidden files, checks, expected artifacts, and only the source context needed for that task.
+3. When task packets, command logs, or subagent transcripts are large, apply `token-optimizer` as a quality-first context budget gate; use `passthrough` or `blocked` if compression would reduce review quality.
+4. Dispatch one implementer per task with only the needed context.
+5. Run spec review first; send any gap back to implementation.
+6. Run quality review only after spec compliance passes.
+7. Preserve every reviewer finding in the aggregated result.
+8. When implementers can edit files concurrently, isolate them with `.worktrees/<task>`, an isolated branch, or a host-provided equivalent workspace.
+9. Run final review across the combined implementation before finishing.
 
 ## External Benchmark Recipe
 
@@ -59,10 +61,11 @@ Pressure scenario: if an implementer says "done" but did not report changed file
 ## Required outputs
 
 - Implementer result per bounded task with status, changed files, checks, and evidence.
-- Context packet per implementer that is self-contained and excludes unrelated session history.
+- Compact task packet per implementer that is self-contained and excludes unrelated session history.
+- `token_optimizer_status` for large task packets, command outputs, or subagent transcripts.
 - Isolation evidence when two or more implementers can write files.
 - Spec-reviewer result for each implementer output before quality review.
-- Code-quality-reviewer result with findings, severity, and suggested fix.
+- Code-quality-reviewer result with findings, reviewer severity, file references, line references when available, and suggested fix.
 - Controller aggregate that preserves `success`, `failed`, `blocked`, and optional reviewer substatus metadata.
 
 ## Common mistakes

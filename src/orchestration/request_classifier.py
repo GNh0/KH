@@ -6,6 +6,8 @@ from typing import Dict, List
 
 
 COMPLEXITIES = {"light", "medium", "heavy", "high_risk", "ambiguous"}
+TOKEN_OPTIMIZER_CONTEXT_THRESHOLD = 8000
+TOKEN_OPTIMIZER_ITEM_THRESHOLD = 2000
 
 INVESTMENT_TERMS = {
     "stock",
@@ -1114,6 +1116,9 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _needs_token_optimization(text, normalized):
         evidence_required.append("token_optimization")
         reasons.append("large_or_log_like_input")
+    if _context_exceeds_token_budget(context):
+        evidence_required.append("token_optimization")
+        reasons.append("context_budget_threshold_exceeded")
     if _requires_resume_context(context):
         evidence_required.append("resume_handoff")
         reasons.append("resume_context_required")
@@ -2117,6 +2122,39 @@ def _needs_token_optimization(original: str, normalized: str) -> bool:
         or original.count("\n") > 50
         or _contains_any(normalized, {"긴 로그", "stack trace", "traceback", "토큰", "압축", "핵심만"})
     )
+
+
+def _context_exceeds_token_budget(context: dict) -> bool:
+    for key in (
+        "estimated_context_tokens",
+        "expected_context_tokens",
+        "estimated_token_usage",
+        "expected_token_usage",
+    ):
+        if _context_int(context, key) >= TOKEN_OPTIMIZER_CONTEXT_THRESHOLD:
+            return True
+    for key in (
+        "largest_item_tokens",
+        "largest_command_output_tokens",
+        "subagent_transcript_tokens",
+    ):
+        if _context_int(context, key) >= TOKEN_OPTIMIZER_ITEM_THRESHOLD:
+            return True
+    if _context_int(context, "expected_tool_calls") >= 6:
+        return True
+    if _context_int(context, "expected_subagents") >= 2:
+        return True
+    if _context_int(context, "broad_file_reads") >= 3:
+        return True
+    return False
+
+
+def _context_int(context: dict, key: str) -> int:
+    value = context.get(key, 0)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _requires_resume_context(context: dict) -> bool:

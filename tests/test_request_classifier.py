@@ -78,6 +78,18 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("token-optimizer", result.cross_cutting)
         self.assertIn("token_optimization", result.evidence_required)
 
+    def test_expected_context_budget_forces_token_optimizer_evidence_without_heavy_route(self):
+        result = classify_request(
+            "What is PER?",
+            {"estimated_context_tokens": 9000},
+        )
+
+        self.assertEqual(result.complexity, "light")
+        self.assertEqual(result.recommended_execution, "direct_answer")
+        self.assertIn("token-optimizer", result.cross_cutting)
+        self.assertIn("token_optimization", result.evidence_required)
+        self.assertIn("context_budget_threshold_exceeded", result.reasons)
+
     def test_legal_and_medical_concepts_are_light_when_not_advice(self):
         legal = classify_request("계약이 뭐야?")
         medical = classify_request("감기 증상이 뭐야?")

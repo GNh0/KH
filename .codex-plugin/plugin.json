@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.7",
+  "version": "2.9.8",
   "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, Superpowers-style project-local artifacts, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
@@ -44,6 +44,9 @@
       "Use KH UAF to plan and run this project.",
       "For new product, SaaS, feature, or unclear design requests, start with KH brainstorming-harness.",
       "For heavy, multi-step, or evidence-gated work, create or update KH GoalState before execution and carry required evidence through review, QA, and release.",
+      "For large or long-running workflows, or whenever `estimated_context_tokens`, broad file reads, long command output, expected tool calls, or subagent transcripts are likely to cross the context budget, run KH token-optimizer as a quality-first gate.",
+      "Report `token_optimizer_status` as `used`, `considered_not_needed`, `passthrough`, or `blocked`; never compress in a way that lowers answer quality or hides source-of-truth details.",
+      "When token optimization touches lifecycle work, preserve `task_status`, `review_status`, `commit_sha`, `next_task`, RED/GREEN evidence, exit code, sandbox retry reason, file references, and reviewer severity.",
       "Before implementation in a Git-backed project, prefer a KH isolated workspace or `.worktrees/<task>` unless the change is docs-only, single-file, or explicitly in-place.",
       "Report `workspace_strategy` as `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch` in final status for implementation work.",
       "Keep the goal ledger updated with active task, missing evidence, next action, and visible KH project artifacts when notes or handoffs are produced.",
