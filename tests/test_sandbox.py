@@ -3,10 +3,38 @@ import tempfile
 import unittest
 
 from src.contracts import HarnessResult
+from src.harness.evaluator import Evaluator
 from src.harness.sandbox import CodeSandbox, set_allowed_workspace
 
 
 class SandboxTests(unittest.TestCase):
+    def test_evaluator_allows_safe_functions_and_harmless_output_text(self):
+        result = Evaluator(timeout=2).evaluate_code(
+            "def add(a, b):\n    return a + b",
+            "assert add(2, 3) == 5\nprint('eval ok')",
+        )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["stderr"], "")
+        self.assertIn("eval ok", result["stdout"])
+
+    def test_evaluator_allows_utf8_sig_fragments_from_windows_files(self):
+        result = Evaluator(timeout=2).evaluate_code(
+            "\ufeffdef add(a, b):\n    return a + b",
+            "\ufeffassert add(2, 3) == 5\nprint('windows utf8 ok')",
+        )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["stderr"], "")
+        self.assertIn("windows utf8 ok", result["stdout"])
+
+    def test_run_python_code_blocks_dangerous_builtin_calls(self):
+        result = CodeSandbox(timeout=2).run_python_code("eval('1 + 1')")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["exit_code"], -1)
+        self.assertIn("Security Error", result["stderr"])
+
     def test_run_python_code_reports_runtime_errors(self):
         result = CodeSandbox(timeout=2).run_python_code("raise ValueError('boom')")
 

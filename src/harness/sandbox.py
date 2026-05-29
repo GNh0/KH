@@ -54,6 +54,11 @@ def _assert_within_workspace(path: str):
     )
 
 
+def _normalize_code(code: str) -> str:
+    """Remove UTF-8 BOM markers that can appear when Windows tools write snippets."""
+    return code.replace("\ufeff", "")
+
+
 def _is_safe_code(code: str) -> bool:
     dangerous_names = {
         "os",
@@ -67,10 +72,23 @@ def _is_safe_code(code: str) -> bool:
         "open",
         "getattr",
         "setattr",
+        "globals",
+        "locals",
+        "vars",
+        "__builtins__",
         "__traceback__",
+        "__class__",
+        "__subclasses__",
+        "__mro__",
+        "__bases__",
+        "__globals__",
+        "__code__",
+        "__closure__",
         "tb_frame",
         "f_globals",
         "f_back",
+        "gi_frame",
+        "cr_frame",
     }
     try:
         tree = ast.parse(code)
@@ -84,10 +102,13 @@ def _is_safe_code(code: str) -> bool:
             return False
         if isinstance(node, ast.Call) and getattr(node.func, "id", "") in dangerous_names:
             return False
-        if isinstance(node, ast.Attribute) and node.attr in dangerous_names:
+        if isinstance(node, ast.Attribute) and (
+            node.attr in dangerous_names
+            or (node.attr.startswith("__") and node.attr.endswith("__"))
+        ):
             return False
 
-    return not any(danger in code for danger in dangerous_names)
+    return True
 
 
 def _run_isolated_process(code: str, result_queue):
@@ -180,6 +201,7 @@ class CodeSandbox:
 
     def run_python_code_result(self, code: str) -> HarnessResult:
         start_time = time.time()
+        code = _normalize_code(code)
 
         if os.environ.get("AG_NO_SANDBOX") == "1":
             print("[Sandbox] Security sandbox is disabled.")

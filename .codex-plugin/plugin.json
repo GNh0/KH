@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.6.1",
-  "description": "KH Universal Agent Framework skills, DAG role artifact orchestration, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, evidence gates, retention cleanup, and local orchestration harness for Codex.",
+  "version": "2.6.2",
+  "description": "KH Universal Agent Framework skills, DAG role artifact orchestration, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, Windows-safe evaluator execution, evidence gates, retention cleanup, and local orchestration harness for Codex.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
