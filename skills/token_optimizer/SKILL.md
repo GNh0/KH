@@ -23,7 +23,8 @@ Large arbitrary prose also passes through by default; this is intentional becaus
 3. Alternatively, if you need to pass a large python file to another agent (or summarize it), minify it first by stripping comments and docstrings via AST:
    `python -c "from src.skills.token_optimizer import minify_code; print(minify_code(open('file.py').read()))"`
 4. If command output needs a reusable UAF evidence record, call `src.skills.token_optimizer.summarize_command_output` so the exit code, command family, raw size, filtered size, and token savings metadata are preserved in `HarnessResult`.
-5. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
+5. For before/after reporting, call `src.skills.token_optimizer.compare_token_usage` for one item or `aggregate_token_usage_stats` for a workflow-level summary. Report `without_token_optimizer`, `with_token_optimizer`, `estimated_tokens_saved`, and `token_savings_ratio`.
+6. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
 
 ## External Benchmark Recipe
 
@@ -41,6 +42,7 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 
 - Compact log or code text that preserves errors, file paths, test names, and exit status context.
 - Token-savings estimate or before/after size when used inside a harness result.
+- Token usage before/after statistics when the skill is used as workflow evidence.
 - Fallback note when truncation or minification cannot safely preserve actionable context.
 - Passthrough note when content is contract-sensitive and should not be compressed.
 
@@ -60,5 +62,8 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - `src.skills.token_optimizer.is_contract_sensitive_text`
 - `src.skills.token_optimizer.filter_command_output`
 - `src.skills.token_optimizer.summarize_command_output`
+- `src.skills.token_optimizer.compare_token_usage`
+- `src.skills.token_optimizer.aggregate_token_usage_stats`
+- `src.skills.token_optimizer.estimate_token_count`
 - `src.contracts.HarnessResult`
 - `tests.test_command_output_runtime`

@@ -7,14 +7,19 @@ A maintainer has just improved KH UAF request routing and wants to know whether 
 ## Expected steps
 
 1. Run `python -m src.orchestration.scenario_evaluator --summary` from the repository root.
-2. Confirm `unexpected_failures` is empty.
-3. Confirm the summary reports at least four SIDE groups and seven domains.
-4. Confirm the signal categories include `classification`, `evidence`, `gate`, and `resume`.
-5. When investigating a change, rerun with `--trace-jsonl scenario_trace.jsonl` and inspect the scenario records.
-6. Convert any unexpected failure into a regression scenario or test before editing the classifier or gates.
-7. Run the targeted test file after each fix.
+2. Run `python -m src.orchestration.scenario_evaluator --summary --stress` when broad coverage matters.
+3. Confirm `unexpected_failures` is empty.
+4. Confirm the stress summary reports at least 190 scenarios, eight SIDE groups, 25 domains, and more than 360 signals.
+5. Confirm the signal categories include `classification`, `evidence`, `gate`, and `resume`.
+6. Run `python -m src.orchestration.interactive_side_evaluator --summary --skills` for the interactive SIDE skill transcript checks.
+7. Run `python -m src.orchestration.interactive_side_evaluator --summary --skills --stress` before treating transcript coverage as useful stress data.
+8. Confirm every packaged KH skill/harness is covered, exact catalog names are used, and `token_usage` reports before/after savings for `token-optimizer`.
+9. Confirm the stress transcript summary has at least 70 turns, 14 conversations, a 10-turn conversation, three multi-skill overlap cases, and five token-usage comparison cases.
+10. When investigating a change, rerun with `--stress --trace-jsonl scenario_trace.jsonl` and inspect the scenario records.
+11. Convert any unexpected failure into a regression scenario or test before editing the classifier or gates.
+12. Run the targeted test file after each fix.
 
-The `actual_runtime_path` is `src.orchestration.scenario_evaluator`, with `src.orchestration.request_classifier` and `src.orchestration.goal_evidence` as the main runtime dependencies.
+The `actual_runtime_path` is `src.orchestration.scenario_evaluator` for deterministic routing scenarios and `src.orchestration.interactive_side_evaluator` for KH-assistant SIDE transcript checks.
 
 ## Expected evidence
 
@@ -23,6 +28,7 @@ The `actual_runtime_path` is `src.orchestration.scenario_evaluator`, with `src.o
 - A finding category for each unexpected mismatch.
 - Gate status evidence for scenarios that intentionally check complete or blocked GoalState behavior.
 - Resume signal evidence for scenarios that require `resume_handoff`.
+- Interactive SIDE report with catalog, assistant-policy, evidence, and token-usage signals.
 
 ## Failure cases
 
@@ -32,10 +38,14 @@ The `actual_runtime_path` is `src.orchestration.scenario_evaluator`, with `src.o
 - A heavy software request does not require TDD/test evidence.
 - A resume scenario does not require `resume_handoff`.
 - The harness marks an expected missing-evidence block as a failed scenario instead of a passing blocked decision.
+- A SIDE transcript uses an invented skill name instead of an exact packaged KH skill.
+- `token-optimizer` is claimed without before/after token usage statistics.
 
 ## Done criteria
 
 - The scenario matrix runs without unexpected failures.
-- Meaningful signals cover classification, evidence, gate, and resume.
+- The stress matrix has at least 190 scenarios and meaningful signals cover classification, evidence, gate, and resume.
+- The interactive SIDE smoke covers every packaged KH skill/harness and includes token usage savings where optimization applies.
+- The interactive SIDE stress run has varied conversation lengths, multi-skill overlap cases, route/execution-level statistics, and token usage comparisons.
 - New useful failures are preserved as regression tests.
 - The final report is short enough to compare across releases and concrete enough to drive the next improvement.

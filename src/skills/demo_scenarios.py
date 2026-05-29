@@ -40,6 +40,7 @@ from src.orchestration.scenario_evaluator import (
     build_scenario_report,
     default_scenarios,
     evaluate_scenarios,
+    stress_scenarios,
 )
 from src.orchestration.role_orchestrator import (
     PRE_IMPLEMENTATION_ROLES,
@@ -651,7 +652,7 @@ def _routing_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dic
 
 
 def _scenario_evaluation_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
-    evaluations = evaluate_scenarios(default_scenarios())
+    evaluations = evaluate_scenarios(stress_scenarios())
     report = build_scenario_report(evaluations)
     trace_path = output_dir / "scenario_trace.jsonl"
     trace_path.write_text(

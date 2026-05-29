@@ -4,7 +4,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from src.skills.token_optimizer import minify_code, optimize_context_content, summarize_command_output, truncate_logs
+from src.skills.token_optimizer import (
+    aggregate_token_usage_stats,
+    compare_token_usage,
+    minify_code,
+    optimize_context_content,
+    summarize_command_output,
+    truncate_logs,
+)
 
 
 class CommandOutputRuntimeTests(unittest.TestCase):
@@ -26,6 +33,8 @@ class CommandOutputRuntimeTests(unittest.TestCase):
         self.assertEqual(result.metadata["command_family"], "test")
         self.assertGreater(result.metadata["raw_bytes"], result.metadata["filtered_bytes"])
         self.assertGreater(result.metadata["token_savings_ratio"], 0)
+        self.assertGreater(result.metadata["token_usage"]["without_token_optimizer"], result.metadata["token_usage"]["with_token_optimizer"])
+        self.assertGreater(result.metadata["token_usage"]["estimated_tokens_saved"], 0)
 
     def test_truncate_logs_prioritizes_failed_pytest_over_bulk_passed_tests(self):
         log = _pytest_bulk_log()
@@ -255,6 +264,43 @@ SELECT @CUSTCD, @CUSTNM
         self.assertGreater(result.metadata["token_savings_ratio"], 0.95)
         self.assertIn("tests/test_invoice.py::test_total_rounding FAILED", result.stdout)
         self.assertIn("119999 == 120000", result.stdout)
+
+    def test_token_usage_stats_compare_without_and_with_optimizer(self):
+        raw = _pytest_bulk_log()
+        optimized = summarize_command_output(
+            "python -m pytest",
+            stdout=raw,
+            stderr="",
+            exit_code=1,
+            max_lines=18,
+        ).stdout
+
+        stats = compare_token_usage(
+            raw,
+            optimized,
+            strategy="command-output",
+            label="pytest-bulk-log",
+        )
+
+        self.assertEqual(stats["label"], "pytest-bulk-log")
+        self.assertEqual(stats["strategy"], "command-output")
+        self.assertGreater(stats["without_token_optimizer"], stats["with_token_optimizer"])
+        self.assertGreater(stats["estimated_tokens_saved"], 0)
+        self.assertGreater(stats["token_savings_ratio"], 0.9)
+
+    def test_aggregate_token_usage_stats_summarizes_multiple_records(self):
+        records = [
+            compare_token_usage("a " * 200, "a " * 20, strategy="command-output", label="log"),
+            compare_token_usage("def run():\n    return 1\n" * 30, "def run():\n return 1\n", strategy="minify-code", label="code"),
+        ]
+
+        summary = aggregate_token_usage_stats(records)
+
+        self.assertEqual(summary["case_count"], 2)
+        self.assertGreater(summary["without_token_optimizer"], summary["with_token_optimizer"])
+        self.assertGreater(summary["estimated_tokens_saved"], 0)
+        self.assertIn("command-output", summary["by_strategy"])
+        self.assertIn("minify-code", summary["by_strategy"])
 
 
 def _pytest_bulk_log() -> str:

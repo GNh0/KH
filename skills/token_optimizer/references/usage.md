@@ -26,6 +26,9 @@ Quality rule: token savings must never hide source-of-truth details. Treat `opti
   - `src.skills.token_optimizer.is_contract_sensitive_text`
   - `src.skills.token_optimizer.filter_command_output`
   - `src.skills.token_optimizer.summarize_command_output`
+  - `src.skills.token_optimizer.compare_token_usage`
+  - `src.skills.token_optimizer.aggregate_token_usage_stats`
+  - `src.skills.token_optimizer.estimate_token_count`
   - `src.contracts.HarnessResult`
   - `tests.test_command_output_runtime`
 
@@ -36,8 +39,14 @@ Quality rule: token savings must never hide source-of-truth details. Treat `opti
 3. Prefer `optimize_context_content` as the default entrypoint. It passes through contract-sensitive text, minifies safe Python code, and uses command-family filters for logs.
 4. For file-based logs, run `python -m src.skills.token_optimizer --log-file <path> --max-lines <n>` instead of pasting very long output into `python -c`.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-6. Report the difference between capability available in the repository and behavior actually executed in the current run.
+5. When optimization is applied, include before/after token usage statistics:
+   - `without_token_optimizer`
+   - `with_token_optimizer`
+   - `estimated_tokens_saved`
+   - `token_savings_ratio`
+   - `by_strategy` for workflow summaries
+6. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+7. Report the difference between capability available in the repository and behavior actually executed in the current run.
 
 ## Evidence to produce
 
@@ -45,6 +54,7 @@ Quality rule: token savings must never hide source-of-truth details. Treat `opti
 - Concrete input summary and target workspace or artifact paths.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
+- Before/after token usage statistics for every optimized item or aggregate workflow.
 - Verification command or review evidence, including failures and blocked states.
 
 ## Failure handling
@@ -56,4 +66,4 @@ Quality rule: token savings must never hide source-of-truth details. Treat `opti
 
 ## Quality bar
 
-A valid use of `token-optimizer` must leave enough evidence for another agent to answer: why this skill applied, what ran or was applied, what changed, and what still needs attention.
+A valid use of `token-optimizer` must leave enough evidence for another agent to answer: why this skill applied, what ran or was applied, what changed, how many estimated tokens were saved compared with no optimizer, and what still needs attention.

@@ -1,5 +1,5 @@
-import ast
 import argparse
+import ast
 import re
 import sys
 from typing import Any, Dict, Tuple
@@ -89,6 +89,12 @@ def optimize_context_content(
                 "raw_bytes": len(content.encode("utf-8")),
                 "filtered_bytes": len(content.encode("utf-8")),
                 "token_savings_ratio": 0.0,
+                "token_usage": compare_token_usage(
+                    content,
+                    content,
+                    strategy="passthrough",
+                    label="contract-sensitive",
+                ),
             },
         )
     if detected_kind == "python-code":
@@ -105,6 +111,12 @@ def optimize_context_content(
                 "raw_bytes": len(content.encode("utf-8")),
                 "filtered_bytes": len(minified.encode("utf-8")),
                 "token_savings_ratio": _savings_ratio(len(content.encode("utf-8")), len(minified.encode("utf-8"))),
+                "token_usage": compare_token_usage(
+                    content,
+                    minified,
+                    strategy="minify-code" if minified != content else "passthrough",
+                    label="python-code",
+                ),
             },
         )
     if detected_kind == "log":
@@ -138,6 +150,12 @@ def optimize_context_content(
             "raw_bytes": len(content.encode("utf-8")),
             "filtered_bytes": len(content.encode("utf-8")),
             "token_savings_ratio": 0.0,
+            "token_usage": compare_token_usage(
+                content,
+                content,
+                strategy="passthrough",
+                label="text",
+            ),
         },
     )
 
@@ -213,6 +231,12 @@ def summarize_command_output(
         "fallback_reason": fallback_reason,
         "output_filter": "command_family" if command_family != "generic" else "truncate_logs",
     }
+    metadata["token_usage"] = compare_token_usage(
+        _join_channels(stdout, stderr),
+        _join_channels(filtered_stdout, filtered_stderr),
+        strategy="command-output" if command_family != "generic" else "truncate_logs",
+        label=command or command_family,
+    )
 
     return HarnessResult(
         success=exit_code == 0,
@@ -222,6 +246,80 @@ def summarize_command_output(
         execution_time=execution_time,
         metadata=metadata,
     )
+
+
+@agent_skill(
+    name="compare_token_usage",
+    description="Estimate token use before and after token optimization for reporting savings.",
+)
+def compare_token_usage(
+    raw_text: str,
+    optimized_text: str,
+    strategy: str = "unknown",
+    label: str = "",
+) -> Dict[str, Any]:
+    without_optimizer = estimate_token_count(raw_text)
+    with_optimizer = estimate_token_count(optimized_text)
+    saved = max(0, without_optimizer - with_optimizer)
+    return {
+        "label": label,
+        "strategy": strategy,
+        "without_token_optimizer": without_optimizer,
+        "with_token_optimizer": with_optimizer,
+        "estimated_tokens_saved": saved,
+        "token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
+    }
+
+
+@agent_skill(
+    name="aggregate_token_usage_stats",
+    description="Aggregate token optimizer before/after records into workflow-level savings statistics.",
+)
+def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]:
+    normalized = [_token_usage_record(record) for record in records if record]
+    without_optimizer = sum(record["without_token_optimizer"] for record in normalized)
+    with_optimizer = sum(record["with_token_optimizer"] for record in normalized)
+    saved = max(0, without_optimizer - with_optimizer)
+    by_strategy: Dict[str, Dict[str, Any]] = {}
+    for record in normalized:
+        strategy = record["strategy"] or "unknown"
+        bucket = by_strategy.setdefault(
+            strategy,
+            {
+                "case_count": 0,
+                "without_token_optimizer": 0,
+                "with_token_optimizer": 0,
+                "estimated_tokens_saved": 0,
+                "token_savings_ratio": 0.0,
+            },
+        )
+        bucket["case_count"] += 1
+        bucket["without_token_optimizer"] += record["without_token_optimizer"]
+        bucket["with_token_optimizer"] += record["with_token_optimizer"]
+        bucket["estimated_tokens_saved"] += record["estimated_tokens_saved"]
+    for bucket in by_strategy.values():
+        bucket["token_savings_ratio"] = _savings_ratio(
+            bucket["without_token_optimizer"],
+            bucket["with_token_optimizer"],
+        )
+    return {
+        "case_count": len(normalized),
+        "without_token_optimizer": without_optimizer,
+        "with_token_optimizer": with_optimizer,
+        "estimated_tokens_saved": saved,
+        "token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
+        "by_strategy": by_strategy,
+    }
+
+
+@agent_skill(
+    name="estimate_token_count",
+    description="Return a deterministic approximate token count for local savings reports.",
+)
+def estimate_token_count(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
 
 
 def _important_line_indices(lines: list[str], excluded: set[int]) -> list[int]:
@@ -368,6 +466,27 @@ def _savings_ratio(raw_bytes: int, filtered_bytes: int) -> float:
         return 0.0
     saved = max(0, raw_bytes - filtered_bytes)
     return round(saved / raw_bytes, 4)
+
+
+def _join_channels(stdout: str, stderr: str) -> str:
+    if stdout and stderr:
+        return f"{stdout}\n{stderr}"
+    return stdout or stderr
+
+
+def _token_usage_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    token_usage = record.get("token_usage") if isinstance(record.get("token_usage"), dict) else record
+    without_optimizer = int(token_usage.get("without_token_optimizer", 0))
+    with_optimizer = int(token_usage.get("with_token_optimizer", 0))
+    saved = max(0, without_optimizer - with_optimizer)
+    return {
+        "label": str(token_usage.get("label", "")),
+        "strategy": str(token_usage.get("strategy", "")),
+        "without_token_optimizer": without_optimizer,
+        "with_token_optimizer": with_optimizer,
+        "estimated_tokens_saved": int(token_usage.get("estimated_tokens_saved", saved)),
+        "token_savings_ratio": float(token_usage.get("token_savings_ratio", _savings_ratio(without_optimizer, with_optimizer))),
+    }
 
 
 def _line_priority(line: str) -> int:
