@@ -45,6 +45,7 @@ This audit scores KH UAF skills against external high-quality skillbooks, not ag
 | quality-gates-harness | 8.5 | Quality gate now has red/green chain, normalized findings, release-block preservation, and missing regression pressure case. |
 | review-gate-harness | 8.6 | Review protocol now separates spec, quality, security, release and blocks success without named reviewed evidence. |
 | request-complexity-router | 8.7 | Intake routing keeps simple prompts direct, ambiguous prompts clarified, and high-risk requests escalated with evidence requirements. |
+| scenario-evaluation-harness | 8.7 | SIDE-style scenario evaluation turns human, domain, evidence, gate, and resume patterns into deterministic regression data. |
 | role-execution-audit-harness | 8.5 | Runtime role artifact and parallel-wave audit remain above target. |
 | skill-catalog | 8.5 | Catalog CLI, read/check/list behavior, execution-level mapping, and target validation remain above target. |
 | snapshot-state-harness | 8.5 | Snapshot and rollback evidence remain above target with per-file restore/removal/failure metadata. |
@@ -55,7 +56,7 @@ This audit scores KH UAF skills against external high-quality skillbooks, not ag
 
 ## Result
 
-- Skills reviewed: 28
+- Skills reviewed: 29
 - Minimum external score: 8.5
 - Average external score: 8.58
 - Highest external score: 8.8

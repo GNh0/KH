@@ -14,6 +14,8 @@ INVESTMENT_TERMS = {
     "per",
     "dcf",
     "earnings",
+    "market",
+    "market news",
     "nvidia",
     "tesla",
     "주식",
@@ -124,14 +126,23 @@ SOFTWARE_DOMAIN_TERMS = {
     "backend",
     "frontend",
     "server",
+    "implementation",
+    "python",
+    "readme",
+    "pr",
     "unit test",
     "test",
+    "tests",
 }
 
 SOFTWARE_HEAVY_TERMS = {
     "implement",
+    "implementation",
     "build",
+    "continue",
     "fix",
+    "finish",
+    "generate",
     "modify",
     "refactor",
     "architecture",
@@ -150,6 +161,11 @@ SOFTWARE_HEAVY_TERMS = {
 DESIGN_HEAVY_TERMS = {
     "screen",
     "dashboard",
+    "drawing",
+    "plate",
+    "hole",
+    "holes",
+    "sus304",
     "mobile app",
     "onboarding",
     "ui",
@@ -165,12 +181,17 @@ DESIGN_HEAVY_TERMS = {
 }
 HEAVY_ACTION_TERMS = {
     "design",
+    "create",
+    "continue",
+    "finish",
+    "generate",
     "implement",
     "build",
     "fix",
     "modify",
     "refactor",
     "architecture",
+    "update",
     "구현",
     "만들어",
     "고쳐",
@@ -180,7 +201,7 @@ HEAVY_ACTION_TERMS = {
     "아키텍처",
 }
 REVIEW_HEAVY_TERMS = {"review", "inspect", "audit", "검토", "리뷰", "점검"}
-MEDIUM_TERMS = {"summarize", "compare", "analyze", "recent", "요약", "비교", "분석", "최근", "검토"}
+MEDIUM_TERMS = {"summarize", "compare", "analyze", "recent", "meeting notes", "action items", "요약", "비교", "분석", "최근", "검토"}
 LIGHT_TERMS = {
     "what is",
     "define",
@@ -195,7 +216,31 @@ LIGHT_TERMS = {
     "설명",
     "예시",
 }
-AMBIGUOUS_TERMS = {"이거", "괜찮아", "어때", "해줘", "봐줘", "올린 파일"}
+AMBIGUOUS_TERMS = {
+    "what should i do with this",
+    "is samsung okay",
+    "do the same thing",
+    "for the other file",
+    "can you review it",
+    "review it",
+    "now make it shorter",
+    "make it shorter",
+    "이거",
+    "괜찮아",
+    "어때",
+    "해줘",
+    "봐줘",
+    "올린 파일",
+}
+CONTEXT_FREE_AMBIGUOUS_TERMS = {
+    "what should i do with this",
+    "do the same thing",
+    "for the other file",
+    "can you review it",
+    "review it",
+    "now make it shorter",
+    "make it shorter",
+}
 
 
 @dataclass(frozen=True)
@@ -226,6 +271,9 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _needs_token_optimization(text, normalized):
         evidence_required.append("token_optimization")
         reasons.append("large_or_log_like_input")
+    if _requires_resume_context(context):
+        evidence_required.append("resume_handoff")
+        reasons.append("resume_context_required")
 
     if _is_ambiguous(normalized, context):
         return _classification(
@@ -247,6 +295,8 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             domain_specific_evidence.extend(["tdd_red_green", "test_evidence"])
         if domain == "security":
             domain_specific_evidence.extend(["security_review", "risk_findings"])
+        if domain == "investment":
+            domain_specific_evidence.extend(["source_summary", "data_sources", "scenario_matrix", "risk_disclosure"])
         return _classification(
             complexity="heavy",
             domain=domain,
@@ -279,7 +329,7 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
 
     if _contains_any(normalized, MEDIUM_TERMS):
         medium_evidence = [*evidence_required]
-        if _contains_any(normalized, {"recent", "최근", "earnings", "실적"}):
+        if _contains_any(normalized, {"summarize", "analyze", "recent", "최근", "earnings", "실적"}):
             medium_evidence.append("source_summary")
         if _contains_any(normalized, {"compare", "비교"}):
             medium_evidence.append("comparison_basis")
@@ -391,6 +441,8 @@ def _detect_domain(normalized: str, context: dict) -> str:
         return explicit_domain
     if _contains_any(normalized, DESTRUCTIVE_ACTION_TERMS):
         return "security"
+    if _contains_any(normalized, SECURITY_HIGH_RISK_TERMS):
+        return "security"
     if _contains_any(normalized, SECURITY_TERMS) and _contains_any(normalized, REVIEW_HEAVY_TERMS | {"risk", "risks"}):
         return "security"
     if _contains_any(normalized, DESIGN_HEAVY_TERMS):
@@ -445,12 +497,18 @@ def _is_heavy_work(normalized: str, domain: str) -> bool:
         return True
     if domain == "security" and _contains_any(normalized, REVIEW_HEAVY_TERMS):
         return True
+    if domain == "software" and _contains_any(normalized, REVIEW_HEAVY_TERMS):
+        return True
+    if domain == "investment" and _contains_any(normalized, {"scenario matrix", "valuation analysis"}):
+        return True
     return False
 
 
 def _is_ambiguous(normalized: str, context: dict) -> bool:
     if context.get("has_active_artifact") or context.get("domain"):
         return False
+    if _contains_any(normalized, CONTEXT_FREE_AMBIGUOUS_TERMS):
+        return True
     strong_terms = (
         INVESTMENT_ADVICE_TERMS
         | LEGAL_ADVICE_TERMS
@@ -480,6 +538,14 @@ def _needs_token_optimization(original: str, normalized: str) -> bool:
         len(original) > 2000
         or original.count("\n") > 50
         or _contains_any(normalized, {"긴 로그", "stack trace", "traceback", "토큰", "압축", "핵심만"})
+    )
+
+
+def _requires_resume_context(context: dict) -> bool:
+    return bool(
+        context.get("requires_resume")
+        or context.get("long_running")
+        or context.get("needs_handoff")
     )
 
 

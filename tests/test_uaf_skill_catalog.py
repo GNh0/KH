@@ -37,6 +37,7 @@ CORE_SKILLS = {
     "qa-gate-harness",
     "review-gate-harness",
     "request-complexity-router",
+    "scenario-evaluation-harness",
     "command-output-harness",
     "skill-catalog",
     "snapshot-state-harness",
@@ -191,6 +192,7 @@ class UafSkillCatalogTests(unittest.TestCase):
             "health-check-harness": "Health workflow",
             "memory-state-harness": "persistent memory",
             "request-complexity-router": "Request complexity",
+            "scenario-evaluation-harness": "Scenario evaluation",
         }
 
         for skill_name, source_label in expected_sources.items():

@@ -14,7 +14,7 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 
 ## What It Includes
 
-- 28 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 29 packaged skills/harnesses with support files, smoke checks, and runnable demos.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - DAG role orchestration with CEO, advisor, architect, planner, controller, implementer, reviewers, QA, security, and release roles.
@@ -24,6 +24,7 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 - Render/template/traceability/role-audit quality harnesses.
 - `KH-Bench Verified`, a practical task benchmark separate from internal skill quality scores.
 - `KH Practical Quality Gate`, the release gate that treats KH-Bench/SIDE/E2E results as the primary quality signal and static skill scores as a structure check.
+- `scenario-evaluation-harness`, a deterministic SIDE-style loop for request routing, evidence, gate, and resume behavior.
 
 By default, user-facing files are written to the target project, while UAF runtime state is written outside the project root under the KH-UAF runtime store. Set `UAF_PROJECT_LOCAL_STATE=1` only when you explicitly want `.uaf` and snapshot state inside the project.
 

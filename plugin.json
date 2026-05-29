@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-    "version": "2.9.1",
+  "version": "2.9.2",
     "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
@@ -125,8 +125,13 @@
       "description": "Classify user requests as light, medium, heavy, high-risk, or ambiguous before choosing direct answer, skill/module, or role-DAG execution depth.",
       "usage": "python -m src.skills.uaf_skill_catalog --read request-complexity-router"
     },
-        {
-            "name": "kh-bench-verified",
+    {
+      "name": "scenario-evaluation-harness",
+      "description": "Run deterministic SIDE-style scenario evaluation across request routing, evidence requirements, gate decisions, and resume readiness.",
+      "usage": "python -m src.orchestration.scenario_evaluator --summary"
+    },
+    {
+      "name": "kh-bench-verified",
             "description": "Run the fixed KH-Bench Verified practical task benchmark with clean workspaces, sealed external candidate task views, pre-validation, fail-to-pass, pass-to-pass, artifact validators, and JSON scoring.",
             "usage": "python -m src.benchmarks.kh_bench_verified --summary"
         },

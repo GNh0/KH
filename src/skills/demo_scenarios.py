@@ -36,6 +36,11 @@ from src.orchestration.gate_evaluators import (
 )
 from src.orchestration.quality_harnesses import audit_role_execution
 from src.orchestration.request_classifier import classify_request
+from src.orchestration.scenario_evaluator import (
+    build_scenario_report,
+    default_scenarios,
+    evaluate_scenarios,
+)
 from src.orchestration.role_orchestrator import (
     PRE_IMPLEMENTATION_ROLES,
     RoleOrchestrator,
@@ -99,6 +104,7 @@ SKILL_OPS_SKILLS = {
 
 ROUTING_SKILLS = {
     "request-complexity-router",
+    "scenario-evaluation-harness",
 }
 
 
@@ -191,6 +197,8 @@ def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]
     if skill_name in SKILL_OPS_SKILLS:
         return _skill_ops_scenario
     if skill_name in ROUTING_SKILLS:
+        if skill_name == "scenario-evaluation-harness":
+            return _scenario_evaluation_scenario
         return _routing_scenario
     return _gate_scenario
 
@@ -639,6 +647,54 @@ def _routing_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dic
         missing_inputs=["domain or artifact context"],
         contracts=contracts,
         artifacts=[],
+    )
+
+
+def _scenario_evaluation_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    evaluations = evaluate_scenarios(default_scenarios())
+    report = build_scenario_report(evaluations)
+    trace_path = output_dir / "scenario_trace.jsonl"
+    trace_path.write_text(
+        "\n".join(json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) for item in evaluations) + "\n",
+        encoding="utf-8",
+    )
+    trace_artifact = _artifact_record_from_file(
+        trace_path,
+        "scenario-trace-jsonl",
+        output_dir,
+        ["jsonl readable", "one record per scenario", "signals captured"],
+        created_by_case="success",
+    )
+    success_payload = {
+        "summary": report["summary"],
+        "signals_by_category": report["signals_by_category"],
+    }
+    blocked_payload = {
+        "status": "blocked",
+        "unexpected_failures": report["unexpected_failures"],
+        "blocked_reason": "unexpected scenario failures require classifier, evidence, gate, or resume fixes",
+    }
+    contracts = [
+        _mapping_contract("ScenarioEvaluationReport", "src.orchestration.scenario_evaluator", report, "policy-result"),
+        _mapping_contract("ScenarioEvaluation", "src.orchestration.scenario_evaluator", evaluations[0].to_dict(), "policy-result"),
+    ]
+    return _scenario_result(
+        success_contract="ScenarioEvaluationReport",
+        success_payload=success_payload,
+        success_evidence=[
+            "scenario matrix executed",
+            "classification signals captured",
+            "evidence and gate signals captured",
+            "resume signals captured",
+        ],
+        success_behavior="Run deterministic SIDE-style scenarios and report actionable routing, evidence, gate, and resume signals.",
+        success_side_effects=["writes scenario_trace.jsonl and demo evidence JSON"],
+        blocked_contract="ScenarioEvaluationReport",
+        blocked_payload=blocked_payload,
+        blocked_reason=blocked_payload["blocked_reason"],
+        missing_inputs=["regression fix for each unexpected failure"],
+        contracts=contracts,
+        artifacts=[trace_artifact],
     )
 
 

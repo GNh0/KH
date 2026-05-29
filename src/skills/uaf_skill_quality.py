@@ -30,6 +30,7 @@ CORE_PRODUCTION_SKILLS = {
     "qa-gate-harness",
     "review-gate-harness",
     "request-complexity-router",
+    "scenario-evaluation-harness",
     "role-execution-audit-harness",
     "snapshot-state-harness",
     "subagent-review-pipeline",
