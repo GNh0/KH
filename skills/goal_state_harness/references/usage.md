@@ -14,6 +14,7 @@ Do not use this skill only because it is available. Use it when the current task
 
 - User objective, success criteria, and any explicit completion conditions.
 - Target workspace, write boundaries, and whether user-facing deliverables are expected.
+- Activation source: request router, development lifecycle, role DAG, QA/release gate, resume handoff, or explicit user request.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
 - Execution level: `python-module`.
@@ -33,13 +34,15 @@ Do not use this skill only because it is available. Use it when the current task
 2. Read this reference before performing non-trivial work with `goal-state-harness`.
 3. Call or inspect the listed Python implementation targets, then record the exact module/function path and test evidence used.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-6. Report the difference between capability available in the repository and behavior actually executed in the current run.
+5. When project Markdown artifacts are enabled, write visible `.kh/goal/.../content/*.md` and `docs/kh/goal/*.md` summaries in addition to runtime JSON.
+6. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+7. Report the difference between capability available in the repository and behavior actually executed in the current run.
 
 ## Evidence to produce
 
 - Skill name and execution level used for the run.
 - Concrete input summary and target workspace or artifact paths.
+- Activation source and linked skill, such as `request-complexity-router` or `development-lifecycle-harness`.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Verification command or review evidence, including failures and blocked states.

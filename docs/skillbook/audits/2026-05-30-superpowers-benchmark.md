@@ -77,3 +77,9 @@ Superpowers is strong at agent behavior activation: short trigger descriptions, 
 - Added a plugin-level prompt requiring isolated workspaces before implementation unless the task is docs-only, a single-file small patch, or explicitly in-place.
 - Required final implementation status to report `workspace_strategy`: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`.
 - Clarified that concurrent write workers should treat `project-local-worktree` as the default safe strategy.
+
+## Current 2.9.6 Changes
+
+- Strengthened GoalState activation so heavy, multi-step, or evidence-gated work creates or refreshes `goal-state-harness` before execution.
+- Added visible KH Markdown artifacts mirroring the useful project-local feel of personal skillbooks without reusing their folders: `.kh/<skill>/<run-id>/content/*.md` for KH working notes and `docs/kh/<skill>/*.md` for shareable summaries.
+- Connected GoalLedger saves to project Markdown summaries while keeping runtime JSON state in the external UAF runtime root by default.

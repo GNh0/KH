@@ -19,6 +19,8 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 - UAF `GoalState`: objective, status, success criteria, evidence requirements, collected evidence, progress notes, and blocked reason.
 - UAF role graph: QA and release roles use evaluated goal evidence before reporting completion.
 - Codex-style goal tracking: active, complete, and blocked states should be explicit and auditable.
+- `request-complexity-router`: heavy implementation, persistent deliverables, and high-impact decisions should activate this harness.
+- `development-lifecycle-harness`: implementation runs should create or refresh GoalState before editing and update it after verification.
 
 ## Workflow
 
@@ -29,10 +31,11 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 5. Persist resumable goal state to the project/chat-scoped runtime `.uaf/state/current_goal.json`.
 6. Append goal lifecycle events to the runtime `.uaf/state/goal_events.jsonl`.
 7. Write runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md` after the evaluated goal is saved.
-8. Add richer evidence as checks, reviews, QA, or release gates run.
-9. Use `GoalState.metadata.evidence_aliases` when host-specific tools emit equivalent evidence keys with different names.
-10. Mark a goal `complete` only when success criteria and required evidence are satisfied.
-11. Mark a goal `blocked` when the workflow cannot make meaningful progress without missing evidence, context, credentials, tools, or external state.
+8. Write human-readable KH Markdown summaries under `.kh/goal/<run-id>/content/` and `docs/kh/goal/` when project Markdown artifacts are enabled.
+9. Add richer evidence as checks, reviews, QA, or release gates run.
+10. Use `GoalState.metadata.evidence_aliases` when host-specific tools emit equivalent evidence keys with different names.
+11. Mark a goal `complete` only when success criteria and required evidence are satisfied.
+12. Mark a goal `blocked` when the workflow cannot make meaningful progress without missing evidence, context, credentials, tools, or external state.
 
 ## Required outputs
 
@@ -46,6 +49,7 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 - `metadata.evidence_alias_matches`: required evidence keys satisfied by an accepted alias.
 - `goal_ledger`: paths to the project/chat-scoped current goal and event log.
 - `resume_handoff`: paths and snapshot for continuing from runtime state without prior chat context.
+- `project_markdown`: visible project-local Markdown paths for `.kh/goal/...` and `docs/kh/goal/...` when written.
 
 ## Runtime storage rule
 

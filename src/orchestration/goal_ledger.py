@@ -4,6 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.orchestration.project_markdown import (
+    project_markdown_enabled,
+    write_goal_markdown_artifacts,
+)
 from src.orchestration.runtime_paths import project_state_dir
 
 
@@ -53,6 +57,15 @@ class GoalLedger:
         }
         normalized_tasks.update(tasks or {})
 
+        project_markdown = {}
+        if project_markdown_enabled():
+            project_markdown = write_goal_markdown_artifacts(
+                str(self.project_root),
+                goal,
+                active_task=active_task,
+                next_recommended_action=next_recommended_action,
+            )
+
         state = {
             "schema_version": 1,
             "objective": goal.get("objective", ""),
@@ -64,6 +77,7 @@ class GoalLedger:
             "evidence": list(goal.get("evidence", [])),
             "blocked_reason": goal.get("blocked_reason", ""),
             "next_recommended_action": next_recommended_action,
+            "project_markdown": project_markdown,
             "goal": json.loads(json.dumps(goal)),
             "updated_at": _utc_now(),
         }

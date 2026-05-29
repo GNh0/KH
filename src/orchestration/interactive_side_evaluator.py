@@ -169,11 +169,12 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
             "development-flow",
             1,
             "Build login with tests, review, verification, and branch finishing.",
-            "Run this through the lifecycle: design first, choose workspace_strategy such as project-local-worktree or host-worktree before implementation, then failing test, implementation, review gates, verification evidence, and branch finishing.",
+            "Run this through the lifecycle: design first, create GoalState, choose workspace_strategy such as project-local-worktree or host-worktree before implementation, then failing test, implementation, review gates, verification evidence, and branch finishing.",
             "development-lifecycle-harness",
-            ["workspace_strategy", "tdd", "verification"],
+            ["goal_state", "workspace_strategy", "tdd", "verification"],
             "procedure_policy",
-            ["workspace_strategy", "worktree", "test", "verification"],
+            ["goal", "workspace_strategy", "worktree", "test", "verification"],
+            additional_skills=["goal-state-harness"],
         ),
         _skill_turn(
             "development-flow",
@@ -507,8 +508,9 @@ def _stress_skill_side_extras() -> List[SkillSideTurn]:
     add(_skill_turn(
         "live-dev-lifecycle", 1,
         "We are building auth. Start from design, TDD, review, verification, and branch finish.",
-        "Run the development lifecycle with design, workspace_strategy, TDD, review, verification, and branch finishing evidence before completion.",
-        "development-lifecycle-harness", ["workspace_strategy", "work_design", "tdd_red_green", "verification"], "procedure_policy", ["workspace_strategy", "design", "verification"],
+        "Run the development lifecycle with design, GoalState, workspace_strategy, TDD, review, verification, and branch finishing evidence before completion.",
+        "development-lifecycle-harness", ["goal_state", "workspace_strategy", "work_design", "tdd_red_green", "verification"], "procedure_policy", ["goal", "workspace_strategy", "design", "verification"],
+        additional_skills=["goal-state-harness"],
     ))
     add(_skill_turn(
         "live-dev-lifecycle", 2,

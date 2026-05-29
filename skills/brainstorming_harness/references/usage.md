@@ -20,6 +20,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Constraints such as budget, stack, timeline, privacy, repo, deployment, or compliance.
 - Decisions already approved by the user.
 - Open questions that should remain visible for the architect or domain workflow.
+- Project Markdown destination when visible KH notes are wanted: `.kh/brainstorm/<run-id>/content/*.md` and `docs/kh/brainstorm/*.md`.
 - Execution level: `hybrid-harness`.
 - Implementation targets:
   - `src.orchestration.brainstorming.BrainstormOption`
@@ -27,7 +28,10 @@ Do not use this skill only because it is available. Use it when the current task
   - `src.orchestration.brainstorming.BrainstormSession`
   - `src.orchestration.brainstorming.validate_brainstorm_session`
   - `src.orchestration.brainstorming.build_architect_handoff`
+  - `src.orchestration.brainstorming.write_brainstorm_markdown_artifacts`
+  - `src.orchestration.project_markdown.KHProjectMarkdownStore`
   - `tests.test_brainstorming_harness`
+  - `tests.test_project_markdown_artifacts`
   - `skills/brainstorming_harness/SKILL.md`
 
 ## Execution pattern
@@ -40,8 +44,9 @@ Do not use this skill only because it is available. Use it when the current task
 6. Confirm the direction before creating architecture, scaffolding, or code.
 7. Build a `BrainstormSession` and run `validate_brainstorm_session`.
 8. If valid, call `build_architect_handoff` and pass the payload to the selected KH skill.
-9. Preserve intermediate decisions in structured evidence rather than relying on chat memory alone.
-10. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+9. When the user benefits from visible project notes, call `write_brainstorm_markdown_artifacts` so KH creates `.kh/brainstorm/.../content/*.md` and `docs/kh/brainstorm/*.md`.
+10. Preserve intermediate decisions in structured evidence rather than relying on chat memory alone.
+11. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 
 ## Evidence to produce
 
@@ -51,6 +56,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Recommendation and approved decisions.
 - `BrainstormSession` validation result.
 - Handoff target, usually `architect-pipeline`.
+- Markdown handoff paths if project-local KH notes were written.
 - Verification command or review evidence when validating the packaged skill itself.
 
 ## Failure handling

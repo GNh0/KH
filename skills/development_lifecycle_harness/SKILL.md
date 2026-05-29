@@ -30,13 +30,15 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 
 1. Clarify the intended outcome and constraints before changing behavior.
 2. Choose and record `workspace_strategy` before editing; for implementation in a Git-backed project, prefer isolated workspace unless an in-place exception applies.
-3. Write a short implementation plan for multi-step work with exact files, tests, and verification commands.
-4. For behavior changes, add or update a failing test before production edits.
-5. Implement the smallest change that satisfies the test and the user requirement.
-6. Review for scope drift, missing requirements, and risky integration points.
-7. Run fresh verification before claiming completion or committing.
-8. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
-9. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
+3. Create or refresh `GoalState` before implementation by using `goal-state-harness` for objective, success criteria, required evidence, and blocked-state handling.
+4. Write a short implementation plan for multi-step work with exact files, tests, and verification commands.
+5. For behavior changes, add or update a failing test before production edits.
+6. Implement the smallest change that satisfies the test and the user requirement.
+7. Review for scope drift, missing requirements, and risky integration points.
+8. Run fresh verification before claiming completion or committing.
+9. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
+10. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
+11. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
 
 ## Gate checks
 
@@ -62,6 +64,7 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 
 - Implementation plan for multi-step work, including files, tests, and verification commands.
 - `workspace_strategy` with path, branch, host workspace, or in-place rationale.
+- GoalState summary with objective, success criteria, required evidence, current evidence, missing evidence, and goal ledger paths.
 - Failing-first test or smoke evidence for behavior changes when practical.
 - Review findings or an explicit no-findings review note.
 - Fresh verification output and final integration status: local only, committed, pushed, or PR-ready.

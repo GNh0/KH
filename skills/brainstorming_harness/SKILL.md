@@ -36,7 +36,8 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 5. Present 2-3 approaches with tradeoffs and a recommended direction.
 6. Present the chosen design direction and ask for approval before implementation or scaffolding.
 7. Build a `BrainstormSession`, validate it, and create a `brainstorm_handoff`.
-8. Pass the handoff to the next KH skill:
+8. Write KH Markdown handoffs when project artifacts are useful: `.kh/brainstorm/<run-id>/content/*.md` for local working notes and `docs/kh/brainstorm/*.md` for shareable summaries.
+9. Pass the handoff to the next KH skill:
    - `architect-pipeline` for product/system design.
    - `domain-orchestration-harness` for cross-domain role/gate design.
    - `goal-state-harness` when completion criteria and evidence are central.
@@ -52,6 +53,7 @@ A valid brainstorming run leaves:
 - `constraints` when constraints are known
 - `open_questions` when unresolved questions remain
 - next skill selection, usually `architect-pipeline`
+- project Markdown paths when written under `.kh/brainstorm/...` and `docs/kh/brainstorm/...`
 
 The agent must not claim KH-backed brainstorming if it only had an informal conversation and did not preserve a handoff or decision evidence.
 
@@ -75,7 +77,10 @@ Pressure scenario: a user says "I want to build a SaaS." The agent should not sc
 - `src.orchestration.brainstorming.BrainstormSession`
 - `src.orchestration.brainstorming.validate_brainstorm_session`
 - `src.orchestration.brainstorming.build_architect_handoff`
+- `src.orchestration.brainstorming.write_brainstorm_markdown_artifacts`
+- `src.orchestration.project_markdown.KHProjectMarkdownStore`
 - `tests.test_brainstorming_harness`
+- `tests.test_project_markdown_artifacts`
 - `skills/brainstorming_harness/SKILL.md`
 
 ## Boundaries
@@ -94,6 +99,7 @@ Pressure scenario: a user says "I want to build a SaaS." The agent should not sc
 - Open questions, if any.
 - `BrainstormSession` validation result.
 - Handoff payload for the next KH skill.
+- Markdown handoff paths when visible project notes are created.
 
 ## Common mistakes
 

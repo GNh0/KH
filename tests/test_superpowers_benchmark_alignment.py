@@ -40,8 +40,10 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         gitignore = read_text(".gitignore")
 
         self.assertIn("KH does not require `.superpowers/`", readme)
-        self.assertIn("KH-owned local state should use `.uaf/`", readme)
+        self.assertIn("KH-owned runtime state should use `.uaf/`", readme)
+        self.assertIn("KH local Markdown notes should use `.kh/`", readme)
         self.assertIn("Git worktrees should live under `.worktrees/`", readme)
+        self.assertIn(".kh/", gitignore)
         self.assertIn(".worktrees/", gitignore)
 
     def test_front_door_brainstorming_is_kh_native_and_trigger_focused(self):

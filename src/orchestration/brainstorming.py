@@ -1,6 +1,8 @@
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List
 
+from src.orchestration.project_markdown import KHProjectMarkdownStore
+
 
 @dataclass(frozen=True)
 class BrainstormOption:
@@ -137,6 +139,52 @@ def build_architect_handoff(session: BrainstormSession) -> Dict[str, Any]:
     }
 
 
+def render_brainstorm_markdown(session: BrainstormSession) -> str:
+    handoff = build_architect_handoff(session)
+    recommended = handoff.get("recommended_option", {}) or {}
+    return "\n".join([
+        f"- Objective: {session.objective}",
+        f"- Target user: {session.target_user or 'not specified'}",
+        f"- Problem: {session.problem or 'not specified'}",
+        f"- Status: {handoff.get('status', '')}",
+        f"- Next skill: {session.next_skill}",
+        "",
+        "## Recommended Option",
+        f"- {recommended.get('name', 'none')}",
+        f"- Rationale: {recommended.get('rationale', 'none')}",
+        "",
+        "## Options",
+        _option_markdown(session.options),
+        "",
+        "## Decisions",
+        _decision_markdown(session.decisions),
+        "",
+        "## Constraints",
+        _bullet_list(session.constraints),
+        "",
+        "## Open Questions",
+        _bullet_list(session.open_questions),
+    ])
+
+
+def write_brainstorm_markdown_artifacts(
+    project_dir: str,
+    session: BrainstormSession,
+    run_id: str = "",
+) -> Dict[str, str]:
+    return KHProjectMarkdownStore(project_dir).write_markdown(
+        kind="brainstorm",
+        title=f"KH Brainstorm - {session.objective[:80] or 'Session'}",
+        body=render_brainstorm_markdown(session),
+        slug="brainstorm-handoff",
+        run_id=run_id,
+        metadata={
+            "skill": "brainstorming-harness",
+            "next_skill": session.next_skill,
+        },
+    )
+
+
 def _recommended_option(session: BrainstormSession) -> BrainstormOption | None:
     for option in session.options:
         if option.recommended:
@@ -155,3 +203,34 @@ def _brainstorm_evidence(session: BrainstormSession) -> List[str]:
     if session.constraints:
         evidence.append("constraints")
     return evidence
+
+
+def _option_markdown(options: List[BrainstormOption]) -> str:
+    if not options:
+        return "- none"
+    lines: List[str] = []
+    for option in options:
+        marker = "recommended" if option.recommended else "option"
+        lines.append(f"- {option.name} ({marker})")
+        if option.rationale:
+            lines.append(f"  - Rationale: {option.rationale}")
+        for tradeoff in option.tradeoffs:
+            lines.append(f"  - {tradeoff}")
+    return "\n".join(lines)
+
+
+def _decision_markdown(decisions: List[BrainstormDecision]) -> str:
+    if not decisions:
+        return "- none"
+    lines: List[str] = []
+    for decision in decisions:
+        lines.append(f"- {decision.key}: {decision.value}")
+        if decision.rationale:
+            lines.append(f"  - Rationale: {decision.rationale}")
+    return "\n".join(lines)
+
+
+def _bullet_list(items: List[str]) -> str:
+    if not items:
+        return "- none"
+    return "\n".join(f"- {item}" for item in items)
