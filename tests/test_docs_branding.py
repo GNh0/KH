@@ -15,6 +15,7 @@ class DocsBrandingTests(unittest.TestCase):
     def test_public_project_surface_uses_personal_uaf_branding(self):
         checked_roots = [
             Path("README.md"),
+            Path("README.ko.md"),
             Path("SKILL.md"),
             Path("plugin.json"),
             Path("docs"),
@@ -46,6 +47,7 @@ class DocsBrandingTests(unittest.TestCase):
     def test_public_project_surface_has_no_mojibake_markers(self):
         checked_roots = [
             Path("README.md"),
+            Path("README.ko.md"),
             Path("SKILL.md"),
             Path("plugin.json"),
             Path(".codex-plugin/plugin.json"),

@@ -66,12 +66,20 @@ class PluginPackagingTests(unittest.TestCase):
     def test_readme_documents_codex_and_antigravity_install_paths(self):
         content = Path("README.md").read_text(encoding="utf-8")
 
+        self.assertIn("README.ko.md", content)
         self.assertIn("## Codex Plugin Install", content)
         self.assertIn(".codex-plugin/plugin.json", content)
         self.assertIn(".agents/plugins/marketplace.json", content)
         self.assertIn("## Antigravity Plugin Install", content)
         self.assertIn("~/.gemini/config/plugins/kh-uaf", content)
         self.assertIn(".agents/plugins/kh-uaf", content)
+
+    def test_korean_readme_links_back_to_english_readme(self):
+        content = Path("README.ko.md").read_text(encoding="utf-8")
+
+        self.assertIn("[English](README.md)", content)
+        self.assertIn("## Codex 플러그인 설치", content)
+        self.assertIn("## Antigravity 플러그인 설치", content)
 
 
 if __name__ == "__main__":
