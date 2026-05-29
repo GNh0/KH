@@ -12,6 +12,7 @@ This is a personal UAF command output harness. It provides compact command outpu
 - Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
 - Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
 - Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+- Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success/blocked mini-demo and verify contract-shaped JSON plus any demo artifacts.
 
 ## Reference basis
 

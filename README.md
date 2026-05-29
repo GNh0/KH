@@ -52,6 +52,7 @@ python -m src.skills.uaf_skill_catalog --list
 python -m src.skills.uaf_skill_catalog --read orchestration-role-graph
 python -m src.skills.uaf_skill_catalog --check
 python -m src.skills.uaf_skill_quality
+python -m unittest tests.test_skill_demos
 python -m unittest discover -s tests
 ```
 
@@ -162,9 +163,18 @@ skills/<skill-folder>/SKILL.md
 skills/<skill-folder>/references/usage.md
 skills/<skill-folder>/examples/minimal-workflow.md
 skills/<skill-folder>/scripts/smoke_check.py
+skills/<skill-folder>/scripts/demo.py
 ```
 
 Then run the catalog and quality checks.
+
+Each packaged skill also has a runnable demo:
+
+```bash
+python skills/token_optimizer/scripts/demo.py --output-dir ./tmp/token-demo
+```
+
+The demo prints JSON with `success_case`, `blocked_or_failure_case`, `contracts`, `host_metadata`, `artifacts`, and `verification`. If `--output-dir` is omitted, demo files go to the OS temp KH-UAF demo directory, not the repository root.
 
 ## Maintainer Quality Gate
 
@@ -175,7 +185,7 @@ python -m src.skills.uaf_skill_catalog --check
 python -m src.skills.uaf_skill_quality
 ```
 
-The quality check is a KH UAF release gate, not a general external-skill ranking tool. It checks support-file wiring, smoke execution, implementation-target resolution, and test evidence for the skills packaged in this repository. The detailed rubric and latest scorecard live under `docs/skillbook/audits/`.
+The quality check is a KH UAF release gate, not a general external-skill ranking tool. It checks support-file wiring, smoke execution, runnable demo execution, implementation-target resolution, and test evidence for the skills packaged in this repository. The detailed rubric and latest scorecard live under `docs/skillbook/audits/`.
 
 ## Project Layout
 

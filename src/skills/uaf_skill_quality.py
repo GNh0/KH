@@ -3,6 +3,7 @@ import ast
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -103,6 +104,14 @@ REQUIRED_SUPPORT_FILES = {
             "IMPLEMENTATION_TARGETS_PATTERN",
             "resolve_target",
             "def main",
+        ],
+    },
+    "scripts/demo.py": {
+        "min_bytes": 450,
+        "required_markers": [
+            "SKILL_NAME",
+            "src.skills.demo_scenarios",
+            "main(SKILL_NAME)",
         ],
     },
 }
@@ -217,6 +226,18 @@ def audit_skill_packaging_quality(
                     )
                 )
 
+        demo_execution = {}
+        if run_smoke_scripts:
+            demo_execution = _run_demo_script(skill_dir, skill["name"])
+            if not demo_execution.get("success"):
+                issues.append(
+                    _issue(
+                        "demo_script_failed",
+                        "scripts/demo.py",
+                        demo_execution.get("message", "Demo script failed."),
+                    )
+                )
+
         deep_skill = deep_by_name.get(skill["name"], {})
         quality_components, quality_gaps = _score_skill_quality(
             skill=skill,
@@ -225,6 +246,7 @@ def audit_skill_packaging_quality(
             support_report=support_report,
             issues=issues,
             smoke_execution=smoke_execution,
+            demo_execution=demo_execution,
             deep_skill=deep_skill,
         )
         quality_score = round(sum(quality_components.values()), 1)
@@ -243,6 +265,7 @@ def audit_skill_packaging_quality(
             "support_files": sorted(REQUIRED_SUPPORT_FILES),
             "support_report": support_report,
             "smoke_execution": smoke_execution,
+            "demo_execution": demo_execution,
             "deep_audit": {
                 "status": deep_skill.get("status"),
                 "target_count": deep_skill.get("target_count", 0),
@@ -302,6 +325,7 @@ def _score_skill_quality(
     support_report: Dict[str, Dict[str, Any]],
     issues: List[Dict[str, str]],
     smoke_execution: Dict[str, Any],
+    demo_execution: Dict[str, Any],
     deep_skill: Dict[str, Any],
 ) -> Tuple[Dict[str, float], List[str]]:
     usage = support_contents.get("references/usage.md", "")
@@ -424,9 +448,9 @@ def _score_skill_quality(
         components,
         "runtime_implementation",
         0.25,
-        bool(smoke_execution.get("success")),
+        bool(smoke_execution.get("success")) and bool(demo_execution.get("success")),
         gaps,
-        "smoke script must execute successfully",
+        "smoke and demo scripts must execute successfully",
     )
     _add(
         components,
@@ -453,7 +477,7 @@ def _score_skill_quality(
         gaps,
         "smoke script must be parseable",
     )
-    _add(components, "verification_evidence", 0.35, bool(smoke_execution.get("success")), gaps, "smoke execution evidence is required")
+    _add(components, "verification_evidence", 0.35, bool(smoke_execution.get("success")) and bool(demo_execution.get("success")), gaps, "smoke and runnable demo execution evidence are required")
     _add(components, "verification_evidence", 0.45, bool(deep_skill.get("has_test_evidence")), gaps, "implementation targets need test evidence")
     _add(
         components,
@@ -643,6 +667,170 @@ def _run_smoke_script(skill_dir: Path) -> Dict[str, Any]:
         "returncode": completed.returncode,
         "message": message[:2000],
     }
+
+
+def _run_demo_script(skill_dir: Path, skill_name: str) -> Dict[str, Any]:
+    script_path = skill_dir / "scripts" / "demo.py"
+    if not script_path.exists():
+        return {
+            "success": False,
+            "returncode": None,
+            "message": "Demo script is missing.",
+        }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        output_dir = Path(tmp) / skill_name
+        completed = subprocess.run(
+            [sys.executable, str(script_path), "--output-dir", str(output_dir)],
+            cwd=skill_dir,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        message = (completed.stdout or completed.stderr or "").strip()
+        if completed.returncode != 0:
+            return {
+                "success": False,
+                "returncode": completed.returncode,
+                "message": message[:2000],
+            }
+        try:
+            payload = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            return {
+                "success": False,
+                "returncode": completed.returncode,
+                "message": f"Demo stdout is not JSON: {exc}",
+            }
+
+        validation_errors = _validate_demo_payload(skill_name, payload, output_dir)
+        if validation_errors:
+            return {
+                "success": False,
+                "returncode": completed.returncode,
+                "message": f"Demo payload failed validation: {', '.join(validation_errors[:8])}",
+            }
+        return {
+            "success": True,
+            "returncode": completed.returncode,
+            "message": json.dumps({
+                "schema_version": payload.get("schema_version"),
+                "skill": payload.get("skill"),
+                "artifact_count": len(payload.get("artifacts", [])),
+                "contract_count": len(payload.get("contracts", [])),
+                "verification": payload.get("verification", {}),
+            }, ensure_ascii=False),
+        }
+
+
+def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir: Path) -> List[str]:
+    errors: List[str] = []
+    required_keys = {
+        "schema_version",
+        "skill",
+        "success_case",
+        "blocked_or_failure_case",
+        "contracts",
+        "host_metadata",
+        "artifacts",
+        "verification",
+    }
+    for key in sorted(required_keys.difference(payload)):
+        errors.append(f"missing {key}")
+    if payload.get("schema_version") != "1.0":
+        errors.append("schema_version must be 1.0")
+    if payload.get("skill") != skill_name:
+        errors.append("skill name mismatch")
+
+    success_case = dict(payload.get("success_case", {}) or {})
+    if success_case.get("status") != "passed":
+        errors.append("success_case.status must be passed")
+    if not success_case.get("contract_type"):
+        errors.append("success_case.contract_type missing")
+    if not success_case.get("evidence"):
+        errors.append("success_case evidence missing")
+
+    blocked_case = dict(payload.get("blocked_or_failure_case", {}) or {})
+    if blocked_case.get("status") not in {"blocked", "failed"}:
+        errors.append("blocked_or_failure_case.status must be blocked or failed")
+    if not blocked_case.get("contract_type"):
+        errors.append("blocked_or_failure_case.contract_type missing")
+    if not (blocked_case.get("blocked_reason") or blocked_case.get("error_code")):
+        errors.append("blocked/failure reason missing")
+    if not blocked_case.get("remediation"):
+        errors.append("blocked/failure remediation missing")
+    if blocked_case.get("non_destructive") is not True:
+        errors.append("blocked/failure case must be non_destructive")
+
+    contracts = list(payload.get("contracts", []) or [])
+    if not contracts:
+        errors.append("contracts empty")
+    for index, contract in enumerate(contracts):
+        if not contract.get("name"):
+            errors.append(f"contract {index} missing name")
+        if not contract.get("module"):
+            errors.append(f"contract {index} missing module")
+        if not contract.get("fields_checked"):
+            errors.append(f"contract {index} fields_checked empty")
+        if contract.get("roundtrip_checked") is not True:
+            errors.append(f"contract {index} did not roundtrip")
+        if contract.get("source") not in {"dataclass", "gate-result", "policy-result", "artifact-validator"}:
+            errors.append(f"contract {index} source invalid")
+
+    host = dict(payload.get("host_metadata", {}) or {})
+    if host.get("selected_host") not in {"local", "codex", "antigravity-style", "claude-code"}:
+        errors.append("host selected_host invalid")
+    if len(host.get("host_differences", []) or []) < 3:
+        errors.append("host_differences too shallow")
+    if Path(str(host.get("output_dir", ""))) != output_dir:
+        errors.append("host output_dir mismatch")
+    if host.get("external_runtime_dependency") is not False:
+        errors.append("external_runtime_dependency must be false")
+
+    artifacts = list(payload.get("artifacts", []) or [])
+    if not artifacts:
+        errors.append("artifacts empty")
+    for index, artifact in enumerate(artifacts):
+        artifact_path = Path(str(artifact.get("path", "")))
+        if not artifact_path.exists():
+            errors.append(f"artifact {index} path missing")
+        if not _path_is_relative_to(artifact_path, output_dir):
+            errors.append(f"artifact {index} outside output_dir")
+        if artifact.get("validated") is not True:
+            errors.append(f"artifact {index} not validated")
+        if not artifact.get("checksum"):
+            errors.append(f"artifact {index} checksum missing")
+        if not artifact.get("validation_evidence"):
+            errors.append(f"artifact {index} validation evidence missing")
+
+    verification = dict(payload.get("verification", {}) or {})
+    for key in [
+        "runnable",
+        "stdout_json_only",
+        "contract_roundtrip",
+        "artifacts_within_output_dir",
+        "artifacts_validated",
+    ]:
+        if verification.get(key) is not True:
+            errors.append(f"verification {key} must be true")
+    if verification.get("exit_code") != 0:
+        errors.append("verification exit_code must be 0")
+    runtime_observation = dict(verification.get("runtime_observation", {}) or {})
+    if runtime_observation.get("source") != "outer subprocess quality gate":
+        errors.append("verification runtime_observation source invalid")
+    declared_paths = {Path(str(artifact.get("path", ""))).resolve() for artifact in artifacts}
+    generated_paths = {path.resolve() for path in output_dir.rglob("*") if path.is_file()}
+    if generated_paths != declared_paths:
+        errors.append("artifact manifest does not declare every generated file")
+    return errors
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def main() -> int:

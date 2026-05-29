@@ -52,6 +52,7 @@ python -m src.skills.uaf_skill_catalog --list
 python -m src.skills.uaf_skill_catalog --read orchestration-role-graph
 python -m src.skills.uaf_skill_catalog --check
 python -m src.skills.uaf_skill_quality
+python -m unittest tests.test_skill_demos
 python -m unittest discover -s tests
 ```
 
@@ -162,9 +163,18 @@ skills/<skill-folder>/SKILL.md
 skills/<skill-folder>/references/usage.md
 skills/<skill-folder>/examples/minimal-workflow.md
 skills/<skill-folder>/scripts/smoke_check.py
+skills/<skill-folder>/scripts/demo.py
 ```
 
 추가 후 catalog/quality check를 실행합니다.
+
+각 패키지 스킬에는 실행 가능한 demo도 포함됩니다.
+
+```bash
+python skills/token_optimizer/scripts/demo.py --output-dir ./tmp/token-demo
+```
+
+demo는 `success_case`, `blocked_or_failure_case`, `contracts`, `host_metadata`, `artifacts`, `verification`을 포함한 JSON을 출력합니다. `--output-dir`를 생략하면 demo 파일은 저장소 루트가 아니라 OS temp의 KH-UAF demo 디렉터리에 생성됩니다.
 
 ## Maintainer 품질 게이트
 
@@ -175,7 +185,7 @@ python -m src.skills.uaf_skill_catalog --check
 python -m src.skills.uaf_skill_quality
 ```
 
-품질 검사는 KH UAF release gate이며, 외부 스킬을 평가하는 범용 ranking 도구가 아닙니다. 이 저장소에 포함된 스킬의 support-file wiring, smoke execution, implementation-target resolution, test evidence를 확인합니다. 상세 rubric과 최신 scorecard는 `docs/skillbook/audits/` 아래에 있습니다.
+품질 검사는 KH UAF release gate이며, 외부 스킬을 평가하는 범용 ranking 도구가 아닙니다. 이 저장소에 포함된 스킬의 support-file wiring, smoke execution, runnable demo execution, implementation-target resolution, test evidence를 확인합니다. 상세 rubric과 최신 scorecard는 `docs/skillbook/audits/` 아래에 있습니다.
 
 ## 프로젝트 구조
 

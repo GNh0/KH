@@ -14,6 +14,7 @@ Large arbitrary prose also passes through by default; this is intentional becaus
 - Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
 - Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
 - Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
+- Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success/blocked mini-demo and verify contract-shaped JSON plus any demo artifacts.
 
 ## Instructions
 1. For mixed content, call `src.skills.token_optimizer.optimize_context_content`; it classifies logs, Python code, and contract-sensitive text before deciding whether compression is safe.
