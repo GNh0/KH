@@ -404,7 +404,7 @@ Every packaged skill must include trigger-focused frontmatter, an operational be
 | `context-state-harness` | Context save/restore, handoff payloads, and continuation metadata. |
 | `review-gate-harness` | Spec, code, and release review gate contracts for UAF workflows. |
 | `qa-gate-harness` | QA checks, regression evidence, bug reports, and browser-adapter expectations. |
-| `health-check-harness` | Code health dashboard inputs, readiness scoring, and trend signals. |
+| `health-check-harness` | Code health dashboard inputs, packaged skill target audit, readiness scoring, and trend signals. |
 
 ### Safety and Operations
 

@@ -66,6 +66,7 @@ If you need to extend or debug this framework, here is the structure:
 - **`src/tasks/workflows.py`**: The `asyncio` queue-based worker engine. Replaces Celery.
 - **`src/harness/sandbox.py`**: A secure code runner. Uses `multiprocessing` for absolute timeout guarantees on Windows.
 - **`src/core/snapshot_manager.py`**: State rollback system utilizing pure `gzip` for 90% disk space reduction.
+- **`src/skills/uaf_skill_audit.py`**: Deep packaged skill/harness audit helper. Resolves each `SKILL.md` implementation target and maps executable skills to test evidence.
 - **`src/api/server.py`**: An optional FastAPI webhook receiver using `aiosqlite` with WAL mode for external host callbacks.
 - **`skills/`**: Packaged UAF-native skill and harness catalog. Add a new skill by creating `skills/<skill-folder>/SKILL.md`.
 

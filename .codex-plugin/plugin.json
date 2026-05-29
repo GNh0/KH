@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.6.2",
-  "description": "KH Universal Agent Framework skills, DAG role artifact orchestration, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, Windows-safe evaluator execution, evidence gates, retention cleanup, and local orchestration harness for Codex.",
+  "version": "2.6.3",
+  "description": "KH Universal Agent Framework skills, DAG role artifact orchestration, standard-template functional specification exports, metadata-only quality harnesses, operational skill target audit, Windows-safe evaluator execution, evidence gates, retention cleanup, and local orchestration harness for Codex.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "KH UAF",
     "shortDescription": "Personal UAF skillbook and orchestration harness.",
-    "longDescription": "KH UAF packages host-readable skills, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill quality validation, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
+    "longDescription": "KH UAF packages host-readable skills, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill target audits, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
     "developerName": "KH UAF",
     "category": "Productivity",
     "capabilities": [

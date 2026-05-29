@@ -10,7 +10,7 @@ This is a UAF-native health harness for quality dashboard workflow patterns. It 
 ## Pattern basis
 
 - Health workflow: quality dashboard, type checker, linter, tests, dead code checks, weighted scores, and trend-friendly summaries.
-- UAF: validator checks, sandbox/evaluator results, workflow gate results, and release-manager metadata.
+- UAF: validator checks, skill target audit, sandbox/evaluator results, workflow gate results, and release-manager metadata.
 
 ## Workflow
 
@@ -24,6 +24,7 @@ This is a UAF-native health harness for quality dashboard workflow patterns. It 
 
 - `score`: numeric readiness score from 0 to 10.
 - `checks`: list of checks, commands, status, and evidence.
+- `skill_target_audit`: packaged skill/harness target resolution and test-evidence summary when the workflow is auditing this repository.
 - `failures`: actionable failed checks.
 - `release_ready`: boolean derived from required checks.
 
@@ -33,11 +34,13 @@ This is a UAF-native health harness for quality dashboard workflow patterns. It 
 - Do not collapse failing command output into a generic failure without the command and exit code.
 - Do not treat optional checks as blockers unless workflow metadata marks them required.
 - Do not hide documentation/catalog failures because runtime tests passed.
+- Do not claim a packaged skill works when its `UAF implementation targets` cannot be resolved or executable skills have no test evidence.
 
 ## UAF implementation targets
 
 - `src.skills.uaf_skill_validator`
 - `src.skills.uaf_skill_catalog`
+- `src.skills.uaf_skill_audit`
 - `src.harness.evaluator`
 - `src.contracts.HarnessResult`
 - `tests`
