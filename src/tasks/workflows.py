@@ -19,6 +19,7 @@ from src.orchestration.goal_ledger import GoalLedger
 from src.orchestration.handoff import ResumeHandoff
 from src.orchestration.memory_state import MemoryScopeResolver
 from src.orchestration.memory_store import MemoryStore
+from src.orchestration.quality_harnesses import audit_role_execution
 from src.orchestration.role_orchestrator import (
     run_pre_implementation_roles,
     run_review_release_roles,
@@ -538,6 +539,7 @@ async def async_project_workflow(
     review_role_orchestration = await run_review_release_roles(review_role_context)
     review_role_task_results = _role_task_results(review_role_orchestration)
     role_metadata = _role_orchestration_metadata(pre_role_orchestration, review_role_orchestration)
+    role_execution_audit = audit_role_execution(role_metadata)
     evaluated_goal = _goal_with_role_orchestration(evaluated_goal, role_metadata)
     gate_results_by_role = review_role_context.get("role_gate_results", {})
     gate_results = [
@@ -552,7 +554,8 @@ async def async_project_workflow(
         if role in gate_results_by_role
     ]
     gate_evidence = _gate_result_evidence(gate_results)
-    final_goal = _goal_with_added_evidence(evaluated_goal, gate_evidence)
+    post_gate_evidence = gate_evidence + list(role_execution_audit.get("evidence", []))
+    final_goal = _goal_with_added_evidence(evaluated_goal, post_gate_evidence)
     if ledger and final_goal:
         ledger.append_event(
             "evidence_added",
@@ -587,7 +590,11 @@ async def async_project_workflow(
         metadata=metadata,
         memory_store_metadata=memory_store_metadata,
     )
-    role_success = pre_role_orchestration.get("success") and review_role_orchestration.get("success")
+    role_success = (
+        pre_role_orchestration.get("success")
+        and review_role_orchestration.get("success")
+        and role_execution_audit.get("status") == "passed"
+    )
     success = role_success and task_success and check_success
     if final_goal:
         success = role_success and task_success and check_success and final_goal.get("status") == "complete"
@@ -615,6 +622,7 @@ async def async_project_workflow(
             "role_orchestration": role_metadata.get("summary", {}),
             "role_orchestration_stages": role_metadata.get("stages", []),
             "role_task_results": role_metadata.get("results", []),
+            "role_execution_audit": role_execution_audit,
             "retention": retention_summary,
             **check_results.to_metadata(),
             "gate_evidence": gate_evidence,

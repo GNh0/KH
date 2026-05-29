@@ -38,6 +38,7 @@ What works today:
 - DomainProfile, WorkDesign, DesignArtifact, and ArtifactManifest contracts for domain-neutral orchestration.
 - Mandatory workflow design-stage persistence under the project-scoped runtime `.uaf/artifacts/design/` and `.uaf/state/artifact_manifest.json`.
 - User-facing deliverable export under the target project's `docs/` folder, routed by work type instead of a fixed DOCX/XLSX set. Software development exports 기능정의서/개발설계서/API/data/test artifacts; general orchestration still exports requirements, design, process, role/task, evidence, risk/policy, and conditional manual files; product design and investment analysis use their own artifact profiles.
+- Metadata-only quality harnesses for template completeness, artifact render structure, traceability rows, and role execution audit evidence. Harness reports stay in UAF runtime metadata; `docs/` is reserved for user-facing work products.
 - Resume-safe handoff snapshots under the project-scoped runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md`.
 - Role graph metadata for architect, implementer, reviewers, QA, security, and release roles.
 - DAG-based role orchestration with asyncio waves: CEO, advisor/product strategist, architect, planner, controller, implementers, review, QA/security, and release roles run as real `WorkflowTaskResult` producing stages when dependencies are satisfied.
@@ -261,7 +262,9 @@ Software templates enforce common development sections: `기능정의서.docx` i
 
 `deliverable_exports["plan"]` records the selected profile, artifact type, format, title, path, and evidence key for each exported artifact. This is the contract hosts should read when deciding whether the result is a report, spreadsheet model, technical drawing, CAD handoff, manual, checklist, or another future artifact type.
 
-The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. General export adds `requirements brief exported`, `orchestration design exported`, `deliverable definition exported`, `process flow exported`, `role task breakdown exported`, `evidence plan exported`, and `risk policy checklist exported`. Software development adds `functional specification exported`, `development design exported`, `screen api definition exported`, `data definition exported`, and `test verification plan exported`. Product design adds `product design document exported`, `dimension bom exported`, `technical drawing exported`, and `cad drawing exported`. Investment analysis adds `investment analysis report exported`, `scenario model exported`, and `risk policy checklist exported`. Conditional manual export adds `manual exported` only when `사용_매뉴얼.docx` is actually written. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
+`deliverable_exports["quality"]` stores harness-only checks in metadata: template marker coverage, DOCX/XLSX/SVG/DXF readability, XLSX row-width consistency, and internal traceability rows that map requirements to deliverables, evidence keys, and gates. These checks emit evidence such as `deliverable template quality passed`, `artifact render qa passed`, and `traceability matrix passed`, but they do not create extra files like `docs/추적성_매트릭스.xlsx` unless a user explicitly asks for that as a user-facing deliverable.
+
+The default design-stage evidence keys are `work design saved`, `artifact manifest saved`, and `required design artifacts saved`. General export adds `requirements brief exported`, `orchestration design exported`, `deliverable definition exported`, `process flow exported`, `role task breakdown exported`, `evidence plan exported`, and `risk policy checklist exported`. Software development adds `functional specification exported`, `development design exported`, `screen api definition exported`, `data definition exported`, and `test verification plan exported`. Product design adds `product design document exported`, `dimension bom exported`, `technical drawing exported`, and `cad drawing exported`. Investment analysis adds `investment analysis report exported`, `scenario model exported`, and `risk policy checklist exported`. Conditional manual export adds `manual exported` only when `사용_매뉴얼.docx` is actually written. Quality harnesses add metadata-only evidence, and `role_execution_audit` adds `role execution audited` after role DAG results and role artifacts are checked. These can be required by `GoalState.evidence_required` and are collected during workflow dispatch before QA/release gates evaluate completion.
 
 ## Persistent Memory
 
@@ -385,6 +388,10 @@ The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_
 | `development-lifecycle-harness` | Planning, TDD, review, verification, and branch completion workflow. |
 | `domain-orchestration-harness` | Domain-neutral WorkDesign, artifact manifest, review, QA/QC, risk, policy, and final decision workflow. |
 | `quality-gates-harness` | TDD, systematic debugging, and evidence-before-completion requirements. |
+| `deliverable-template-quality-harness` | Required-section and table-marker checks for generated user-facing deliverables. |
+| `artifact-render-qa-harness` | DOCX/XLSX/SVG/DXF readability and structural checks. |
+| `traceability-matrix-harness` | Metadata-only requirement, deliverable, evidence, and gate mapping. |
+| `role-execution-audit-harness` | Role DAG execution, artifact, and parallel-wave audit checks. |
 | `workflow-skill-distiller` | Turn repeated workflows into reusable UAF skills. |
 
 ### Gates and State

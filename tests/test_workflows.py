@@ -664,12 +664,16 @@ class WorkflowDispatchTests(unittest.TestCase):
                 self.assertTrue((project_dir / "docs" / "오케스트레이션_설계서.docx").exists())
                 self.assertTrue((project_dir / "docs" / "역할별_작업분해표.xlsx").exists())
                 self.assertTrue((project_dir / "docs" / "사용_매뉴얼.docx").exists())
+                self.assertFalse((project_dir / "docs" / "추적성_매트릭스.xlsx").exists())
                 self.assertTrue(zipfile.is_zipfile(exported_paths["오케스트레이션_설계서.docx"]))
                 with zipfile.ZipFile(exported_paths["사용_매뉴얼.docx"]) as package:
                     manual_xml = package.read("word/document.xml").decode("utf-8")
                 self.assertIn("requirements brief exported", result.metadata["goal"]["evidence"])
                 self.assertIn("orchestration design exported", result.metadata["goal"]["evidence"])
                 self.assertIn("manual exported", result.metadata["goal"]["evidence"])
+                self.assertIn("deliverable template quality passed", result.metadata["goal"]["evidence"])
+                self.assertIn("artifact render qa passed", result.metadata["goal"]["evidence"])
+                self.assertIn("traceability matrix passed", result.metadata["goal"]["evidence"])
                 self.assertIn("리비전 버전 관리", manual_xml)
                 self.assertIn("Rev. 1.1", manual_xml)
                 self.assertEqual(
@@ -704,6 +708,9 @@ class WorkflowDispatchTests(unittest.TestCase):
                 self.assertTrue(architect_artifact.exists())
                 self.assertIn("system-architect", architect_artifact.read_text(encoding="utf-8"))
                 self.assertIn("system architect role task completed", result.metadata["goal"]["evidence"])
+                self.assertEqual(result.metadata["role_execution_audit"]["status"], "passed")
+                self.assertIn("role execution audited", result.metadata["role_execution_audit"]["evidence"])
+                self.assertIn("role execution audited", result.metadata["goal"]["evidence"])
                 self.assertIn(
                     "deliverable_exports",
                     ledger_state["goal"]["metadata"],

@@ -6,6 +6,10 @@ from typing import Any, Dict, Iterable, List
 from xml.sax.saxutils import escape
 
 from src.contracts import DomainProfile, DomainRole, WorkDesign
+from src.orchestration.quality_harnesses import (
+    build_traceability_matrix_rows,
+    evaluate_deliverable_quality,
+)
 
 
 DELIVERABLE_EVIDENCE = [
@@ -139,13 +143,14 @@ def export_office_deliverables(
                 _manual_sections(workflow_id, domain_profile, work_design, files, metadata),
             )
         )
-    return {
-        "export_dir": str(export_dir),
-        "profile": profile_name,
-        "plan": _plan_from_records(deliverables, profile_name),
-        "deliverables": deliverables,
-        "evidence": evidence,
-    }
+    return _final_export_result(
+        export_dir=export_dir,
+        workflow_id=workflow_id,
+        profile_name=profile_name,
+        work_design=work_design,
+        deliverables=deliverables,
+        evidence=evidence,
+    )
 
 
 def _export_product_design_deliverables(
@@ -202,13 +207,14 @@ def _export_product_design_deliverables(
             artifact_type="cad-drawing",
         ),
     ]
-    return {
-        "export_dir": str(export_dir),
-        "profile": profile_name,
-        "plan": _plan_from_records(deliverables, profile_name),
-        "deliverables": deliverables,
-        "evidence": evidence,
-    }
+    return _final_export_result(
+        export_dir=export_dir,
+        workflow_id=workflow_id,
+        profile_name=profile_name,
+        work_design=work_design,
+        deliverables=deliverables,
+        evidence=evidence,
+    )
 
 
 def _export_investment_analysis_deliverables(
@@ -254,13 +260,14 @@ def _export_investment_analysis_deliverables(
             artifact_type="risk-policy-checklist",
         ),
     ]
-    return {
-        "export_dir": str(export_dir),
-        "profile": profile_name,
-        "plan": _plan_from_records(deliverables, profile_name),
-        "deliverables": deliverables,
-        "evidence": evidence,
-    }
+    return _final_export_result(
+        export_dir=export_dir,
+        workflow_id=workflow_id,
+        profile_name=profile_name,
+        work_design=work_design,
+        deliverables=deliverables,
+        evidence=evidence,
+    )
 
 
 def _export_software_development_deliverables(
@@ -357,13 +364,14 @@ def _export_software_development_deliverables(
             artifact_type="risk-policy-checklist",
         ),
     ]
-    return {
-        "export_dir": str(export_dir),
-        "profile": profile_name,
-        "plan": _plan_from_records(deliverables, profile_name),
-        "deliverables": deliverables,
-        "evidence": evidence,
-    }
+    return _final_export_result(
+        export_dir=export_dir,
+        workflow_id=workflow_id,
+        profile_name=profile_name,
+        work_design=work_design,
+        deliverables=deliverables,
+        evidence=evidence,
+    )
 
 
 def _requirements_sections(
@@ -1826,6 +1834,38 @@ def _write_dxf_deliverable(
 ) -> Dict[str, str]:
     path.write_text(content, encoding="ascii")
     return _deliverable_record(path, workflow_id, kind, title, "dxf", evidence, artifact_type)
+
+
+def _final_export_result(
+    export_dir: Path,
+    workflow_id: str,
+    profile_name: str,
+    work_design: WorkDesign,
+    deliverables: List[Dict[str, str]],
+    evidence: List[str],
+) -> Dict[str, Any]:
+    traceability_rows = build_traceability_matrix_rows(work_design, deliverables)
+    quality = evaluate_deliverable_quality({
+        "profile": profile_name,
+        "deliverables": deliverables,
+        "traceability_rows": traceability_rows,
+    })
+    evidence.extend(quality.get("evidence", []))
+    return {
+        "export_dir": str(export_dir),
+        "profile": profile_name,
+        "plan": _plan_from_records(deliverables, profile_name),
+        "deliverables": deliverables,
+        "quality": quality,
+        "internal_artifacts": {
+            "traceability_matrix": {
+                "storage": "metadata",
+                "row_count": len(traceability_rows),
+                "rows": traceability_rows,
+            },
+        },
+        "evidence": _unique(evidence),
+    }
 
 
 def _write_docx(path: Path, title: str, sections: List[Dict[str, Any]]) -> None:

@@ -13,9 +13,11 @@ from src.skills.uaf_skill_catalog import collect_packaged_skills, read_packaged_
 
 CORE_SKILLS = {
     "adapter-contract-harness",
+    "artifact-render-qa-harness",
     "architect-pipeline",
     "command-hook-policy-harness",
     "development-lifecycle-harness",
+    "deliverable-template-quality-harness",
     "context-state-harness",
     "domain-orchestration-harness",
     "goal-state-harness",
@@ -26,6 +28,7 @@ CORE_SKILLS = {
     "memory-state-harness",
     "orchestration-role-graph",
     "parallel-orchestration-harness",
+    "role-execution-audit-harness",
     "quality-gates-harness",
     "qa-gate-harness",
     "review-gate-harness",
@@ -33,6 +36,7 @@ CORE_SKILLS = {
     "skill-catalog",
     "snapshot-state-harness",
     "subagent-review-pipeline",
+    "traceability-matrix-harness",
     "token-optimizer",
     "workflow-skill-distiller",
 }
@@ -185,6 +189,24 @@ class UafSkillCatalogTests(unittest.TestCase):
                 self.assertIn("UAF implementation targets", content)
                 self.assertIn(source_label, content)
                 self.assertNotIn(r"C:\Users\KONEIT\.gemini", content)
+
+    def test_quality_improvement_harnesses_are_packaged(self):
+        expected_targets = {
+            "deliverable-template-quality-harness": "evaluate_deliverable_quality",
+            "artifact-render-qa-harness": "evaluate_deliverable_quality",
+            "traceability-matrix-harness": "build_traceability_matrix_rows",
+            "role-execution-audit-harness": "audit_role_execution",
+        }
+
+        for skill_name, target in expected_targets.items():
+            with self.subTest(skill_name=skill_name):
+                content = read_packaged_skill(skill_name)
+
+                self.assertIn("Packaged source: uaf_skill_folder", content)
+                self.assertIn("External runtime dependency: false", content)
+                self.assertIn("UAF implementation targets", content)
+                self.assertIn("src.orchestration.quality_harnesses", content)
+                self.assertIn(target, content)
 
     def test_skills_folder_makes_new_harness_easy_to_add(self):
         with tempfile.TemporaryDirectory() as temp_dir:

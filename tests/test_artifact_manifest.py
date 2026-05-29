@@ -245,6 +245,8 @@ class ArtifactStoreTests(unittest.TestCase):
                 self.assertLess(manual_xml.index("리비전 버전 관리"), manual_xml.index("운영"))
                 self.assertIn("운영", manual_xml)
                 self.assertIn("requirements brief exported", result["evidence"])
+                self.assertIn("traceability matrix passed", result["evidence"])
+                self.assertIn("deliverable template quality passed", result["evidence"])
                 self.assertIn("manual exported", result["evidence"])
         finally:
             if original_runtime_root is None:
@@ -283,6 +285,7 @@ class ArtifactStoreTests(unittest.TestCase):
 
                 self.assertIn("투자_분석보고서.docx", exported_names)
                 self.assertIn("가정_시나리오.xlsx", exported_names)
+                self.assertNotIn("추적성_매트릭스.xlsx", exported_names)
                 self.assertNotIn("사용_매뉴얼.docx", exported_names)
                 self.assertNotIn("요구정의서.docx", exported_names)
                 self.assertNotIn("manual exported", result["evidence"])
@@ -420,6 +423,7 @@ class ArtifactStoreTests(unittest.TestCase):
                 self.assertIn("치수_BOM.xlsx", exported_paths)
                 self.assertIn("개념_설계도.svg", exported_paths)
                 self.assertIn("개념_설계도.dxf", exported_paths)
+                self.assertNotIn("추적성_매트릭스.xlsx", exported_paths)
                 self.assertNotIn("요구정의서.docx", exported_paths)
                 self.assertIn("technical-drawing", plan_types)
                 self.assertIn("cad-drawing", plan_types)

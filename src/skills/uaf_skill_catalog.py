@@ -28,11 +28,13 @@ DESIGN_REFERENCES_CONSIDERED = {
 
 SKILL_EXECUTION_LEVELS = {
     "adapter-contract-harness": "python-module",
+    "artifact-render-qa-harness": "python-module",
     "architect-pipeline": "hybrid-harness",
     "command-hook-policy-harness": "procedure-policy",
     "command-output-harness": "procedure-policy",
     "context-state-harness": "python-module",
     "development-lifecycle-harness": "procedure-policy",
+    "deliverable-template-quality-harness": "python-module",
     "domain-orchestration-harness": "hybrid-harness",
     "goal-state-harness": "python-module",
     "guard-policy-harness": "procedure-policy",
@@ -42,12 +44,14 @@ SKILL_EXECUTION_LEVELS = {
     "memory-state-harness": "python-module",
     "orchestration-role-graph": "python-module",
     "parallel-orchestration-harness": "python-module",
+    "role-execution-audit-harness": "python-module",
     "qa-gate-harness": "hybrid-harness",
     "quality-gates-harness": "procedure-policy",
     "review-gate-harness": "hybrid-harness",
     "skill-catalog": "python-module",
     "snapshot-state-harness": "python-module",
     "subagent-review-pipeline": "hybrid-harness",
+    "traceability-matrix-harness": "python-module",
     "token-optimizer": "procedure-policy",
     "workflow-skill-distiller": "procedure-policy",
 }
