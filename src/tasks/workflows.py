@@ -5,8 +5,6 @@ import multiprocessing
 import os
 from typing import List
 
-import httpx
-
 from src.contracts import MemoryScope, WorkflowDispatchResult, WorkflowTaskResult
 from src.core.snapshot_manager import SnapshotManager
 from src.orchestration.artifacts import ArtifactStore, build_design_stage
@@ -431,7 +429,7 @@ def _apply_retention_policy(
 
 
 async def _report_task_result_to_webhook(
-    client: httpx.AsyncClient,
+    client,
     webhook_url: str,
     api_key: str,
     project_id: str,
@@ -486,6 +484,8 @@ async def code_generation_worker(
     webhook_url = os.environ.get("AG_WEBHOOK_URL", "").strip()
     api_key = os.environ.get("AG_API_KEY", "antigravity-secret-key-v2")
     task_runner = runner or LocalTaskRunner()
+
+    import httpx  # lazy import: only needed for webhook dispatch
 
     async with httpx.AsyncClient() as client:
         while True:
