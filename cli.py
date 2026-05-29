@@ -59,6 +59,10 @@ def build_agent_loop(router, project: str, platform_mode: str):
     return AgentLoop(router, project, platform_mode=platform_mode)
 
 
+def should_start_background_webhook(platform_mode: str) -> bool:
+    return platform_mode == "antigravity"
+
+
 def main():
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -93,8 +97,8 @@ def main():
     parser.add_argument("--platform", choices=["local", "antigravity"], default=os.environ.get("AG_PLATFORM_MODE", "local"),
                         help="Dispatcher platform mode. Use antigravity for app/webhook-driven subagent dispatch.")
 
-    parser.add_argument("--provider", default=os.environ.get("AG_LLM_PROVIDER", "local"),
-                        help="LLM provider: local, openai, codex, or claude")
+    parser.add_argument("--provider", default=os.environ.get("AG_LLM_PROVIDER", "offline"),
+                        help="LLM provider: offline, local, openai, codex, or claude")
     parser.add_argument("--model", default=os.environ.get("AG_LLM_MODEL", "llama3"),
                         help="LLM model name")
     parser.add_argument("--base-url", default=os.environ.get("AG_LLM_BASE_URL", "http://localhost:11434/v1"),
@@ -105,7 +109,10 @@ def main():
     args = parser.parse_args()
 
     # 환경변수로 프레임워크 내부 모듈에 옵션 전달 (결합도 제거)
-    os.environ["AG_WEBHOOK_URL"] = f"http://127.0.0.1:{args.port}/api/webhook/subagent-result"
+    if should_start_background_webhook(args.platform):
+        os.environ["AG_WEBHOOK_URL"] = f"http://127.0.0.1:{args.port}/api/webhook/subagent-result"
+    else:
+        os.environ.pop("AG_WEBHOOK_URL", None)
     os.environ["AG_MAX_WORKERS"] = str(args.workers)
     os.environ["AG_NO_SANDBOX"] = "1" if args.no_sandbox else "0"
     os.environ["AG_VERBOSE"] = "1" if args.verbose else "0"
@@ -119,17 +126,21 @@ def main():
         if args.no_sandbox:
             print("[CLI] --no-sandbox is enabled. Code safety checks are disabled.")
 
-        print(f"[CLI] Starting background webhook server on port {args.port}.")
-        server_process = multiprocessing.Process(
-            target=start_server_process,
-            args=(args.port, args.verbose),
-            daemon=True
-        )
-        server_process.start()
+        server_process = None
+        if should_start_background_webhook(args.platform):
+            print(f"[CLI] Starting background webhook server on port {args.port}.")
+            server_process = multiprocessing.Process(
+                target=start_server_process,
+                args=(args.port, args.verbose),
+                daemon=True
+            )
+            server_process.start()
 
-        if not wait_for_server(args.port):
-            server_process.terminate()
-            return
+            if not wait_for_server(args.port):
+                server_process.terminate()
+                return
+        else:
+            print("[CLI] Local platform selected; background webhook server is not required.")
 
         try:
             sandbox_status = "OFF" if args.no_sandbox else "ON"
@@ -159,9 +170,10 @@ def main():
                 sandbox.cleanup_workspace_temps()
             except Exception:
                 pass
-            print("[CLI] Stopping background server.")
-            server_process.terminate()
-            server_process.join()
+            if server_process is not None:
+                print("[CLI] Stopping background server.")
+                server_process.terminate()
+                server_process.join()
             print("[CLI] All processes stopped.")
 
 

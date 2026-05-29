@@ -55,7 +55,7 @@ If you need to extend or debug this framework, here is the structure:
 - **`src/orchestration/quality_harnesses.py`**: Metadata-only quality harnesses for deliverable template markers, artifact render/readability checks, internal traceability rows, and role execution audit evidence. These checks do not write harness-only spreadsheets into the target project's `docs/` folder.
 - **`src/orchestration/memory_state.py`**: Project/conversation memory scope resolver for host-neutral persistent memory namespaces.
 - **`src/orchestration/memory_store.py`**: JSON/JSONL memory store for scoped records, candidates, events, and cleanup policy.
-- **`src/orchestration/llm_router.py`**: Built-in OpenAI-compatible and Anthropic routing plus custom LLM provider registration.
+- **`src/orchestration/llm_router.py`**: Built-in deterministic offline, OpenAI-compatible, and Anthropic routing plus custom LLM provider registration.
 - **`src/orchestration/roles.py`**: Default UAF role graph (`ceo`, `advisor`, `system-architect`, `controller`, `implementer`, reviewers, QA, security, release).
 - **`src/platforms/antigravity_native.py`**: Native Antigravity dispatch result contract for injected host adapters and JSON process sidecars.
 - **`src/platforms/codex_thread_registry.py`**: Optional Codex desktop thread registry reader for active/archived thread memory cleanup.
@@ -67,7 +67,7 @@ If you need to extend or debug this framework, here is the structure:
 - **`src/harness/sandbox.py`**: A secure code runner. Uses `multiprocessing` for absolute timeout guarantees on Windows.
 - **`src/core/snapshot_manager.py`**: State rollback system utilizing pure `gzip` for 90% disk space reduction.
 - **`src/skills/uaf_skill_audit.py`**: Deep packaged skill/harness audit helper. Resolves each `SKILL.md` implementation target and maps executable skills to test evidence.
-- **`src/skills/uaf_skill_quality.py`**: Packaged skill quality gate. Verifies each skill's support-file wiring, bundled usage reference, minimal workflow example, executable smoke script, and implementation target resolution.
+- **`src/skills/uaf_skill_quality.py`**: Packaged skill quality gate. Verifies each skill's support-file wiring, bundled usage reference, minimal workflow example, executable smoke script, implementation target resolution, test evidence, and 10-point practical readiness thresholds.
 - **`src/api/server.py`**: An optional FastAPI webhook receiver using `aiosqlite` with WAL mode for external host callbacks.
 - **`skills/`**: Packaged UAF-native skill and harness catalog. Add a new skill by creating `skills/<skill-folder>/SKILL.md`, `references/usage.md`, `examples/minimal-workflow.md`, and `scripts/smoke_check.py`.
 

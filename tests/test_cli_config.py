@@ -33,6 +33,10 @@ class CliConfigTests(unittest.TestCase):
 
         self.assertEqual(loop.platform_mode, "antigravity")
 
+    def test_local_platform_does_not_require_background_webhook(self):
+        self.assertFalse(cli.should_start_background_webhook("local"))
+        self.assertTrue(cli.should_start_background_webhook("antigravity"))
+
 
 if __name__ == "__main__":
     unittest.main()

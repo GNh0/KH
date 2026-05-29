@@ -55,6 +55,37 @@ class UafSkillQualityTests(unittest.TestCase):
 
                 self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
+    def test_every_skill_has_minimum_runtime_quality_score(self):
+        report = audit_skill_packaging_quality(run_smoke_scripts=True)
+        low_quality = [
+            {
+                "name": skill["name"],
+                "score": skill["quality_score"],
+                "rating": skill["quality_rating"],
+                "gaps": skill["quality_gaps"],
+            }
+            for skill in report["skills"]
+            if skill["quality_score"] < 8.0
+        ]
+
+        self.assertEqual(low_quality, [])
+
+    def test_core_runtime_harnesses_score_at_least_nine(self):
+        report = audit_skill_packaging_quality(run_smoke_scripts=True)
+        low_core = [
+            {
+                "name": skill["name"],
+                "score": skill["quality_score"],
+                "rating": skill["quality_rating"],
+                "gaps": skill["quality_gaps"],
+            }
+            for skill in report["skills"]
+            if skill["name"] in report["core_production_skills"]
+            if skill["quality_score"] < 9.0
+        ]
+
+        self.assertEqual(low_core, [])
+
 
 if __name__ == "__main__":
     unittest.main()

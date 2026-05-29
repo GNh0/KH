@@ -86,6 +86,8 @@ python cli.py run --project ./my_app --prompt "Create a FastAPI backend"
 python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --platform antigravity
 ```
 
+The CLI defaults to `--provider offline`, a deterministic smoke-run provider that does not require Ollama, OpenAI, Anthropic, or a local API server. Use `--provider local --base-url http://localhost:11434/v1` when you want an OpenAI-compatible local LLM, or `--provider openai` / `--provider claude` for external providers.
+
 Useful commands:
 
 ```bash
@@ -442,7 +444,11 @@ python -m src.skills.uaf_skill_catalog --check
 python -m src.skills.uaf_skill_quality
 ```
 
-The catalog check is repo-local and dependency-free. The quality check additionally executes every packaged skill's `scripts/smoke_check.py`, so it proves the support files are present, wired from `SKILL.md`, and able to resolve implementation targets. Treat both checks as release gates before publishing the plugin.
+The catalog check is repo-local and dependency-free. The quality check additionally executes every packaged skill's `scripts/smoke_check.py`, resolves implementation targets through `src.skills.uaf_skill_audit`, and returns a 10-point practical quality score for every skill/harness.
+
+The score is calibrated against the repo's target skillbook standard: trigger clarity, executable or procedural workflow depth, implementation targets, test evidence, failure handling, examples/references, UAF observability, and maintainability. The release gate requires every packaged skill to score at least `8.0`, while core runtime/quality/orchestration harnesses must score at least `9.0`. `low_quality_skills` must be empty before publishing the plugin.
+
+The score is not a popularity metric and does not claim external adoption. It is a local readiness gate that prevents shallow name-only skills from passing without support files, target resolution, smoke execution, and test evidence. Treat both catalog and quality checks as release gates before publishing the plugin.
 
 ## Windows App Integration
 
@@ -532,6 +538,7 @@ Set these only when you need to override the defaults.
 | `AG_NO_SANDBOX` | `0` | Disable sandbox when set to `1`. |
 | `AG_VERBOSE` | `0` | Verbose server logs. |
 | `AG_PLATFORM_MODE` | `local` | Dispatcher platform mode for CLI and runner paths. |
+| `AG_LLM_PROVIDER` | `offline` | Default LLM provider for CLI runs; use `local`, `openai`, `codex`, or `claude` when configured. |
 
 ## Verification
 

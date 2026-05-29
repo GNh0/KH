@@ -30,6 +30,38 @@ class LLMRouterTests(unittest.TestCase):
             with self.assertRaises(LLMRouterError):
                 router.chat("system", "user")
 
+    def test_offline_provider_returns_deterministic_target_files(self):
+        router = LLMRouter(provider="offline")
+
+        response = router.chat(
+            "You output only JSON arrays.",
+            "Return only a JSON array of source file paths.",
+        )
+
+        self.assertEqual(response, "[\"README.md\", \"src/app.py\"]")
+
+    def test_offline_provider_returns_deterministic_file_content(self):
+        router = LLMRouter(provider="offline")
+
+        response = router.chat(
+            "Return only file content.",
+            "Target file: src/app.py\nRole: implementer\n",
+        )
+
+        self.assertIn("def main", response)
+        self.assertIn("KH UAF", response)
+
+    def test_offline_provider_prioritizes_target_file_over_embedded_csv_context(self):
+        router = LLMRouter(provider="offline")
+
+        response = router.chat(
+            "Return only file content.",
+            "Target file: src/app.py\n\nDesign document:\n## 기능정의서\n```csv\nID,대분류,기능명,상세설명\n```",
+        )
+
+        self.assertIn("def main", response)
+        self.assertNotIn("ID,대분류", response)
+
 
 if __name__ == "__main__":
     unittest.main()

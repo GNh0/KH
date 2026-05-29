@@ -1,5 +1,23 @@
 import ast
+import re
 from src.skills.base import agent_skill
+
+IMPORTANT_LOG_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"\bFAILED\b",
+        r"\bERROR\b",
+        r"\bFAIL\b",
+        r"\bTraceback\b",
+        r"\bException\b",
+        r"\bAssertionError\b",
+        r"\bValueError\b",
+        r"\bexit code\s*:\s*\d+",
+        r"\breturncode\s*[:=]\s*\d+",
+        r"\bline\s+\d+\b",
+        r"\b[A-Za-z0-9_./\\-]+\.py::[A-Za-z0-9_./\\:-]+",
+    ]
+)
 
 @agent_skill(name="minify_code", description="파이썬 코드에서 빈 줄, 주석, Docstring을 제거하여 LLM 컨텍스트 창의 토큰 소모를 극적으로 줄입니다.")
 def minify_code(code: str) -> str:
@@ -34,8 +52,36 @@ def truncate_logs(log_text: str, max_lines: int = 30) -> str:
     lines = log_text.splitlines()
     if len(lines) <= max_lines:
         return log_text
-    
-    half = max_lines // 2
-    head = "\n".join(lines[:half])
-    tail = "\n".join(lines[-half:])
-    return f"{head}\n\n... [토큰 최적화됨: {len(lines) - max_lines} 줄 생략] ...\n\n{tail}"
+
+    head_count = max(3, max_lines // 4)
+    tail_count = max(3, max_lines // 4)
+    critical_budget = max(0, max_lines - head_count - tail_count)
+    head_indices = set(range(head_count))
+    tail_start = max(len(lines) - tail_count, head_count)
+    tail_indices = set(range(tail_start, len(lines)))
+    critical_indices = _important_line_indices(lines, excluded=head_indices | tail_indices)
+    critical_indices = critical_indices[:critical_budget]
+
+    omitted = len(lines) - len(head_indices | tail_indices | set(critical_indices))
+    sections = [
+        "\n".join(lines[index] for index in sorted(head_indices)),
+        f"... [토큰 최적화됨: {omitted} 줄 생략] ...",
+    ]
+    if critical_indices:
+        sections.extend([
+            "... [중요 실패 문맥 보존] ...",
+            "\n".join(lines[index] for index in critical_indices),
+            "... [중간 반복 로그 생략] ...",
+        ])
+    sections.append("\n".join(lines[index] for index in sorted(tail_indices)))
+    return "\n\n".join(section for section in sections if section)
+
+
+def _important_line_indices(lines: list[str], excluded: set[int]) -> list[int]:
+    indices = []
+    for index, line in enumerate(lines):
+        if index in excluded:
+            continue
+        if any(pattern.search(line) for pattern in IMPORTANT_LOG_PATTERNS):
+            indices.append(index)
+    return indices
