@@ -72,6 +72,7 @@ Failed or weak:
 - Offline CLI workflows can mechanically complete while producing smoke/demo files rather than a task-faithful app.
 - Markdown generation for README dropped surrounding prose when a fenced command block appeared.
 - Product design drawings were too hard-coded and did not reflect supplied dimensions, material, or hole count.
+- Static skill quality scores reached 10.0 and stopped being useful as the primary release signal.
 - Novice docs needed a clearer smoke-only warning for offline provider output.
 
 ## Changes Applied
@@ -84,6 +85,8 @@ Failed or weak:
 - Updated product-design export to parse dimensions, material, hole count, and hole spec from source text, then reflect them in BOM, SVG, and DXF.
 - Added role runtime metadata: `started_at_utc`, `finished_at_utc`, `duration_seconds`, `runner_type`, `adapter_name`, and `independent_process`.
 - Added `runtime_overlap_wave_count` to role orchestration summary and made audit fail when explicit overlap evidence is present but zero.
+- Added `khbench-side-regression-markdown-001` and `khbench-side-regression-product-spec-001` so SIDE failures are fixed as benchmark tasks, not just one-off tests.
+- Added `KH Practical Quality Gate` so KH-Bench/SIDE/E2E results are the primary release signal and static 10-point skill scores are an advisory structure gate.
 
 ## Remaining Queue
 
@@ -105,13 +108,18 @@ Targeted checks after fixes:
 
 ```bash
 python -B -m unittest tests.test_command_output_runtime tests.test_builtin_skill_runtime tests.test_plugin_packaging tests.test_docs_branding tests.test_task_runners tests.test_cli_config tests.test_artifact_manifest tests.test_orchestration_roles tests.test_quality_harnesses tests.test_workflows.WorkflowDispatchTests.test_role_execution_audit_requirement_is_satisfied_after_review_roles
+python -B -m unittest tests.test_practical_quality_gate tests.test_kh_bench_verified tests.test_plugin_packaging tests.test_docs_branding
 python -B -c "import pathlib; [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in pathlib.Path('.').rglob('*.py')]; print('compile_ok=1')"
 python -B -m src.benchmarks.kh_bench_verified --summary
+python -B -m src.benchmarks.practical_quality_gate --summary
+python -B -m unittest discover -s tests
 ```
 
 Results:
 
 - Targeted tests: 78 passed.
+- Practical gate/package/docs targeted tests: 19 passed.
 - No-write Python compile: `compile_ok=1`.
-- KH-Bench Verified: 6/6 passed.
-
+- KH-Bench Verified: 8/8 passed.
+- KH Practical Quality Gate: release_ready=true, practical_confidence_score=10.0.
+- Full unittest discovery: 282 passed.

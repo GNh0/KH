@@ -8,7 +8,7 @@ It combines:
 
 - host-readable skills in `skills/<skill-folder>/SKILL.md`
 - Python contracts, dispatchers, role orchestration, gates, state, and validators under `src/`
-- practical release checks and a SWE-bench-style local benchmark
+- practical release checks, SIDE regression tasks, and a SWE-bench-style local benchmark
 
 The goal is not to depend on a vendor-specific local skill folder. UAF packages its own portable skills and harnesses.
 
@@ -23,6 +23,7 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 - Type-aware user deliverables under the target project's `docs/` folder.
 - Render/template/traceability/role-audit quality harnesses.
 - `KH-Bench Verified`, a practical task benchmark separate from internal skill quality scores.
+- `KH Practical Quality Gate`, the release gate that treats KH-Bench/SIDE/E2E results as the primary quality signal and static skill scores as a structure check.
 
 By default, user-facing files are written to the target project, while UAF runtime state is written outside the project root under the KH-UAF runtime store. Set `UAF_PROJECT_LOCAL_STATE=1` only when you explicitly want `.uaf` and snapshot state inside the project.
 
@@ -146,6 +147,7 @@ Internal quality scores prove that packaged skills are well structured. `KH-Benc
 
 ```bash
 python -m src.benchmarks.kh_bench_verified --summary
+python -m src.benchmarks.practical_quality_gate --summary
 python -m unittest tests.test_kh_bench_verified
 ```
 
@@ -156,9 +158,11 @@ Each task runs in a clean workspace with a task-scoped `UAF_RUNTIME_ROOT`. The b
 - `pass_to_pass`: regression checks that must remain passing
 - JSON score output with resolved rate, evidence, runtime contracts, artifacts, and unresolved task IDs
 
-Current task categories cover coding workflow dispatch, product/domain deliverables, role DAG orchestration, snapshot rollback, goal/memory/handoff state, and token-safe command-output compression.
+Current task categories cover coding workflow dispatch, product/domain deliverables, role DAG orchestration, snapshot rollback, goal/memory/handoff state, token-safe command-output compression, and SIDE regression cases for Markdown extraction and compact product-spec drawing exports.
 
 The CLI uses the built-in `KHBaselineCandidateRunner` to score KH UAF itself. Python callers can pass a different candidate runner to `run_kh_bench_verified(...)`. External candidate runners receive only a sealed public task view; validators, expected artifacts, and baseline profile metadata stay inside the grader. Validators read concrete files, runtime artifacts, and report JSON rather than trusting runner-owned custom flags.
+
+For publishing, prefer `python -m src.benchmarks.practical_quality_gate --summary` over reading `lowest_quality_score` alone. The static 10-point skill score is an advisory structure gate; release readiness is blocked by failed KH-Bench or SIDE regression tasks.
 
 ## Verification
 
@@ -170,6 +174,7 @@ python -m json.tool .codex-plugin/plugin.json
 python -m src.skills.uaf_skill_catalog --check
 python -m src.skills.uaf_skill_quality
 python -m src.benchmarks.kh_bench_verified --summary
+python -m src.benchmarks.practical_quality_gate --summary
 python -m unittest discover -s tests
 ```
 

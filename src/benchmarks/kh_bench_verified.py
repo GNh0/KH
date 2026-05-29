@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ from src.orchestration.memory_store import MemoryStore
 from src.orchestration.quality_harnesses import audit_role_execution
 from src.orchestration.role_orchestrator import RoleOrchestrator
 from src.skills.token_optimizer import optimize_context_content
+from src.tasks.runners import LLMCodeGenerationAdapter, LocalTaskRunner, WorkflowTaskInput
 from src.tasks.workflows import dispatch_project_workflow
 
 
@@ -231,6 +233,16 @@ def evaluate_validator(validator: Dict[str, Any], context: Dict[str, Any]) -> Di
             failures = [str(path.name) for path in matches if not _is_renderable_artifact(path)]
             passed = bool(matches) and not failures
             return _validator_result(name, passed, f"renderable files: {len(matches)}" if passed else f"unrenderable artifacts: {failures}")
+        if validator_type == "file_glob_text_contains_all":
+            matches = _workspace_glob(context, validator["pattern"])
+            combined = "\n".join(
+                path.read_text(encoding="utf-8", errors="ignore")
+                for path in matches
+                if _artifact_format(path) in {"md", "json", "svg", "dxf", "txt"}
+            )
+            missing = [value for value in validator.get("values", []) if str(value) not in combined]
+            passed = bool(matches) and not missing
+            return _validator_result(name, passed, "all required text present" if passed else f"missing text: {missing}")
         if validator_type == "snapshot_log_bundle_count":
             logs = _runtime_glob(context, "**/.snapshots/commit_log.json")
             entries: List[Dict[str, Any]] = []
@@ -263,6 +275,10 @@ def _execute_candidate_profile(task: Dict[str, Any], workspace: Path, runtime_ro
         return _baseline_snapshot_state(task, workspace)
     if profile == "goal_memory":
         return _baseline_goal_memory(task, workspace)
+    if profile == "side_markdown_generation":
+        return _baseline_side_markdown_generation(task, workspace)
+    if profile == "side_product_spec_deliverables":
+        return _baseline_side_product_spec_deliverables(task, workspace)
     raise ValueError(f"unknown candidate profile: {profile}")
 
 
@@ -483,6 +499,80 @@ def _baseline_goal_memory(task: Dict[str, Any], workspace: Path) -> Dict[str, An
         "workflow": {"success": True, "handoff": handoff.get("snapshot", {})},
         "evidence": ["goal saved", "memory saved", "handoff saved"],
         "runtime_contract": {"type": "GoalLedger+MemoryStore+ResumeHandoff", "fields": ["goal", "memory", "handoff"]},
+    }
+
+
+def _baseline_side_markdown_generation(task: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
+    class MarkdownRouter:
+        def chat(self, system_prompt: str, user_prompt: str) -> str:
+            return "\n".join([
+                "# Usage Guide",
+                "",
+                "This section must survive extraction even when the response contains an embedded code fence.",
+                "",
+                "```python",
+                "print('hello')",
+                "```",
+                "",
+                "Done criteria: prose and fenced code are both preserved.",
+            ])
+
+    runner = LocalTaskRunner(adapter=LLMCodeGenerationAdapter(MarkdownRouter()))
+    task_input = WorkflowTaskInput(
+        project_dir=str(workspace),
+        file_name="README.md",
+        design_doc="Create a markdown README that preserves prose and embedded fenced code.",
+        platform_mode="local",
+        role="implementer",
+    )
+    result = asyncio.run(runner.run(task_input))
+    result_dict = result.to_dict()
+    report_path = workspace / "reports" / "markdown_generation.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(result_dict, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    artifacts = [_artifact_record(report_path, workspace, "json", "markdown-generation-result")]
+    target_path = workspace / "README.md"
+    if target_path.exists():
+        artifacts.append(_artifact_record(target_path, workspace, "md", "generated-markdown"))
+    return {
+        "artifacts": artifacts,
+        "workflow": result_dict,
+        "evidence": ["markdown prose preserved", "embedded fenced code preserved"],
+        "runtime_contract": {"type": "WorkflowTaskResult", "fields": sorted(result_dict)},
+    }
+
+
+def _baseline_side_product_spec_deliverables(task: Dict[str, Any], workspace: Path) -> Dict[str, Any]:
+    stage = build_design_stage(
+        project_dir=str(workspace),
+        workflow_id="workflow_side_product_spec",
+        design_doc=(
+            "# Cable gland plate design\n"
+            "22kw / CABLE GLAND PLATE 389. Plate size 200x120 mm, material SUS304, "
+            "four M20 cable gland holes. Produce type-aware design handoff artifacts."
+        ),
+        file_list=["22kw", "CABLE GLAND PLATE 389", "200x120", "SUS304", "four M20"],
+        metadata={
+            "domain_hint": "product-design",
+            "scope": "SIDE regression for compact product specs flowing into drawing deliverables.",
+            "deliverables": ["product design document", "dimension BOM", "concept SVG", "concept DXF"],
+        },
+    )
+    exports = stage["deliverable_exports"]
+    deliverables = exports.get("deliverables", [])
+    report_path = workspace / "reports" / "side_product_spec_exports.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(exports, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    artifacts = [
+        _artifact_record(Path(item["path"]), workspace, item.get("format", ""), item.get("artifact_type", ""))
+        for item in deliverables
+    ]
+    artifacts.append(_artifact_record(report_path, workspace, "json", "side-product-spec-export-result"))
+    return {
+        "artifacts": artifacts,
+        "workflow": {"success": exports.get("quality", {}).get("status") == "passed", "deliverable_exports": exports},
+        "evidence": list(exports.get("evidence", [])) + ["SIDE product spec facts preserved"],
+        "runtime_contract": {"type": "deliverable_exports", "fields": sorted(exports)},
     }
 
 
@@ -785,6 +875,62 @@ _TASKS: List[Dict[str, Any]] = [
         "pass_to_pass": [
             {"name": "export report written", "type": "file_exists", "path": "reports/deliverable_exports.json"},
             {"name": "deliverable count at least four", "type": "json_file_field_at_least", "path": "reports/deliverable_exports.json", "field": "deliverables", "minimum": 4},
+        ],
+    },
+    {
+        "schema_version": TASK_SCHEMA_VERSION,
+        "instance_id": "khbench-side-regression-markdown-001",
+        "title": "Preserve Markdown prose and embedded code fences from an LLM adapter",
+        "category": "side-regression",
+        "difficulty": "hard",
+        "human_verified": True,
+        "skills": ["adapter-contract-harness", "development-lifecycle-harness", "quality-gates-harness"],
+        "problem_statement": "SIDE regression: README generation must not drop prose when an LLM response contains an embedded fenced code block.",
+        "base_workspace": {"files": []},
+        "pre_validation": [{"name": "README absent before generation", "type": "file_exists", "path": "README.md", "expect": "fail"}],
+        "candidate_profile": "side_markdown_generation",
+        "expected_artifacts": ["README.md", "reports/markdown_generation.json"],
+        "fail_to_pass": [
+            {"name": "markdown generation succeeded", "type": "json_file_field_equals", "path": "reports/markdown_generation.json", "field": "status", "value": "success"},
+            {"name": "README written", "type": "file_exists", "path": "README.md"},
+            {
+                "name": "prose and code fence preserved",
+                "type": "file_contains",
+                "path": "README.md",
+                "must_include": ["# Usage Guide", "This section must survive", "```python", "print('hello')"],
+            },
+        ],
+        "pass_to_pass": [
+            {"name": "adapter metadata recorded", "type": "json_file_field_equals", "path": "reports/markdown_generation.json", "field": "metadata.source", "value": "llm"},
+            {"name": "target path recorded", "type": "json_file_field_contains_all", "path": "reports/markdown_generation.json", "field": "metadata.target_path", "values": ["README.md"]},
+        ],
+    },
+    {
+        "schema_version": TASK_SCHEMA_VERSION,
+        "instance_id": "khbench-side-regression-product-spec-001",
+        "title": "Carry compact product specs into SVG and DXF deliverables",
+        "category": "side-regression",
+        "difficulty": "hard",
+        "human_verified": True,
+        "skills": ["domain-orchestration-harness", "artifact-render-qa-harness", "deliverable-template-quality-harness"],
+        "problem_statement": "SIDE regression: compact product specs such as 200x120, SUS304, and four M20 holes must flow into generated DOCX/XLSX/SVG/DXF deliverables.",
+        "base_workspace": {"files": []},
+        "pre_validation": [{"name": "SIDE product deliverables absent before run", "type": "file_glob_count", "pattern": "docs/*", "minimum": 1, "expect": "fail"}],
+        "candidate_profile": "side_product_spec_deliverables",
+        "expected_artifacts": ["docs/*.docx", "docs/*.xlsx", "docs/*.svg", "docs/*.dxf", "reports/side_product_spec_exports.json"],
+        "fail_to_pass": [
+            {"name": "SIDE export report written", "type": "file_exists", "path": "reports/side_product_spec_exports.json"},
+            {"name": "SIDE deliverable quality passed", "type": "json_file_field_equals", "path": "reports/side_product_spec_exports.json", "field": "quality.status", "value": "passed"},
+            {"name": "all required formats exported", "type": "artifact_glob_formats", "pattern": "docs/*", "formats": ["docx", "xlsx", "svg", "dxf"]},
+        ],
+        "pass_to_pass": [
+            {
+                "name": "drawing text preserves compact spec facts",
+                "type": "file_glob_text_contains_all",
+                "pattern": "docs/*",
+                "values": ["200", "120", "SUS304", "4 x M20", "4xM20"],
+            },
+            {"name": "artifacts are renderable", "type": "renderable_artifacts", "pattern": "docs/*"},
         ],
     },
     {
