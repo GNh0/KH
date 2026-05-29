@@ -108,3 +108,11 @@ Superpowers is strong at agent behavior activation: short trigger descriptions, 
 - Standardized modes as `runtime`, `procedural`, `considered`, and `blocked`.
 - Added a minimal evidence template so procedural or considered use does not require fake AdapterRequest, role result, or wave metadata.
 - Clarified that memory handling should default to memory candidates only unless durable promotion has explicit scope and approval.
+
+## Current 2.9.11 Changes
+
+- Audited completed Superpowers PipePilot session `019e7441-eecf-7e23-b9ee-9aefa1c8fdf6` as a large-project control sample.
+- Added `src.orchestration.development_progress` for `.kh/development/<run-id>/state/progress.json`.
+- Added standard implementer, spec-reviewer, and code-quality-reviewer task packet guidance under `subagent-review-pipeline`.
+- Development lifecycle and subagent review now explicitly require progress updates for multi-task implementation runs.
+- Token optimizer audit showed 24.12% savings on normalized lifecycle transcript while preserving task, review, commit, next-task, worktree, verification, and sandbox evidence.

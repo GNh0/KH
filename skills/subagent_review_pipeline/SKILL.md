@@ -10,6 +10,7 @@ This is a personal UAF subagent coordination harness. It defines review roles an
 ## Support files
 
 - Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
+- Use `references/standard-task-packets.md` for implementer, spec-reviewer, and code-quality-reviewer prompt packet fields.
 - Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
 - Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
 - Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success/blocked mini-demo and verify contract-shaped JSON plus any demo artifacts.
@@ -37,14 +38,15 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 ## Workflow
 
 1. Split the plan into independent, bounded tasks.
-2. Build a compact task packet per implementer: objective, owned files, forbidden files, checks, expected artifacts, and only the source context needed for that task.
+2. Build a compact task packet per implementer using `references/standard-task-packets.md`: objective, workspace, base SHA, plan section, owned files, forbidden files, checks, expected artifacts, commit message, and report fields.
 3. When task packets, command logs, or subagent transcripts are large, apply `token-optimizer` as a quality-first context budget gate; use `passthrough` or `blocked` if compression would reduce review quality.
 4. Dispatch one implementer per task with only the needed context.
 5. Run spec review first; send any gap back to implementation.
 6. Run quality review only after spec compliance passes.
 7. Preserve every reviewer finding in the aggregated result.
-8. When implementers can edit files concurrently, isolate them with `.worktrees/<task>`, an isolated branch, or a host-provided equivalent workspace.
-9. Run final review across the combined implementation before finishing.
+8. For task-plan development runs, update `.kh/development/<run-id>/state/progress.json` after implementer, spec reviewer, code-quality reviewer, fix, re-review, and commit events.
+9. When implementers can edit files concurrently, isolate them with `.worktrees/<task>`, an isolated branch, or a host-provided equivalent workspace.
+10. Run final review across the combined implementation before finishing.
 
 ## Large Work Bundle Reporting
 
@@ -66,7 +68,9 @@ Pressure scenario: if an implementer says "done" but did not report changed file
 
 - Implementer result per bounded task with status, changed files, checks, and evidence.
 - Compact task packet per implementer that is self-contained and excludes unrelated session history.
+- Standard reviewer packets for `spec-reviewer` and `code-quality-reviewer` when those roles are dispatched.
 - `token_optimizer_status` for large task packets, command outputs, or subagent transcripts.
+- Development progress state update when a task-plan run is active.
 - Isolation evidence when two or more implementers can write files.
 - Spec-reviewer result for each implementer output before quality review.
 - Code-quality-reviewer result with findings, reviewer severity, file references, line references when available, and suggested fix.

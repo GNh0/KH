@@ -48,12 +48,20 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
   - `git diff --check`
 - Follow-up external benchmark target after Superpowers-run session `019e7441-eecf-7e23-b9ee-9aefa1c8fdf6` ends:
-  - Treat it as a large-project control sample for learning KH improvement directions, not as a KH compliance audit.
-  - Re-read the parent session and child/subagent logs to identify what Superpowers made easy or hard.
-  - Compare Superpowers' actual planning, worktree, subagent, review, verification, commit, and progress-tracking behavior against KH's `large_work_orchestration_bundle`, `application_mode`, GoalState, token, memory, parallel, role-audit, Compound, and distiller contracts.
-  - Measure where KH would need less friction, clearer triggers, better templates, or stronger automation to match or exceed that workflow.
-  - Check token optimizer usage and possible savings as a KH improvement signal, without judging the Superpowers run as required to use KH.
-  - Record transferable patterns, gaps, and follow-up fixes as a new external benchmark audit note.
+  - Completed as `docs/skillbook/audits/2026-05-30-superpowers-large-project-control-sample.md`.
+  - Key follow-up implemented: `src.orchestration.development_progress`, `.kh/development/<run-id>/state/progress.json`, and standard subagent task packets.
+  - Remaining future work: wire progress state into live KH workflow dispatch and add a small demo that writes progress during execution.
+- Latest verification after Superpowers large-project control sample 2.9.11:
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool plugin.json`
+  - `python -m src.skills.uaf_skill_catalog --check` (31 valid / 0 invalid)
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (179 files)
+  - `python -m unittest tests.test_plugin_packaging tests.test_skill_application_bundle tests.test_token_optimizer_gate_integration tests.test_development_progress tests.test_superpowers_benchmark_alignment` (29 tests)
+  - `python -m unittest discover -s tests` (387 tests)
+  - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
+  - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
+  - `python -m json.tool .agents/plugins/marketplace.json`
+  - `git diff --check`
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
   - `python -m json.tool .codex-plugin/plugin.json`

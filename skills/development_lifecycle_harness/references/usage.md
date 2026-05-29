@@ -18,6 +18,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Default to isolated workspace for implementation in Git-backed projects. Use `current-checkout` only for documentation-only edits, a single-file small patch, or explicit user instruction.
 - Token context budget inputs: `estimated_context_tokens`, expected tool calls, broad file reads, large outputs, subagent transcripts, and whether `token-optimizer` should be `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 - GoalState inputs: objective, success criteria, required evidence, current evidence, active task, missing evidence, and next recommended action.
+- Development progress inputs for task-plan work: `run_id`, task IDs/titles, active task, RED/GREEN status, spec-review status, code-quality-review status, fix/re-review status, commit SHA, next task, and final report fields.
 - Large-work bundle inputs: `large_work_orchestration_bundle.skill_statuses` for `request-complexity-router`, `host-agent-orchestration`, `goal-state-harness`, `development-lifecycle-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller`.
 - Large-work bundle status values: `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`; every status needs a short evidence note or rationale.
 - Required role, gate, state, artifact, or command evidence for this harness.
@@ -29,6 +30,7 @@ Do not use this skill only because it is available. Use it when the current task
   - `src.harness.evaluator`
   - `src.tasks.workflows`
   - `src.skills.uaf_skill_catalog`
+  - `src.orchestration.development_progress`
 
 ## Execution pattern
 
@@ -40,10 +42,11 @@ Do not use this skill only because it is available. Use it when the current task
 6. Fill `skill_statuses` for the bundle members. Mark optional members `considered_not_needed` only with a rationale; mark unavailable host capability `blocked` instead of silently omitting it.
 7. For large or long-running work, or when estimated context will cross the threshold, apply `token-optimizer` as a context budget gate before broad reads, long commands, or subagent dispatch. Use `command-output-harness` for long test/build/lint logs.
 8. Create or refresh `GoalState` through `goal-state-harness` before implementation, then update it after checks, review, QA, and release decisions.
-9. For parallel or risky edits, record whether work used `.worktrees/`, an isolated branch, or an equivalent host workspace.
-10. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-11. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-12. Report the difference between capability available in the repository and behavior actually executed in the current run.
+9. For task-plan implementation, create `.kh/development/<run-id>/state/progress.json` and update it after each task loop stage: RED, GREEN, spec review, code-quality review, fix, re-review, commit, and next task.
+10. For parallel or risky edits, record whether work used `.worktrees/`, an isolated branch, or an equivalent host workspace.
+11. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
+12. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+13. Report the difference between capability available in the repository and behavior actually executed in the current run.
 
 ## Evidence to produce
 
@@ -53,6 +56,7 @@ Do not use this skill only because it is available. Use it when the current task
 - `workspace_strategy` and its evidence: current checkout rationale, worktree path, host workspace id, or isolated branch name.
 - `token_optimizer_status` and its evidence: savings statistics, `considered_not_needed` rationale, `passthrough` quality reason, or blocked reason.
 - GoalState and goal ledger evidence: objective, status, success criteria, evidence required, evidence collected, missing evidence, and next recommended action.
+- Development progress evidence: `.kh/development/<run-id>/state/progress.json`, active task, task statuses, RED/GREEN/review/fix/re-review/commit loop state, and stable final report fields.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Verification command or review evidence, including failures and blocked states.

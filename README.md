@@ -40,6 +40,7 @@ KH UAF separates reusable skills from per-project workflow artifacts.
 - Set `UAF_PROJECT_LOCAL_STATE=1` when a project should carry its own `.uaf/` state for portable project memory or resume handoff.
 - Human-readable KH notes and handoffs are written in the target project like Superpowers-style local artifacts: `.kh/<skill>/<run-id>/content/*.md` for KH working notes, `.kh/<skill>/<run-id>/state/*.json` for run-local state, and shareable Markdown under `docs/kh/specs/`, `docs/kh/plans/`, `docs/kh/decisions/`, `docs/kh/qa/`, or `docs/kh/handoffs/` by document type.
 - Git-backed implementation should prefer an isolated workspace by default. Use host worktrees when the host provides them; otherwise use project-local `.worktrees/<task>` or an isolated branch. Git worktrees should live under `.worktrees/` when KH creates project-local isolation. Use the current checkout only for docs-only edits, a single-file small patch, or explicit in-place user instruction, and report `workspace_strategy` in the final status.
+- Multi-task development runs should keep machine-readable progress at `.kh/development/<run-id>/state/progress.json`. The progress state records active task, RED/GREEN evidence, spec/code-quality review status, fix/re-review status, commit SHA, next task, `workspace_strategy`, and `token_optimizer_status`.
 
 KH does not require `.superpowers/` or `docs/superpowers/` paths. If Superpowers is also installed, those folders are Superpowers-owned project artifacts; KH-owned runtime state should use `.uaf/`, KH local run notes/state should use `.kh/`, and KH shareable deliverables should use `docs/kh/` or the task-specific `docs/` export path.
 
@@ -56,6 +57,9 @@ Recommended KH project artifact layout:
     goal/<run-id>/
       content/
       state/
+    development/<run-id>/
+      state/
+        progress.json
   docs/
     kh/
       specs/
@@ -162,7 +166,7 @@ For large or long-running work, KH treats `token-optimizer` as a context budget 
 
 For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, KH now requires `large_work_orchestration_bundle` evidence before implementation. The bundle records `skill_statuses` for routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation. Each status must be `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`, and each entry carries `application_mode`: `runtime`, `procedural`, `considered`, or `blocked`. This keeps KH light for simple requests while making omissions visible during large work without pretending that procedural use produced runtime adapter evidence.
 
-Python callers can use `src.orchestration.skill_application.build_large_work_orchestration_bundle(...)` and `validate_large_work_orchestration_bundle(...)` to create that lightweight evidence without hand-assembling the JSON.
+Python callers can use `src.orchestration.skill_application.build_large_work_orchestration_bundle(...)` and `validate_large_work_orchestration_bundle(...)` to create that lightweight evidence without hand-assembling the JSON. For task-plan execution, use `src.orchestration.development_progress.write_development_progress(...)` and `validate_development_progress(...)` to keep `.kh/development/<run-id>/state/progress.json` aligned with the final report fields.
 
 The ongoing Superpowers benchmark notes live in `docs/skillbook/audits/2026-05-30-superpowers-benchmark.md`.
 

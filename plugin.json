@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.10",
-    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, brainstorming handoff, large-work orchestration bundle evidence with application modes, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
+  "version": "2.9.11",
+    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "skills": [
@@ -59,6 +59,11 @@
       "name": "skill-application-bundle",
       "description": "Build and validate lightweight large-work skill status bundles with runtime, procedural, considered, and blocked application modes.",
       "module": "src.orchestration.skill_application"
+    },
+    {
+      "name": "development-progress",
+      "description": "Build, validate, read, and write `.kh/development/<run-id>/state/progress.json` for task-plan runs with RED/GREEN, review, fix, re-review, commit, next task, workspace, and token optimizer status.",
+      "module": "src.orchestration.development_progress"
     },
     {
       "name": "evidence-producers",

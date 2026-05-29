@@ -11,6 +11,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 
 - Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
 - Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
+- For task-by-task implementation runs, write progress to `.kh/development/<run-id>/state/progress.json`; the runtime helper is `src.orchestration.development_progress`.
 - Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
 - Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success/blocked mini-demo and verify contract-shaped JSON plus any demo artifacts.
 
@@ -51,13 +52,14 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 4. For large work, create or update `large_work_orchestration_bundle.skill_statuses` before editing.
 5. Decide `token_optimizer_status` for large or long-running work and route long logs or subagent transcripts through `token-optimizer` when needed.
 6. Write a short implementation plan for multi-step work with exact files, tests, and verification commands.
-7. For behavior changes, add or update a failing test before production edits.
-8. Implement the smallest change that satisfies the test and the user requirement.
-9. Review for scope drift, missing requirements, and risky integration points.
-10. Run fresh verification before claiming completion or committing.
-11. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
-12. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
-13. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
+7. For task-plan work, create `.kh/development/<run-id>/state/progress.json` and update it as each task moves through RED, GREEN, spec review, code-quality review, fix, re-review, commit, and next task.
+8. For behavior changes, add or update a failing test before production edits.
+9. Implement the smallest change that satisfies the test and the user requirement.
+10. Review for scope drift, missing requirements, and risky integration points.
+11. Run fresh verification before claiming completion or committing.
+12. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
+13. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
+14. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
 
 ## Gate checks
 
@@ -86,6 +88,7 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - `workspace_strategy` with path, branch, host workspace, or in-place rationale.
 - `token_optimizer_status` with token savings, passthrough reason, blocked reason, or `considered_not_needed` rationale for large or long-running workflows.
 - GoalState summary with objective, success criteria, required evidence, current evidence, missing evidence, and goal ledger paths.
+- Development progress state at `.kh/development/<run-id>/state/progress.json` for multi-task implementation runs, with task IDs, active task, RED/GREEN status, spec/code-quality review status, commit SHA, and next task.
 - Failing-first test or smoke evidence for behavior changes when practical.
 - Review findings or an explicit no-findings review note.
 - Fresh verification output and final integration status: local only, committed, pushed, or PR-ready.
@@ -106,3 +109,4 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - `src.harness.evaluator`
 - `src.tasks.workflows`
 - `src.skills.uaf_skill_catalog`
+- `src.orchestration.development_progress`

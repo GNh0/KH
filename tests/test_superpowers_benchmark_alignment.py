@@ -124,6 +124,30 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("memory-state-harness", skill)
         self.assertIn("regression_check_plan", skill)
 
+    def test_large_project_control_sample_adds_progress_state_and_task_packets(self):
+        audit = read_text("docs/skillbook/audits/2026-05-30-superpowers-large-project-control-sample.md")
+        lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
+        subagent = read_text("skills/subagent_review_pipeline/SKILL.md")
+        packets = read_text("skills/subagent_review_pipeline/references/standard-task-packets.md")
+        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
+        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+
+        for text in [audit, lifecycle, subagent, prompts]:
+            self.assertIn(".kh/development/<run-id>/state/progress.json", text)
+
+        for expected in [
+            "Implementer Packet",
+            "Spec Reviewer Packet",
+            "Code Quality Reviewer Packet",
+            "RED -> GREEN",
+            "commit_sha",
+            "token_optimizer_status",
+        ]:
+            self.assertIn(expected, packets)
+
+        self.assertIn("development progress state", plugin["description"])
+        self.assertIn("Development Progress", plugin["interface"]["capabilities"])
+
 
 if __name__ == "__main__":
     unittest.main()
