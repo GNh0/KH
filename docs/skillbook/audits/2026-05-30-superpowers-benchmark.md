@@ -101,3 +101,10 @@ Superpowers is strong at agent behavior activation: short trigger descriptions, 
 - Added `large_work_orchestration_bundle` as KH's answer to the observed "individual checklist" failure mode in large SaaS/app work.
 - Required bundle `skill_statuses` for request routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation.
 - Kept the router cheap for light and medium work: conceptual questions do not create the large-work bundle, while heavy implementation routes carry the bundle evidence.
+
+## Current 2.9.10 Changes
+
+- Added `application_mode` to large-work bundle skill statuses so "used a skill" is no longer ambiguous.
+- Standardized modes as `runtime`, `procedural`, `considered`, and `blocked`.
+- Added a minimal evidence template so procedural or considered use does not require fake AdapterRequest, role result, or wave metadata.
+- Clarified that memory handling should default to memory candidates only unless durable promotion has explicit scope and approval.

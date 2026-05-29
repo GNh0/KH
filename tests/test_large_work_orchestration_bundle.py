@@ -41,6 +41,9 @@ class LargeWorkOrchestrationBundleTests(unittest.TestCase):
 
         self.assertIn("large_work_orchestration_bundle", prompt)
         self.assertIn("skill_statuses", prompt)
+        self.assertIn("application_mode", prompt)
+        for mode in ["runtime", "procedural", "considered", "blocked"]:
+            self.assertIn(mode, prompt)
         for status in BUNDLE_STATUS_VALUES:
             self.assertIn(status, prompt)
         for skill in BUNDLE_SKILLS:

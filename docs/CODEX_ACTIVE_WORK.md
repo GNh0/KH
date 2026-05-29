@@ -33,6 +33,20 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - Heavy project/SaaS/app/multi-file/role-DAG/long-running work requires `large_work_orchestration_bundle`.
   - Bundle `skill_statuses` must account for routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation.
   - Light and medium requests remain cheap; the bundle is not created for conceptual questions.
+- Latest skill usability refinement after session review:
+  - `large_work_orchestration_bundle.skill_statuses` now carries `application_mode`: `runtime`, `procedural`, `considered`, or `blocked`.
+  - Use the minimal evidence template when a skill was applied as policy or considered: `skill`, `status`, `application_mode`, `evidence_note`, `evidence_keys`, and optional `blocked_reason`.
+  - Do not require AdapterRequest, role results, or wave metadata unless runtime execution is claimed.
+  - Memory work should default to memory candidates only unless durable promotion has explicit scope and approval.
+- Latest verification after skill usability bundle 2.9.10:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m unittest tests.test_skill_application_bundle tests.test_large_work_orchestration_bundle tests.test_request_classifier tests.test_plugin_packaging tests.test_goal_skill_integration` (59 tests)
+  - `python -m src.skills.uaf_skill_catalog --check` (31 valid / 0 invalid)
+  - `python -m unittest discover -s tests` (381 tests)
+  - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
+  - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
+  - `git diff --check`
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
   - `python -m json.tool .codex-plugin/plugin.json`

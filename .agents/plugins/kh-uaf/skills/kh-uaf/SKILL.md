@@ -19,7 +19,7 @@ This workspace includes KH UAF, a personal skillbook and Python-first orchestrat
 python -m src.skills.uaf_skill_catalog --check
 ```
 
-For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, create `large_work_orchestration_bundle` evidence before implementation. Its `skill_statuses` must account for routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.
+For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, create `large_work_orchestration_bundle` evidence before implementation. Its `skill_statuses` must account for routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`, with `application_mode` set to `runtime`, `procedural`, `considered`, or `blocked`.
 
 ## Useful Entry Points
 

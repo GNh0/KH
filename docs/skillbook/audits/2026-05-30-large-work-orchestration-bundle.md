@@ -36,6 +36,36 @@ Allowed status values:
 
 This is an accounting contract, not a command to run every harness heavily. For example, `parallel-orchestration-harness` can be `considered_not_needed` for sequential dependent work, and `workflow-skill-distiller` can be `considered_not_needed` when no repeated workflow or reusable lesson exists.
 
+## Application Modes
+
+Every `skill_statuses` item also carries `application_mode`:
+
+- `runtime`: a Python module, adapter, role DAG, command, or harness output actually ran.
+- `procedural`: the skill was applied as host-agent policy or operating discipline.
+- `considered`: the skill was evaluated and not needed for this run.
+- `blocked`: a required tool, permission, host capability, context, or evidence was missing.
+
+This closes the ambiguity from the review session: "used a skill" no longer has to mean only one thing. A Codex single-agent run can honestly mark host orchestration, memory, parallelism, or distillation as procedural or considered instead of fabricating runtime AdapterRequest or role-wave evidence.
+
+## Minimal Evidence Template
+
+Use this minimal evidence template when full runtime evidence would be disproportionate:
+
+```json
+{
+  "skill": "parallel-orchestration-harness",
+  "status": "considered_not_needed",
+  "application_mode": "considered",
+  "evidence_note": "Sequential task dependencies; no safe independent write set.",
+  "evidence_keys": ["parallel_strategy_decision"],
+  "blocked_reason": ""
+}
+```
+
+This template does not require AdapterRequest, role results, or wave metadata unless those runtime paths are actually claimed. If a role DAG or subagent wave is claimed, then runtime evidence is required and `role-execution-audit-harness` cannot stay considered.
+
+Memory handling should default to memory candidates only. Durable project, conversation, or global memory promotion still requires the relevant scope, evidence, cleanup policy, and user approval where required.
+
 ## Evidence Keys
 
 Large work should carry these evidence keys:

@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.9",
-  "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, large-work orchestration bundle, Superpowers-style project-local artifacts, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
+  "version": "2.9.10",
+  "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, large-work orchestration bundle with application modes, Superpowers-style project-local artifacts, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -47,6 +47,7 @@
       "For heavy, multi-step, or evidence-gated work, create or update KH GoalState before execution and carry required evidence through review, QA, and release.",
       "For large project, SaaS, app, multi-file implementation, or long-running work, create `large_work_orchestration_bundle` evidence before implementation.",
       "In `large_work_orchestration_bundle.skill_statuses`, report request-complexity-router, host-agent-orchestration, goal-state-harness, development-lifecycle-harness, token-optimizer, memory-state-harness, parallel-orchestration-harness, subagent-review-pipeline, role-execution-audit-harness, compound-engineering-harness, and workflow-skill-distiller as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.",
+      "Each bundle entry must include `application_mode`: `runtime`, `procedural`, `considered`, or `blocked`; use the minimal evidence template instead of fabricating AdapterRequest, role results, or wave metadata when the skill was only applied procedurally or considered.",
       "Considering a bundle member is not the same as running heavy machinery: keep light/medium requests cheap, and record rationale when memory, parallelism, subagents, role audit, or distillation is not needed.",
       "For large or long-running workflows, or whenever `estimated_context_tokens`, broad file reads, long command output, expected tool calls, or subagent transcripts are likely to cross the context budget, run KH token-optimizer as a quality-first gate.",
       "Report `token_optimizer_status` as `used`, `considered_not_needed`, `passthrough`, or `blocked`; never compress in a way that lowers answer quality or hides source-of-truth details.",
