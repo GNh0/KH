@@ -140,6 +140,44 @@ class LocalTaskRunnerTests(unittest.TestCase):
         self.assertEqual(artifact.metadata["source"], "llm")
         self.assertIn("main.py", llm.calls[0][1])
 
+    def test_llm_generation_adapter_preserves_markdown_with_embedded_fence(self):
+        response = (
+            "# Demo README\n\n"
+            "Run this command:\n\n"
+            "```bash\n"
+            "python src/app.py\n"
+            "```\n\n"
+            "The project has a real README body.\n"
+        )
+        llm = FakeLLMRouter(response)
+        task = WorkflowTaskInput(
+            project_dir="C:/work/demo",
+            file_name="README.md",
+            design_doc="# design",
+            platform_mode="local",
+        )
+
+        artifact = asyncio.run(LLMCodeGenerationAdapter(llm).generate(task))
+
+        self.assertEqual(artifact.status, "success")
+        self.assertIn("# Demo README", artifact.content)
+        self.assertIn("```bash", artifact.content)
+        self.assertIn("The project has a real README body.", artifact.content)
+
+    def test_llm_generation_adapter_strips_whole_markdown_fence(self):
+        llm = FakeLLMRouter("```markdown\n# Demo README\n\nBody.\n```")
+        task = WorkflowTaskInput(
+            project_dir="C:/work/demo",
+            file_name="README.md",
+            design_doc="# design",
+            platform_mode="local",
+        )
+
+        artifact = asyncio.run(LLMCodeGenerationAdapter(llm).generate(task))
+
+        self.assertEqual(artifact.status, "success")
+        self.assertEqual(artifact.content, "# Demo README\n\nBody.\n")
+
     def test_local_runner_can_write_llm_adapter_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             project_dir = Path(tmp) / "demo"

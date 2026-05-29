@@ -225,7 +225,7 @@ class RoleOrchestrator:
                 break
 
             tasks = [
-                asyncio.create_task(self.runner.run_role(self._profiles_by_name[name], shared_context))
+                asyncio.create_task(self._run_named_role(name, shared_context))
                 for name in ready
             ]
             raw_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -245,6 +245,7 @@ class RoleOrchestrator:
             waves.append({
                 "index": len(waves),
                 "parallel": len(wave_results) > 1,
+                "runtime_overlap": _wave_has_runtime_overlap(wave_results),
                 "roles": [result.role for result in wave_results],
                 "results": [result.to_dict() for result in wave_results],
             })
@@ -282,6 +283,7 @@ class RoleOrchestrator:
             "role_count": len(role_names),
             "wave_count": len(waves),
             "parallel_wave_count": sum(1 for wave in waves if wave.get("parallel")),
+            "runtime_overlap_wave_count": sum(1 for wave in waves if wave.get("runtime_overlap")),
             "roles": list(role_names),
             "success": not failed and not pending,
         }
@@ -317,6 +319,61 @@ class RoleOrchestrator:
         if hasattr(self.runner, "blocked_role_result"):
             return await self.runner.blocked_role_result(profile, context, pending_dependencies)
         return _blocked_role_result(profile, pending_dependencies)
+
+    async def _run_named_role(self, role_name: str, context: Dict[str, Any]) -> WorkflowTaskResult:
+        profile = self._profiles_by_name[role_name]
+        started_at = datetime.now(timezone.utc)
+        result = await self.runner.run_role(profile, context)
+        finished_at = datetime.now(timezone.utc)
+        return _with_runtime_metadata(result, started_at, finished_at, self.runner)
+
+
+def _with_runtime_metadata(
+    result: WorkflowTaskResult,
+    started_at: datetime,
+    finished_at: datetime,
+    runner: Any,
+) -> WorkflowTaskResult:
+    metadata = dict(result.metadata)
+    metadata.setdefault("started_at_utc", started_at.isoformat())
+    metadata.setdefault("finished_at_utc", finished_at.isoformat())
+    metadata.setdefault("duration_seconds", round(max(0.0, (finished_at - started_at).total_seconds()), 6))
+    metadata.setdefault("runner_type", runner.__class__.__name__)
+    metadata.setdefault("adapter_name", getattr(runner, "name", runner.__class__.__name__))
+    metadata.setdefault("independent_process", False)
+    return WorkflowTaskResult(
+        task_id=result.task_id,
+        file_name=result.file_name,
+        role=result.role,
+        status=result.status,
+        message=result.message,
+        metadata=metadata,
+    )
+
+
+def _wave_has_runtime_overlap(results: List[WorkflowTaskResult]) -> bool:
+    if len(results) < 2:
+        return False
+    intervals = []
+    for result in results:
+        metadata = dict(result.metadata)
+        start = _parse_datetime(metadata.get("started_at_utc"))
+        finish = _parse_datetime(metadata.get("finished_at_utc"))
+        if start is None or finish is None:
+            return False
+        intervals.append((start, finish))
+    latest_start = max(start for start, _ in intervals)
+    earliest_finish = min(finish for _, finish in intervals)
+    return latest_start < earliest_finish
+
+
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
 
 
 async def run_pre_implementation_roles(context: Dict[str, Any]) -> Dict[str, Any]:

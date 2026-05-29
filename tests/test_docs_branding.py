@@ -57,21 +57,18 @@ class DocsBrandingTests(unittest.TestCase):
             Path("src"),
             Path("tests"),
         ]
-        marker_codes = (
-            0x00C3,
-            0x00C2,
-            0xFFFD,
-            0xF9E3,
-            0xBD89,
-            0xBEA4,
-            0x314C,
-            0xAC57,
-            0xAFAA,
-            0x8E42,
-            0x7230,
-            0x6028,
+        mojibake_markers = (
+            "\ufffd",
+            "?" + "뚮",
+            "?" + "ㅼ",
+            "?" + "곗",
+            "?" + "섎",
+            "怨" + "꾩",
+            "濡" + "쒖",
+            "留" + "ㅻ",
+            "瑜" + "?",
+            "媛" + "쒕",
         )
-        mojibake_markers = tuple(chr(code) for code in marker_codes)
         findings = []
 
         for root in checked_roots:

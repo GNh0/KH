@@ -79,7 +79,7 @@ class LLMCodeGenerationAdapter:
             f"{task.design_doc}\n"
         )
         response = self.llm.chat(system_prompt, user_prompt)
-        content = _extract_generated_content(response)
+        content = _extract_generated_content(response, task.file_name)
         if not content.strip():
             return GeneratedTaskArtifact(
                 status="blocked",
@@ -228,9 +228,13 @@ def _comment_block(text: str) -> str:
     return "\n".join(f"# {line}" if line else "#" for line in lines)
 
 
-def _extract_generated_content(response: str) -> str:
+def _extract_generated_content(response: str, file_name: str = "") -> str:
     text = response or ""
-    match = re.search(r"```(?:[A-Za-z0-9_+.-]+)?\s*\n(.*?)```", text, re.DOTALL)
+    markdown_target = file_name.replace("\\", "/").lower().endswith(".md")
+    if markdown_target:
+        match = re.fullmatch(r"\s*```(?:[A-Za-z0-9_+.-]+)?\s*\n(.*?)```\s*", text, re.DOTALL)
+    else:
+        match = re.search(r"```(?:[A-Za-z0-9_+.-]+)?\s*\n(.*?)```", text, re.DOTALL)
     if match:
         content = match.group(1)
     else:

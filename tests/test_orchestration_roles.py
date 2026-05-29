@@ -221,6 +221,12 @@ class OrchestrationRoleGraphTests(unittest.TestCase):
         timing_b = result["context"]["timings"]["parallel-b"]
         self.assertLess(abs(timing_a[0] - timing_b[0]), 0.04)
         self.assertLess(max(timing_a[1], timing_b[1]) - min(timing_a[0], timing_b[0]), 0.14)
+        self.assertEqual(result["context"]["role_orchestration"]["runtime_overlap_wave_count"], 1)
+        parallel_a = next(item for item in result["results"] if item["role"] == "parallel-a")
+        self.assertIn("started_at_utc", parallel_a["metadata"])
+        self.assertIn("finished_at_utc", parallel_a["metadata"])
+        self.assertEqual(parallel_a["metadata"]["runner_type"], "TimedRoleRunner")
+        self.assertFalse(parallel_a["metadata"]["independent_process"])
 
     def test_review_release_roles_block_qa_without_explicit_checks(self):
         result = RoleOrchestrator().run_sync({})

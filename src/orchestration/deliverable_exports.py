@@ -195,7 +195,7 @@ def _export_product_design_deliverables(
             "concept-drawing-svg",
             "개념 설계도",
             "technical drawing exported",
-            _concept_svg(product_name, work_design),
+            _concept_svg(product_name, work_design, source_design_doc),
             artifact_type="technical-drawing",
         ),
         _write_dxf_deliverable(
@@ -204,7 +204,7 @@ def _export_product_design_deliverables(
             "concept-drawing-dxf",
             "개념 설계도 DXF",
             "cad drawing exported",
-            _concept_dxf(product_name),
+            _concept_dxf(product_name, source_design_doc),
             artifact_type="cad-drawing",
         ),
     ]
@@ -1487,9 +1487,15 @@ def _dimension_bom_rows(
     source_design_doc: str,
     product_name: str,
 ) -> List[List[str]]:
+    spec = _product_spec_from_text(source_design_doc)
+    dimensions = spec["dimensions"] or "TBD"
+    material = spec["material"] or "TBD"
+    hole_spec = spec["hole_spec"] or "TBD"
+    hole_count = str(spec["hole_count"] or "TBD")
     return [
         ["품번", "품명", "재질", "규격", "치수", "수량", "공차", "근거", "비고"],
-        ["P-001", product_name, "TBD", "CABLE GLAND PLATE", "TBD", "1", "TBD", "user input", "정확 치수는 규격 가이드 필요"],
+        ["P-001", product_name, material, "CABLE GLAND PLATE", dimensions, "1", "TBD", "user input", "concept only until approved drawing"],
+        ["H-001", "Cable gland holes", material, hole_spec, dimensions, hole_count, "TBD", "user input", "verify pitch, edge distance, and tolerance"],
         ["E-001", "Power rating reference", "N/A", _extract_power_rating(source_design_doc), "N/A", "1", "N/A", "user input", "전기 용량은 기구 치수 확정 근거가 아님"],
         ["D-001", "Concept SVG drawing", "N/A", "review drawing", "concept", "1", "N/A", "UAF export", "제조용 최종 도면 전 검토 필요"],
         ["D-002", "Concept DXF drawing", "N/A", "CAD handoff", "concept", "1", "N/A", "UAF export", "제조용 최종 도면 전 검토 필요"],
@@ -1536,9 +1542,13 @@ def _scenario_model_rows(design: WorkDesign, file_list: List[str]) -> List[List[
 
 
 def _product_spec_summary_lines(source_design_doc: str, product_name: str) -> List[str]:
+    spec = _product_spec_from_text(source_design_doc)
     return [
         f"제품명/규격명: {product_name}",
         f"전기 용량: {_extract_power_rating(source_design_doc)}",
+        f"치수 참조: {spec['dimensions'] or 'not specified'}",
+        f"재질 참조: {spec['material'] or 'not specified'}",
+        f"hole 참조: {spec['hole_count'] or 'not specified'} x {spec['hole_spec'] or 'not specified'}",
         "적용 기준: supplied specification guide 또는 사용자 제공 규격",
         "도면 수준: 입력 치수와 공차가 부족하면 concept handoff",
     ]
@@ -1557,10 +1567,12 @@ def _product_requirement_lines(design: WorkDesign, source_design_doc: str) -> Li
 
 
 def _dimension_basis_lines(source_design_doc: str) -> List[str]:
+    spec = _product_spec_from_text(source_design_doc)
     return [
-        "전체 외형 치수: source guide에서 확인 필요",
-        "hole/punch 위치: source guide 또는 승인 도면에서 확인 필요",
-        "공차: 제조 표준 또는 고객 승인 기준 필요",
+        f"overall dimensions: {spec['dimensions'] or 'source guide confirmation required'}",
+        f"hole/punch count and type: {spec['hole_count'] or 'source guide confirmation required'} x {spec['hole_spec'] or 'source guide confirmation required'}",
+        f"material: {spec['material'] or 'manufacturer/customer confirmation required'}",
+        "tolerance: manufacturer standard or customer approval required",
         f"입력 용량 참조: {_extract_power_rating(source_design_doc)}",
     ]
 
@@ -1620,41 +1632,74 @@ def _investment_risk_return_lines(design: WorkDesign) -> List[str]:
     ]
 
 
-def _concept_svg(product_name: str, design: WorkDesign) -> str:
+def _concept_svg(product_name: str, design: WorkDesign, source_design_doc: str = "") -> str:
     title = escape(product_name)
     note = escape(design.scope or "Concept drawing; verify dimensions against supplied guide.")
+    spec = _product_spec_from_text(source_design_doc)
+    width_mm = spec["width_mm"] or 540
+    height_mm = spec["height_mm"] or 300
+    hole_count = spec["hole_count"] or 3
+    hole_label = escape(spec["hole_spec"] or "hole TBD")
+    material = escape(spec["material"] or "material TBD")
+    scale = min(540 / max(width_mm, 1), 300 / max(height_mm, 1))
+    rect_width = round(width_mm * scale, 2)
+    rect_height = round(height_mm * scale, 2)
+    rect_x = round(450 - rect_width / 2, 2)
+    rect_y = round(290 - rect_height / 2, 2)
+    hole_radius = max(8, min(28, round((spec["hole_mm"] or 20) * scale / 2, 2)))
+    spacing = rect_width / (hole_count + 1)
+    circles = []
+    for index in range(hole_count):
+        cx = round(rect_x + spacing * (index + 1), 2)
+        cy = round(rect_y + rect_height / 2, 2)
+        circles.append(f"<circle cx=\"{cx}\" cy=\"{cy}\" r=\"{hole_radius}\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"4\"/>")
     return (
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"900\" height=\"620\" viewBox=\"0 0 900 620\">"
         "<rect width=\"900\" height=\"620\" fill=\"#ffffff\"/>"
         "<text x=\"40\" y=\"50\" font-family=\"Arial\" font-size=\"26\" font-weight=\"700\">"
         f"{title}</text>"
-        "<rect x=\"180\" y=\"140\" width=\"540\" height=\"300\" fill=\"none\" stroke=\"#111827\" stroke-width=\"4\"/>"
-        "<circle cx=\"330\" cy=\"290\" r=\"42\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"4\"/>"
-        "<circle cx=\"450\" cy=\"290\" r=\"42\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"4\"/>"
-        "<circle cx=\"570\" cy=\"290\" r=\"42\" fill=\"none\" stroke=\"#2563eb\" stroke-width=\"4\"/>"
-        "<line x1=\"180\" y1=\"470\" x2=\"720\" y2=\"470\" stroke=\"#374151\" stroke-width=\"2\"/>"
-        "<text x=\"360\" y=\"505\" font-family=\"Arial\" font-size=\"18\">overall width TBD</text>"
-        "<line x1=\"750\" y1=\"140\" x2=\"750\" y2=\"440\" stroke=\"#374151\" stroke-width=\"2\"/>"
-        "<text x=\"770\" y=\"300\" font-family=\"Arial\" font-size=\"18\" transform=\"rotate(90 770 300)\">height TBD</text>"
+        f"<rect x=\"{rect_x}\" y=\"{rect_y}\" width=\"{rect_width}\" height=\"{rect_height}\" fill=\"none\" stroke=\"#111827\" stroke-width=\"4\"/>"
+        f"{''.join(circles)}"
+        f"<line x1=\"{rect_x}\" y1=\"470\" x2=\"{rect_x + rect_width}\" y2=\"470\" stroke=\"#374151\" stroke-width=\"2\"/>"
+        f"<text x=\"360\" y=\"505\" font-family=\"Arial\" font-size=\"18\">overall width {_format_number(width_mm)} mm</text>"
+        f"<line x1=\"750\" y1=\"{rect_y}\" x2=\"750\" y2=\"{rect_y + rect_height}\" stroke=\"#374151\" stroke-width=\"2\"/>"
+        f"<text x=\"770\" y=\"300\" font-family=\"Arial\" font-size=\"18\" transform=\"rotate(90 770 300)\">height {_format_number(height_mm)} mm</text>"
+        f"<text x=\"40\" y=\"95\" font-family=\"Arial\" font-size=\"16\">{material}; {hole_count} x {hole_label}</text>"
         "<text x=\"40\" y=\"560\" font-family=\"Arial\" font-size=\"16\">"
         f"{note}</text>"
         "</svg>"
     )
 
 
-def _concept_dxf(product_name: str) -> str:
+def _concept_dxf(product_name: str, source_design_doc: str = "") -> str:
     title = _ascii_dxf_text(product_name)
+    spec = _product_spec_from_text(source_design_doc)
+    width_mm = spec["width_mm"] or 540
+    height_mm = spec["height_mm"] or 300
+    hole_count = spec["hole_count"] or 3
+    hole_radius = max(1, round((spec["hole_mm"] or 84) / 2, 2))
+    hole_spec = _ascii_dxf_text(spec["hole_spec"] or "HOLE TBD")
+    material = _ascii_dxf_text(spec["material"] or "MATERIAL TBD")
+    spacing = width_mm / (hole_count + 1)
+    circle_entities: List[str] = []
+    for index in range(hole_count):
+        circle_entities.extend([
+            "0", "CIRCLE", "8", "GLAND_HOLES",
+            "10", str(round(spacing * (index + 1), 2)),
+            "20", str(round(height_mm / 2, 2)),
+            "40", str(hole_radius),
+        ])
     return "\n".join([
         "0", "SECTION", "2", "ENTITIES",
         "0", "LWPOLYLINE", "8", "PLATE", "90", "4", "70", "1",
         "10", "0", "20", "0",
-        "10", "540", "20", "0",
-        "10", "540", "20", "300",
-        "10", "0", "20", "300",
-        "0", "CIRCLE", "8", "GLAND_HOLES", "10", "150", "20", "150", "40", "42",
-        "0", "CIRCLE", "8", "GLAND_HOLES", "10", "270", "20", "150", "40", "42",
-        "0", "CIRCLE", "8", "GLAND_HOLES", "10", "390", "20", "150", "40", "42",
+        "10", str(_format_number(width_mm)), "20", "0",
+        "10", str(_format_number(width_mm)), "20", str(_format_number(height_mm)),
+        "10", "0", "20", str(_format_number(height_mm)),
+        *circle_entities,
         "0", "TEXT", "8", "NOTES", "10", "0", "20", "340", "40", "18", "1", title,
+        "0", "TEXT", "8", "NOTES", "10", "0", "20", "360", "40", "12", "1",
+        f"{_format_number(width_mm)}x{_format_number(height_mm)} {material} {hole_count}x{hole_spec}",
         "0", "TEXT", "8", "NOTES", "10", "0", "20", "365", "40", "12", "1",
         "CONCEPT ONLY - VERIFY DIMENSIONS AND TOLERANCES AGAINST SOURCE GUIDE",
         "0", "ENDSEC", "0", "EOF", "",
@@ -2114,6 +2159,87 @@ def _extract_power_rating(text: str) -> str:
 
     match = re.search(r"\b\d+(?:\.\d+)?\s*kW\b", text or "", flags=re.IGNORECASE)
     return match.group(0) if match else "not specified"
+
+
+def _product_spec_from_text(text: str) -> Dict[str, Any]:
+    import re
+
+    source = text or ""
+    dimension_match = re.search(
+        r"\b(?P<w>\d+(?:\.\d+)?)\s*(?:x|X|×|by)\s*(?P<h>\d+(?:\.\d+)?)\s*(?:mm)?\b",
+        source,
+    )
+    width_mm = _number_from_match(dimension_match, "w")
+    height_mm = _number_from_match(dimension_match, "h")
+    dimensions = f"{_format_number(width_mm)}x{_format_number(height_mm)} mm" if width_mm and height_mm else ""
+
+    material_match = re.search(
+        r"\b(SUS\s*-?\s*\d{3,4}|SS\s*-?\s*\d{3,4}|AL\s*-?\s*\d{3,4})\b",
+        source,
+        re.IGNORECASE,
+    )
+    material = material_match.group(1).replace(" ", "").upper() if material_match else ""
+
+    hole_match = re.search(
+        r"\b(?P<count>\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:x\s*)?(?P<hole>M\s*\d+(?:\.\d+)?)\b",
+        source,
+        re.IGNORECASE,
+    )
+    hole_count = _parse_count(hole_match.group("count")) if hole_match else 0
+    hole_spec = hole_match.group("hole").replace(" ", "").upper() if hole_match else ""
+    hole_mm = 0.0
+    if hole_spec:
+        hole_size = re.search(r"\d+(?:\.\d+)?", hole_spec)
+        hole_mm = float(hole_size.group(0)) if hole_size else 0.0
+
+    return {
+        "width_mm": width_mm,
+        "height_mm": height_mm,
+        "dimensions": dimensions,
+        "material": material,
+        "hole_count": hole_count,
+        "hole_spec": hole_spec,
+        "hole_mm": hole_mm,
+    }
+
+
+def _number_from_match(match, group: str) -> float:
+    if not match:
+        return 0.0
+    try:
+        return float(match.group(group))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _format_number(value: float) -> str:
+    if not value:
+        return ""
+    if float(value).is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _parse_count(value: str) -> int:
+    words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
+    lowered = (value or "").lower()
+    if lowered in words:
+        return words[lowered]
+    try:
+        return int(lowered)
+    except ValueError:
+        return 0
 
 
 def _ascii_dxf_text(text: str) -> str:

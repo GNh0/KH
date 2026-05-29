@@ -406,7 +406,11 @@ class ArtifactStoreTests(unittest.TestCase):
                 result = build_design_stage(
                     project_dir=str(project_dir),
                     workflow_id="workflow_demo",
-                    design_doc="# 22kW CABLE GLAND PLATE 389\nCreate a design drawing from the supplied specification guide.",
+                    design_doc=(
+                        "# 22kW CABLE GLAND PLATE 389\n"
+                        "Create a design drawing from the supplied specification guide.\n"
+                        "Plate size 200x120 mm, material SUS304, four M20 cable gland holes."
+                    ),
                     file_list=["CABLE GLAND PLATE 389"],
                     metadata={
                         "domain_hint": "product-design",
@@ -446,8 +450,17 @@ class ArtifactStoreTests(unittest.TestCase):
                     "수량", "공차", "근거", "비고",
                 ])
                 self.assertIn("CABLE GLAND PLATE 389", svg_text)
+                self.assertIn("200", svg_text)
+                self.assertIn("120", svg_text)
+                self.assertIn("SUS304", svg_text)
+                self.assertIn("4 x M20", svg_text)
+                self.assertEqual(svg_text.count("<circle "), 4)
                 self.assertIn("SECTION", dxf_text)
                 self.assertIn("ENTITIES", dxf_text)
+                self.assertIn("200x120", dxf_text)
+                self.assertIn("SUS304", dxf_text)
+                self.assertIn("4xM20", dxf_text)
+                self.assertEqual(dxf_text.count("CIRCLE"), 4)
         finally:
             if original_runtime_root is None:
                 os.environ.pop("UAF_RUNTIME_ROOT", None)

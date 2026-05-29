@@ -37,6 +37,11 @@ class CliConfigTests(unittest.TestCase):
         self.assertFalse(cli.should_start_background_webhook("local"))
         self.assertTrue(cli.should_start_background_webhook("antigravity"))
 
+    def test_offline_provider_is_smoke_only(self):
+        self.assertTrue(cli.is_smoke_only_provider("offline"))
+        self.assertTrue(cli.is_smoke_only_provider("deterministic"))
+        self.assertFalse(cli.is_smoke_only_provider("openai"))
+
 
 if __name__ == "__main__":
     unittest.main()

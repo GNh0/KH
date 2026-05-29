@@ -265,6 +265,8 @@ def audit_role_execution(
         findings.append("role orchestration has no execution waves")
     if int(summary.get("parallel_wave_count") or 0) <= 0:
         findings.append("role orchestration did not record any parallel wave")
+    if "runtime_overlap_wave_count" in summary and int(summary.get("runtime_overlap_wave_count") or 0) <= 0:
+        findings.append("role orchestration did not record runtime overlap evidence for parallel waves")
 
     for role in required:
         result = by_role.get(role)

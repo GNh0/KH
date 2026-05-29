@@ -34,6 +34,7 @@ python cli.py run --project ./my_app --prompt "Create a small demo app"
 ```
 
 The CLI defaults to the deterministic `offline` provider, so a smoke run does not require a local or hosted LLM.
+Offline output is smoke-only. It proves packaging, dispatch, state, and gates can run, but it is not a task-faithful implementation of the prompt. Use `local`, `openai`, `codex`, or `claude` when the generated project must satisfy the actual user request.
 
 Use a model-backed provider when needed:
 
@@ -54,6 +55,8 @@ Sparse path: .agents/plugins
 ```
 
 After install or upgrade, start a new thread so Codex reloads the skills.
+
+Upgrade note: Codex installs plugin cache entries by manifest version. When publishing a new plugin build, bump both `.codex-plugin/plugin.json` and the root `plugin.json` version. If the marketplace clone is current but the installed plugin still appears under an older cache path such as `kh-uaf/2.8.0`, install or upgrade again after the version bump.
 
 Direct Windows clone:
 

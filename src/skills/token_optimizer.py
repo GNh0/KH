@@ -21,11 +21,14 @@ IMPORTANT_LOG_PATTERNS = tuple(
         r"\bBuild FAILED\b",
         r"\berror\s+[A-Z]{2,}\d+\b",
         r"\bassert\b.*\b==\b",
+        r"^\s*E\s+[-+]\s+",
+        r"\b(expected|actual)\s*:",
         r"\b\d+\s*==\s*\d+\b",
         r"\bexit code\s*:\s*\d+",
         r"\breturncode\s*[:=]\s*\d+",
         r"\bline\s+\d+\b",
         r"\b[A-Za-z0-9_./\\-]+\.py::[A-Za-z0-9_./\\:-]+",
+        r"\b(USER_CONSTRAINT|DECISION|EVIDENCE|BLOCKER|P[0-2])\b",
     ]
 )
 
@@ -291,6 +294,15 @@ def is_contract_sensitive_text(text: str) -> bool:
         "security:",
         "security ",
         "security review",
+        "type: ignore",
+        "noqa",
+        "pylint:",
+        "pragma:",
+        "important",
+        "warning",
+        "compatibility",
+        "coding:",
+        "#!",
         "do not remove",
         "business rule",
         "business contract",
@@ -302,9 +314,30 @@ def is_contract_sensitive_text(text: str) -> bool:
 
 def _command_family(command: str) -> str:
     lowered = (command or "").lower()
-    if any(token in lowered for token in ["pytest", "unittest", "npm test", "cargo test"]):
+    if any(token in lowered for token in [
+        "pytest",
+        "unittest",
+        "npm test",
+        "cargo test",
+        "go test",
+        "dotnet test",
+        "mvn test",
+        "gradle test",
+        "jest",
+        "vitest",
+    ]):
         return "test"
-    if any(token in lowered for token in ["msbuild", "dotnet build", "npm run build", "cargo build", "build "]):
+    if any(token in lowered for token in [
+        "msbuild",
+        "dotnet build",
+        "npm run build",
+        "cargo build",
+        "go build",
+        "mvn package",
+        "gradle build",
+        "tsc",
+        "build ",
+    ]):
         return "build"
     if any(token in lowered for token in ["git status", "git diff", "git show"]):
         return "git-read"
@@ -345,12 +378,16 @@ def _line_priority(line: str) -> int:
         return 100
     if re.search(r"\berror\s+[a-z]{2,}\d+\b", lowered):
         return 95
+    if re.search(r"^\s*e\s+[-+]\s+|\b(expected|actual)\s*:", lowered):
+        return 92
     if re.search(r"\bassert\b.*\b==\b|\b\d+\s*==\s*\d+\b", lowered):
         return 90
     if re.search(r"\b(exit code|returncode)\s*[:=]\s*\d+\b", lowered):
         return 85
     if re.search(r"\btraceback\b", lowered):
         return 80
+    if re.search(r"\b(user_constraint|decision|evidence|blocker|p[0-2])\b", lowered):
+        return 75
     if re.search(r"\bline\s+\d+\b|:\d+:\d+|\(\d+,\d+\)", lowered):
         return 70
     if any(pattern.search(line) for pattern in IMPORTANT_LOG_PATTERNS):

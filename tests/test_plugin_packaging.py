@@ -3,6 +3,10 @@ import unittest
 from pathlib import Path
 
 
+def _u(value: str) -> str:
+    return value
+
+
 class PluginPackagingTests(unittest.TestCase):
     def test_codex_plugin_manifest_exposes_repo_skills(self):
         manifest_path = Path(".codex-plugin") / "plugin.json"
@@ -77,13 +81,48 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn("## Antigravity Plugin Install", content)
         self.assertIn("~/.gemini/config/plugins/kh-uaf", content)
         self.assertIn(".agents/plugins/kh-uaf", content)
+        self.assertIn("Upgrade note", content)
+        self.assertIn(".codex-plugin/plugin.json", content)
+        self.assertIn("root `plugin.json`", content)
+        self.assertIn("Offline output is smoke-only", content)
 
     def test_korean_readme_links_back_to_english_readme(self):
         content = Path("README.ko.md").read_text(encoding="utf-8")
 
         self.assertIn("[English](README.md)", content)
-        self.assertIn("## Codex 플러그인 설치", content)
-        self.assertIn("## Antigravity 플러그인 설치", content)
+        self.assertIn(_u("## Codex \ud50c\ub7ec\uadf8\uc778 \uc124\uce58"), content)
+        self.assertIn(_u("## Antigravity \ud50c\ub7ec\uadf8\uc778 \uc124\uce58"), content)
+        self.assertIn(_u("\uc5c5\uadf8\ub808\uc774\ub4dc \ucc38\uace0"), content)
+        self.assertIn(_u("\ubc84\uc804 bump"), content)
+        self.assertIn("smoke-only", content)
+
+    def test_korean_readme_is_not_mojibake(self):
+        content = Path("README.ko.md").read_text(encoding="utf-8")
+
+        for expected in [
+            _u("KH UAF\ub294"),
+            _u("\ud3ec\ud568 \ud56d\ubaa9"),
+            _u("\ube60\ub978 \uc2dc\uc791"),
+            _u("\uae30\ubcf8 \ud750\ub984"),
+            _u("\uc0b0\ucd9c\ubb3c"),
+            _u("\uac80\uc99d"),
+        ]:
+            self.assertIn(expected, content)
+
+        mojibake_fragments = [
+            "\ufffd",
+            "?" + "\ub6ae",
+            "?" + "\u317c",
+            "?" + "\uacf3",
+            "?" + "\uc12e",
+            "\u6028" + "\uafbe",
+            "\u6fe1" + "\uc492",
+            "\uf9cd" + "\u317b",
+            "\uc720" + "?",
+            "\u5a9b" + "\uc492",
+        ]
+        for fragment in mojibake_fragments:
+            self.assertNotIn(fragment, content)
 
 
 if __name__ == "__main__":

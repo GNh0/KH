@@ -75,6 +75,22 @@ class CommandOutputRuntimeTests(unittest.TestCase):
             self.assertIn(fact, result.stdout)
         self.assertIn("required facts", result.metadata["fallback_reason"])
 
+    def test_summary_preserves_pytest_multiline_expected_actual_diff(self):
+        log = _pytest_multiline_diff_log()
+
+        result = summarize_command_output("pytest tests/test_auth.py", stdout=log, stderr="", exit_code=1, max_lines=12)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.metadata["command_family"], "test")
+        for fact in [
+            "tests/test_auth.py::test_role_label FAILED",
+            "E       - expected: admin",
+            "E       + actual: user",
+            "AssertionError",
+            "exit code: 1",
+        ]:
+            self.assertIn(fact, result.stdout)
+
     def test_summary_uses_build_family_filter_for_compile_errors(self):
         log = _msbuild_error_log()
 
@@ -107,6 +123,40 @@ class CommandOutputRuntimeTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 2)
         self.assertIn("ERROR: only failure line", result.stderr)
         self.assertEqual(result.metadata["fallback_reason"], "filtered output was empty for failing command")
+
+    def test_generic_success_trace_keeps_constraint_decision_and_evidence(self):
+        log = _agent_success_trace()
+
+        result = summarize_command_output("agent-run", stdout=log, stderr="", exit_code=0, max_lines=8)
+
+        self.assertTrue(result.success)
+        for fact in [
+            "USER_CONSTRAINT: never write harness-only files into docs",
+            "DECISION: use runtime metadata for internal audit rows",
+            "EVIDENCE: rendered DOCX and XLSX were structurally checked",
+        ]:
+            self.assertIn(fact, result.stdout)
+
+    def test_non_python_test_and_build_commands_are_classified(self):
+        cases = [
+            ("go test ./...", "test"),
+            ("dotnet test App.Tests.csproj", "test"),
+            ("mvn test", "test"),
+            ("gradle test", "test"),
+            ("npx tsc --noEmit", "build"),
+            ("go build ./...", "build"),
+        ]
+
+        for command, expected_family in cases:
+            with self.subTest(command=command):
+                result = summarize_command_output(
+                    command,
+                    stdout="ERROR: failed\nexit code: 1",
+                    stderr="",
+                    exit_code=1,
+                    max_lines=4,
+                )
+                self.assertEqual(result.metadata["command_family"], expected_family)
 
     def test_module_cli_accepts_log_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -157,6 +207,9 @@ def get_value(token):
             "# security review note keep this exact warning\n\ndef run():\n    return 1\n",
             "# license header must remain attached\n\ndef run():\n    return 1\n",
             "# business rule keep the order of fields\n\ndef run():\n    return 1\n",
+            "# type: ignore is required for the generated client\n\ndef run():\n    return 1\n",
+            "# noqa keep compatibility import side effect\n\ndef run():\n    return 1\n",
+            "# IMPORTANT compatibility shim for old hosts\n\ndef run():\n    return 1\n",
         ]:
             with self.subTest(source=source.splitlines()[0]):
                 self.assertEqual(minify_code(source), source)
@@ -233,6 +286,32 @@ def _msbuild_error_log() -> str:
     ])
     lines.extend(f"Copying file obj\\Debug\\artifact-{index}.dll" for index in range(450))
     lines.append("exit code: 1")
+    return "\n".join(lines)
+
+
+def _pytest_multiline_diff_log() -> str:
+    lines = [f"tests/test_auth.py::test_bulk_role[{index}] PASSED" for index in range(80)]
+    lines.extend([
+        "tests/test_auth.py::test_role_label FAILED",
+        "Traceback (most recent call last):",
+        "tests/test_auth.py line 42",
+        "AssertionError: role label mismatch",
+        "E       - expected: admin",
+        "E       + actual: user",
+    ])
+    lines.extend(f"tests/test_auth.py::test_bulk_after[{index}] PASSED" for index in range(80))
+    lines.append("exit code: 1")
+    return "\n".join(lines)
+
+
+def _agent_success_trace() -> str:
+    lines = [f"[debug] scanned node {index}: no action" for index in range(120)]
+    lines.extend([
+        "USER_CONSTRAINT: never write harness-only files into docs",
+        "DECISION: use runtime metadata for internal audit rows",
+        "EVIDENCE: rendered DOCX and XLSX were structurally checked",
+    ])
+    lines.extend(f"[debug] completed node {index}: ok" for index in range(120))
     return "\n".join(lines)
 
 

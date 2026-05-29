@@ -160,6 +160,7 @@ class QualityHarnessTests(unittest.TestCase):
                 "success": True,
                 "wave_count": 3,
                 "parallel_wave_count": 1,
+                "runtime_overlap_wave_count": 1,
             },
             "results": [
                 {
@@ -193,6 +194,7 @@ class QualityHarnessTests(unittest.TestCase):
                 "wave_count": 3,
                 "parallel_wave_count": 1,
                 "implementation_required": True,
+                "runtime_overlap_wave_count": 1,
             },
             "results": [
                 {
@@ -213,6 +215,29 @@ class QualityHarnessTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertTrue(any("product-strategist" in finding for finding in result["findings"]))
         self.assertTrue(any("implementer" in finding for finding in result["findings"]))
+
+    def test_role_execution_audit_fails_when_runtime_overlap_evidence_is_missing(self):
+        role_metadata = {
+            "summary": {
+                "execution_model": "dag-asyncio-role-waves",
+                "success": True,
+                "wave_count": 2,
+                "parallel_wave_count": 1,
+                "runtime_overlap_wave_count": 0,
+            },
+            "results": [
+                {
+                    "role": "ceo",
+                    "status": "success",
+                    "metadata": {"role_artifacts": [{"path": "runtime/ceo.md"}]},
+                },
+            ],
+        }
+
+        result = audit_role_execution(role_metadata, required_roles=["ceo"])
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("runtime overlap" in finding for finding in result["findings"]))
 
     def test_traceability_matrix_dict_rows_have_named_schema_and_gate_status(self):
         profile = DomainProfileBuilder.build(
