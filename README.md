@@ -1,32 +1,30 @@
 # Universal Agent Framework (UAF)
 
-[English](README.md) | [한국어](README.ko.md)
+[English](README.md) | [Korean](README.ko.md)
 
-UAF is a Python-first, local-first orchestration framework for Codex, Antigravity, Claude Code, and other agent hosts.
+KH UAF is a local-first skill and harness framework for Codex, Antigravity-style agents, Claude Code, and local workers.
 
-It packages two things:
+It combines:
 
-- runtime contracts, dispatchers, gates, state, and harnesses under `src/`
-- host-readable skills under `skills/<skill-folder>/SKILL.md`
+- host-readable skills in `skills/<skill-folder>/SKILL.md`
+- Python contracts, dispatchers, role orchestration, gates, state, and validators under `src/`
+- practical release checks and a SWE-bench-style local benchmark
 
-The intent is to make planning, domain profiling, role orchestration, worker dispatch, review/QA gates, snapshots, memory, goal state, and user-facing deliverables portable across agent hosts without depending on one vendor-specific local skill folder.
+The goal is not to depend on a vendor-specific local skill folder. UAF packages its own portable skills and harnesses.
 
 ## What It Includes
 
-- Packaged KH UAF skill catalog with 27 skills/harnesses.
-- CLI runner for local project workflows.
-- Codex plugin manifest at `.codex-plugin/plugin.json`.
-- Codex marketplace file at `.agents/plugins/marketplace.json`.
-- Antigravity workspace bootstrap at `.agents/plugins/kh-uaf`.
-- Local/Antigravity dispatcher contracts.
-- DAG-based role orchestration with CEO, advisor, architect, planner, controller, implementer, reviewer, QA, security, and release roles.
-- Goal ledger, scoped memory store, resume handoff, and runtime state under the UAF runtime store by default.
+- 27 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
+- Antigravity workspace/global plugin bootstrap files.
+- DAG role orchestration with CEO, advisor, architect, planner, controller, implementer, reviewers, QA, security, and release roles.
+- Bounded local workflow dispatch with review, QA, security, release, and evidence gates.
+- Goal state, scoped memory, resume handoff, snapshots, and runtime state.
 - Type-aware user deliverables under the target project's `docs/` folder.
-- Metadata-only quality, render QA, traceability, and role execution audit harnesses.
-- Deterministic `offline` provider for install-time smoke runs without a local LLM.
-- OpenAI-compatible, Anthropic, and custom LLM provider hooks.
+- Render/template/traceability/role-audit quality harnesses.
+- `KH-Bench Verified`, a practical task benchmark separate from internal skill quality scores.
 
-Internal state is not written into the target project root by default. User-facing files go under the target project's `docs/`; UAF runtime state normally lives under `%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/`.
+By default, user-facing files are written to the target project, while UAF runtime state is written outside the project root under the KH-UAF runtime store. Set `UAF_PROJECT_LOCAL_STATE=1` only when you explicitly want `.uaf` and snapshot state inside the project.
 
 ## Quick Start
 
@@ -35,9 +33,9 @@ pip install -r requirements.txt
 python cli.py run --project ./my_app --prompt "Create a small demo app"
 ```
 
-The CLI defaults to `--provider offline`, so a first smoke run does not require Ollama, OpenAI, Anthropic, or a local API server.
+The CLI defaults to the deterministic `offline` provider, so a smoke run does not require a local or hosted LLM.
 
-Use a configured model when you want real generation:
+Use a model-backed provider when needed:
 
 ```bash
 python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --provider local --base-url http://localhost:11434/v1
@@ -45,22 +43,9 @@ python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --provi
 python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --platform antigravity
 ```
 
-Useful commands:
-
-```bash
-python -m src.skills.uaf_skill_catalog --list
-python -m src.skills.uaf_skill_catalog --read orchestration-role-graph
-python -m src.skills.uaf_skill_catalog --check
-python -m src.skills.uaf_skill_quality
-python -m unittest tests.test_skill_demos
-python -m unittest discover -s tests
-```
-
 ## Codex Plugin Install
 
-This repo can be installed as a Codex plugin because it includes `.codex-plugin/plugin.json`.
-
-In Codex, open Plugins -> Manage -> Add marketplace and use:
+In Codex, open Plugins -> Manage -> Add marketplace:
 
 ```text
 Source: https://github.com/GNh0/KH.git
@@ -68,15 +53,9 @@ Git ref: main
 Sparse path: .agents/plugins
 ```
 
-The sparse path points at `.agents/plugins/marketplace.json`, which exposes the `KH UAF` plugin entry. After installing or upgrading the plugin, start a new thread so the skills reload.
+After install or upgrade, start a new thread so Codex reloads the skills.
 
-The same marketplace can be added from a CLI-capable environment:
-
-```bash
-codex plugin marketplace add https://github.com/GNh0/KH.git --ref main --sparse .agents/plugins
-```
-
-Recommended direct clone path on Windows:
+Direct Windows clone:
 
 ```powershell
 git clone https://github.com/GNh0/KH.git "$env:USERPROFILE\plugins\kh-uaf"
@@ -88,9 +67,7 @@ The root `plugin.json` is the UAF runtime manifest. The Codex plugin manifest is
 
 ## Antigravity Plugin Install
 
-Antigravity can use KH UAF as a global plugin or through a workspace bootstrap.
-
-Global install on Windows:
+Global Windows install:
 
 ```powershell
 git clone https://github.com/GNh0/KH.git "$env:USERPROFILE\.gemini\config\plugins\kh-uaf"
@@ -98,7 +75,7 @@ cd "$env:USERPROFILE\.gemini\config\plugins\kh-uaf"
 python -m src.skills.uaf_skill_catalog --check
 ```
 
-Global install on macOS/Linux:
+Global macOS/Linux install:
 
 ```bash
 git clone https://github.com/GNh0/KH.git ~/.gemini/config/plugins/kh-uaf
@@ -106,57 +83,41 @@ cd ~/.gemini/config/plugins/kh-uaf
 python -m src.skills.uaf_skill_catalog --check
 ```
 
-For workspace-local bootstrapping, use:
+Workspace-local bootstrap path:
 
 ```text
 <workspace-root>/.agents/plugins/kh-uaf/
 ```
 
-The workspace bootstrap is intentionally small. It exposes a `kh-uaf` skill that points the host back to this repo's root `skills/`, `SKILL.md`, and validation commands. For full access to every packaged KH UAF skill across workspaces, use the global clone path.
+Use the global clone when you want every packaged KH UAF skill available across workspaces.
 
 ## Core Flow
 
 ```text
 cli.py run
-  -> SystemArchitect writes design_doc.md
-  -> AgentLoop attaches role graph and GoalState metadata
-  -> DomainProfile and WorkDesign are created
-  -> user-facing deliverables are routed to docs/
-  -> DispatcherFactory selects local or Antigravity mode
-  -> role DAG and bounded workers execute tasks
-  -> review, QA, security, release, and evidence gates run
-  -> GoalLedger, memory, artifacts, and resume handoff are written to runtime state
+  -> design document and domain profile
+  -> WorkDesign and user deliverable plan
+  -> role DAG and bounded worker dispatch
+  -> review, QA, security, release, and evidence gates
+  -> user-facing docs under docs/
+  -> UAF state, memory, snapshots, role artifacts, and handoff under runtime state
 ```
-
-The local path can run with the deterministic `offline` provider for smoke testing. Real model-backed work should use `local`, `openai`, `codex`, `claude`, or a custom provider registered through `LLMRouter.register_provider(...)`.
 
 ## Deliverables
 
-UAF exports user-facing work products by task type, not by a fixed extension checklist.
+UAF exports user-facing artifacts by task type, not by a fixed extension list.
 
-- Software work: `요구정의서.docx`, `기능정의서.docx`, `개발설계서.docx`, `화면_API_정의서.docx`, data/test/risk XLSX files.
+- Software work: requirements, functional specification, development design, screen/API definition, data definition, test plan, and risk/policy workbooks.
 - General orchestration: requirements, orchestration design, process flow, role/task breakdown, evidence plan, and risk/policy files.
-- Product/mechanical work: design notes, dimension/BOM workbook, SVG concept drawing, DXF handoff when the input supports it.
-- Investment/analysis work: report, scenario workbook, and risk/policy workbook.
-- Manuals are conditional. `사용_매뉴얼.docx` is generated only when the task needs user/operations instructions or manual revision metadata is supplied.
+- Product or mechanical work: product design document, dimension/BOM workbook, SVG concept drawing, and DXF handoff when the input supports it.
+- Investment or analysis work: analysis report, scenario workbook, and risk/policy workbook.
+- Manuals are conditional and are generated only when the task needs user or operations instructions.
 
-Harness-only outputs such as traceability rows, render QA checks, role audit findings, and template quality checks stay in runtime metadata unless the user explicitly asks for them as deliverables.
+Harness-only outputs such as traceability rows, render QA checks, role audit findings, and template quality checks stay in runtime metadata unless explicitly requested as user deliverables.
 
-## Packaged Skills
+## Skills
 
-The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_skill_catalog`.
-
-Main groups:
-
-| Group | Skills |
-| --- | --- |
-| Orchestration/adapters | `orchestration-role-graph`, `adapter-contract-harness`, `host-agent-orchestration`, `parallel-orchestration-harness`, `subagent-review-pipeline` |
-| Planning/lifecycle | `architect-pipeline`, `development-lifecycle-harness`, `domain-orchestration-harness`, `quality-gates-harness`, `workflow-skill-distiller` |
-| Quality/artifacts | `deliverable-template-quality-harness`, `artifact-render-qa-harness`, `traceability-matrix-harness`, `role-execution-audit-harness`, `health-check-harness` |
-| Gates/state | `goal-state-harness`, `memory-state-harness`, `context-state-harness`, `review-gate-harness`, `qa-gate-harness` |
-| Safety/operations | `guard-policy-harness`, `command-hook-policy-harness`, `command-output-harness`, `snapshot-state-harness`, `token-optimizer`, `harness-evaluator`, `skill-catalog` |
-
-To add a new packaged skill, create:
+Each packaged skill has this structure:
 
 ```text
 skills/<skill-folder>/SKILL.md
@@ -166,81 +127,78 @@ skills/<skill-folder>/scripts/smoke_check.py
 skills/<skill-folder>/scripts/demo.py
 ```
 
-Then run the catalog and quality checks.
-
-Each packaged skill also has a runnable demo:
+Useful commands:
 
 ```bash
+python -m src.skills.uaf_skill_catalog --list
+python -m src.skills.uaf_skill_catalog --read orchestration-role-graph
+python -m src.skills.uaf_skill_catalog --check
+python -m src.skills.uaf_skill_quality
 python skills/token_optimizer/scripts/demo.py --output-dir ./tmp/token-demo
 ```
 
-The demo prints JSON with `success_case`, `blocked_or_failure_case`, `contracts`, `host_metadata`, `artifacts`, and `verification`. If `--output-dir` is omitted, demo files go to the OS temp KH-UAF demo directory, not the repository root.
+## KH-Bench Verified
 
-## Maintainer Quality Gate
-
-Before publishing KH UAF, validate this repo's packaged `skills/` directory:
+Internal quality scores prove that packaged skills are well structured. `KH-Bench Verified` proves that UAF can execute practical tasks.
 
 ```bash
-python -m src.skills.uaf_skill_catalog --check
-python -m src.skills.uaf_skill_quality
+python -m src.benchmarks.kh_bench_verified --summary
+python -m unittest tests.test_kh_bench_verified
 ```
 
-The quality check is a KH UAF release gate, not a general external-skill ranking tool. It checks support-file wiring, smoke execution, runnable demo execution, implementation-target resolution, and test evidence for the skills packaged in this repository. The detailed rubric and latest scorecard live under `docs/skillbook/audits/`.
+Each task runs in a clean workspace with a task-scoped `UAF_RUNTIME_ROOT`. The benchmark also forces `UAF_PROJECT_LOCAL_STATE=0` during task execution so ambient host settings cannot move runtime state into the project.
 
-## Project Layout
+- `pre_validation`: checks expected to fail before execution
+- `fail_to_pass`: checks that must pass after execution
+- `pass_to_pass`: regression checks that must remain passing
+- JSON score output with resolved rate, evidence, runtime contracts, artifacts, and unresolved task IDs
 
-```text
-.codex-plugin/
-  plugin.json
-.agents/
-  plugins/
-    marketplace.json
-    kh-uaf/
-cli.py
-plugin.json
-SKILL.md
-requirements.txt
-src/
-  contracts.py
-  core/
-  orchestration/
-  platforms/
-  tasks/
-  harness/
-  skills/
-skills/
-  <skill-folder>/SKILL.md
-docs/
-  skillbook/
-tests/
-```
+Current task categories cover coding workflow dispatch, product/domain deliverables, role DAG orchestration, snapshot rollback, goal/memory/handoff state, and token-safe command-output compression.
 
-## Environment
-
-Set these only when you need to override defaults.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `AG_PLATFORM_MODE` | `local` | Dispatcher mode for CLI and runner paths. |
-| `AG_LLM_PROVIDER` | `offline` | Default CLI provider; use `local`, `openai`, `codex`, or `claude` when configured. |
-| `AG_LLM_BASE_URL` | `http://localhost:11434/v1` | OpenAI-compatible local endpoint for `--provider local`. |
-| `AG_WEBHOOK_URL` | unset | Optional subagent result webhook for external host callbacks. |
-| `AG_API_KEY` | `antigravity-secret-key-v2` | API key used only when webhook reporting is enabled. |
-| `AG_MAX_WORKERS` | `50` | Max async workers, clamped by CPU. |
-| `AG_NO_SANDBOX` | `0` | Disable sandbox when set to `1`. |
-| `AG_VERBOSE` | `0` | Verbose server logs. |
-| `UAF_RUNTIME_ROOT` | `%LOCALAPPDATA%/KH-UAF` | Runtime state root. |
-| `UAF_PROJECT_LOCAL_STATE` | unset | Set to `1` only when `.uaf/` should be written inside the target project. |
+The CLI uses the built-in `KHBaselineCandidateRunner` to score KH UAF itself. Python callers can pass a different candidate runner to `run_kh_bench_verified(...)`. External candidate runners receive only a sealed public task view; validators, expected artifacts, and baseline profile metadata stay inside the grader. Validators read concrete files, runtime artifacts, and report JSON rather than trusting runner-owned custom flags.
 
 ## Verification
 
-Use these before claiming a branch is ready:
+Before publishing:
 
 ```bash
 python -m json.tool plugin.json
 python -m json.tool .codex-plugin/plugin.json
 python -m src.skills.uaf_skill_catalog --check
 python -m src.skills.uaf_skill_quality
+python -m src.benchmarks.kh_bench_verified --summary
 python -m unittest discover -s tests
-python -B -c "import pathlib; [compile(p.read_text(encoding='utf-8'), str(p), 'exec') for p in pathlib.Path('.').rglob('*.py')]"
 ```
+
+## Project Layout
+
+```text
+.codex-plugin/
+.agents/plugins/
+cli.py
+plugin.json
+SKILL.md
+src/
+  benchmarks/
+  contracts.py
+  core/
+  harness/
+  orchestration/
+  platforms/
+  skills/
+  tasks/
+skills/
+docs/
+tests/
+```
+
+## Environment
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `AG_PLATFORM_MODE` | `local` | Dispatcher mode |
+| `AG_LLM_PROVIDER` | `offline` | Default CLI provider |
+| `AG_LLM_BASE_URL` | `http://localhost:11434/v1` | Local OpenAI-compatible endpoint |
+| `AG_MAX_WORKERS` | `50` | Requested async worker limit |
+| `UAF_RUNTIME_ROOT` | `%LOCALAPPDATA%/KH-UAF` | Runtime state root |
+| `UAF_PROJECT_LOCAL_STATE` | unset | Set to `1` only when project-local `.uaf` state is desired |
