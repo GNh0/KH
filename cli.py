@@ -104,6 +104,12 @@ Examples:
     parser.add_argument("--model", default=os.environ.get("AG_LLM_MODEL", "llama3"), help="LLM model name")
     parser.add_argument("--base-url", default=os.environ.get("AG_LLM_BASE_URL", "http://localhost:11434/v1"), help="OpenAI-compatible API base URL")
     parser.add_argument("--api-key", default=os.environ.get("AG_LLM_API_KEY"), help="LLM API key. If omitted, provider-specific environment variables are used.")
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "quick", "full"],
+        default=os.environ.get("AG_MODE", "auto"),
+        help="Execution mode: quick skips DAG/state for simple tasks, full uses complete orchestration, auto detects complexity.",
+    )
     return parser
 
 
@@ -116,6 +122,7 @@ def _apply_runtime_environment(args) -> None:
     os.environ["AG_NO_SANDBOX"] = "1" if args.no_sandbox else "0"
     os.environ["AG_VERBOSE"] = "1" if args.verbose else "0"
     os.environ["AG_PLATFORM_MODE"] = args.platform
+    os.environ["AG_MODE"] = args.mode
 
 
 def _run_agent_command(args) -> None:
@@ -126,6 +133,10 @@ def _run_agent_command(args) -> None:
             "[CLI] Offline provider selected: smoke-only deterministic output. "
             "Use a model-backed provider for task-faithful implementation."
         )
+    if args.mode == "quick":
+        print("[CLI] Quick mode: skipping DAG orchestration, state, and multi-gate pipeline.")
+    elif args.mode == "auto":
+        print("[CLI] Auto mode: complexity will be assessed to select quick or full execution.")
 
     server_process = None
     if should_start_background_webhook(args.platform):
