@@ -9,8 +9,11 @@ class PluginPackagingTests(unittest.TestCase):
 
         self.assertTrue(manifest_path.is_file())
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        root_manifest = json.loads(Path("plugin.json").read_text(encoding="utf-8"))
 
         self.assertEqual(manifest["name"], "kh-uaf")
+        self.assertEqual(manifest["version"], root_manifest["version"])
+        self.assertGreaterEqual(tuple(map(int, manifest["version"].split("."))), (2, 9, 0))
         self.assertEqual(manifest["skills"], "./skills/")
         self.assertTrue(Path("skills").is_dir())
         self.assertNotIn("apps", manifest)
@@ -19,6 +22,7 @@ class PluginPackagingTests(unittest.TestCase):
         interface = manifest["interface"]
         self.assertEqual(interface["displayName"], "KH UAF")
         self.assertIn("Skill", " ".join(interface["capabilities"]))
+        self.assertIn("KH-Bench Verified", " ".join(interface["capabilities"]))
         self.assertIn("https://github.com/GNh0/KH", manifest["repository"])
 
     def test_repo_marketplace_exposes_git_backed_plugin(self):

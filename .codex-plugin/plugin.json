@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.8.0",
-  "description": "KH Universal Agent Framework skills, science-style support files, executable skill smoke checks, 10-point practical skill quality scoring, deterministic offline CLI smoke runs, DAG role artifact orchestration, standard-template deliverable exports, metadata-only quality harnesses, Windows-safe evaluator execution, evidence gates, retention cleanup, and local orchestration harness for Codex.",
+  "version": "2.9.0",
+  "description": "KH Universal Agent Framework skills, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "KH UAF",
     "shortDescription": "Personal UAF skillbook and orchestration harness.",
-    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, 10-point practical skill quality scoring, deterministic offline CLI smoke runs, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill target audits, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
+    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, 10-point practical skill quality scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill target audits, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
     "developerName": "KH UAF",
     "category": "Productivity",
     "capabilities": [
@@ -29,6 +29,7 @@
       "Local Harness",
       "Type-Aware Deliverables",
       "Skill Quality Checks",
+      "KH-Bench Verified",
       "Quality Harnesses",
       "Evidence Gates",
       "Goal State",
@@ -37,6 +38,7 @@
     "defaultPrompt": [
       "Use KH UAF to plan and run this project.",
       "List the KH UAF skills available here.",
+      "Run KH-Bench Verified for this UAF checkout.",
       "Resume the current UAF goal ledger."
     ],
     "brandColor": "#2563EB"
