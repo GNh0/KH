@@ -18,7 +18,7 @@ Superpowers is strong at agent behavior activation: short trigger descriptions, 
 | TDD and verification-before-completion | Preserve in `quality-gates-harness`, `development-lifecycle-harness`, and release gates. |
 | Subagent review discipline | Preserve through `subagent-review-pipeline`, `review-gate-harness`, and role DAG reviewers. |
 | Compound engineering | Make `workflow-skill-distiller`, `context-state-harness`, `memory-state-harness`, and scenario regression the KH Compound step. |
-| Project-local artifacts | Keep KH deliverables in `docs/` and optional state in `.uaf/`; treat `.superpowers/` and `docs/superpowers/` as Superpowers-owned when both systems are installed. |
+| Project-local artifacts | Use KH-owned `.kh/<skill>/<run-id>/content/` and `.kh/<skill>/<run-id>/state/` for local run artifacts, and `docs/kh/specs|plans|decisions|qa|handoffs/` for shareable summaries; treat `.superpowers/` and `docs/superpowers/` as Superpowers-owned when both systems are installed. |
 | Worktree isolation | Use project-local `.worktrees/<task>` or equivalent isolated workspaces for concurrent file-editing workers. |
 
 ## Role-Stack Benchmark Coverage
@@ -83,3 +83,9 @@ Superpowers is strong at agent behavior activation: short trigger descriptions, 
 - Strengthened GoalState activation so heavy, multi-step, or evidence-gated work creates or refreshes `goal-state-harness` before execution.
 - Added visible KH Markdown artifacts mirroring the useful project-local feel of personal skillbooks without reusing their folders: `.kh/<skill>/<run-id>/content/*.md` for KH working notes and `docs/kh/<skill>/*.md` for shareable summaries.
 - Connected GoalLedger saves to project Markdown summaries while keeping runtime JSON state in the external UAF runtime root by default.
+
+## Current 2.9.7 Changes
+
+- Aligned KH project artifacts more closely with the useful Superpowers project layout while keeping KH-owned paths.
+- Added `.kh/<skill>/<run-id>/state/*.json` beside `.kh/<skill>/<run-id>/content/*.md` for run-local state.
+- Switched shareable KH Markdown summaries to document-type folders: `docs/kh/specs/`, `docs/kh/plans/`, `docs/kh/decisions/`, `docs/kh/qa/`, and `docs/kh/handoffs/`.

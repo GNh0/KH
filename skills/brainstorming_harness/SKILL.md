@@ -36,7 +36,7 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 5. Present 2-3 approaches with tradeoffs and a recommended direction.
 6. Present the chosen design direction and ask for approval before implementation or scaffolding.
 7. Build a `BrainstormSession`, validate it, and create a `brainstorm_handoff`.
-8. Write KH Markdown handoffs when project artifacts are useful: `.kh/brainstorm/<run-id>/content/*.md` for local working notes and `docs/kh/brainstorm/*.md` for shareable summaries.
+8. Write KH project artifacts when useful: `.kh/brainstorm/<run-id>/content/*.md` for local working notes, `.kh/brainstorm/<run-id>/state/*.json` for run-local state, and `docs/kh/handoffs/*.md` for shareable summaries.
 9. Pass the handoff to the next KH skill:
    - `architect-pipeline` for product/system design.
    - `domain-orchestration-harness` for cross-domain role/gate design.
@@ -53,7 +53,7 @@ A valid brainstorming run leaves:
 - `constraints` when constraints are known
 - `open_questions` when unresolved questions remain
 - next skill selection, usually `architect-pipeline`
-- project Markdown paths when written under `.kh/brainstorm/...` and `docs/kh/brainstorm/...`
+- project artifact paths when written under `.kh/brainstorm/.../content/`, `.kh/brainstorm/.../state/`, and `docs/kh/handoffs/`
 
 The agent must not claim KH-backed brainstorming if it only had an informal conversation and did not preserve a handoff or decision evidence.
 
@@ -99,7 +99,7 @@ Pressure scenario: a user says "I want to build a SaaS." The agent should not sc
 - Open questions, if any.
 - `BrainstormSession` validation result.
 - Handoff payload for the next KH skill.
-- Markdown handoff paths when visible project notes are created.
+- Markdown handoff and state paths when visible project artifacts are created.
 
 ## Common mistakes
 

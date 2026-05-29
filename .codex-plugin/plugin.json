@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.6",
-  "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, project-local Markdown artifacts, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
+  "version": "2.9.7",
+  "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, Superpowers-style project-local artifacts, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "KH UAF",
     "shortDescription": "Personal UAF skillbook and orchestration harness.",
-    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, brainstorming handoff for early product/project discovery, GoalState ledger updates with project-local Markdown summaries, Compound learning capture with scoped memory candidates, lightweight request-complexity routing, SIDE-style scenario evaluation for routing/evidence/gate/resume behavior, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill target audits, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
+    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, brainstorming handoff for early product/project discovery, GoalState ledger updates with Superpowers-style project-local content/state artifacts, Compound learning capture with scoped memory candidates, lightweight request-complexity routing, SIDE-style scenario evaluation for routing/evidence/gate/resume behavior, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill target audits, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
     "developerName": "KH UAF",
     "category": "Productivity",
     "capabilities": [
@@ -46,7 +46,8 @@
       "For heavy, multi-step, or evidence-gated work, create or update KH GoalState before execution and carry required evidence through review, QA, and release.",
       "Before implementation in a Git-backed project, prefer a KH isolated workspace or `.worktrees/<task>` unless the change is docs-only, single-file, or explicitly in-place.",
       "Report `workspace_strategy` as `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch` in final status for implementation work.",
-      "Keep the goal ledger updated with active task, missing evidence, next action, and visible KH Markdown artifacts under `.kh/` and `docs/kh/` when notes or handoffs are produced.",
+      "Keep the goal ledger updated with active task, missing evidence, next action, and visible KH project artifacts when notes or handoffs are produced.",
+      "Keep KH project artifacts organized as `.kh/<skill>/<run-id>/content/`, `.kh/<skill>/<run-id>/state/`, and shareable docs under `docs/kh/specs`, `docs/kh/plans`, `docs/kh/decisions`, `docs/kh/qa`, or `docs/kh/handoffs`.",
       "After Plan, Work, and Review, run KH compound-engineering-harness when reusable learning, scoped memory, or regression checks may be needed.",
       "When a workflow produces a reusable lesson, finish with KH workflow-skill-distiller, memory-state-harness, or a scenario regression.",
       "List the KH UAF skills available here.",

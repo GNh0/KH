@@ -17,7 +17,7 @@ class PluginPackagingTests(unittest.TestCase):
 
         self.assertEqual(manifest["name"], "kh-uaf")
         self.assertEqual(manifest["version"], root_manifest["version"])
-        self.assertGreaterEqual(tuple(map(int, manifest["version"].split("."))), (2, 9, 6))
+        self.assertGreaterEqual(tuple(map(int, manifest["version"].split("."))), (2, 9, 7))
         self.assertEqual(manifest["skills"], "./skills/")
         self.assertTrue(Path("skills").is_dir())
         self.assertNotIn("apps", manifest)

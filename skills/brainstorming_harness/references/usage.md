@@ -20,7 +20,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Constraints such as budget, stack, timeline, privacy, repo, deployment, or compliance.
 - Decisions already approved by the user.
 - Open questions that should remain visible for the architect or domain workflow.
-- Project Markdown destination when visible KH notes are wanted: `.kh/brainstorm/<run-id>/content/*.md` and `docs/kh/brainstorm/*.md`.
+- Project artifact destination when visible KH notes are wanted: `.kh/brainstorm/<run-id>/content/*.md`, `.kh/brainstorm/<run-id>/state/*.json`, and `docs/kh/handoffs/*.md`.
 - Execution level: `hybrid-harness`.
 - Implementation targets:
   - `src.orchestration.brainstorming.BrainstormOption`
@@ -44,7 +44,7 @@ Do not use this skill only because it is available. Use it when the current task
 6. Confirm the direction before creating architecture, scaffolding, or code.
 7. Build a `BrainstormSession` and run `validate_brainstorm_session`.
 8. If valid, call `build_architect_handoff` and pass the payload to the selected KH skill.
-9. When the user benefits from visible project notes, call `write_brainstorm_markdown_artifacts` so KH creates `.kh/brainstorm/.../content/*.md` and `docs/kh/brainstorm/*.md`.
+9. When the user benefits from visible project notes, call `write_brainstorm_markdown_artifacts` so KH creates `.kh/brainstorm/.../content/*.md`, `.kh/brainstorm/.../state/`, and `docs/kh/handoffs/*.md`.
 10. Preserve intermediate decisions in structured evidence rather than relying on chat memory alone.
 11. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 

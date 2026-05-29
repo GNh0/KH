@@ -172,7 +172,8 @@ def write_brainstorm_markdown_artifacts(
     session: BrainstormSession,
     run_id: str = "",
 ) -> Dict[str, str]:
-    return KHProjectMarkdownStore(project_dir).write_markdown(
+    store = KHProjectMarkdownStore(project_dir)
+    result = store.write_markdown(
         kind="brainstorm",
         title=f"KH Brainstorm - {session.objective[:80] or 'Session'}",
         body=render_brainstorm_markdown(session),
@@ -182,7 +183,18 @@ def write_brainstorm_markdown_artifacts(
             "skill": "brainstorming-harness",
             "next_skill": session.next_skill,
         },
+        doc_type="handoffs",
     )
+    state_result = store.write_state(
+        kind="brainstorm",
+        run_id=result["run_id"],
+        name="session",
+        payload={
+            "session": asdict(session),
+            "handoff": build_architect_handoff(session),
+        },
+    )
+    return {**result, **state_result}
 
 
 def _recommended_option(session: BrainstormSession) -> BrainstormOption | None:

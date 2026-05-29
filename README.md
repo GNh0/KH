@@ -38,10 +38,34 @@ KH UAF separates reusable skills from per-project workflow artifacts.
 - User-facing design and delivery artifacts should go under the target project's `docs/` folder.
 - Runtime state, goal ledger, memory candidates, snapshots, traces, and handoff metadata default to the external KH-UAF runtime store.
 - Set `UAF_PROJECT_LOCAL_STATE=1` when a project should carry its own `.uaf/` state for portable project memory or resume handoff.
-- Human-readable KH notes and handoffs can be written in the target project like Superpowers-style local artifacts: `.kh/<skill>/<run-id>/content/*.md` for KH working notes and `docs/kh/<skill>/*.md` for shareable Markdown summaries.
+- Human-readable KH notes and handoffs are written in the target project like Superpowers-style local artifacts: `.kh/<skill>/<run-id>/content/*.md` for KH working notes, `.kh/<skill>/<run-id>/state/*.json` for run-local state, and shareable Markdown under `docs/kh/specs/`, `docs/kh/plans/`, `docs/kh/decisions/`, `docs/kh/qa/`, or `docs/kh/handoffs/` by document type.
 - Git-backed implementation should prefer an isolated workspace by default. Use host worktrees when the host provides them; otherwise use project-local `.worktrees/<task>` or an isolated branch. Git worktrees should live under `.worktrees/` when KH creates project-local isolation. Use the current checkout only for docs-only edits, a single-file small patch, or explicit in-place user instruction, and report `workspace_strategy` in the final status.
 
-KH does not require `.superpowers/` or `docs/superpowers/` paths. If Superpowers is also installed, those folders are Superpowers-owned project artifacts; KH-owned runtime state should use `.uaf/`, KH local Markdown notes should use `.kh/`, and KH shareable deliverables should use `docs/kh/` or the task-specific `docs/` export path.
+KH does not require `.superpowers/` or `docs/superpowers/` paths. If Superpowers is also installed, those folders are Superpowers-owned project artifacts; KH-owned runtime state should use `.uaf/`, KH local run notes/state should use `.kh/`, and KH shareable deliverables should use `docs/kh/` or the task-specific `docs/` export path.
+
+KH local Markdown notes should use `.kh/`; KH shareable summaries should use `docs/kh/`; Superpowers-owned artifacts should remain in `.superpowers/` and `docs/superpowers/`.
+
+Recommended KH project artifact layout:
+
+```text
+<target-project>/
+  .kh/
+    brainstorm/<run-id>/
+      content/
+      state/
+    goal/<run-id>/
+      content/
+      state/
+  docs/
+    kh/
+      specs/
+      plans/
+      decisions/
+      qa/
+      handoffs/
+  .worktrees/
+    <task>/
+```
 
 ## Quick Start
 
@@ -132,7 +156,7 @@ KH UAF maps the compound-engineering loop into explicit skills:
 - Review: `review-gate-harness`, `qa-gate-harness`, `quality-gates-harness`, security checks, and release gates.
 - Compound: `compound-engineering-harness`, `workflow-skill-distiller`, `memory-state-harness`, `context-state-harness`, goal ledger updates, and SIDE/scenario regression captures.
 
-For heavy, multi-step, or evidence-gated work, create or refresh `GoalState` before execution and keep the goal ledger updated through review, QA, and release. For a new product, SaaS, feature, or unclear design request, start with `brainstorming-harness` before architecture or implementation and write visible Markdown handoffs under `.kh/` and `docs/kh/` when useful. After Plan, Work, and Review, run `compound-engineering-harness` when reusable learning, scoped memory candidates, or regression checks may be needed. For a completed workflow that reveals a reusable pattern, finish by distilling the pattern, adding scoped memory, or adding a regression scenario instead of leaving the learning only in chat.
+For heavy, multi-step, or evidence-gated work, create or refresh `GoalState` before execution and keep the goal ledger updated through review, QA, and release. For a new product, SaaS, feature, or unclear design request, start with `brainstorming-harness` before architecture or implementation and write visible run artifacts under `.kh/<skill>/<run-id>/content/` plus `.kh/<skill>/<run-id>/state/`, with shareable summaries under `docs/kh/handoffs/` or the relevant `docs/kh/<type>/` folder. After Plan, Work, and Review, run `compound-engineering-harness` when reusable learning, scoped memory candidates, or regression checks may be needed. For a completed workflow that reveals a reusable pattern, finish by distilling the pattern, adding scoped memory, or adding a scenario regression instead of leaving the learning only in chat.
 
 The ongoing Superpowers benchmark notes live in `docs/skillbook/audits/2026-05-30-superpowers-benchmark.md`.
 

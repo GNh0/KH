@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
+KH_DOC_TYPES = ("specs", "plans", "decisions", "qa", "handoffs")
 
 
 class KHProjectMarkdownStore:
@@ -25,12 +26,14 @@ class KHProjectMarkdownStore:
         run_id: str = "",
         metadata: Optional[Dict[str, Any]] = None,
         docs_copy: bool = True,
+        doc_type: str = "handoffs",
         local_root: str = ".kh",
         docs_root: str = "docs/kh",
     ) -> Dict[str, str]:
         safe_kind = _safe_segment(kind)
         safe_run_id = _safe_segment(run_id or _run_id())
         safe_slug = f"{_safe_segment(slug or title or safe_kind)}.md"
+        safe_doc_type = _safe_doc_type(doc_type)
         document = render_markdown_document(
             title=title,
             body=body,
@@ -41,15 +44,19 @@ class KHProjectMarkdownStore:
             },
         )
 
-        content_dir = self._project_path(local_root) / safe_kind / safe_run_id / "content"
+        run_dir = self._project_path(local_root) / safe_kind / safe_run_id
+        content_dir = run_dir / "content"
+        state_dir = run_dir / "state"
         content_path = content_dir / safe_slug
         self._assert_in_project(content_path)
         content_dir.mkdir(parents=True, exist_ok=True)
+        state_dir.mkdir(parents=True, exist_ok=True)
         content_path.write_text(document, encoding="utf-8")
 
         docs_path = Path("")
+        docs_dir = Path("")
         if docs_copy:
-            docs_dir = self._project_path(docs_root) / safe_kind
+            docs_dir = self._project_path(docs_root) / safe_doc_type
             docs_path = docs_dir / safe_slug
             self._assert_in_project(docs_path)
             docs_dir.mkdir(parents=True, exist_ok=True)
@@ -58,8 +65,39 @@ class KHProjectMarkdownStore:
         return {
             "kind": safe_kind,
             "run_id": safe_run_id,
+            "doc_type": safe_doc_type,
+            "content_dir": str(content_dir),
+            "state_dir": str(state_dir),
             "content_path": str(content_path),
+            "docs_dir": str(docs_dir) if docs_copy else "",
             "docs_path": str(docs_path) if docs_copy else "",
+            "workspace_strategy": "project-local-markdown",
+        }
+
+    def write_state(
+        self,
+        kind: str,
+        run_id: str,
+        name: str,
+        payload: Dict[str, Any],
+        local_root: str = ".kh",
+    ) -> Dict[str, str]:
+        safe_kind = _safe_segment(kind)
+        safe_run_id = _safe_segment(run_id or _run_id())
+        safe_name = f"{_safe_segment(name or 'state')}.json"
+        state_dir = self._project_path(local_root) / safe_kind / safe_run_id / "state"
+        state_path = state_dir / safe_name
+        self._assert_in_project(state_path)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        return {
+            "kind": safe_kind,
+            "run_id": safe_run_id,
+            "state_dir": str(state_dir),
+            "state_path": str(state_path),
             "workspace_strategy": "project-local-markdown",
         }
 
@@ -137,7 +175,8 @@ def write_goal_markdown_artifacts(
     run_id: str = "",
 ) -> Dict[str, str]:
     title = _goal_title(goal)
-    return KHProjectMarkdownStore(project_dir).write_markdown(
+    store = KHProjectMarkdownStore(project_dir)
+    result = store.write_markdown(
         kind="goal",
         title=title,
         body=render_goal_markdown(
@@ -151,7 +190,19 @@ def write_goal_markdown_artifacts(
             "skill": "goal-state-harness",
             "status": goal.get("status", "active"),
         },
+        doc_type="handoffs",
     )
+    state_result = store.write_state(
+        kind="goal",
+        run_id=result["run_id"],
+        name="goal",
+        payload={
+            "goal": goal,
+            "active_task": active_task,
+            "next_recommended_action": next_recommended_action,
+        },
+    )
+    return {**result, **state_result}
 
 
 def _goal_title(goal: Dict[str, Any]) -> str:
@@ -185,6 +236,13 @@ def _safe_key(value: str) -> str:
 def _safe_segment(value: str) -> str:
     segment = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip().lower())
     return segment.strip(".-") or "artifact"
+
+
+def _safe_doc_type(value: str) -> str:
+    doc_type = _safe_segment(value or "handoffs")
+    if doc_type not in KH_DOC_TYPES:
+        raise ValueError(f"unsupported KH docs type: {value}")
+    return doc_type
 
 
 def _run_id() -> str:

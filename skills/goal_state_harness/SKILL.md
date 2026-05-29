@@ -31,7 +31,7 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 5. Persist resumable goal state to the project/chat-scoped runtime `.uaf/state/current_goal.json`.
 6. Append goal lifecycle events to the runtime `.uaf/state/goal_events.jsonl`.
 7. Write runtime `.uaf/state/resume_handoff.json` and `.uaf/state/resume_handoff.md` after the evaluated goal is saved.
-8. Write human-readable KH Markdown summaries under `.kh/goal/<run-id>/content/` and `docs/kh/goal/` when project Markdown artifacts are enabled.
+8. Write human-readable KH summaries under `.kh/goal/<run-id>/content/`, run-local state under `.kh/goal/<run-id>/state/`, and shareable summaries under `docs/kh/handoffs/` when project artifacts are enabled.
 9. Add richer evidence as checks, reviews, QA, or release gates run.
 10. Use `GoalState.metadata.evidence_aliases` when host-specific tools emit equivalent evidence keys with different names.
 11. Mark a goal `complete` only when success criteria and required evidence are satisfied.
@@ -49,7 +49,7 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 - `metadata.evidence_alias_matches`: required evidence keys satisfied by an accepted alias.
 - `goal_ledger`: paths to the project/chat-scoped current goal and event log.
 - `resume_handoff`: paths and snapshot for continuing from runtime state without prior chat context.
-- `project_markdown`: visible project-local Markdown paths for `.kh/goal/...` and `docs/kh/goal/...` when written.
+- `project_markdown`: visible project-local paths for `.kh/goal/.../content/`, `.kh/goal/.../state/`, and `docs/kh/handoffs/` when written.
 
 ## Runtime storage rule
 
