@@ -36,6 +36,20 @@ from src.orchestration.gate_evaluators import (
 )
 from src.orchestration.quality_harnesses import audit_role_execution
 from src.orchestration.request_classifier import classify_request
+from src.orchestration.brainstorming import (
+    BrainstormDecision,
+    BrainstormOption,
+    BrainstormSession,
+    build_architect_handoff,
+    validate_brainstorm_session,
+)
+from src.orchestration.compound import (
+    CompoundCapture,
+    CompoundLearning,
+    CompoundMemoryCandidate,
+    build_compound_handoff,
+    validate_compound_capture,
+)
 from src.orchestration.scenario_evaluator import (
     build_scenario_report,
     default_scenarios,
@@ -183,6 +197,10 @@ def main(default_skill_name: str | None = None) -> int:
 
 
 def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]]:
+    if skill_name == "brainstorming-harness":
+        return _brainstorming_scenario
+    if skill_name == "compound-engineering-harness":
+        return _compound_engineering_scenario
     if skill_name == "adapter-contract-harness":
         return _adapter_scenario
     if skill_name in COMMAND_SKILLS:
@@ -202,6 +220,157 @@ def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]
             return _scenario_evaluation_scenario
         return _routing_scenario
     return _gate_scenario
+
+
+def _brainstorming_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    session = BrainstormSession(
+        objective="Build a small B2B CRM SaaS MVP.",
+        target_user="Small B2B sales teams",
+        problem="Deals and follow-ups are scattered across spreadsheets.",
+        options=[
+            BrainstormOption(
+                name="Pipeline-first CRM",
+                tradeoffs=["fastest MVP", "tasks and reporting can follow"],
+                recommended=True,
+                rationale="A deal pipeline is the clearest CRM core loop.",
+            ),
+            BrainstormOption(
+                name="Reporting-first CRM",
+                tradeoffs=["useful dashboards", "requires more data before value is visible"],
+            ),
+        ],
+        decisions=[
+            BrainstormDecision("product_name", "PipePilot", "Short, pipeline-oriented SaaS name."),
+            BrainstormDecision("mvp_focus", "deal pipeline", "Best validates the CRM workflow quickly."),
+        ],
+        open_questions=["Select auth provider during architecture."],
+        constraints=["private GitHub repo", "full-stack TypeScript MVP"],
+        metadata={"source_pattern": "Superpowers brainstorming adapted for KH UAF"},
+    )
+    validation = validate_brainstorm_session(session)
+    handoff = build_architect_handoff(session)
+    blocked = build_architect_handoff(
+        BrainstormSession(
+            objective="Build a SaaS.",
+            options=[BrainstormOption(name="Option A")],
+        )
+    )
+    dispatch = _dispatch_for(skill_name, [validation], success=validation["valid"])
+    handoff_path = output_dir / "brainstorm_handoff.json"
+    handoff_path.write_text(json.dumps(handoff, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    contracts = [
+        _dataclass_contract(session),
+        _dataclass_contract(dispatch),
+        _mapping_contract("BrainstormValidation", "src.orchestration.brainstorming", validation, "policy-result"),
+        _mapping_contract("BrainstormHandoff", "src.orchestration.brainstorming", handoff, "policy-result"),
+    ]
+    return _scenario_result(
+        success_contract="BrainstormHandoff",
+        success_payload=handoff,
+        success_evidence=handoff["evidence"],
+        success_behavior="Capture early product intent, compare approaches, preserve decisions, and hand off to architect-pipeline.",
+        success_side_effects=["writes brainstorm_handoff.json under the demo output directory"],
+        blocked_contract="BrainstormHandoff",
+        blocked_payload=blocked,
+        blocked_reason=blocked["blocked_reason"],
+        missing_inputs=["target_user", "problem", "recommended_option", "decisions"],
+        contracts=contracts,
+        artifacts=[
+            _artifact_record_from_file(
+                handoff_path,
+                "brainstorm-handoff-json",
+                output_dir,
+                ["json readable", "architect handoff captured"],
+                created_by_case="success",
+            )
+        ],
+    )
+
+
+def _compound_engineering_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    capture = CompoundCapture(
+        objective="Improve early SaaS discovery behavior.",
+        completed_work=[
+            "Added KH-native brainstorming handoff and SIDE activation coverage.",
+            "Documented Plan -> Work -> Review -> Compound as the KH loop.",
+        ],
+        review_findings=[
+            "External skillbook patterns should be benchmarked, but KH needs explicit scoped learning.",
+        ],
+        learnings=[
+            CompoundLearning(
+                title="Run KH Compound after review",
+                trigger="Meaningful Plan, Work, and Review activity just finished",
+                reusable_insight="Capture reusable lessons as skill updates, scoped memory candidates, or regression checks.",
+                evidence=["review_summary", "regression_check_plan"],
+                tags=["compound", "memory", "regression"],
+                target_update="compound-engineering-harness",
+            )
+        ],
+        system_updates=[
+            "Keep plugin prompts pointing to compound-engineering-harness after review.",
+            "Route project-specific lessons through memory-state-harness candidates.",
+        ],
+        regression_checks=[
+            "python -m unittest tests.test_compound_engineering_harness",
+            "python -m unittest tests.test_superpowers_benchmark_alignment",
+        ],
+        memory_candidates=[
+            CompoundMemoryCandidate(
+                scope="project",
+                content="For repeated project workflow lessons, use KH compound-engineering-harness before finishing.",
+                evidence=["compound_capture", "review_summary"],
+                confidence=0.86,
+            )
+        ],
+        next_skills=[
+            "workflow-skill-distiller",
+            "memory-state-harness",
+            "scenario-evaluation-harness",
+        ],
+        source_references=["Superpowers", "external role-stack benchmark", "external compound engineering"],
+    )
+    validation = validate_compound_capture(capture)
+    handoff = build_compound_handoff(capture)
+    blocked = build_compound_handoff(
+        CompoundCapture(
+            objective="Ship a small feature.",
+            completed_work=["Implementation and review finished."],
+            review_findings=["A repeated mistake was found but not captured."],
+        )
+    )
+    dispatch = _dispatch_for(skill_name, [validation], success=validation["valid"])
+    handoff_path = output_dir / "compound_handoff.json"
+    handoff_path.write_text(json.dumps(handoff, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    contracts = [
+        _dataclass_contract(capture),
+        _dataclass_contract(capture.learnings[0]),
+        _dataclass_contract(capture.memory_candidates[0]),
+        _dataclass_contract(dispatch),
+        _mapping_contract("CompoundValidation", "src.orchestration.compound", validation, "policy-result"),
+        _mapping_contract("CompoundHandoff", "src.orchestration.compound", handoff, "policy-result"),
+    ]
+    return _scenario_result(
+        success_contract="CompoundHandoff",
+        success_payload=handoff,
+        success_evidence=handoff["evidence"],
+        success_behavior="Capture post-review learning, scoped memory candidates, and regression checks before finishing.",
+        success_side_effects=["writes compound_handoff.json under the demo output directory"],
+        blocked_contract="CompoundHandoff",
+        blocked_payload=blocked,
+        blocked_reason=blocked["blocked_reason"],
+        missing_inputs=["learning_or_no_learning_rationale"],
+        contracts=contracts,
+        artifacts=[
+            _artifact_record_from_file(
+                handoff_path,
+                "compound-handoff-json",
+                output_dir,
+                ["json readable", "compound handoff captured"],
+                created_by_case="success",
+            )
+        ],
+    )
 
 
 def _adapter_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:

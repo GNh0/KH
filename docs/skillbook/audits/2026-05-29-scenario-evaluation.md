@@ -37,7 +37,7 @@ The first broad stress loops were useful as deterministic routing pressure, but 
 
 The all-skill SIDE transcript smoke covers every packaged KH skill/harness:
 
-- Packaged skills/harnesses covered: 29
+- Packaged skills/harnesses covered: 31
 - Conversations: 8
 - Multi-turn conversations: 8
 - Signal categories: `catalog`, `evidence`, `assistant_policy`, `token_usage`
@@ -65,14 +65,14 @@ Latest all-skill SIDE smoke summary:
 
 ```json
 {
-  "total": 29,
-  "passed": 29,
+  "total": 31,
+  "passed": 31,
   "failed": 0,
-  "skill_count": 29,
-  "catalog_skill_count": 29,
+  "skill_count": 31,
+  "catalog_skill_count": 31,
   "conversation_count": 8,
   "multi_turn_conversation_count": 8,
-  "meaningful_signal_count": 88,
+  "meaningful_signal_count": 94,
   "token_usage": {
     "without_token_optimizer": 830,
     "with_token_optimizer": 53,
@@ -86,26 +86,26 @@ Latest live-style SIDE stress summary:
 
 ```json
 {
-  "total": 72,
-  "passed": 72,
+  "total": 76,
+  "passed": 76,
   "failed": 0,
-  "skill_count": 29,
+  "skill_count": 31,
   "conversation_count": 14,
   "multi_turn_conversation_count": 14,
   "min_turns_per_conversation": 3,
-  "max_turns_per_conversation": 10,
+  "max_turns_per_conversation": 11,
   "multi_skill_turn_count": 3,
   "route_counts": {
     "skill_call": 51,
-    "workflow_harness": 19,
+    "workflow_harness": 23,
     "procedure_policy": 2
   },
   "execution_level_counts": {
     "python-module": 51,
-    "hybrid-harness": 19,
+    "hybrid-harness": 23,
     "procedure-policy": 2
   },
-  "meaningful_signal_count": 221,
+  "meaningful_signal_count": 233,
   "token_usage": {
     "case_count": 5,
     "without_token_optimizer": 5783,

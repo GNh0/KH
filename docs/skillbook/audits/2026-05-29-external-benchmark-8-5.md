@@ -26,9 +26,11 @@ This audit scores KH UAF skills against external high-quality skillbooks, not ag
 | --- | ---: | --- |
 | adapter-contract-harness | 8.6 | Adapter recipe now covers request/result shape, pending path, metadata preservation, and host-unavailable smoke expectation. |
 | architect-pipeline | 8.6 | Cohesive pipeline recipe now covers objective capture, output bundle inspection, design rejection, and docs/runtime boundary. |
+| brainstorming-harness | 8.7 | Superpowers brainstorming is adapted into a KH-native discovery, option comparison, decision log, and architect handoff contract. |
 | artifact-render-qa-harness | 8.7 | Render QA now has package-part checks, malformed artifact pressure case, and per-file finding expectations. |
 | command-hook-policy-harness | 8.6 | Command firewall recipe now covers classify/load/evaluate/rewrite/audit with secret redaction and ambiguity handling. |
 | command-output-harness | 8.8 | Runtime preserves required failure facts, exit code, savings metadata, and fallback behavior. |
+| compound-engineering-harness | 8.7 | Explicit Compound step captures review learning, scoped memory candidates, system updates, and regression checks after Plan/Work/Review. |
 | context-state-harness | 8.5 | Resume recipe now covers handoff JSON/Markdown, git-state validation, stale context handling, and superseded instructions. |
 | deliverable-template-quality-harness | 8.6 | Artifact-type policy and pressure case now distinguish readable files from template-complete files. |
 | development-lifecycle-harness | 8.5 | Lifecycle now has a Superpowers-style execution guard with plan, RED/smoke evidence, verification, and integration state. |
@@ -56,9 +58,9 @@ This audit scores KH UAF skills against external high-quality skillbooks, not ag
 
 ## Result
 
-- Skills reviewed: 29
+- Skills reviewed: 31
 - Minimum external score: 8.5
-- Average external score: 8.58
+- Average external score: 8.60
 - Highest external score: 8.8
 - Low-score skills below 8.5: none
 

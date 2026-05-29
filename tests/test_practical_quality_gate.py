@@ -10,7 +10,7 @@ class PracticalQualityGateTests(unittest.TestCase):
             "success": True,
             "lowest_quality_score": 10.0,
             "low_quality_skills": [],
-            "total_skills": 29,
+            "total_skills": 31,
         }
         bench_report = {
             "benchmark": "KH-Bench Verified",
@@ -53,7 +53,7 @@ class PracticalQualityGateTests(unittest.TestCase):
             "success": True,
             "lowest_quality_score": 10.0,
             "low_quality_skills": [],
-            "total_skills": 29,
+            "total_skills": 31,
         }
         bench_report = {
             "benchmark": "KH-Bench Verified",

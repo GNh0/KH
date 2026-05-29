@@ -14,9 +14,11 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 
 ## What It Includes
 
-- 29 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 31 packaged skills/harnesses with support files, smoke checks, and runnable demos.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
+- `brainstorming-harness` for early product/project discovery and KH handoff before architecture or implementation.
+- `compound-engineering-harness` for mandatory post-review learning capture, scoped memory candidates, system updates, and regression checks.
 - DAG role orchestration with CEO, advisor, architect, planner, controller, implementer, reviewers, QA, security, and release roles.
 - Bounded local workflow dispatch with review, QA, security, release, and evidence gates.
 - Goal state, scoped memory, resume handoff, snapshots, and runtime state.
@@ -27,6 +29,18 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 - `scenario-evaluation-harness`, a deterministic SIDE-style loop for request routing, evidence, gate, and resume behavior.
 
 By default, user-facing files are written to the target project, while UAF runtime state is written outside the project root under the KH-UAF runtime store. Set `UAF_PROJECT_LOCAL_STATE=1` only when you explicitly want `.uaf` and snapshot state inside the project.
+
+## Project-Local Artifacts
+
+KH UAF separates reusable skills from per-project workflow artifacts.
+
+- Reusable KH skills live in the KH checkout or installed plugin cache, not inside every target project.
+- User-facing design and delivery artifacts should go under the target project's `docs/` folder.
+- Runtime state, goal ledger, memory candidates, snapshots, traces, and handoff metadata default to the external KH-UAF runtime store.
+- Set `UAF_PROJECT_LOCAL_STATE=1` when a project should carry its own `.uaf/` state for portable project memory or resume handoff.
+- Git worktrees should live under `.worktrees/` when isolated implementation or parallel file-editing workers are useful.
+
+KH does not require `.superpowers/` or `docs/superpowers/` paths. If Superpowers is also installed, those folders are Superpowers-owned project artifacts; KH-owned local state should use `.uaf/` and KH deliverables should use `docs/`.
 
 ## Quick Start
 
@@ -107,6 +121,19 @@ cli.py run
   -> user-facing docs under docs/
   -> UAF state, memory, snapshots, role artifacts, and handoff under runtime state
 ```
+
+## KH Loop
+
+KH UAF maps the compound-engineering loop into explicit skills:
+
+- Plan: `brainstorming-harness`, `architect-pipeline`, `domain-orchestration-harness`, and `goal-state-harness`.
+- Work: `development-lifecycle-harness`, adapter contracts, role DAG execution, and bounded workflow dispatch.
+- Review: `review-gate-harness`, `qa-gate-harness`, `quality-gates-harness`, security checks, and release gates.
+- Compound: `compound-engineering-harness`, `workflow-skill-distiller`, `memory-state-harness`, `context-state-harness`, goal ledger updates, and SIDE/scenario regression captures.
+
+For a new product, SaaS, feature, or unclear design request, start with `brainstorming-harness` before architecture or implementation. After Plan, Work, and Review, run `compound-engineering-harness` when reusable learning, scoped memory candidates, or regression checks may be needed. For a completed workflow that reveals a reusable pattern, finish by distilling the pattern, adding scoped memory, or adding a regression scenario instead of leaving the learning only in chat.
+
+The ongoing Superpowers benchmark notes live in `docs/skillbook/audits/2026-05-30-superpowers-benchmark.md`.
 
 ## Deliverables
 

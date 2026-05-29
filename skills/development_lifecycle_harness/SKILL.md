@@ -5,7 +5,7 @@ description: Use when running UAF development work through design, isolated work
 
 # Development Lifecycle Harness
 
-This is a personal UAF development workflow. It packages the useful planning, TDD, review, and branch-finishing methodology without requiring any external workflow plugin at runtime.
+This is a personal UAF development workflow. It packages the useful Plan -> Work -> Review loop with TDD, verification, and branch finishing without requiring any external workflow plugin at runtime. When the work produces a reusable lesson, hand off to `workflow-skill-distiller` for the Compound step.
 
 ## Support files
 
@@ -21,18 +21,20 @@ This is a personal UAF development workflow. It packages the useful planning, TD
 ## Workflow
 
 1. Clarify the intended outcome and constraints before changing behavior.
-2. Create or select an isolated workspace when the task can disturb unrelated work.
+2. Create or select an isolated workspace when the task can disturb unrelated work; for parallel edits prefer project-local `.worktrees/<task-or-branch>` or an equivalent isolated workspace.
 3. Write a short implementation plan for multi-step work with exact files, tests, and verification commands.
 4. For behavior changes, add or update a failing test before production edits.
 5. Implement the smallest change that satisfies the test and the user requirement.
 6. Review for scope drift, missing requirements, and risky integration points.
 7. Run fresh verification before claiming completion or committing.
 8. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
+9. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
 
 ## Gate checks
 
 - No broad refactor unless the plan requires it.
 - No completion claim without fresh verification output.
+- No concurrent file-editing workers in one mutable checkout without a non-overlap proof.
 - No branch finishing until the working tree diff matches the requested scope.
 
 ## External Benchmark Recipe
@@ -53,6 +55,7 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - Failing-first test or smoke evidence for behavior changes when practical.
 - Review findings or an explicit no-findings review note.
 - Fresh verification output and final integration status: local only, committed, pushed, or PR-ready.
+- Compound note, distilled skill candidate, scenario regression, or explicit no-reusable-learning rationale when the work produced a repeatable lesson.
 
 ## Common mistakes
 

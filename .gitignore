@@ -5,4 +5,5 @@ __pycache__/
 venv/
 .snapshots/
 .uaf/
+.worktrees/
 .demo-output/

@@ -19,7 +19,9 @@ CORE_SKILLS = {
     "adapter-contract-harness",
     "artifact-render-qa-harness",
     "architect-pipeline",
+    "brainstorming-harness",
     "command-hook-policy-harness",
+    "compound-engineering-harness",
     "development-lifecycle-harness",
     "deliverable-template-quality-harness",
     "context-state-harness",
@@ -177,6 +179,8 @@ class UafSkillCatalogTests(unittest.TestCase):
     def test_reference_derived_harnesses_are_uaf_native(self):
         expected_sources = {
             "development-lifecycle-harness": "Personal skillbook",
+            "brainstorming-harness": "Superpowers brainstorming",
+            "compound-engineering-harness": "compound engineering",
             "domain-orchestration-harness": "domain orchestration",
             "host-agent-orchestration": "host orchestration",
             "subagent-review-pipeline": "Personal subagent",

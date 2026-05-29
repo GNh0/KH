@@ -7,9 +7,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTERNAL_BENCHMARK_TARGETS = [
     "adapter_contract_harness",
     "architect_pipeline",
+    "brainstorming_harness",
     "artifact_render_qa_harness",
     "command_hook_policy_harness",
     "command_output_harness",
+    "compound_engineering_harness",
     "context_state_harness",
     "deliverable_template_quality_harness",
     "development_lifecycle_harness",

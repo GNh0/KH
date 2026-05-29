@@ -1,0 +1,66 @@
+# Brainstorming Harness Usage Reference
+
+This reference expands the portable operating contract for `brainstorming-harness`. Read it when KH UAF needs to turn an early idea into a structured design handoff before architecture, domain orchestration, or implementation.
+
+## When to use
+
+Use when a user is starting a feature, product, project, or design idea and the agent must clarify intent, compare approaches, and produce an approved handoff before implementation.
+
+Context summary: this is the KH UAF version of Superpowers brainstorming. It keeps the useful interaction pattern but changes the storage, handoff, and next-step contracts to KH. The output is not a Superpowers spec. It is a KH `BrainstormSession` plus handoff evidence for the next UAF skill.
+
+Do not use this skill only because it is available. Use it when the current task needs discovery before design or implementation, and state whether the skill was actually executed, applied procedurally, or only considered.
+
+## Inputs to collect
+
+- User objective and what success should look like.
+- Target user, buyer, operator, or audience.
+- Problem being solved and current pain.
+- 2-3 possible approaches with tradeoffs.
+- Recommended approach and why.
+- Constraints such as budget, stack, timeline, privacy, repo, deployment, or compliance.
+- Decisions already approved by the user.
+- Open questions that should remain visible for the architect or domain workflow.
+- Execution level: `hybrid-harness`.
+- Implementation targets:
+  - `src.orchestration.brainstorming.BrainstormOption`
+  - `src.orchestration.brainstorming.BrainstormDecision`
+  - `src.orchestration.brainstorming.BrainstormSession`
+  - `src.orchestration.brainstorming.validate_brainstorm_session`
+  - `src.orchestration.brainstorming.build_architect_handoff`
+  - `tests.test_brainstorming_harness`
+  - `skills/brainstorming_harness/SKILL.md`
+
+## Execution pattern
+
+1. Read `SKILL.md` first and confirm the trigger applies.
+2. Inspect project context if a repository already exists.
+3. Ask one question at a time. Prefer multiple-choice options when that reduces friction.
+4. Offer visual companion only when seeing a layout, diagram, or comparison is better than reading text.
+5. Present 2-3 approaches with tradeoffs and a recommendation.
+6. Confirm the direction before creating architecture, scaffolding, or code.
+7. Build a `BrainstormSession` and run `validate_brainstorm_session`.
+8. If valid, call `build_architect_handoff` and pass the payload to the selected KH skill.
+9. Preserve intermediate decisions in structured evidence rather than relying on chat memory alone.
+10. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+
+## Evidence to produce
+
+- Skill name and execution level used for the run.
+- User objective, target user, problem, constraints, and success criteria.
+- Options considered and tradeoffs.
+- Recommendation and approved decisions.
+- `BrainstormSession` validation result.
+- Handoff target, usually `architect-pipeline`.
+- Verification command or review evidence when validating the packaged skill itself.
+
+## Failure handling
+
+- If no target user or problem is known, keep asking clarifying questions instead of claiming a handoff is complete.
+- If no option is recommended, block handoff and record `recommended_option` as missing.
+- If the user rejects the proposed direction, update decisions and rerun validation.
+- If the task is too broad for one design, decompose it and brainstorm only the first project slice.
+- If visual artifacts are created, record what decision they supported and avoid leaving orphan mockups.
+
+## Quality bar
+
+A valid use of `brainstorming-harness` must leave enough evidence for another agent to answer: what idea was explored, what alternatives were considered, what the user approved, what constraints apply, what is unresolved, and which KH skill should receive the handoff next.

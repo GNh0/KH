@@ -20,6 +20,8 @@ CORE_PRODUCTION_QUALITY_SCORE = 9.0
 CORE_PRODUCTION_SKILLS = {
     "adapter-contract-harness",
     "artifact-render-qa-harness",
+    "brainstorming-harness",
+    "compound-engineering-harness",
     "deliverable-template-quality-harness",
     "domain-orchestration-harness",
     "goal-state-harness",

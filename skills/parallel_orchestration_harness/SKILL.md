@@ -17,12 +17,13 @@ This is the portable UAF replacement for host and personal skillbook parallel di
 ## Workflow
 
 1. Split the project goal into role responsibilities and independent work items.
-2. Build a role dependency DAG from the default or supplied role profiles.
-3. Run all dependency-ready role tasks in the same wave concurrently.
-4. Enqueue file/task work with a bounded worker count.
-5. Dispatch each item through an adapter contract.
-6. Collect all `WorkflowTaskResult` or `AdapterResult` values before reporting completion.
-7. Preserve partial failures and blocked roles as structured results instead of hiding them in logs.
+2. Decide isolation before dispatch: use project-local `.worktrees/<task-or-branch>` or a separate branch/workspace when parallel workers may edit files.
+3. Build a role dependency DAG from the default or supplied role profiles.
+4. Run all dependency-ready role tasks in the same wave concurrently.
+5. Enqueue file/task work with a bounded worker count.
+6. Dispatch each item through an adapter contract.
+7. Collect all `WorkflowTaskResult` or `AdapterResult` values before reporting completion.
+8. Preserve partial failures and blocked roles as structured results instead of hiding them in logs.
 
 ## Required metadata
 
@@ -31,22 +32,26 @@ This is the portable UAF replacement for host and personal skillbook parallel di
 - `role_orchestration_stages[].waves[]`
 - `role_task_results[]`
 - per-result `metadata.execution_model = parallel-role-stage`
+- `isolation.workspace_strategy` when workers edit files: `same-worktree-readonly`, `isolated-branch`, `project-local-worktree`, or `external-workspace`
+- `isolation.worktree_root = .worktrees` when project-local worktrees are used
 
 ## External Benchmark Recipe
 
 Use this harness only when work is actually independent:
 
 1. Identify independent role or file tasks and shared-state conflicts before dispatch.
-2. Run dependency-ready role waves with `asyncio.create_task(...)`.
-3. Run file/task work through a bounded queue and worker count.
-4. Fan in every result before completion.
-5. Preserve partial failures and blocked records in the aggregate.
+2. Choose the isolation strategy. For concurrent edits, prefer project-local `.worktrees/<task>` or an equivalent isolated workspace.
+3. Run dependency-ready role waves with `asyncio.create_task(...)`.
+4. Run file/task work through a bounded queue and worker count.
+5. Fan in every result before completion.
+6. Preserve partial failures and blocked records in the aggregate.
 
-Pressure scenario: if the implementation loops over tasks sequentially, the result may be valid work but must not be reported as parallel orchestration.
+Pressure scenario: if multiple workers edit the same checkout without an isolation plan, the result may be useful work but must not be reported as safe parallel orchestration.
 
 ## Required outputs
 
 - Bounded worker count and queue size for file/task fan-out.
+- Isolation strategy and worktree/branch/workspace paths when workers can write files.
 - Role DAG wave summary showing which roles ran concurrently.
 - Aggregated task results with success, failure, and blocked states preserved.
 - Evidence that all queued work was drained before completion was reported.
@@ -56,6 +61,7 @@ Pressure scenario: if the implementation loops over tasks sequentially, the resu
 - Do not call sequential loops parallel because the code could support parallelism.
 - Do not let one failed worker disappear from the final aggregate result.
 - Do not spawn unbounded workers from user-provided file counts.
+- Do not run concurrent file edits in one mutable checkout unless the tasks are proven non-overlapping.
 - Do not report completion before fan-in has collected every role and worker result.
 
 ## UAF implementation targets

@@ -41,7 +41,8 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 3. Run spec review first; send any gap back to implementation.
 4. Run quality review only after spec compliance passes.
 5. Preserve every reviewer finding in the aggregated result.
-6. Run final review across the combined implementation before finishing.
+6. When implementers can edit files concurrently, isolate them with `.worktrees/<task>`, an isolated branch, or a host-provided equivalent workspace.
+7. Run final review across the combined implementation before finishing.
 
 ## External Benchmark Recipe
 
@@ -58,6 +59,8 @@ Pressure scenario: if an implementer says "done" but did not report changed file
 ## Required outputs
 
 - Implementer result per bounded task with status, changed files, checks, and evidence.
+- Context packet per implementer that is self-contained and excludes unrelated session history.
+- Isolation evidence when two or more implementers can write files.
 - Spec-reviewer result for each implementer output before quality review.
 - Code-quality-reviewer result with findings, severity, and suggested fix.
 - Controller aggregate that preserves `success`, `failed`, `blocked`, and optional reviewer substatus metadata.
@@ -65,6 +68,7 @@ Pressure scenario: if an implementer says "done" but did not report changed file
 ## Common mistakes
 
 - Do not let implementers share hidden state that reviewers cannot inspect.
+- Do not dispatch concurrent implementers into the same mutable checkout unless the write set is proven non-overlapping.
 - Do not skip spec review because code quality looks good.
 - Do not flatten reviewer findings into a vague summary.
 - Do not mark blocked tasks as failed implementation without identifying the blocker category.

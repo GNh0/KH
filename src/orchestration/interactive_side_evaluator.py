@@ -218,6 +218,16 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         _skill_turn(
             "design-deliverables",
             2,
+            "Before the design stage, clarify the product direction and compare a few approaches.",
+            "Use brainstorming harness first: ask one focused question at a time, compare options, capture decisions, and produce a handoff to architect-pipeline.",
+            "brainstorming-harness",
+            ["brainstorm_handoff", "decision_log", "recommended_option"],
+            "workflow_harness",
+            ["brainstorm", "handoff"],
+        ),
+        _skill_turn(
+            "design-deliverables",
+            3,
             "It may involve engineering, procurement, safety, and compliance reviewers.",
             "Use domain orchestration: define domain roles, persist design artifacts and deliverables, then route through risk, policy, QA/QC, and final decision gates.",
             "domain-orchestration-harness",
@@ -227,7 +237,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "design-deliverables",
-            3,
+            4,
             "Map requirements to deliverables, evidence keys, and review gates.",
             "Build a traceability matrix that links requirements to deliverables, evidence keys, owner roles, and review gates without exposing internal spreadsheets.",
             "traceability-matrix-harness",
@@ -237,7 +247,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "design-deliverables",
-            4,
+            5,
             "Now check the final user-facing document template for missing required sections.",
             "Run deliverable template quality checks for required sections, evidence-backed claims, and completion status before presenting the deliverable.",
             "deliverable-template-quality-harness",
@@ -414,6 +424,16 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         _skill_turn(
             "routing-evaluation",
             3,
+            "The work passed review; now capture what the system should learn for next time.",
+            "Use compound engineering to record review learning, scoped memory candidates, system updates, and regression checks before finishing.",
+            "compound-engineering-harness",
+            ["compound_capture", "memory_candidates", "regression_check_plan"],
+            "workflow_harness",
+            ["compound", "memory"],
+        ),
+        _skill_turn(
+            "routing-evaluation",
+            4,
             "We keep repeating this workflow; turn it into a reusable skill folder.",
             "Use workflow skill distillation to identify the repeatable workflow, extract contracts, and scaffold a reusable skill with examples and smoke checks.",
             "workflow-skill-distiller",
@@ -423,7 +443,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            4,
+            5,
             "Show the CEO, advisor, architect, implementer, QA, security, and release roles for this workflow.",
             "Use the orchestration role graph to inspect roles, handoffs, ownership, and required artifacts across CEO, advisors, architect, implementers, reviewers, QA, security, and release.",
             "orchestration-role-graph",
@@ -627,24 +647,30 @@ def _stress_skill_side_extras() -> List[SkillSideTurn]:
     ))
     add(_skill_turn(
         "live-routing-growth", 3,
+        "This review exposed a reusable lesson; make it survive into future sessions.",
+        "Use compound engineering to capture the learning, scoped memory candidate, system update plan, and regression check plan.",
+        "compound-engineering-harness", ["compound_capture", "memory_candidates"], "workflow_harness", ["compound", "memory"],
+    ))
+    add(_skill_turn(
+        "live-routing-growth", 4,
         "This repeated workflow should become a reusable skill.",
         "Use workflow skill distiller to extract the repeatable workflow and scaffold a skill with examples and smoke checks.",
         "workflow-skill-distiller", ["repeatable_workflow", "skill_scaffold"], "skill_call", ["workflow", "skill"],
     ))
     add(_skill_turn(
-        "live-routing-growth", 4,
+        "live-routing-growth", 5,
         "Inspect the selected skill details before executing.",
         "Use the skill catalog to read packaged skill metadata and exact trigger text before applying it.",
         "skill-catalog", ["list_skills", "read_skill"], "skill_call", ["catalog", "read"],
     ))
     add(_skill_turn(
-        "live-routing-growth", 5,
+        "live-routing-growth", 6,
         "Verify a small Python harness before claiming it works.",
         "Use harness evaluator for syntax, runtime, and module verification evidence.",
         "harness-evaluator", ["syntax_check", "runtime_check"], "skill_call", ["syntax", "runtime"],
     ))
     add(_skill_turn(
-        "live-routing-growth", 6,
+        "live-routing-growth", 7,
         "Compress a repeated scenario trace but keep useful findings.",
         "Use token optimizer to preserve findings while reporting token savings for the trace.",
         "token-optimizer", ["token_savings", "preserved_facts"], "skill_call", ["token", "findings"],
@@ -707,6 +733,12 @@ def _stress_skill_side_extras() -> List[SkillSideTurn]:
     ))
     add(_skill_turn(
         "live-role-graph-long", 10,
+        "Capture reusable review and QA lessons before finishing this branch.",
+        "Use compound engineering to turn review outcomes into scoped learning, memory candidates, and regression checks.",
+        "compound-engineering-harness", ["compound_capture", "regression_check_plan"], "workflow_harness", ["compound", "regression"],
+    ))
+    add(_skill_turn(
+        "live-role-graph-long", 11,
         "Turn this repeated review workflow into a skill later.",
         "Use workflow skill distiller to capture repeatable workflow steps, examples, and smoke checks.",
         "workflow-skill-distiller", ["repeatable_workflow", "skill_scaffold"], "skill_call", ["workflow", "skill"],

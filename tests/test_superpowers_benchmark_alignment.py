@@ -1,0 +1,97 @@
+import json
+import unittest
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def read_text(relative_path: str) -> str:
+    return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
+    def test_benchmark_note_records_adopt_and_do_not_copy_boundaries(self):
+        text = read_text("docs/skillbook/audits/2026-05-30-superpowers-benchmark.md")
+
+        for expected in [
+            "Strong front-door triggers",
+            "One-question-at-a-time discovery",
+            "TDD and verification-before-completion",
+            "Subagent review discipline",
+            "Compound engineering",
+            "Worktree isolation",
+            "Role-Stack Benchmark Coverage",
+            "Office-hours style discovery before commitment",
+            "CEO and advisor plan challenge",
+            "Engineering, design, and developer-experience plan reviews",
+            "Browser, QA, and release checks",
+            "Security officer and safety guardrails",
+            "Learn, retro, and project memory",
+            "Cross-model or second-opinion review",
+            "Continuous checkpoint and restore",
+            "Do not require `.superpowers/` paths",
+            "Current 2.9.4 Changes",
+        ]:
+            self.assertIn(expected, text)
+
+    def test_project_local_artifacts_policy_keeps_kh_and_superpowers_paths_separate(self):
+        readme = read_text("README.md")
+        gitignore = read_text(".gitignore")
+
+        self.assertIn("KH does not require `.superpowers/`", readme)
+        self.assertIn("KH-owned local state should use `.uaf/`", readme)
+        self.assertIn("Git worktrees should live under `.worktrees/`", readme)
+        self.assertIn(".worktrees/", gitignore)
+
+    def test_front_door_brainstorming_is_kh_native_and_trigger_focused(self):
+        skill = read_text("skills/brainstorming_harness/SKILL.md")
+
+        self.assertIn("SaaS", skill)
+        self.assertIn("Ask one question at a time", skill)
+        self.assertIn("brainstorm_handoff", skill)
+        self.assertIn("architect-pipeline", skill)
+        self.assertIn("Do not copy Superpowers paths", skill)
+        self.assertIn("KH handoff targets are UAF skills", skill)
+
+    def test_parallel_and_subagent_harnesses_require_isolation_evidence(self):
+        parallel = read_text("skills/parallel_orchestration_harness/SKILL.md")
+        subagent = read_text("skills/subagent_review_pipeline/SKILL.md")
+        lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
+
+        for text in [parallel, subagent, lifecycle]:
+            self.assertIn(".worktrees/", text)
+            self.assertIn("isolated", text.lower())
+
+        self.assertIn("isolation.workspace_strategy", parallel)
+        self.assertIn("same mutable checkout", subagent)
+        self.assertIn("No concurrent file-editing workers", lifecycle)
+
+    def test_plan_work_review_compound_is_visible_to_plugin_users(self):
+        readme = read_text("README.md")
+        lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
+        distiller = read_text("skills/workflow_skill_distiller/SKILL.md")
+        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
+        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+
+        for stage in ["Plan", "Work", "Review", "Compound"]:
+            self.assertIn(stage, readme)
+
+        self.assertIn("Plan -> Work -> Review", lifecycle)
+        self.assertIn("Compound step", distiller)
+        self.assertIn("KH brainstorming-harness", prompts)
+        self.assertIn("KH workflow-skill-distiller", prompts)
+
+    def test_compound_harness_combines_external_role_stack_and_memory(self):
+        skill = read_text("skills/compound_engineering_harness/SKILL.md")
+
+        self.assertIn("role-stack", skill)
+        self.assertIn("Superpowers", skill)
+        self.assertIn("Compound", skill)
+        self.assertIn("memory_candidates", skill)
+        self.assertIn("memory-state-harness", skill)
+        self.assertIn("regression_check_plan", skill)
+
+
+if __name__ == "__main__":
+    unittest.main()

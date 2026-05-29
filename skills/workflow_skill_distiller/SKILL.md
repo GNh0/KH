@@ -5,7 +5,7 @@ description: Use when turning a repeated user workflow, completed interaction, o
 
 # Workflow Skill Distiller
 
-This skill defines how UAF captures workflows as portable skills. A new skill should be added as `skills/<skill-name>/SKILL.md`; optional support files are used only when that `SKILL.md` says when to read or run them.
+This is UAF's Compound step: it captures repeatable workflow lessons as portable skills instead of leaving them only in chat history. A new skill should be added as `skills/<skill-name>/SKILL.md`; optional support files are used only when that `SKILL.md` says when to read or run them.
 
 ## Support files
 
