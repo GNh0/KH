@@ -40,6 +40,10 @@ This is the UAF-native persistent memory harness. It keeps long-lived project or
 
 Do not create `.uaf/` in the target project root by default. Use `%LOCALAPPDATA%/KH-UAF/` or `UAF_RUNTIME_ROOT` for project/chat-scoped memory. `UAF_PROJECT_LOCAL_STATE=1` is the explicit opt-in for project-local runtime files.
 
+## Large Work Bundle Reporting
+
+When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["memory-state-harness"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Large work should at least decide whether scoped `memory_candidates` are needed; do not promote candidates to durable memory without the required scope and approval.
+
 ## External Benchmark Recipe
 
 Use this harness only for durable, scoped facts:

@@ -46,6 +46,10 @@ Do not skip this step only because the feature already works. The Compound step 
 8. Hand off to `workflow-skill-distiller`, `scenario-evaluation-harness`, `memory-state-harness`, or `context-state-harness` as appropriate.
 9. Verify the learning by running or adding a check that would catch the same failure next time.
 
+## Large Work Bundle Reporting
+
+When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["compound-engineering-harness"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Large work must leave `compound_handoff`: a learning capture, scoped memory candidate, scenario regression, distiller handoff, or explicit no-reusable-learning rationale.
+
 ## Evidence Contract
 
 A valid Compound run leaves:

@@ -46,6 +46,10 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 8. When implementers can edit files concurrently, isolate them with `.worktrees/<task>`, an isolated branch, or a host-provided equivalent workspace.
 9. Run final review across the combined implementation before finishing.
 
+## Large Work Bundle Reporting
+
+When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["subagent-review-pipeline"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. If subagents are not used, the rationale should say whether the task was too small, sequentially dependent, host-limited, or better handled by the main controller.
+
 ## External Benchmark Recipe
 
 Use this harness when an implementation needs independent roles to produce reviewable evidence:

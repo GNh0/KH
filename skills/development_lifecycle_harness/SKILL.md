@@ -32,20 +32,29 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 - Use `command-output-harness` plus `token-optimizer` for repeated test, lint, build, traceback, or install logs so exit codes and actionable failures are preserved without flooding context.
 - Final status must include `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`, plus savings, passthrough reason, blocked reason, or skip rationale.
 
+## Large Work Orchestration Bundle Policy
+
+- For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, create `large_work_orchestration_bundle` evidence before implementation.
+- The bundle must contain `skill_statuses` for `request-complexity-router`, `host-agent-orchestration`, `goal-state-harness`, `development-lifecycle-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller`.
+- Each `skill_statuses` entry must be one of `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`, with a short evidence note or rationale.
+- Do not run every bundle member heavily by default. `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller` may be `considered_not_needed` when the run lacks durable memory, independent workers, claimed role DAG execution, or reusable learning.
+- The bundle must preserve `parallel_strategy_decision`, `memory_candidates`, `workspace_strategy`, `token_optimizer_status`, and `compound_handoff` or a no-learning rationale.
+
 ## Workflow
 
 1. Clarify the intended outcome and constraints before changing behavior.
 2. Choose and record `workspace_strategy` before editing; for implementation in a Git-backed project, prefer isolated workspace unless an in-place exception applies.
 3. Create or refresh `GoalState` before implementation by using `goal-state-harness` for objective, success criteria, required evidence, and blocked-state handling.
-4. Decide `token_optimizer_status` for large or long-running work and route long logs or subagent transcripts through `token-optimizer` when needed.
-5. Write a short implementation plan for multi-step work with exact files, tests, and verification commands.
-6. For behavior changes, add or update a failing test before production edits.
-7. Implement the smallest change that satisfies the test and the user requirement.
-8. Review for scope drift, missing requirements, and risky integration points.
-9. Run fresh verification before claiming completion or committing.
-10. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
-11. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
-12. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
+4. For large work, create or update `large_work_orchestration_bundle.skill_statuses` before editing.
+5. Decide `token_optimizer_status` for large or long-running work and route long logs or subagent transcripts through `token-optimizer` when needed.
+6. Write a short implementation plan for multi-step work with exact files, tests, and verification commands.
+7. For behavior changes, add or update a failing test before production edits.
+8. Implement the smallest change that satisfies the test and the user requirement.
+9. Review for scope drift, missing requirements, and risky integration points.
+10. Run fresh verification before claiming completion or committing.
+11. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
+12. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
+13. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
 
 ## Gate checks
 
@@ -70,13 +79,14 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 ## Required outputs
 
 - Implementation plan for multi-step work, including files, tests, and verification commands.
+- `large_work_orchestration_bundle` with `skill_statuses` for large work; valid statuses are `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.
 - `workspace_strategy` with path, branch, host workspace, or in-place rationale.
 - `token_optimizer_status` with token savings, passthrough reason, blocked reason, or `considered_not_needed` rationale for large or long-running workflows.
 - GoalState summary with objective, success criteria, required evidence, current evidence, missing evidence, and goal ledger paths.
 - Failing-first test or smoke evidence for behavior changes when practical.
 - Review findings or an explicit no-findings review note.
 - Fresh verification output and final integration status: local only, committed, pushed, or PR-ready.
-- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, and `token_optimizer_status`.
+- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, `token_optimizer_status`, and `skill_statuses`.
 - Compound note, distilled skill candidate, scenario regression, or explicit no-reusable-learning rationale when the work produced a repeatable lesson.
 
 ## Common mistakes

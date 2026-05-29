@@ -24,6 +24,10 @@ This is UAF's Compound step: it captures repeatable workflow lessons as portable
 6. Add tests or smoke checks when the skill is surfaced through Python or MCP.
 7. For generated skills, run the generated `scripts/smoke_check.py` from the generated skill folder and pass `UAF_REPO_ROOT` when the skill is outside the repository tree.
 
+## Large Work Bundle Reporting
+
+When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["workflow-skill-distiller"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Do not publish a skill only because work was large; require a repeated workflow, clear trigger, and verification path.
+
 ## External Benchmark Recipe
 
 Use this skill like Superpowers `writing-skills` adapted for UAF:

@@ -22,6 +22,10 @@ This harness audits role orchestration evidence after DAG execution. It answers 
 4. Verify each required role records `metadata.role_artifacts` when project context is available; implementer task results may satisfy this with explicit completion evidence.
 5. Attach audit findings to metadata and goal evidence rather than creating user-facing audit documents.
 
+## Large Work Bundle Reporting
+
+When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["role-execution-audit-harness"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Use `considered_not_needed` only when no role DAG or subagent wave was claimed; if role execution is claimed, the audit must inspect runtime role results.
+
 ## External Benchmark Recipe
 
 Use this harness after any claimed role-DAG run:

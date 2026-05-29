@@ -18,6 +18,8 @@ Do not use this skill only because it is available. Use it when the current task
 - Default to isolated workspace for implementation in Git-backed projects. Use `current-checkout` only for documentation-only edits, a single-file small patch, or explicit user instruction.
 - Token context budget inputs: `estimated_context_tokens`, expected tool calls, broad file reads, large outputs, subagent transcripts, and whether `token-optimizer` should be `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 - GoalState inputs: objective, success criteria, required evidence, current evidence, active task, missing evidence, and next recommended action.
+- Large-work bundle inputs: `large_work_orchestration_bundle.skill_statuses` for `request-complexity-router`, `host-agent-orchestration`, `goal-state-harness`, `development-lifecycle-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller`.
+- Large-work bundle status values: `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`; every status needs a short evidence note or rationale.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
 - Execution level: `procedure-policy`.
@@ -34,24 +36,27 @@ Do not use this skill only because it is available. Use it when the current task
 2. Read this reference before performing non-trivial work with `development-lifecycle-harness`.
 3. Apply the written workflow as a host-agent policy, then record the decision, boundary, or gate evidence that proves the policy was actually used.
 4. For implementation work, choose `host-worktree`, `project-local-worktree`, or `isolated-branch` before editing unless the task qualifies for `current-checkout`.
-5. For large or long-running work, or when estimated context will cross the threshold, apply `token-optimizer` as a context budget gate before broad reads, long commands, or subagent dispatch. Use `command-output-harness` for long test/build/lint logs.
-6. Create or refresh `GoalState` through `goal-state-harness` before implementation, then update it after checks, review, QA, and release decisions.
-7. For parallel or risky edits, record whether work used `.worktrees/`, an isolated branch, or an equivalent host workspace.
-8. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-9. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-10. Report the difference between capability available in the repository and behavior actually executed in the current run.
+5. For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, create `large_work_orchestration_bundle` evidence before implementation.
+6. Fill `skill_statuses` for the bundle members. Mark optional members `considered_not_needed` only with a rationale; mark unavailable host capability `blocked` instead of silently omitting it.
+7. For large or long-running work, or when estimated context will cross the threshold, apply `token-optimizer` as a context budget gate before broad reads, long commands, or subagent dispatch. Use `command-output-harness` for long test/build/lint logs.
+8. Create or refresh `GoalState` through `goal-state-harness` before implementation, then update it after checks, review, QA, and release decisions.
+9. For parallel or risky edits, record whether work used `.worktrees/`, an isolated branch, or an equivalent host workspace.
+10. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
+11. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+12. Report the difference between capability available in the repository and behavior actually executed in the current run.
 
 ## Evidence to produce
 
 - Skill name and execution level used for the run.
 - Concrete input summary and target workspace or artifact paths.
+- `large_work_orchestration_bundle` with `skill_statuses`, `parallel_strategy_decision`, `memory_candidates`, `compound_handoff`, and no-learning or skip rationales.
 - `workspace_strategy` and its evidence: current checkout rationale, worktree path, host workspace id, or isolated branch name.
 - `token_optimizer_status` and its evidence: savings statistics, `considered_not_needed` rationale, `passthrough` quality reason, or blocked reason.
 - GoalState and goal ledger evidence: objective, status, success criteria, evidence required, evidence collected, missing evidence, and next recommended action.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Verification command or review evidence, including failures and blocked states.
-- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, and `token_optimizer_status`.
+- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, `token_optimizer_status`, and `skill_statuses`.
 
 ## Failure handling
 

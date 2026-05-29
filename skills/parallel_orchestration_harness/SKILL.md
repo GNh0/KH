@@ -37,6 +37,10 @@ This is the portable UAF replacement for host and personal skillbook parallel di
 - `isolation.worktree_root = .worktrees` when project-local worktrees are used
 - final report `workspace_strategy`: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`
 
+## Large Work Bundle Reporting
+
+When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["parallel-orchestration-harness"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Always leave `parallel_strategy_decision`: parallel, sequential with rationale, read-only side agents, or blocked by shared-state risk.
+
 ## External Benchmark Recipe
 
 Use this harness only when work is actually independent:

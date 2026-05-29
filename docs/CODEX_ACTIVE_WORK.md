@@ -20,6 +20,19 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 - Core direction approved by user: improve incrementally, taking useful ideas from external references while keeping KH/UAF branded as a personal skillbook.
 - Python core should remain the stable center for now.
 - TypeScript is best treated as a future sidecar for browser adapters, dashboards, and skill/template tooling.
+- Latest verification after large-work orchestration bundle 2.9.9:
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m unittest tests.test_large_work_orchestration_bundle tests.test_request_classifier tests.test_goal_skill_integration tests.test_superpowers_benchmark_alignment tests.test_plugin_packaging` (62 tests)
+  - `python -m src.skills.uaf_skill_catalog --check` (31 valid / 0 invalid)
+  - `python -m unittest discover -s tests` (377 tests)
+  - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
+  - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
+  - `git diff --check`
+- Latest large-work routing policy:
+  - Heavy project/SaaS/app/multi-file/role-DAG/long-running work requires `large_work_orchestration_bundle`.
+  - Bundle `skill_statuses` must account for routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation.
+  - Light and medium requests remain cheap; the bundle is not created for conceptual questions.
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
   - `python -m json.tool .codex-plugin/plugin.json`

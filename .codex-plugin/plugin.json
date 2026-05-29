@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.8",
-  "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, Superpowers-style project-local artifacts, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
+  "version": "2.9.9",
+  "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, large-work orchestration bundle, Superpowers-style project-local artifacts, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -24,6 +24,7 @@
     "capabilities": [
       "Skills",
       "Brainstorming",
+      "Large Work Bundle",
       "Compound Learning",
       "Request Routing",
       "Scenario Evaluation",
@@ -44,6 +45,9 @@
       "Use KH UAF to plan and run this project.",
       "For new product, SaaS, feature, or unclear design requests, start with KH brainstorming-harness.",
       "For heavy, multi-step, or evidence-gated work, create or update KH GoalState before execution and carry required evidence through review, QA, and release.",
+      "For large project, SaaS, app, multi-file implementation, or long-running work, create `large_work_orchestration_bundle` evidence before implementation.",
+      "In `large_work_orchestration_bundle.skill_statuses`, report request-complexity-router, host-agent-orchestration, goal-state-harness, development-lifecycle-harness, token-optimizer, memory-state-harness, parallel-orchestration-harness, subagent-review-pipeline, role-execution-audit-harness, compound-engineering-harness, and workflow-skill-distiller as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.",
+      "Considering a bundle member is not the same as running heavy machinery: keep light/medium requests cheap, and record rationale when memory, parallelism, subagents, role audit, or distillation is not needed.",
       "For large or long-running workflows, or whenever `estimated_context_tokens`, broad file reads, long command output, expected tool calls, or subagent transcripts are likely to cross the context budget, run KH token-optimizer as a quality-first gate.",
       "Report `token_optimizer_status` as `used`, `considered_not_needed`, `passthrough`, or `blocked`; never compress in a way that lowers answer quality or hides source-of-truth details.",
       "When token optimization touches lifecycle work, preserve `task_status`, `review_status`, `commit_sha`, `next_task`, RED/GREEN evidence, exit code, sandbox retry reason, file references, and reviewer severity.",

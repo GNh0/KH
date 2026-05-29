@@ -89,3 +89,15 @@ Superpowers is strong at agent behavior activation: short trigger descriptions, 
 - Aligned KH project artifacts more closely with the useful Superpowers project layout while keeping KH-owned paths.
 - Added `.kh/<skill>/<run-id>/state/*.json` beside `.kh/<skill>/<run-id>/content/*.md` for run-local state.
 - Switched shareable KH Markdown summaries to document-type folders: `docs/kh/specs/`, `docs/kh/plans/`, `docs/kh/decisions/`, `docs/kh/qa/`, and `docs/kh/handoffs/`.
+
+## Current 2.9.8 Changes
+
+- Strengthened `token-optimizer` from a rescue-only tool into an early context budget gate for large work.
+- Added quality-preserving agent transcript summarization with lifecycle evidence preservation.
+- Required `token_optimizer_status` to preserve task status, review status, commit SHA, next task, RED/GREEN evidence, exit code, sandbox retry reason, file references, and reviewer severity.
+
+## Current 2.9.9 Changes
+
+- Added `large_work_orchestration_bundle` as KH's answer to the observed "individual checklist" failure mode in large SaaS/app work.
+- Required bundle `skill_statuses` for request routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation.
+- Kept the router cheap for light and medium work: conceptual questions do not create the large-work bundle, while heavy implementation routes carry the bundle evidence.

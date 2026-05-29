@@ -8,6 +8,41 @@ from typing import Dict, List
 COMPLEXITIES = {"light", "medium", "heavy", "high_risk", "ambiguous"}
 TOKEN_OPTIMIZER_CONTEXT_THRESHOLD = 8000
 TOKEN_OPTIMIZER_ITEM_THRESHOLD = 2000
+LARGE_WORK_BUNDLE_SKILLS = [
+    "request-complexity-router",
+    "host-agent-orchestration",
+    "domain-orchestration-harness",
+    "goal-state-harness",
+    "development-lifecycle-harness",
+    "token-optimizer",
+    "memory-state-harness",
+    "parallel-orchestration-harness",
+    "subagent-review-pipeline",
+    "role-execution-audit-harness",
+    "quality-gates-harness",
+    "review-gate-harness",
+    "qa-gate-harness",
+    "compound-engineering-harness",
+    "workflow-skill-distiller",
+]
+LARGE_WORK_REQUIRED_HARNESSES = [
+    "host-agent-orchestration",
+    "domain-orchestration-harness",
+    "goal-state-harness",
+    "development-lifecycle-harness",
+    "quality-gates-harness",
+    "review-gate-harness",
+    "qa-gate-harness",
+]
+LARGE_WORK_BUNDLE_EVIDENCE = [
+    "large_work_orchestration_bundle",
+    "skill_statuses",
+    "workspace_strategy",
+    "parallel_strategy_decision",
+    "token_optimizer_status",
+    "memory_candidates",
+    "compound_handoff",
+]
 
 INVESTMENT_TERMS = {
     "stock",
@@ -1396,21 +1431,11 @@ def _heavy_classification(
         domain=domain,
         recommended_execution="role_dag",
         cross_cutting=cross_cutting,
-        recommended_skills=[
-            "request-complexity-router",
-            "domain-orchestration-harness",
-            "goal-state-harness",
-            "quality-gates-harness",
-        ],
-        required_harnesses=[
-            "domain-orchestration-harness",
-            "goal-state-harness",
-            "quality-gates-harness",
-            "review-gate-harness",
-            "qa-gate-harness",
-        ],
+        recommended_skills=LARGE_WORK_BUNDLE_SKILLS,
+        required_harnesses=LARGE_WORK_REQUIRED_HARNESSES,
         evidence_required=[
             *evidence_required,
+            *LARGE_WORK_BUNDLE_EVIDENCE,
             "objective",
             "work_design",
             "target_scope",

@@ -160,6 +160,8 @@ For heavy, multi-step, or evidence-gated work, create or refresh `GoalState` bef
 
 For large or long-running work, KH treats `token-optimizer` as a context budget gate. If `estimated_context_tokens`, broad file reads, long command output, expected tool calls, or subagent transcripts are likely to cross the threshold, the workflow must report `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`. Compression is never allowed to lower answer quality or hide source-of-truth details; unsafe content stays `passthrough` or blocks the optimization path.
 
+For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, KH now requires `large_work_orchestration_bundle` evidence before implementation. The bundle records `skill_statuses` for routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation. Each status must be `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`, so KH can stay light for simple requests while making omissions visible during large work.
+
 The ongoing Superpowers benchmark notes live in `docs/skillbook/audits/2026-05-30-superpowers-benchmark.md`.
 
 ## Deliverables

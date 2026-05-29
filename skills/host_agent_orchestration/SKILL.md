@@ -30,6 +30,10 @@ This is a personal UAF host orchestration harness. It packages reusable agent, s
 
 Use the default UAF role graph for orchestration: `ceo`, `advisor`, `product-strategist`, `system-architect`, `implementation-planner`, `controller`, `implementer`, `spec-reviewer`, `code-quality-reviewer`, `qa-verifier`, `security-reviewer`, and `release-manager`.
 
+## Large Work Bundle Reporting
+
+When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["host-agent-orchestration"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Include the host runtime, adapter path, missing capability, or no-subagent rationale as evidence.
+
 ## External Benchmark Recipe
 
 Use this harness when host differences could otherwise be hidden behind vague "agent ran" claims:

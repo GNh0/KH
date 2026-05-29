@@ -27,7 +27,10 @@ Source label: Request complexity routing.
 8. Workspace strategy is a cross-cutting output for implementation routes. Prefer `host-worktree`, `project-local-worktree`, or `isolated-branch` for Git-backed implementation unless the task is documentation-only, a single-file small patch, or explicitly in-place.
 9. Heavy implementation routes should include `goal-state-harness` so completion criteria, evidence requirements, and blocked states survive context compaction.
 10. For heavy implementation routes or threshold-crossing contexts, final status must include `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`. Do not make a light request heavy just because this gate is considered.
-11. Do not grow this into a large keyword dictionary. Prefer intent order: conceptual questions stay light, concrete build/review/design work becomes heavy, and destructive or regulated advice overrides to high-risk.
+11. For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, require `large_work_orchestration_bundle` evidence with `skill_statuses`.
+12. `large_work_orchestration_bundle.skill_statuses` must cover `request-complexity-router`, `host-agent-orchestration`, `goal-state-harness`, `development-lifecycle-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.
+13. Do not create a large-work bundle for light or medium requests; keep them cheap unless context budget thresholds require only token optimization evidence.
+14. Do not grow this into a large keyword dictionary. Prefer intent order: conceptual questions stay light, concrete build/review/design work becomes heavy, and destructive or regulated advice overrides to high-risk.
 
 ## External Benchmark Recipe
 
@@ -37,7 +40,8 @@ Use this skill as a Superpowers-style intake rule:
 2. Escalate only on concrete triggers: implementation, persisted deliverables, external commands, long-running state, money, law, health, credentials, security, destructive operations, or explicit review/QA needs.
 3. Keep ambiguous prompts in clarification mode until the domain or target artifact is known.
 4. Keep token optimization as cross-cutting infrastructure, not as a full workflow.
-5. Record the routing reason so later review can spot over-orchestration or under-escalation.
+5. For large work, require the large-work bundle so host, goal, lifecycle, token, memory, parallel, subagent, audit, compound, and distiller decisions are visible.
+6. Record the routing reason so later review can spot over-orchestration or under-escalation.
 
 Pressure scenario: a user asks "삼성 괜찮아?" without context. The host must not guess investment, phone purchase, hiring, or brand reputation and must not start a role DAG. It should ask a short clarification, then reclassify when the domain is known.
 
@@ -48,6 +52,7 @@ Pressure scenario: a user asks "삼성 괜찮아?" without context. The host mus
 - For implementation routes, a `workspace_strategy` recommendation: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`.
 - For heavy implementation routes, include `goal-state-harness` in `required_harnesses`.
 - For threshold-crossing contexts, include `token_optimization` in `evidence_required` and report `token_optimizer_status` without changing the request depth by itself.
+- For large work, include `large_work_orchestration_bundle`, `skill_statuses`, `parallel_strategy_decision`, `memory_candidates`, and `compound_handoff` in `evidence_required`.
 - A clarification path when context is insufficient.
 - A short reason for the chosen depth.
 
