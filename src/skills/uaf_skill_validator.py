@@ -13,6 +13,8 @@ BEHAVIOR_SECTION_PATTERN = re.compile(
     r"^##\s+(Workflow|Instructions|Core Flow|Command lifecycle|Hook workflow|Add a skill|Required default roles)\b",
     re.IGNORECASE | re.MULTILINE,
 )
+REQUIRED_OUTPUTS_PATTERN = re.compile(r"^##\s+Required outputs\b", re.IGNORECASE | re.MULTILINE)
+COMMON_MISTAKES_PATTERN = re.compile(r"^##\s+Common mistakes\b", re.IGNORECASE | re.MULTILINE)
 
 
 @dataclass
@@ -170,6 +172,18 @@ def _validate_skill_file(skills_dir: str, folder_name: str, skill_path: str) -> 
         result.add_issue(
             "missing_uaf_targets",
             "Skill body must include a '## UAF implementation targets' section.",
+        )
+
+    if not REQUIRED_OUTPUTS_PATTERN.search(content):
+        result.add_issue(
+            "missing_required_outputs",
+            "Skill body must include a '## Required outputs' section.",
+        )
+
+    if not COMMON_MISTAKES_PATTERN.search(content):
+        result.add_issue(
+            "missing_common_mistakes",
+            "Skill body must include a '## Common mistakes' section.",
         )
 
     if PLACEHOLDER_PATTERN.search(content):

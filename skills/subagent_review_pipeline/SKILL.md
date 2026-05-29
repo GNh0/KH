@@ -36,6 +36,20 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 5. Preserve every reviewer finding in the aggregated result.
 6. Run final review across the combined implementation before finishing.
 
+## Required outputs
+
+- Implementer result per bounded task with status, changed files, checks, and evidence.
+- Spec-reviewer result for each implementer output before quality review.
+- Code-quality-reviewer result with findings, severity, and suggested fix.
+- Controller aggregate that preserves `DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, and `BLOCKED` states.
+
+## Common mistakes
+
+- Do not let implementers share hidden state that reviewers cannot inspect.
+- Do not skip spec review because code quality looks good.
+- Do not flatten reviewer findings into a vague summary.
+- Do not mark blocked tasks as failed implementation without identifying the blocker category.
+
 ## UAF implementation targets
 
 - `src.tasks.workflows`

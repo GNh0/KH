@@ -21,6 +21,13 @@ This harness builds an internal traceability matrix linking requirements, delive
 - `traceability_matrix.status`: `passed` or `failed`.
 - Goal evidence for traceability pass/fail status.
 
+## Common mistakes
+
+- Do not export internal traceability spreadsheets into `docs/` by default.
+- Do not leave rows without requirement id, deliverable, evidence, gate, or status.
+- Do not treat traceability as complete when generated files are missing.
+- Do not use trace rows as user-facing deliverables unless explicitly requested.
+
 ## UAF implementation targets
 
 - `src.orchestration.quality_harnesses.build_traceability_matrix_rows`

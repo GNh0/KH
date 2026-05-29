@@ -27,6 +27,20 @@ This is a personal UAF command output harness. It provides compact command outpu
 - Prefer grouping by file, package, test name, or error type.
 - If filtering fails or produces an unsafe empty result, return raw output with metadata explaining the fallback.
 
+## Required outputs
+
+- Compact stdout/stderr summary that keeps failures, exit status, changed paths, and actionable lines.
+- Raw size, filtered size, elapsed time, command family, and token savings estimate.
+- Fallback reason when output is returned raw.
+- Preserved exit code and enough context to reproduce the failing command.
+
+## Common mistakes
+
+- Do not summarize away the only failing assertion, traceback, or compiler error.
+- Do not change command success semantics while filtering output.
+- Do not return an empty summary for non-empty failing output.
+- Do not over-compress file paths, test names, or line numbers needed for follow-up edits.
+
 ## UAF implementation targets
 
 - `src.skills.token_optimizer`

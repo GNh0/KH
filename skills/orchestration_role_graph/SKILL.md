@@ -55,6 +55,20 @@ This is the UAF-native role contract for multi-agent orchestration. It makes lea
 - `qa-verifier` and `security-reviewer` can run in the same wave after code quality review.
 - `release-manager` runs after QA and security are complete or records a blocked result when they are not.
 
+## Required outputs
+
+- Default role metadata with role ids, stages, responsibilities, dependencies, and execution flags.
+- Runtime `role_orchestration` summary with execution model, waves, parallel wave count, and status.
+- `role_task_results` for every required role, including blocked results instead of silent omissions.
+- `metadata.role_artifacts` for role-stage artifacts when project context is available.
+
+## Common mistakes
+
+- Do not list roles in documentation without preserving them in runtime metadata.
+- Do not call the run parallel unless role waves or worker fan-out actually executed.
+- Do not let reviewer, QA, security, or release roles disappear when an upstream role blocks.
+- Do not make `implementer` the only meaningful role in a role-based orchestration run.
+
 ## UAF implementation targets
 
 - `src.orchestration.roles`

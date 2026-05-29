@@ -42,6 +42,20 @@ The default should be conservative for destructive actions and non-blocking for 
 - exit code
 - fallback reason
 
+## Required outputs
+
+- Command classification: read, write, network, destructive, credential-bearing, or unknown.
+- Permission verdict with matched policy source and precedence level.
+- Rewrite decision with original command, rewritten command, or passthrough reason.
+- Audit record that preserves integrity status and command exit semantics.
+
+## Common mistakes
+
+- Do not rewrite a command unless the replacement is semantically equivalent and auditable.
+- Do not block unrelated execution because a hook parser failed; passthrough with an audit note.
+- Do not allow destructive commands through default policy without explicit approval.
+- Do not hide credential-like content in audit logs; redact while preserving the reason.
+
 ## UAF implementation targets
 
 - `src.contracts.AdapterRequest`

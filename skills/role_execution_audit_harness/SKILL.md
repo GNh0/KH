@@ -21,6 +21,13 @@ This harness audits role orchestration evidence after DAG execution. It answers 
 - `role_execution_audit.findings`: missing role, failed role, or missing artifact findings.
 - Evidence key `role execution audited` when the audit passes.
 
+## Common mistakes
+
+- Do not infer role execution from a static role graph; inspect runtime role task results.
+- Do not count a role as complete when it has no role artifact in project-backed runs.
+- Do not call the DAG parallel when no parallel wave was recorded.
+- Do not create user-facing role audit documents unless the user asks for them.
+
 ## UAF implementation targets
 
 - `src.orchestration.quality_harnesses.audit_role_execution`

@@ -22,6 +22,13 @@ This harness checks user-facing deliverables against recognizable document and s
 - `quality.checks`: per-file checks for template and render quality.
 - Evidence keys such as `deliverable template quality passed` or `deliverable template quality failed`.
 
+## Common mistakes
+
+- Do not pass a deliverable only because a filename exists; inspect required headings and table markers.
+- Do not apply software-only sections to product design, analysis, or operations deliverables.
+- Do not export quality findings as user-facing files by default.
+- Do not mark the workflow complete when required template markers are missing.
+
 ## UAF implementation targets
 
 - `src.orchestration.quality_harnesses.evaluate_deliverable_quality`

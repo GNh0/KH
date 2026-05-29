@@ -35,6 +35,16 @@ class UafSkillValidatorTests(unittest.TestCase):
 
         self.assertTrue(report.success, report.to_dict())
         self.assertEqual(report.invalid_skills, 0)
+
+    def test_repository_packaged_skills_have_operational_quality_sections(self):
+        report = validate_skill_folders()
+
+        self.assertTrue(report.success, report.to_dict())
+        for result in report.results:
+            with self.subTest(skill=result.name):
+                issue_codes = {issue.code for issue in result.issues}
+                self.assertNotIn("missing_required_outputs", issue_codes)
+                self.assertNotIn("missing_common_mistakes", issue_codes)
         self.assertGreater(report.valid_skills, 0)
 
     def test_missing_frontmatter_is_reported(self):

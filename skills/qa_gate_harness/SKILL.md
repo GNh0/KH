@@ -28,6 +28,13 @@ This is a UAF-native QA harness for regression and verification workflow pattern
 - `bugs`: structured reproduction reports.
 - `regression_tests`: tests added or recommended.
 
+## Common mistakes
+
+- Do not count planned QA as completed QA.
+- Do not emit passed evidence when the browser/QA adapter is missing or failed.
+- Do not treat a smoke test as full regression coverage unless the workflow explicitly scopes it that way.
+- Do not omit manual verification notes when no deterministic test can cover the risk.
+
 ## UAF implementation targets
 
 - `src.harness.evaluator`

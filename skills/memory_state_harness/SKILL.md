@@ -41,6 +41,13 @@ Do not create `.uaf/` in the target project root by default. Use `%LOCALAPPDATA%
 - `memory_candidates`: pending records requiring later promotion.
 - `cleanup_summary`: active, archived, quarantined, and deleted conversation memory results.
 
+## Common mistakes
+
+- Do not mix project memory and conversation memory in one namespace.
+- Do not persist secrets, credentials, or raw private outputs as durable memory.
+- Do not delete memory for archived conversations without checking the thread registry when available.
+- Do not treat memory-derived facts as current truth without revalidation when they can drift.
+
 ## UAF implementation targets
 
 - `src.contracts.MemoryScope`

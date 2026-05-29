@@ -13,6 +13,19 @@ This skill acts as a Tester/Evaluator for your code. It runs the code in an isol
 3. If the evaluation output contains `[Fail]`, read the Stderr logs carefully.
 4. Fix the errors in the code based on the Stderr feedback, and re-run the evaluator until it passes `[Success]`.
 
+## Required outputs
+
+- `HarnessResult` with status, stdout, stderr, execution time, and failure reason.
+- Syntax or runtime evidence that can be attached to workflow gates.
+- Clear distinction between sandbox rejection, test failure, timeout, and successful execution.
+
+## Common mistakes
+
+- Do not run untrusted Python outside the sandbox just because it is small.
+- Do not treat syntax compile success as runtime correctness.
+- Do not hide stderr when returning a failed result.
+- Do not retry indefinitely after a timeout; report the timeout as a blocker or failure.
+
 ## UAF implementation targets
 
 - `src.harness.evaluator.Evaluator`

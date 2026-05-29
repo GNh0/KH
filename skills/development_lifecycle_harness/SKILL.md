@@ -28,6 +28,20 @@ This is a personal UAF development workflow. It packages the useful planning, TD
 - No completion claim without fresh verification output.
 - No branch finishing until the working tree diff matches the requested scope.
 
+## Required outputs
+
+- Implementation plan for multi-step work, including files, tests, and verification commands.
+- Failing-first test or smoke evidence for behavior changes when practical.
+- Review findings or an explicit no-findings review note.
+- Fresh verification output and final integration status: local only, committed, pushed, or PR-ready.
+
+## Common mistakes
+
+- Do not skip design or planning because the task looks small when it changes shared behavior.
+- Do not write production behavior before the failing check for bug fixes or new behavior.
+- Do not mix unrelated refactors into the branch-finishing diff.
+- Do not claim completion from stale test output or a previous run.
+
 ## UAF implementation targets
 
 - `src.orchestration.agent_loop`

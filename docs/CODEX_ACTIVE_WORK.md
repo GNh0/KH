@@ -237,6 +237,7 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - README now documents the Codex app Add marketplace fields for `GNh0/KH`, `main`, and `.agents/plugins`.
 - Strengthened packaged skill behavior validation:
   - `src.skills.uaf_skill_validator` now requires trigger-focused `Use when` descriptions and an explicit behavior section.
+  - Packaged `SKILL.md` files now also require `Required outputs` and `Common mistakes`, so skills explain concrete evidence/results and failure modes instead of staying as shallow topic notes.
   - `tests.test_uaf_skill_catalog` verifies packaged skill implementation target references resolve to repo modules, symbols, or skill files.
 - Hardened goal-state verification:
   - command/check-stage failures now keep evaluated goals blocked even when the failed check has no evidence key.

@@ -29,6 +29,13 @@ This is a UAF-native context harness for context-save and context-restore patter
 - `remaining_work`: next tasks and verification commands.
 - `resume_handoff`: JSON and Markdown paths for a future host session.
 
+## Common mistakes
+
+- Do not store resumable runtime state in the target project root unless project-local state was explicitly requested.
+- Do not trust stale context when the git branch, head, or dirty files no longer match.
+- Do not omit blocked reasons, remaining work, or verification commands from handoff state.
+- Do not persist secrets, credentials, or private tool outputs as memory/context records.
+
 ## UAF implementation targets
 
 - `src.core.snapshot_manager`

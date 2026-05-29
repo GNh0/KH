@@ -369,6 +369,7 @@ The policy trims JSONL event logs and prunes older gzip snapshots after the work
 ## Packaged Skills
 
 The catalog scans `skills/` and exposes each `SKILL.md` through `src.skills.uaf_skill_catalog`.
+Every packaged skill must include trigger-focused frontmatter, an operational behavior section, `Required outputs`, `Common mistakes`, and `UAF implementation targets`. The validator rejects shallow skill notes that only name a topic without explaining the evidence, outputs, and failure modes future agents must preserve.
 
 ### Orchestration and Adapters
 

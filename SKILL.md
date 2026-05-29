@@ -98,6 +98,7 @@ External agents should exchange structured data through the contracts module ins
 - Use `WorkflowDispatchResult.task_results` and `WorkflowDispatchResult.gate_results` for worker status, optional webhook reporting metadata, and reviewer/QA/security/release gate results.
 - For Codex and Antigravity Windows app integrations, call `src.core.app_bridge.create_app_request(...)` and `dispatch_app_request(...)` directly instead of shelling through the CLI.
 - Add new UAF skills and harnesses as `skills/<skill-name>/SKILL.md`. The packaged skill folder is the source of truth.
+- Keep each packaged `SKILL.md` operational: include behavior steps, `Required outputs`, `Common mistakes`, and `UAF implementation targets` so the catalog rejects shallow notes.
 - Use `src.skills.uaf_skill_catalog` to list/read packaged UAF skill folders. External systems are development references only, not runtime dependencies.
 
 ## Packaged Harnesses

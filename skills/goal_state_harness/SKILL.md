@@ -44,6 +44,13 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 
 By default, do not create `.uaf/` in the target project root. Store runtime state under the UAF runtime root, normally `%LOCALAPPDATA%/KH-UAF/projects/<project-key>/.uaf/`, or under `projects/<project-key>/chats/<thread-id>/.uaf/` when a host thread id is available. `UAF_RUNTIME_ROOT` may override the base directory. `UAF_PROJECT_LOCAL_STATE=1` is the explicit opt-in for project-local `.uaf/`.
 
+## Common mistakes
+
+- Do not mark a goal complete from task success alone; required evidence must be present.
+- Do not use `metadata.evidence_key` as passed evidence unless a producer emitted a real evidence record.
+- Do not keep retrying a blocked workflow without updating `blocked_reason` and missing evidence.
+- Do not write goal state into the target project root by default.
+
 ## UAF implementation targets
 
 - `src.contracts.GoalState`

@@ -28,6 +28,13 @@ This is a UAF-native safety harness for careful execution, edit boundary, guard,
 - `scope`: allowed path roots or command family.
 - `audit`: decision timestamp, actor, and override status.
 
+## Common mistakes
+
+- Do not rely on string-prefix path checks; resolve real paths before allowing writes.
+- Do not treat network, credentials, or destructive commands as normal write actions.
+- Do not silently bypass an `ask` or `deny` verdict because a workflow is otherwise ready.
+- Do not record raw secrets in guard audit metadata.
+
 ## UAF implementation targets
 
 - `src.harness.sandbox`

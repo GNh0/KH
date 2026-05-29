@@ -14,6 +14,20 @@ This skill defines how UAF captures workflows as portable skills. A new skill sh
 3. Put heavy examples in `references/` and deterministic helpers in `scripts/`.
 4. Add tests or smoke checks when the skill is surfaced through Python or MCP.
 
+## Required outputs
+
+- New or updated `skills/<skill-name>/SKILL.md` with trigger-focused frontmatter.
+- Explicit workflow, required outputs, common mistakes, and implementation targets.
+- Support-file guidance inside SKILL.md when `references/`, `scripts/`, or `assets/` are used.
+- Catalog validation and targeted tests for any Python-backed behavior.
+
+## Common mistakes
+
+- Do not turn a one-off session story into a reusable skill.
+- Do not hide support-file behavior in README-only text.
+- Do not create extra README, changelog, or guide files inside a skill folder.
+- Do not publish a skill whose trigger description summarizes the workflow instead of when to use it.
+
 ## UAF implementation targets
 
 - `skills/<skill-name>/SKILL.md`

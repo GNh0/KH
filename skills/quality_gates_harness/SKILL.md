@@ -27,6 +27,20 @@ This is a personal UAF quality harness for testing, debugging, and verification 
 - `regression`: the original bug or requested behavior has a direct check when practical.
 - `security`: new command execution, file writes, network calls, and secrets handling are reviewed.
 
+## Required outputs
+
+- Failing-first evidence for behavior changes when practical.
+- Targeted verification output followed by broader relevant checks.
+- Structured review gate result with spec, runtime, regression, and security status.
+- Missing-evidence or blocker notes when a check cannot be executed.
+
+## Common mistakes
+
+- Do not write tests after implementation and call it TDD.
+- Do not accept task success when required evidence is missing.
+- Do not skip root-cause tracing for unexpected failures.
+- Do not collapse all review gates into one pass/fail string.
+
 ## UAF implementation targets
 
 - `src.harness.evaluator`

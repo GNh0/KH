@@ -27,6 +27,13 @@ This is a UAF-native health harness for quality dashboard workflow patterns. It 
 - `failures`: actionable failed checks.
 - `release_ready`: boolean derived from required checks.
 
+## Common mistakes
+
+- Do not score a workflow as release-ready when required checks were skipped or unavailable.
+- Do not collapse failing command output into a generic failure without the command and exit code.
+- Do not treat optional checks as blockers unless workflow metadata marks them required.
+- Do not hide documentation/catalog failures because runtime tests passed.
+
 ## UAF implementation targets
 
 - `src.skills.uaf_skill_validator`

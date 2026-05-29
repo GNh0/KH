@@ -26,6 +26,20 @@ This is a UAF-native rollback harness. It packages snapshot behavior inside this
 - Keep snapshot version IDs unique even when multiple snapshots are created within the same second.
 - Use fresh verification after rollback before claiming the workspace is restored.
 
+## Required outputs
+
+- Work-level snapshot bundle for related multi-file changes, or single-file snapshot for isolated edits.
+- Snapshot metadata with version id, file list, message, timestamp, and compressed artifact path.
+- Restore result that identifies restored files and failed restores.
+- Retention/prune result when cleanup is requested.
+
+## Common mistakes
+
+- Do not create one archive per file when the work should be captured as one batch checkpoint.
+- Do not write `.snapshots` into the project root by default.
+- Do not allow snapshot targets outside the project root or inside snapshot metadata.
+- Do not claim rollback succeeded without verifying the restored files.
+
 ## UAF implementation targets
 
 - `src.core.snapshot_manager.SnapshotManager`

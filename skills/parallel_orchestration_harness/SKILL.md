@@ -25,6 +25,20 @@ This is the portable UAF replacement for host and personal skillbook parallel di
 - `role_task_results[]`
 - per-result `metadata.execution_model = parallel-role-stage`
 
+## Required outputs
+
+- Bounded worker count and queue size for file/task fan-out.
+- Role DAG wave summary showing which roles ran concurrently.
+- Aggregated task results with success, failure, and blocked states preserved.
+- Evidence that all queued work was drained before completion was reported.
+
+## Common mistakes
+
+- Do not call sequential loops parallel because the code could support parallelism.
+- Do not let one failed worker disappear from the final aggregate result.
+- Do not spawn unbounded workers from user-provided file counts.
+- Do not report completion before fan-in has collected every role and worker result.
+
 ## UAF implementation targets
 
 - `src.orchestration.role_orchestrator`

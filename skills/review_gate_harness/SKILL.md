@@ -30,6 +30,13 @@ This is a UAF-native review harness for structured review workflow patterns. It 
 - `evidence_records`: passed records grant evidence through `record.evidence`; `metadata.evidence_key` is trace metadata and does not satisfy a goal by itself.
 - `next_action`: `fix`, `ask`, `verify`, or `release`.
 
+## Common mistakes
+
+- Do not pass review from `WorkflowTaskResult.status == success` alone.
+- Do not treat `metadata.evidence_key` as satisfying goal evidence without a passed record.
+- Do not hide partial failures by returning one generic review message.
+- Do not run code-quality review before spec compliance gaps are resolved.
+
 ## UAF implementation targets
 
 - `src.orchestration.roles`

@@ -54,6 +54,20 @@ The catalog exposes `execution_level` for every skill:
 
 Do not claim every packaged skill is executed the same way. A run can combine direct module calls, hybrid harness orchestration, and procedure/policy application, but the catalog must make that distinction explicit.
 
+## Required outputs
+
+- Skill list with name, description, relative path, packaging source, external dependency flag, and execution level.
+- Validation summary with total, valid, invalid, and issue details.
+- `--read <skill>` output that includes packaged source and the selected SKILL.md body.
+- Clear distinction between `python-module`, `hybrid-harness`, and `procedure-policy`.
+
+## Common mistakes
+
+- Do not scan local Gemini, Antigravity, Claude, or Codex user skill folders at runtime.
+- Do not claim every skill is directly executable when some are procedure/policy skills.
+- Do not accept a skill without trigger-focused frontmatter and implementation targets.
+- Do not rely on README-only instructions for support files.
+
 ## UAF implementation targets
 
 - `skills/<skill-name>/SKILL.md`

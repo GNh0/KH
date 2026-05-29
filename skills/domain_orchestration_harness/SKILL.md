@@ -85,3 +85,18 @@ The artifact names are examples, not a fixed taxonomy. The router should choose 
 - Do not treat generated answer text as completion evidence unless it is attached to a persisted artifact or normalized evidence record.
 - Do not skip the design stage because the domain is unfamiliar. Use a generic profile and record assumptions instead.
 - Do not store secrets, credentials, or unsupported durable claims inside design artifacts.
+
+## Required outputs
+
+- `DomainProfile` with domain, subdomains, roles, artifact types, review gates, risk/policy gates, and evidence requirements.
+- `WorkDesign` persisted to the UAF runtime store before execution.
+- `ArtifactManifest` and `deliverable_exports` metadata with selected profile, artifact type, format, path, and evidence.
+- User-facing deliverables that match the task type, not a fixed file-extension checklist.
+- Gate results that block completion when required design, QA, policy, or export evidence is missing.
+
+## Common mistakes
+
+- Do not equate domain orchestration with software architecture; choose artifacts by objective.
+- Do not force DOCX/XLSX/PDF/DXF/SVG/PNG output when the domain does not need those files.
+- Do not place internal UAF state or harness-only reports in the user's `docs/` folder.
+- Do not mark generic assumptions as verified facts; route them to review or risk gates.

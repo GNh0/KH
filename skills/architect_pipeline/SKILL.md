@@ -16,6 +16,20 @@ When the user asks you to design or execute a substantial workflow, you MUST fol
 5. Follow the exact design patterns, orchestration boundaries, evidence requirements, and domain constraints written in the design outputs.
 6. If there are license, policy, safety, or missing-evidence warnings, do NOT proceed as complete until alternatives or blockers are recorded.
 
+## Required outputs
+
+- `design_doc.md` or equivalent design text with objective, scope, assumptions, constraints, roles, and deliverables.
+- `WorkDesign` metadata persisted through the UAF artifact store.
+- User-facing design deliverables only when they are useful for the target work, under the target project's `docs/` folder.
+- Evidence keys for saved design, artifact manifest, exported deliverables, and unresolved blockers.
+
+## Common mistakes
+
+- Do not make every architecture output software-specific; product, analysis, operations, and research work need domain-appropriate designs.
+- Do not count a short note as a design blueprint when roles, constraints, gates, and deliverables are missing.
+- Do not export internal harness reports as user-facing documents unless explicitly requested.
+- Do not proceed to implementation when required design evidence or policy warnings are unresolved.
+
 ## UAF implementation targets
 
 - `src.core.architect.SystemArchitect`

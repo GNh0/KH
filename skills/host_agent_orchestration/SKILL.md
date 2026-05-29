@@ -35,6 +35,13 @@ Use the default UAF role graph for orchestration: `ceo`, `advisor`, `product-str
 - Tool permission denial should be visible in result metadata.
 - Hook failures should be reported, but they must not hide the original agent result.
 
+## Common mistakes
+
+- Do not assume Codex, Antigravity-style hosts, Claude Code, and local runners share the same tool APIs.
+- Do not let host-specific permissions bypass UAF guard and evidence policy.
+- Do not claim subagent delegation happened unless adapter metadata or role task results prove it.
+- Do not store host-only state in the project output surface.
+
 ## UAF implementation targets
 
 - `src.contracts.AdapterRequest`

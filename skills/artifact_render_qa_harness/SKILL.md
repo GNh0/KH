@@ -20,6 +20,13 @@ This harness verifies that generated files can be opened or parsed enough for de
 - `artifact render qa passed` when every artifact is readable and structurally consistent.
 - `artifact render qa failed` with per-file findings when a file is missing, unreadable, or malformed.
 
+## Common mistakes
+
+- Do not treat file existence as render quality; open or parse the artifact format.
+- Do not require a browser or Office installation for basic structural checks.
+- Do not write render QA workbooks into the user's `docs/` folder by default.
+- Do not hide corrupt optional artifacts when they were listed in the export plan.
+
 ## UAF implementation targets
 
 - `src.orchestration.quality_harnesses.evaluate_deliverable_quality`
