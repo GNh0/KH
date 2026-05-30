@@ -20,6 +20,7 @@ CORE_SKILLS = {
     "artifact-render-qa-harness",
     "architect-pipeline",
     "brainstorming-harness",
+    "branch-finishing-harness",
     "command-hook-policy-harness",
     "compound-engineering-harness",
     "development-lifecycle-harness",
@@ -35,6 +36,7 @@ CORE_SKILLS = {
     "orchestration-role-graph",
     "parallel-orchestration-harness",
     "plugin-composition-policy",
+    "plan-execution-harness",
     "role-execution-audit-harness",
     "quality-gates-harness",
     "qa-gate-harness",
@@ -45,10 +47,13 @@ CORE_SKILLS = {
     "skill-catalog",
     "snapshot-state-harness",
     "subagent-review-pipeline",
+    "systematic-debugging-harness",
     "traceability-matrix-harness",
     "token-optimizer",
     "workflow-skill-distiller",
     "workflow-usability-harness",
+    "verification-before-completion-harness",
+    "worktree-isolation-harness",
 }
 
 REMOVED_EXAMPLE_SKILLS = {
@@ -182,6 +187,7 @@ class UafSkillCatalogTests(unittest.TestCase):
         expected_sources = {
             "development-lifecycle-harness": "Personal skillbook",
             "brainstorming-harness": "Superpowers brainstorming",
+            "branch-finishing-harness": "branch finishing",
             "compound-engineering-harness": "compound engineering",
             "domain-orchestration-harness": "domain orchestration",
             "host-agent-orchestration": "host orchestration",
@@ -199,6 +205,10 @@ class UafSkillCatalogTests(unittest.TestCase):
             "memory-state-harness": "persistent memory",
             "request-complexity-router": "Request complexity",
             "scenario-evaluation-harness": "Scenario evaluation",
+            "plan-execution-harness": "progress state",
+            "systematic-debugging-harness": "root cause",
+            "verification-before-completion-harness": "completion guard",
+            "worktree-isolation-harness": "workspace isolation",
             "workflow-usability-harness": "visible progress",
         }
 

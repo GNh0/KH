@@ -21,6 +21,7 @@ CORE_PRODUCTION_SKILLS = {
     "adapter-contract-harness",
     "artifact-render-qa-harness",
     "brainstorming-harness",
+    "branch-finishing-harness",
     "compound-engineering-harness",
     "deliverable-template-quality-harness",
     "domain-orchestration-harness",
@@ -30,6 +31,7 @@ CORE_PRODUCTION_SKILLS = {
     "orchestration-role-graph",
     "parallel-orchestration-harness",
     "plugin-composition-policy",
+    "plan-execution-harness",
     "qa-gate-harness",
     "review-gate-harness",
     "request-complexity-router",
@@ -37,8 +39,11 @@ CORE_PRODUCTION_SKILLS = {
     "role-execution-audit-harness",
     "snapshot-state-harness",
     "subagent-review-pipeline",
+    "systematic-debugging-harness",
     "token-optimizer",
     "traceability-matrix-harness",
+    "verification-before-completion-harness",
+    "worktree-isolation-harness",
 }
 
 QUALITY_RUBRIC = {

@@ -57,8 +57,8 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         rows = {row["name"]: row for row in audit.skills}
 
-        self.assertEqual(audit.total_skills, 33)
-        self.assertEqual(audit.coverage["total_skills"], 33)
+        self.assertEqual(audit.total_skills, 38)
+        self.assertEqual(audit.coverage["total_skills"], 38)
         self.assertTrue(rows["token-optimizer"]["required"])
         self.assertTrue(rows["goal-state-harness"]["required"])
         self.assertIn("token-optimizer", audit.coverage["required_missing_skill_names"])

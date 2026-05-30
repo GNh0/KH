@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.18",
-    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, capability-based plugin composition, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, automatic workflow usability runtime, runtime token optimization evidence, runtime memory candidate recording, session skill audits, session postmortem gates, progress-to-Compound bridge, token optimizer provider policy, KH role command entrypoints, visible progress panels, session-start context restore, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
+  "version": "2.9.19",
+    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, capability-based plugin composition, KH-native replacements for Superpowers-style worktree/TDD/debug/review/finish workflows, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, automatic workflow usability runtime, runtime token optimization evidence, runtime memory candidate recording, session skill audits, session postmortem gates, progress-to-Compound bridge, token optimizer provider policy, KH role command entrypoints, visible progress panels, session-start context restore, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "skills": [
@@ -269,6 +269,31 @@
       "name": "quality-gates-harness",
       "description": "UAF-native TDD, systematic debugging, review, and evidence-before-completion gate definitions.",
       "usage": "python -m src.skills.uaf_skill_catalog --read quality-gates-harness"
+    },
+    {
+      "name": "worktree-isolation-harness",
+      "description": "KH-native workspace isolation policy for host worktrees, project-local .worktrees, isolated branches, and current-checkout exceptions.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read worktree-isolation-harness"
+    },
+    {
+      "name": "plan-execution-harness",
+      "description": "KH-native task-plan execution loop with progress.json, RED/GREEN, review, commit, and next-task handoff.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read plan-execution-harness"
+    },
+    {
+      "name": "systematic-debugging-harness",
+      "description": "KH-native bug diagnosis workflow for symptoms, reproduction, hypotheses, root cause, regression evidence, and verification.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read systematic-debugging-harness"
+    },
+    {
+      "name": "verification-before-completion-harness",
+      "description": "KH-native completion guard that requires fresh verification evidence before done, commit, push, PR-ready, release, or handoff claims.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read verification-before-completion-harness"
+    },
+    {
+      "name": "branch-finishing-harness",
+      "description": "KH-native branch finishing workflow for local-only, committed, pushed, PR-ready, merged, blocked, or cleanup-only decisions.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read branch-finishing-harness"
     },
     {
       "name": "deliverable-template-quality-harness",

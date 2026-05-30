@@ -52,6 +52,27 @@ RUNTIME_MARKERS = {
         "workspace_strategy",
         "task_status",
     ],
+    "worktree-isolation-harness": [
+        "worktree-isolation-harness",
+        "workspace_strategy",
+        "project-local-worktree",
+        "host-worktree",
+        ".worktrees",
+    ],
+    "plan-execution-harness": [
+        "plan-execution-harness",
+        "progress.json",
+        "active task",
+        "next_task",
+        "task_status",
+    ],
+    "systematic-debugging-harness": [
+        "systematic-debugging-harness",
+        "root cause",
+        "hypothesis",
+        "debug_status",
+        "unexpected failure",
+    ],
     "goal-state-harness": [
         "GoalState",
         "goal_ledger",
@@ -101,6 +122,20 @@ RUNTIME_MARKERS = {
         "browser qa",
         "manual test",
         "verification",
+    ],
+    "verification-before-completion-harness": [
+        "verification-before-completion-harness",
+        "fresh verification",
+        "verification_status",
+        "completion_claim",
+        "verification_claim_guard",
+    ],
+    "branch-finishing-harness": [
+        "branch-finishing-harness",
+        "branch_finish_status",
+        "commit_sha",
+        "git push",
+        "pr-ready",
     ],
     "review-gate-harness": [
         "review gate",
@@ -277,7 +312,7 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
     if verification_guard.get("status") == "blocked":
         issues.append(
             {
-                "skill": "qa-gate-harness",
+                "skill": "verification-before-completion-harness",
                 "status": "blocked",
                 "severity": "P1",
                 "reason": "failed verification was not reflected in final completion claims",
@@ -460,13 +495,20 @@ def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
         _add(required, "review-gate-harness", "review findings or reviewer activity appeared")
         _add(required, "quality-gates-harness", "reviewed development work needs quality gates")
     if verification_commands or _mentions_verification(lowered):
+        _add(required, "verification-before-completion-harness", "completion or verification claims require fresh verification evidence")
         _add(required, "qa-gate-harness", "verification commands or QA claims appeared")
         _add(required, "quality-gates-harness", "verification needs evidence-before-completion gate")
         _add(required, "command-output-harness", "command output should preserve exit code and actionable failure lines")
         _add(required, "harness-evaluator", "Python/test checks appeared")
     if "worktree" in lowered or ".worktrees" in lowered or "git commit" in lowered:
+        _add(required, "worktree-isolation-harness", "git/worktree implementation workflow appeared")
+        _add(required, "branch-finishing-harness", "commit, push, branch, or cleanup evidence appeared")
         _add(required, "development-lifecycle-harness", "git/worktree implementation workflow appeared")
         _add(required, "snapshot-state-harness", "large generated changes should record checkpoint or no-snapshot rationale")
+    if any(marker in lowered for marker in ["progress.json", "task 1", "task 2", "next_task", "task_status"]):
+        _add(required, "plan-execution-harness", "task-plan progress or next-task handoff appeared")
+    if any(marker in lowered for marker in ["root cause", "hypothesis", "debug", "unexpected failure", "traceback"]):
+        _add(required, "systematic-debugging-harness", "bug diagnosis or unexpected failure appeared")
     if "compound" in lowered or "compound_handoff" in lowered or "memory_candidates" in lowered:
         _add(required, "compound-engineering-harness", "compound handoff or memory candidates appeared")
         _add(required, "workflow-skill-distiller", "compound learning should route to reusable skill/scenario/memory follow-up")
@@ -496,7 +538,10 @@ def _require_core_large_work(required: Dict[str, str], reason: str) -> None:
         "request-complexity-router",
         "goal-state-harness",
         "development-lifecycle-harness",
+        "worktree-isolation-harness",
+        "plan-execution-harness",
         "token-optimizer",
+        "verification-before-completion-harness",
         "workflow-usability-harness",
         "context-state-harness",
     ]:

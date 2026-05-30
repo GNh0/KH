@@ -14,6 +14,9 @@ LARGE_WORK_BUNDLE_SKILLS = [
     "domain-orchestration-harness",
     "goal-state-harness",
     "development-lifecycle-harness",
+    "worktree-isolation-harness",
+    "plan-execution-harness",
+    "systematic-debugging-harness",
     "token-optimizer",
     "memory-state-harness",
     "parallel-orchestration-harness",
@@ -22,6 +25,8 @@ LARGE_WORK_BUNDLE_SKILLS = [
     "quality-gates-harness",
     "review-gate-harness",
     "qa-gate-harness",
+    "verification-before-completion-harness",
+    "branch-finishing-harness",
     "compound-engineering-harness",
     "workflow-skill-distiller",
 ]
@@ -30,9 +35,12 @@ LARGE_WORK_REQUIRED_HARNESSES = [
     "domain-orchestration-harness",
     "goal-state-harness",
     "development-lifecycle-harness",
+    "worktree-isolation-harness",
+    "plan-execution-harness",
     "quality-gates-harness",
     "review-gate-harness",
     "qa-gate-harness",
+    "verification-before-completion-harness",
 ]
 LARGE_WORK_BUNDLE_EVIDENCE = [
     "large_work_orchestration_bundle",
