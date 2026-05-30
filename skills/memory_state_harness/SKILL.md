@@ -31,10 +31,11 @@ This is the UAF-native persistent memory harness. It keeps long-lived project or
 3. Preserve memory context inside `GoalState.metadata["memory_context"]` so the goal ledger can resume with the same long-term context.
 4. Save verified project decisions as `MemoryRecord(kind="decision")`.
 5. Save uncertain lessons as candidates first, not committed memory.
-6. Append memory lifecycle events to `memory_events.jsonl`.
-7. Keep active and archived conversation memories.
-8. Delete or quarantine conversation memories only when the host reports deletion or the thread disappears from the host registry.
-9. Never store secrets, API keys, private keys, credentials, or one-off transient prompts.
+6. When workflow usability or Compound produces `memory_candidates`, call `src.orchestration.runtime_memory.record_workflow_memory_candidates` so the scoped candidate store can be read by the next session.
+7. Append memory lifecycle events to `memory_events.jsonl`.
+8. Keep active and archived conversation memories.
+9. Delete or quarantine conversation memories only when the host reports deletion or the thread disappears from the host registry.
+10. Never store secrets, API keys, private keys, credentials, or one-off transient prompts.
 
 ## Runtime storage rule
 
@@ -62,6 +63,7 @@ Pressure scenario: if a fact came from an older conversation and the source may 
 - `memory_context`: bounded records loaded for the current workflow.
 - `memory_store`: JSON/JSONL paths for records, candidates, events, and scope state.
 - `memory_candidates`: pending records requiring later promotion.
+- `memory_state`: candidate recording status with recorded, skipped, blocked, and promotion mode.
 - `cleanup_summary`: active, archived, quarantined, and deleted conversation memory results.
 
 ## Common mistakes
@@ -78,5 +80,6 @@ Pressure scenario: if a fact came from an older conversation and the source may 
 - `src.contracts.MemoryEvent`
 - `src.orchestration.memory_state`
 - `src.orchestration.memory_store`
+- `src.orchestration.runtime_memory`
 - `src.platforms.codex_thread_registry`
 - `src.tasks.workflows`

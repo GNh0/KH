@@ -4,7 +4,7 @@
 
 Use this skill whenever KH has enough moving parts that the user or next session should not have to reconstruct the workflow from chat. The common trigger is a task-plan run with `.kh/development/<run-id>/state/progress.json`, but the same harness applies to long reviews, subagent packets, QA loops, token-budget decisions, session resume work, and postmortems over Codex session JSONL logs.
 
-In AgentLoop, app bridge, and workflow dispatch paths, set `workflow_usability_auto=true` to make the runtime apply this harness automatically. The automatic path writes the same evidence as a manual helper call: session-start context, token provider policy, progress panel, progress state, Compound handoff, and candidates.
+In AgentLoop, app bridge, and workflow dispatch paths, set `workflow_usability_auto=true` to make the runtime apply this harness automatically. The automatic path writes the same evidence as a manual helper call: session-start context, token provider policy, runtime token optimization evidence, progress panel, progress state, Compound handoff, and candidates.
 
 This harness is also the KH-native place to absorb useful external workflow ergonomics: visible progress panels, short role command entrypoints, token provider policy, and a final Compound handoff. It should be used as a light control surface. It must not force every request through heavy role DAG execution.
 
@@ -29,23 +29,32 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 3. Resolve the token optimizer provider before reading or producing large content:
    `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider(...)`.
 4. Use `kh` by default. Use `hybrid` when RTK-style command optimization may be available. Use `passthrough` for exact evidence.
-5. Resolve a role command only when the user or workflow asks for one:
+5. When task results include command output or subagent transcripts, call:
+   `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results(...)`.
+   Runtime auto mode performs this during `apply_workflow_usability_runtime(...)`.
+6. When Compound/workflow usability produces memory candidates, call:
+   `src.orchestration.runtime_memory.record_workflow_memory_candidates(...)`.
+   This records candidates for scoped review and does not promote durable memory automatically.
+7. Resolve a role command only when the user or workflow asks for one:
    `src.orchestration.role_commands.resolve_role_command("/kh:work")`.
-6. Keep `progress.json` current while tasks move through RED, GREEN, review, fix, re-review, commit, and next task.
-7. Render a visible panel with `src.orchestration.progress_panel.render_progress_panel(progress)` after meaningful task transitions.
-8. After Plan, Work, and Review, convert progress to Compound artifacts with:
+8. Keep `progress.json` current while tasks move through RED, GREEN, review, fix, re-review, commit, and next task.
+9. Render a visible panel with `src.orchestration.progress_panel.render_progress_panel(progress)` after meaningful task transitions.
+10. After Plan, Work, and Review, convert progress to Compound artifacts with:
    `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts(project_root, progress)`.
-9. Treat generated memory records as candidates unless the user explicitly approves durable memory promotion and scope.
-10. Route next skills from the handoff instead of leaving them as chat-only advice.
-11. When reviewing a real session, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl(...)` and inspect `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, `token_gate`, `subagent_summary`, `secret_findings`, and `git_integration`.
-12. Treat skill-file reads and default-prompt mentions as inspection only. Token optimizer usage requires runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence.
-13. For Windows Streamlit or similar local dev-server checks, use `src.orchestration.windows_dev_server.build_streamlit_launch_plan(...)` to avoid repeated hidden-process failures caused by Path/PATH environment quirks.
+11. Treat generated memory records as candidates unless the user explicitly approves durable memory promotion and scope.
+12. Route next skills from the handoff instead of leaving them as chat-only advice.
+13. When reviewing a real session, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl(...)` and inspect `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, `token_gate`, `subagent_summary`, `secret_findings`, and `git_integration`.
+14. For full skill usage review, call `src.orchestration.session_skill_audit.analyze_session_skills(...)` or `python -m src.orchestration.session_skill_audit --summary <jsonl>`.
+15. Treat skill-file reads and default-prompt mentions as inspection only. Token optimizer usage requires runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence.
+16. For Windows Streamlit or similar local dev-server checks, use `src.orchestration.windows_dev_server.build_streamlit_launch_plan(...)` to avoid repeated hidden-process failures caused by Path/PATH environment quirks.
 
 ## Evidence to produce
 
 - `session_start_context` with recommended reads.
 - `progress_panel` text or equivalent structured panel payload.
 - `token_optimizer_provider` decision with status and rationale.
+- `token_optimization` summary with workflow status, aggregate savings, preserved command/subagent records, and RTK-style `by_command_family` savings when command output was optimized.
+- `memory_state` candidate recording summary with scoped store paths and promotion mode.
 - `role_command_entrypoint` when used.
 - `compound_capture.json`.
 - `compound_handoff.json`.
@@ -53,6 +62,7 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 - `docs/kh/handoffs/<run-id>-compound.md`.
 - `required_next_skills` or explicit blocked/no-learning rationale.
 - `session_postmortem` when inspecting prior Codex logs, including active-goal completion, verification-claim, and scope-delta guard status.
+- `session_skill_audit` when inspecting a session against all packaged KH skills.
 - `token_optimizer_evidence` separating runtime calls, skill doc reads, explicit usage records, and status mentions.
 - `windows_dev_server_launch_plan` when a local Windows app server must stay running for QA.
 
