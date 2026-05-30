@@ -22,6 +22,7 @@ Keep the router principle-based. Keyword rules are only guardrails for obvious d
 - Whether implementation should use `host-worktree`, `project-local-worktree`, `isolated-branch`, or an allowed `current-checkout` exception.
 - Expected context pressure: `estimated_context_tokens`, largest command output, expected tool calls, broad file reads, subagent count, or subagent transcript size.
 - Whether the request is large project work that needs `large_work_orchestration_bundle` evidence with `skill_statuses` for host, goal, lifecycle, token, memory, parallel, subagent, audit, compound, and distiller decisions.
+- Whether large-work completion needs `skill_transition_handoff` evidence to prove follow-up skills are applied, blocked, or carried forward.
 - Execution level: `python-module`.
 - Implementation targets:
   - `src.orchestration.request_classifier.classify_request`
@@ -41,11 +42,12 @@ Keep the router principle-based. Keyword rules are only guardrails for obvious d
 7. For Git-backed implementation routes, recommend `host-worktree`, `project-local-worktree`, or `isolated-branch` unless the task is documentation-only, a single-file small patch, or explicitly in-place.
 8. For heavy implementation routes, include `goal-state-harness` in the required harnesses and preserve GoalState evidence through the final status.
 9. For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, require `large_work_orchestration_bundle` and `skill_statuses`.
-10. Do not create a large-work bundle for light or medium requests; they should stay direct or bounded unless token context thresholds require `token_optimization` evidence.
-11. If the result is `high_risk`, require explicit scope, evidence, risk disclosure, scenario analysis, and review gates before presenting a decision.
-12. If the result is `ambiguous`, ask for the missing domain or artifact context instead of guessing.
-13. Keep `token-optimizer` as cross-cutting infrastructure; only compress when the content is long, log-like, or token-expensive.
-14. If expected context pressure crosses the threshold, require `token_optimization` evidence and final `token_optimizer_status`, but do not escalate a light request to a heavy route solely because the token gate ran.
+10. For large-work final status, require `skill_transition_handoff` when any bundle member creates required follow-up work.
+11. Do not create a large-work bundle for light or medium requests; they should stay direct or bounded unless token context thresholds require `token_optimization` evidence.
+12. If the result is `high_risk`, require explicit scope, evidence, risk disclosure, scenario analysis, and review gates before presenting a decision.
+13. If the result is `ambiguous`, ask for the missing domain or artifact context instead of guessing.
+14. Keep `token-optimizer` as cross-cutting infrastructure; only compress when the content is long, log-like, or token-expensive.
+15. If expected context pressure crosses the threshold, require `token_optimization` evidence and final `token_optimizer_status`, but do not escalate a light request to a heavy route solely because the token gate ran.
 
 ## Evidence to produce
 
@@ -55,6 +57,7 @@ Keep the router principle-based. Keyword rules are only guardrails for obvious d
 - Token optimizer status is a cross-cutting output for threshold-crossing contexts: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 - Heavy implementation routes include a GoalState activation note or `goal-state-harness` requirement.
 - Large work includes `large_work_orchestration_bundle.skill_statuses` entries for `request-complexity-router`, `host-agent-orchestration`, `goal-state-harness`, `development-lifecycle-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller`.
+- Large-work final status includes `skill_transition_handoff` when memory candidates, subagents, parallel execution, or Compound next skills create a concrete handoff.
 - Valid bundle status values are `applied`, `considered_not_needed`, `skipped_with_rationale`, and `blocked`.
 - Trigger reason: conceptual, summary/comparison, implementation/design, high-risk, or ambiguous.
 - If escalated, the actual runtime path and required harnesses.

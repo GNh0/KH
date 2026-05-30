@@ -72,6 +72,9 @@ inspect diff -> inspect relevant files -> run/read checks -> findings -> fix req
 ## Controller Requirements
 
 - Write `.kh/development/<run-id>/state/progress.json` before dispatching the first task when the run has a task plan.
+- Record `subagent_strategy`: `dispatch`, `single-controller`, `review-only`, or `blocked` before creating implementer packets.
+- Dispatch subagents only when the task split is independent enough, review benefit is real, context packets can stay bounded, and isolation is available.
+- Prefer `single-controller` when the work is sequential, tiny, shared-state heavy, or the host cannot provide safe isolation.
 - Update progress after each implementer report, review result, fix, re-review, and commit.
 - Preserve `workspace_strategy`, `task_status`, `review_status`, `commit_sha`, `next_task`, and `token_optimizer_status` in the final response.
-- Use `token-optimizer` for large task packets, command output, or subagent transcripts, and do not compress away reviewer severity, failing command output, or commit evidence.
+- Decide `token_optimizer_status` for task packets, command output, and subagent transcripts. Use `token-optimizer` only when content is large or token-expensive enough and do not compress away reviewer severity, failing command output, or commit evidence.

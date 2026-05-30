@@ -16,7 +16,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 
 - User objective, success criteria, and any explicit completion conditions.
 - Target workspace, write boundaries, and whether user-facing deliverables are expected.
-- Context budget risk: `estimated_context_tokens`, large files, repeated test logs, long command output, large task plans, subagent transcripts, expected tool calls, broad file reads, or multi-turn resume state.
+- Context budget risk: `estimated_context_tokens`, large files, repeated test logs, long command output, large task plans, task-packet size, subagent transcripts, expected tool calls, broad file reads, or multi-turn resume state.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
 - Execution level: `python-module`.
@@ -40,7 +40,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 2. Read this reference before performing non-trivial work with `token-optimizer`.
 3. For heavy work, decide the `token_optimizer_status` before the first broad file read, long-running command, or subagent dispatch.
 4. Prefer `optimize_context_content` as the default entrypoint. It passes through contract-sensitive text, minifies safe Python code, and uses command-family filters for logs.
-5. For long agent or subagent transcripts, use `summarize_agent_transcript` so task, review, verification, and commit evidence survive compression.
+5. For long agent or subagent transcripts, use `summarize_agent_transcript` so task, review, verification, and commit evidence survive compression. For short, exact, or contract-sensitive subagent output, record `considered_not_needed` or `passthrough` instead of compressing.
 6. For file-based logs, run `python -m src.skills.token_optimizer --log-file <path> --max-lines <n>` instead of pasting very long output into `python -c`.
 7. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
 8. When optimization is applied, include before/after token usage statistics:

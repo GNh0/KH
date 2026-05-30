@@ -37,9 +37,9 @@ If any of those facts would be lost, do not compress that item; use `passthrough
 - Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success/blocked mini-demo and verify contract-shaped JSON plus any demo artifacts.
 
 ## Instructions
-1. At the start of large or long-running development workflows, decide whether command output, file reads, task plans, or subagent transcripts are likely to exceed the useful context budget. Use host metadata such as `estimated_context_tokens`, largest output size, expected tool calls, broad file reads, or subagent count when available.
+1. At the start of large or long-running development workflows, decide whether command output, file reads, task plans, or subagent transcripts are likely to exceed the useful context budget. Use host metadata such as `estimated_context_tokens`, largest output size, expected tool calls, broad file reads, subagent count, task-packet size, or transcript size when available.
 2. For mixed content, call `src.skills.token_optimizer.optimize_context_content`; it classifies logs, Python code, and contract-sensitive text before deciding whether compression is safe.
-3. For long agent transcripts or subagent transcripts, call `src.skills.token_optimizer.summarize_agent_transcript` so lifecycle quality evidence is preserved while chatter is removed.
+3. For long agent transcripts or subagent transcripts, call `src.skills.token_optimizer.summarize_agent_transcript` so lifecycle quality evidence is preserved while chatter is removed. Do not assume every subagent transcript should be compressed; short, exact, or contract-sensitive reviewer output may be `considered_not_needed` or `passthrough`.
 4. If you run a command and it produces an extremely long error log (hundreds of lines) that clutters your context, you can run the python script directly to truncate it:
    `python -c "from src.skills.token_optimizer import truncate_logs; print(truncate_logs('''<PASTE_LOG_HERE>'''))"`
 5. Alternatively, if you need to pass a large python file to another agent (or summarize it), minify it first by stripping comments and docstrings via AST:

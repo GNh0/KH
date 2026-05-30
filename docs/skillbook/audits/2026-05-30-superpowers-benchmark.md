@@ -116,3 +116,11 @@ Superpowers is strong at agent behavior activation: short trigger descriptions, 
 - Added standard implementer, spec-reviewer, and code-quality-reviewer task packet guidance under `subagent-review-pipeline`.
 - Development lifecycle and subagent review now explicitly require progress updates for multi-task implementation runs.
 - Token optimizer audit showed 24.12% savings on normalized lifecycle transcript while preserving task, review, commit, next-task, worktree, verification, and sandbox evidence.
+
+## Current 2.9.12 Changes
+
+- Added `src.orchestration.skill_transitions` so large-work bundle skills behave as connected handoffs rather than a passive checklist.
+- Transition validation now flags memory candidates without `memory-state-harness`, subagent review without `role-execution-audit-harness`, selected parallel execution without `parallel-orchestration-harness`, and post-review work without a closed Compound decision.
+- Clarified that subagents are decision-gated by `subagent_strategy`; they are not automatic for large work, and token optimization for packets/transcripts is a required decision rather than automatic compression.
+- Compound `next_skills` now become binding follow-ups for `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness` until completed, blocked, or explicitly carried forward.
+- Documented the external role-stack benchmark trace: office-hours/spec/CEO/eng review/QA/ship style downstream handoffs map to KH brainstorming, architecture, review, QA, release, and the KH-only Compound learning loop.

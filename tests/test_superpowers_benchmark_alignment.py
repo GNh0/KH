@@ -148,6 +148,50 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("development progress state", plugin["description"])
         self.assertIn("Development Progress", plugin["interface"]["capabilities"])
 
+    def test_subagent_dispatch_and_token_optimizer_are_decision_gated(self):
+        subagent = read_text("skills/subagent_review_pipeline/SKILL.md")
+        packets = read_text("skills/subagent_review_pipeline/references/standard-task-packets.md")
+        token = read_text("skills/token_optimizer/SKILL.md")
+        readme = read_text("README.md")
+        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
+        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+        combined = "\n".join([subagent, packets, token, readme, prompts])
+
+        for expected in [
+            "subagent_strategy",
+            "`dispatch`, `single-controller`, `review-only`, or `blocked`",
+            "Dispatch subagents only when",
+            "This is a decision gate, not automatic compression",
+            "not automatic compression",
+            "short, exact, or contract-sensitive reviewer output",
+            "considered_not_needed",
+            "passthrough",
+        ]:
+            self.assertIn(expected, combined)
+
+    def test_skill_transition_policy_connects_large_work_skills(self):
+        readme = read_text("README.md")
+        lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
+        router = read_text("skills/request_complexity_router/SKILL.md")
+        compound = read_text("skills/compound_engineering_harness/SKILL.md")
+        audit = read_text("docs/skillbook/audits/2026-05-30-skill-transition-policy.md")
+        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
+        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+        combined = "\n".join([readme, lifecycle, router, compound, audit, prompts])
+
+        for expected in [
+            "skill_transition_handoff",
+            "memory candidates trigger memory-state-harness",
+            "subagent review triggers role-execution-audit-harness",
+            "post-review work closes compound-engineering-harness",
+            "workflow-skill-distiller",
+            "scenario-evaluation-harness",
+            "External role-stack",
+        ]:
+            self.assertIn(expected, combined)
+
+        self.assertIn("Skill Transitions", plugin["interface"]["capabilities"])
+
 
 if __name__ == "__main__":
     unittest.main()

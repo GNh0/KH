@@ -44,6 +44,16 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 - `memory-state-harness` should normally produce memory candidates only unless the user explicitly approves durable promotion and scope.
 - The bundle must preserve `parallel_strategy_decision`, `memory_candidates`, `workspace_strategy`, `token_optimizer_status`, and `compound_handoff` or a no-learning rationale.
 
+## Skill Transition Policy
+
+- Treat bundle member skills as connected handoffs, not as a passive checklist.
+- After review and before final completion, validate `skill_transition_handoff` through `src.orchestration.skill_transitions`.
+- `memory_candidates` require `memory-state-harness` to be applied, blocked, or explicitly resolved.
+- Applied `subagent-review-pipeline` requires `role-execution-audit-harness` to inspect the role/reviewer outputs or report a blocker.
+- A parallel execution decision requires `parallel-orchestration-harness` evidence.
+- Post-review work must close `compound-engineering-harness` with reusable learning, a scoped next skill, or an explicit `no_reusable_learning_rationale`.
+- Compound `next_skills` such as `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness` must be followed or listed as required next work; do not leave them as invisible chat-only advice.
+
 ## Workflow
 
 1. Clarify the intended outcome and constraints before changing behavior.
@@ -58,8 +68,9 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 10. Review for scope drift, missing requirements, and risky integration points.
 11. Run fresh verification before claiming completion or committing.
 12. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
-13. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
-14. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
+13. Validate `skill_transition_handoff` for large work so required follow-up skills cannot be silently omitted.
+14. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
+15. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
 
 ## Gate checks
 
@@ -89,6 +100,7 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - `token_optimizer_status` with token savings, passthrough reason, blocked reason, or `considered_not_needed` rationale for large or long-running workflows.
 - GoalState summary with objective, success criteria, required evidence, current evidence, missing evidence, and goal ledger paths.
 - Development progress state at `.kh/development/<run-id>/state/progress.json` for multi-task implementation runs, with task IDs, active task, RED/GREEN status, spec/code-quality review status, commit SHA, and next task.
+- `skill_transition_handoff` for large-work progress and final reports, with required next skills or `skill_transition_policy_passed`.
 - Failing-first test or smoke evidence for behavior changes when practical.
 - Review findings or an explicit no-findings review note.
 - Fresh verification output and final integration status: local only, committed, pushed, or PR-ready.

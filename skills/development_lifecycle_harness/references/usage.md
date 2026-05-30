@@ -21,6 +21,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Development progress inputs for task-plan work: `run_id`, task IDs/titles, active task, RED/GREEN status, spec-review status, code-quality-review status, fix/re-review status, commit SHA, next task, and final report fields.
 - Large-work bundle inputs: `large_work_orchestration_bundle.skill_statuses` for `request-complexity-router`, `host-agent-orchestration`, `goal-state-harness`, `development-lifecycle-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller`.
 - Large-work bundle status values: `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`; every status needs a short evidence note or rationale.
+- Skill transition inputs: `skill_transition_handoff`, required next skills, Compound `next_skills`, memory candidates, subagent/reviewer evidence, and whether each required follow-up skill was applied, blocked, or left for next work.
 - Required role, gate, state, artifact, or command evidence for this harness.
 - Existing artifacts or state files that must be preserved rather than overwritten.
 - Execution level: `procedure-policy`.
@@ -45,8 +46,9 @@ Do not use this skill only because it is available. Use it when the current task
 9. For task-plan implementation, create `.kh/development/<run-id>/state/progress.json` and update it after each task loop stage: RED, GREEN, spec review, code-quality review, fix, re-review, commit, and next task.
 10. For parallel or risky edits, record whether work used `.worktrees/`, an isolated branch, or an equivalent host workspace.
 11. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-12. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-13. Report the difference between capability available in the repository and behavior actually executed in the current run.
+12. After review and before final completion on large work, validate `skill_transition_handoff` with `src.orchestration.skill_transitions` so memory, subagent, parallel, Compound, distiller, scenario, and context follow-ups cannot be silently skipped.
+13. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+14. Report the difference between capability available in the repository and behavior actually executed in the current run.
 
 ## Evidence to produce
 
@@ -57,6 +59,7 @@ Do not use this skill only because it is available. Use it when the current task
 - `token_optimizer_status` and its evidence: savings statistics, `considered_not_needed` rationale, `passthrough` quality reason, or blocked reason.
 - GoalState and goal ledger evidence: objective, status, success criteria, evidence required, evidence collected, missing evidence, and next recommended action.
 - Development progress evidence: `.kh/development/<run-id>/state/progress.json`, active task, task statuses, RED/GREEN/review/fix/re-review/commit loop state, and stable final report fields.
+- Skill transition evidence: `skill_transition_handoff`, `required_next_skills`, transition issues, or `skill_transition_policy_passed`.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Verification command or review evidence, including failures and blocked states.

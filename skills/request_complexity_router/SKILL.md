@@ -30,8 +30,9 @@ Source label: Request complexity routing.
 11. For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, require `large_work_orchestration_bundle` evidence with `skill_statuses`.
 12. `large_work_orchestration_bundle.skill_statuses` must cover `request-complexity-router`, `host-agent-orchestration`, `goal-state-harness`, `development-lifecycle-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.
 13. Bundle entries must include `application_mode`: `runtime`, `procedural`, `considered`, or `blocked`. The router should not imply runtime execution unless runtime evidence exists.
-14. Do not create a large-work bundle for light or medium requests; keep them cheap unless context budget thresholds require only token optimization evidence.
-15. Do not grow this into a large keyword dictionary. Prefer intent order: conceptual questions stay light, concrete build/review/design work becomes heavy, and destructive or regulated advice overrides to high-risk.
+14. For large-work progress and final reports, require `skill_transition_handoff` evidence so bundle members that became necessary are not left as passive listed skills.
+15. Do not create a large-work bundle for light or medium requests; keep them cheap unless context budget thresholds require only token optimization evidence.
+16. Do not grow this into a large keyword dictionary. Prefer intent order: conceptual questions stay light, concrete build/review/design work becomes heavy, and destructive or regulated advice overrides to high-risk.
 
 ## External Benchmark Recipe
 
@@ -53,7 +54,7 @@ Pressure scenario: a user asks "삼성 괜찮아?" without context. The host mus
 - For implementation routes, a `workspace_strategy` recommendation: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`.
 - For heavy implementation routes, include `goal-state-harness` in `required_harnesses`.
 - For threshold-crossing contexts, include `token_optimization` in `evidence_required` and report `token_optimizer_status` without changing the request depth by itself.
-- For large work, include `large_work_orchestration_bundle`, `skill_statuses`, `parallel_strategy_decision`, `memory_candidates`, and `compound_handoff` in `evidence_required`.
+- For large work, include `large_work_orchestration_bundle`, `skill_statuses`, `parallel_strategy_decision`, `memory_candidates`, `compound_handoff`, and `skill_transition_handoff` in `evidence_required`.
 - A minimal evidence template for bundle status: `skill`, `status`, `application_mode`, `evidence_note`, `evidence_keys`, and optional `blocked_reason`; do not require AdapterRequest, role results, or wave metadata unless runtime execution is claimed.
 - A clarification path when context is insufficient.
 - A short reason for the chosen depth.

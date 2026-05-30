@@ -16,7 +16,7 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 
 ## Current Verified State
 
-- Repository: `GNh0/KH`, local path `C:\Users\KONEIT\Desktop\Jang\KH`.
+- Repository: `GNh0/KH`, local path `C:\Users\User\Documents\Codex\KH`.
 - Core direction approved by user: improve incrementally, taking useful ideas from external references while keeping KH/UAF branded as a personal skillbook.
 - Python core should remain the stable center for now.
 - TypeScript is best treated as a future sidecar for browser adapters, dashboards, and skill/template tooling.
@@ -61,6 +61,22 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
   - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
   - `python -m json.tool .agents/plugins/marketplace.json`
+  - `git diff --check`
+- Latest skill transition direction for 2.9.12:
+  - Large-work bundle skills are now connected by `src.orchestration.skill_transitions`.
+  - Required final evidence: `skill_transition_handoff`.
+  - Transitions enforced: memory candidates -> `memory-state-harness`, subagent review -> `role-execution-audit-harness`, selected parallel execution -> `parallel-orchestration-harness`, and post-review work -> closed `compound-engineering-harness` or visible next skills.
+  - Compound next skills are binding follow-ups for `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`.
+  - Subagents are not automatic for large work; record `subagent_strategy` before dispatch and record a token optimizer decision for packets/transcripts without forcing compression.
+- Latest verification after skill transition policy 2.9.12:
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool plugin.json`
+  - `python -m unittest tests.test_skill_transitions tests.test_superpowers_benchmark_alignment tests.test_docs_branding tests.test_skill_application_bundle tests.test_plugin_packaging` (31 tests)
+  - `python -m src.skills.uaf_skill_catalog --check` (31 valid / 0 invalid)
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (181 files)
+  - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
+  - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
+  - `python -m unittest discover -s tests` (396 tests)
   - `git diff --check`
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`

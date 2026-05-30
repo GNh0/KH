@@ -45,10 +45,13 @@ Do not skip this step only because the feature already works. The Compound step 
 7. If there is no reusable learning, record an explicit `no_reusable_learning_rationale`.
 8. Hand off to `workflow-skill-distiller`, `scenario-evaluation-harness`, `memory-state-harness`, or `context-state-harness` as appropriate.
 9. Verify the learning by running or adding a check that would catch the same failure next time.
+10. For large work, ensure the final lifecycle report includes `skill_transition_handoff` so the selected next KH skill is either completed, blocked, or visible as required next work.
 
 ## Large Work Bundle Reporting
 
 When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["compound-engineering-harness"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Large work must leave `compound_handoff`: a learning capture, scoped memory candidate, scenario regression, distiller handoff, or explicit no-reusable-learning rationale.
+
+The lifecycle transition validator treats this handoff as binding. If `compound_handoff.next_skills` names `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`, that skill must be applied, blocked with rationale, or left in `required_next_skills`. This prevents Compound from becoming a recap that never affects the next run.
 
 ## Evidence Contract
 
@@ -62,6 +65,7 @@ A valid Compound run leaves:
 - `memory_candidates` when project/conversation learning should persist
 - `no_reusable_learning_rationale` when nothing reusable exists
 - next KH skill selection
+- `skill_transition_handoff` when used inside a large-work lifecycle
 
 The agent must not claim compound learning if it only writes a recap and does not connect the learning to a future retrieval, skill, state, or regression path.
 
