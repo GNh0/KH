@@ -99,6 +99,8 @@ Git ref: main
 Sparse path: .agents/plugins
 ```
 
+The marketplace file lives on `main`, but it installs the plugin from the `codex-runtime` branch. `main` keeps tests, audits, and development docs; `codex-runtime` is the slim plugin runtime branch intended for Codex cache installs.
+
 After install or upgrade, start a new thread so Codex reloads the skills.
 
 Upgrade note: Codex installs plugin cache entries by manifest version. When publishing a new plugin build, bump both `.codex-plugin/plugin.json` and the root `plugin.json` version. If the marketplace clone is current but the installed plugin still appears under an older cache path such as `kh-uaf/2.8.0`, install or upgrade again after the version bump.
@@ -112,6 +114,8 @@ python -m src.skills.uaf_skill_catalog --check
 ```
 
 The root `plugin.json` is the UAF runtime manifest. The Codex plugin manifest is `.codex-plugin/plugin.json`.
+
+Repository hygiene: `tests/` and `docs/skillbook/` are development evidence for this repo, not required at plugin runtime. Marketplace installs should use the `codex-runtime` ref so the Codex plugin cache stays focused on `.codex-plugin/`, `skills/`, `src/`, and runtime manifests.
 
 ## Antigravity Plugin Install
 

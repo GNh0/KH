@@ -1,0 +1,6 @@
+tests/ export-ignore
+docs/ export-ignore
+test_cli_project/ export-ignore
+test_project/ export-ignore
+.worktrees/ export-ignore
+__pycache__/ export-ignore

@@ -43,10 +43,26 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertEqual(entry["name"], "kh-uaf")
         self.assertEqual(entry["source"]["source"], "url")
         self.assertEqual(entry["source"]["url"], "https://github.com/GNh0/KH.git")
-        self.assertEqual(entry["source"]["ref"], "main")
+        self.assertEqual(entry["source"]["ref"], "codex-runtime")
         self.assertEqual(entry["policy"]["installation"], "AVAILABLE")
         self.assertEqual(entry["policy"]["authentication"], "ON_INSTALL")
         self.assertEqual(entry["category"], "Productivity")
+
+    def test_root_does_not_ship_legacy_sample_project_folders(self):
+        self.assertFalse(Path("test_cli_project").exists())
+        self.assertFalse(Path("test_project").exists())
+
+        ignore_content = Path(".gitignore").read_text(encoding="utf-8")
+        self.assertIn("test_cli_project/", ignore_content)
+        self.assertIn("test_project/", ignore_content)
+
+    def test_runtime_archive_marks_development_only_paths_export_ignored(self):
+        attributes = Path(".gitattributes").read_text(encoding="utf-8")
+
+        self.assertIn("tests/ export-ignore", attributes)
+        self.assertIn("docs/ export-ignore", attributes)
+        self.assertIn("test_cli_project/ export-ignore", attributes)
+        self.assertIn("test_project/ export-ignore", attributes)
 
     def test_antigravity_workspace_plugin_wrapper_is_available(self):
         plugin_root = Path(".agents") / "plugins" / "kh-uaf"
@@ -78,6 +94,8 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn("## Codex Plugin Install", content)
         self.assertIn(".codex-plugin/plugin.json", content)
         self.assertIn(".agents/plugins/marketplace.json", content)
+        self.assertIn("codex-runtime", content)
+        self.assertIn("slim plugin runtime branch", content)
         self.assertIn("## Antigravity Plugin Install", content)
         self.assertIn("~/.gemini/config/plugins/kh-uaf", content)
         self.assertIn(".agents/plugins/kh-uaf", content)
@@ -94,6 +112,7 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn(_u("## Antigravity \ud50c\ub7ec\uadf8\uc778 \uc124\uce58"), content)
         self.assertIn(_u("\uc5c5\uadf8\ub808\uc774\ub4dc \ucc38\uace0"), content)
         self.assertIn(_u("\ubc84\uc804 bump"), content)
+        self.assertIn("codex-runtime", content)
         self.assertIn("smoke-only", content)
 
     def test_korean_readme_is_not_mojibake(self):

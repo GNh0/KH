@@ -8,3 +8,5 @@ venv/
 .kh/
 .worktrees/
 .demo-output/
+test_cli_project/
+test_project/

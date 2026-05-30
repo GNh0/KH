@@ -134,6 +134,23 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed, `practical_confidence_score`: 10.0)
   - `python -m src.orchestration.scenario_evaluator --summary` (30/30 passed, 66 meaningful signals)
   - `git diff --check`
+- Latest repository packaging cleanup direction for 2.9.16:
+  - `main` remains the development and verification repository with `tests/`, audits, and docs.
+  - Codex marketplace metadata in `.agents/plugins/marketplace.json` now installs from the `codex-runtime` ref so plugin cache installs do not need to carry development-only test folders.
+  - Removed legacy root sample project folders `test_cli_project/` and `test_project/`; `.gitignore` prevents regenerating them as tracked files.
+  - Added `.gitattributes` export-ignore markers for development-only paths when an archive-based runtime package is produced.
+  - Plugin manifest versions are now `2.9.16` to force cache refresh after the runtime packaging change.
+- Latest verification after repository packaging cleanup 2.9.16:
+  - `python -m unittest tests.test_plugin_packaging tests.test_plugin_composition_policy tests.test_docs_branding` (24 tests)
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool plugin.json`
+  - `python -m json.tool .agents/plugins/marketplace.json`
+  - `python -m src.skills.uaf_skill_catalog --check` (33 valid / 0 invalid)
+  - `git diff --check`
+  - `python -m unittest discover -s tests` (419 tests)
+  - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.3)
+  - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed, `practical_confidence_score`: 10.0)
+  - `python -m src.orchestration.scenario_evaluator --summary` (30/30 passed, 66 meaningful signals)
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
   - `python -m json.tool .codex-plugin/plugin.json`

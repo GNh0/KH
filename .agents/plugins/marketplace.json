@@ -9,7 +9,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/GNh0/KH.git",
-        "ref": "main"
+        "ref": "codex-runtime"
       },
       "policy": {
         "installation": "AVAILABLE",

@@ -47,6 +47,8 @@ Git ref: main
 Sparse path: .agents/plugins
 ```
 
+마켓플레이스 파일은 `main`에 있지만, 실제 플러그인은 `codex-runtime` 브랜치에서 설치되도록 설정되어 있습니다. `main`은 테스트, 감사 문서, 개발 기록을 보관하고, `codex-runtime`은 Codex 설치 캐시에 들어가는 슬림 런타임 브랜치입니다.
+
 설치 또는 업그레이드 후에는 새 thread를 시작해야 Codex가 스킬을 다시 로드합니다.
 
 업그레이드 참고: Codex는 플러그인 매니페스트 버전별로 설치 캐시를 만듭니다. 새 플러그인 빌드를 배포할 때는 `.codex-plugin/plugin.json`과 루트 `plugin.json`의 version을 함께 올려야 합니다. marketplace clone은 최신인데 설치된 플러그인이 `kh-uaf/2.8.0` 같은 예전 캐시 경로에 남아 있으면, 버전 bump 이후 다시 설치하거나 업그레이드합니다.
@@ -60,6 +62,8 @@ python -m src.skills.uaf_skill_catalog --check
 ```
 
 루트 `plugin.json`은 UAF 런타임 매니페스트이고, Codex 플러그인 매니페스트는 `.codex-plugin/plugin.json`입니다.
+
+저장소 정리 기준: `tests/`와 `docs/skillbook/`은 개발/검증용 증거이며 플러그인 런타임에는 필요하지 않습니다. 마켓플레이스 설치는 `codex-runtime` ref를 사용해 Codex 플러그인 캐시에 `.codex-plugin/`, `skills/`, `src/`, 런타임 매니페스트 중심으로 들어가게 합니다.
 
 ## Antigravity 플러그인 설치
 

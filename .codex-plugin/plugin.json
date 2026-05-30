@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.15",
+  "version": "2.9.16",
   "description": "KH Universal Agent Framework skills, capability-based plugin composition, brainstorming handoff, GoalState ledger, large-work orchestration bundle with application modes, Superpowers-style project-local artifacts, development progress state, automatic workflow usability runtime, progress-to-Compound bridge, token provider policy, KH role commands, visible progress panels, session-start context restore, skill transition policy, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
