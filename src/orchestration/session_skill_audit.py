@@ -268,6 +268,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             "completion_guard": postmortem.completion_guard,
             "verification_claim_guard": postmortem.verification_claim_guard,
             "scope_completion_delta": postmortem.scope_completion_delta,
+            "user_stop_guard": postmortem.user_stop_guard,
             "recommended_actions": postmortem.recommended_actions,
         },
     )
@@ -328,6 +329,17 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
                 "severity": "P1",
                 "reason": "final milestone omitted objective markers from the active goal",
                 "action": "Record scope_completion_delta and continue missing objective markers.",
+            }
+        )
+    user_stop_guard = postmortem.get("user_stop_guard", {}) or {}
+    if user_stop_guard.get("status") == "blocked":
+        issues.append(
+            {
+                "skill": "goal-state-harness",
+                "status": "blocked",
+                "severity": "P0",
+                "reason": "user stop request was followed by continued work or an active goal left open",
+                "action": "Treat user stop/cancel as higher priority than goal_context; stop tools and mark the active goal blocked with user_requested_stop.",
             }
         )
     subagents = postmortem.get("subagent_summary", {}) or {}

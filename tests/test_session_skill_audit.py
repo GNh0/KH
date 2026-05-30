@@ -161,6 +161,46 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_user_stop_guard_failure_is_p0_skill_audit_issue(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"objective": "Build complete app", "status": "active"},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "goal 멈추라고",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "goal-state-harness"
+                and issue["severity"] == "P0"
+                and "user stop request" in issue["reason"]
+                for issue in audit.issues
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

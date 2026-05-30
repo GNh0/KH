@@ -17,7 +17,16 @@ from src.orchestration.progress_compound_bridge import (
     build_progress_compound_artifacts,
     write_progress_compound_artifacts,
 )
-from src.orchestration.progress_panel import build_progress_panel, render_progress_panel
+from src.orchestration.progress_panel import (
+    build_host_progress_panel,
+    build_progress_panel,
+    render_progress_panel,
+    write_host_progress_panel,
+)
+from src.orchestration.interruption_state import (
+    build_interruption_checkpoint,
+    write_interruption_checkpoint,
+)
 from src.orchestration.role_commands import (
     build_role_command_menu,
     list_role_command_entrypoints,
@@ -167,6 +176,35 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         self.assertIn("[x] task-1", rendered)
         self.assertIn("Token: used", rendered)
 
+    def test_host_progress_panel_contract_targets_native_agent_surfaces(self):
+        progress = self.sample_progress()
+
+        panel = build_host_progress_panel(progress, host="antigravity")
+
+        self.assertEqual(panel["schema"], "kh.uaf.host_progress_panel.v1")
+        self.assertEqual(panel["host"], "antigravity")
+        self.assertEqual(panel["host_binding"]["preferred_surface"], "antigravity-agent-manager")
+        self.assertTrue(panel["capabilities"]["subagent_panel"])
+        self.assertTrue(panel["capabilities"]["worktree_aware"])
+        self.assertEqual(panel["summary"]["workspace_strategy"], "project-local-worktree")
+        self.assertIn("tasks", {section["id"] for section in panel["sections"]})
+        self.assertIn("subagents", {section["id"] for section in panel["sections"]})
+        task_rows = next(section["rows"] for section in panel["sections"] if section["id"] == "tasks")
+        self.assertEqual(task_rows[0]["status"], "complete")
+        self.assertEqual(task_rows[0]["detail"]["spec_review_status"], "passed")
+        self.assertEqual(
+            panel["state_files"]["host_panel_json"],
+            ".kh/development/run-usability/state/host_panel.antigravity.json",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_host_progress_panel(tmp, progress, host="antigravity")
+            written = json.loads(path.read_text(encoding="utf-8"))
+
+            self.assertEqual(path.name, "host_panel.antigravity.json")
+            self.assertEqual(written["host"], "antigravity")
+            self.assertEqual(written["summary"]["task_status"], "complete")
+
     def test_session_start_context_reads_kh_docs_progress_compound_and_memory_candidates(self):
         progress = self.sample_progress()
         with tempfile.TemporaryDirectory() as tmp:
@@ -198,8 +236,69 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertEqual(context["compound_handoff"]["status"], "ready_for_system_update")
             self.assertTrue(context["docs_kh"])
             self.assertEqual(context["memory_candidates"][0]["content"], "Read KH progress and Compound before continuing.")
+            self.assertEqual(context["memory_context"]["record_count"], 0)
             self.assertIn("KH Session Start Context", rendered)
+            self.assertIn("Memory Records", rendered)
             self.assertIn("Memory Candidates", rendered)
+
+    def test_interruption_checkpoint_writes_resume_memory_and_session_start_prefers_it(self):
+        progress = DevelopmentRunProgress(
+            run_id="run-stop",
+            objective="Finish a long task safely.",
+            workspace_strategy="project-local-worktree",
+            active_task="task-2",
+            next_task="task-2",
+            token_optimizer_status="used",
+            tasks=[
+                DevelopmentTaskProgress(
+                    task_id="task-1",
+                    title="Done task",
+                    status="complete",
+                    red_status="failed_expected",
+                    green_status="passed",
+                    spec_review_status="passed",
+                    code_quality_review_status="passed",
+                    commit_sha="abc1234",
+                ),
+                DevelopmentTaskProgress(
+                    task_id="task-2",
+                    title="Continue stopped work",
+                    status="in_progress",
+                    changed_files=["src/example.py"],
+                    verification=[{"command": "python -m unittest", "status": "failed"}],
+                    next_action="resume from failing test",
+                ),
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_dir = root / ".memory"
+
+            checkpoint = build_interruption_checkpoint(
+                root,
+                progress,
+                goal={"objective": progress.objective, "status": "active"},
+            )
+            result = write_interruption_checkpoint(
+                root,
+                progress,
+                goal={"objective": progress.objective, "status": "active"},
+                thread_id="thread-1",
+                memory_root=memory_dir,
+            )
+            context = build_session_start_context(root, thread_id="thread-1", memory_root=memory_dir)
+            rendered = render_session_start_context(context)
+
+            self.assertEqual(checkpoint.goal["status"], "blocked")
+            self.assertTrue(Path(result["paths"]["interruption_json"]).exists())
+            self.assertTrue(Path(result["paths"]["interruption_markdown"]).exists())
+            self.assertEqual(result["memory"]["status"], "saved")
+            self.assertEqual(context["interruption_checkpoint"]["run_id"], "run-stop")
+            self.assertEqual(context["memory_context"]["record_count"], 1)
+            self.assertIn("Resume checkpoint for run-stop", context["memory_context"]["records"][0]["content"])
+            self.assertEqual(context["recommended_reads"][0], result["paths"]["interruption_json"])
+            self.assertIn("Interrupted: run-stop reason=user_requested_stop", rendered)
+            self.assertIn("Resume checkpoint for run-stop", rendered)
 
     def test_plugin_surface_exposes_workflow_usability_controls(self):
         root = Path(__file__).resolve().parents[1]
@@ -216,11 +315,14 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             "Session Postmortem",
             "Session Skill Audit",
             "Completion Guard",
+            "User Stop Guard",
+            "Interruption Checkpoints",
             "Verification Claim Guard",
             "Windows Dev Server Runner",
             "Token Provider Policy",
             "Role Commands",
             "Progress Panel",
+            "Host Native Progress Panels",
             "Session Restore",
         ]:
             self.assertIn(capability, codex_manifest["interface"]["capabilities"])
@@ -234,6 +336,8 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             "token-optimizer-provider",
             "role-command-entrypoints",
             "progress-panel",
+            "host-progress-panel",
+            "interruption-checkpoint",
             "session-start-context",
             "session-postmortem",
             "session-skill-audit",
@@ -246,9 +350,13 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         self.assertIn("session_postmortem", prompt)
         self.assertIn("session_skill_audit", prompt)
         self.assertIn("scope_completion_delta", prompt)
+        self.assertIn("user_stop_guard", prompt)
+        self.assertIn("interruption.json", prompt)
+        self.assertIn("resume-checkpoint", prompt)
         self.assertIn("memory_candidates", prompt)
         self.assertIn("skill inspection", prompt)
         self.assertIn("windows-dev-server-runner", prompt)
+        self.assertIn("host_panel.<host>.json", prompt)
         self.assertIn("/kh:work", prompt)
         self.assertIn("progress.json", prompt)
         self.assertIn(".kh", prompt)
@@ -263,6 +371,7 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
                 "token_optimizer_max_lines": 8,
                 "memory_root": str(Path(tmp) / ".memory"),
                 "workspace_strategy": "project-local-worktree",
+                "host_panel_host": "antigravity",
                 "goal": {"objective": "Build a workflow."},
             }
             noisy_output = "\n".join([*(f"progress {index}" for index in range(80)), "ERROR: runtime failed", "exit code: 1"])
@@ -303,6 +412,9 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertEqual(result.status, "complete")
             self.assertTrue(Path(result.progress_path).exists())
             self.assertIn("KH Progress", result.progress_panel)
+            self.assertTrue(Path(result.host_progress_panel_path).exists())
+            self.assertEqual(result.host_progress_panel["host"], "antigravity")
+            self.assertIn("host_progress_panel", result.evidence)
             self.assertEqual(result.token_optimizer_provider["provider"], "kh")
             self.assertEqual(result.token_optimization["status"], "used")
             self.assertEqual(result.memory_state["status"], "candidates_recorded")

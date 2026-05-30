@@ -4,6 +4,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.orchestration.development_progress import read_development_progress
+from src.orchestration.interruption_state import (
+    latest_interruption_checkpoint_path,
+    read_latest_interruption_checkpoint,
+)
 from src.orchestration.memory_state import MemoryScopeResolver
 from src.orchestration.memory_store import MemoryStore
 
@@ -22,17 +26,25 @@ def build_session_start_context(
 
     compound_capture = _read_latest_json(root / ".kh" / "development", "compound_capture.json")
     compound_handoff = _read_latest_json(root / ".kh" / "development", "compound_handoff.json")
+    interruption_path = latest_interruption_checkpoint_path(root)
+    interruption_checkpoint = read_latest_interruption_checkpoint(root) if interruption_path else {}
     kh_docs = _latest_docs(root / "docs" / "kh", max_items=max_items)
     memory_candidates = _memory_candidates(root, thread_id=thread_id, memory_root=memory_root, max_items=max_items)
+    memory_context = _memory_context(root, thread_id=thread_id, memory_root=memory_root, max_items=max_items)
 
     recommended_reads = []
-    for path in [latest_progress_path]:
+    for path in [interruption_path, latest_progress_path]:
         if path:
             recommended_reads.append(str(path))
     recommended_reads.extend(item["path"] for item in kh_docs[: max_items // 2 or 1])
     recommended_reads.extend(
         item.get("metadata", {}).get("source_path", "")
         for item in memory_candidates
+        if item.get("metadata", {}).get("source_path")
+    )
+    recommended_reads.extend(
+        item.get("metadata", {}).get("source_path", "")
+        for item in memory_context.get("records", [])
         if item.get("metadata", {}).get("source_path")
     )
 
@@ -43,14 +55,19 @@ def build_session_start_context(
         "latest_progress": latest_progress,
         "compound_capture": compound_capture,
         "compound_handoff": compound_handoff,
+        "interruption_checkpoint_path": str(interruption_path) if interruption_path else "",
+        "interruption_checkpoint": interruption_checkpoint,
         "docs_kh": kh_docs,
+        "memory_context": memory_context,
         "memory_candidates": memory_candidates,
         "recommended_reads": _dedupe([item for item in recommended_reads if item])[:max_items],
         "evidence": [
             "session_start_context",
             ".kh",
             "docs/kh",
+            "memory_records",
             "memory_candidates",
+            *(("interruption_checkpoint",) if interruption_checkpoint else ()),
         ],
     }
 
@@ -58,10 +75,17 @@ def build_session_start_context(
 def render_session_start_context(context: Dict[str, Any]) -> str:
     progress = context.get("latest_progress", {})
     handoff = context.get("compound_handoff", {})
+    interruption = context.get("interruption_checkpoint", {})
     lines = [
         "KH Session Start Context",
         f"Project: {context.get('project_root', '')}",
     ]
+    if interruption:
+        lines.append(
+            f"Interrupted: {interruption.get('run_id', '')} reason={interruption.get('reason', '')}"
+        )
+        if interruption.get("next_action"):
+            lines.append(f"Resume next action: {interruption.get('next_action')}")
     if progress:
         lines.append(f"Latest progress: {progress.get('run_id', '')} status={progress.get('task_status', '')}")
         if progress.get("next_task"):
@@ -75,6 +99,10 @@ def render_session_start_context(context: Dict[str, Any]) -> str:
     lines.append("Recommended Reads")
     for path in context.get("recommended_reads", []) or ["none"]:
         lines.append(f"- {path}")
+    lines.append("")
+    lines.append("Memory Records")
+    for item in context.get("memory_context", {}).get("records", []) or [{"content": "none"}]:
+        lines.append(f"- {item.get('content', '')}")
     lines.append("")
     lines.append("Memory Candidates")
     for item in context.get("memory_candidates", []) or [{"content": "none"}]:
@@ -128,6 +156,19 @@ def _memory_candidates(
         scope = replace(scope, root_path=str(root))
     candidates = MemoryStore(str(root), scope).read_candidates()
     return candidates[-max_items:] if max_items >= 0 else candidates
+
+
+def _memory_context(
+    project_root: Path,
+    thread_id: str,
+    memory_root: str | Path | None,
+    max_items: int,
+) -> Dict[str, Any]:
+    scope = MemoryScopeResolver.project_scope(str(project_root), thread_id=thread_id or None)
+    root = Path(memory_root).resolve() if memory_root else Path(MemoryScopeResolver.storage_path(scope))
+    if memory_root:
+        scope = replace(scope, root_path=str(root))
+    return MemoryStore(str(root), scope).build_context(limit=max_items)
 
 
 def _dedupe(items: List[str]) -> List[str]:

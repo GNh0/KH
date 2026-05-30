@@ -44,6 +44,7 @@ KH UAF separates reusable skills from per-project workflow artifacts.
 - Human-readable KH notes and handoffs are written in the target project like Superpowers-style local artifacts: `.kh/<skill>/<run-id>/content/*.md` for KH working notes, `.kh/<skill>/<run-id>/state/*.json` for run-local state, and shareable Markdown under `docs/kh/specs/`, `docs/kh/plans/`, `docs/kh/decisions/`, `docs/kh/qa/`, or `docs/kh/handoffs/` by document type.
 - Git-backed implementation should prefer an isolated workspace by default. Use host worktrees when the host provides them; otherwise use project-local `.worktrees/<task>` or an isolated branch. Git worktrees should live under `.worktrees/` when KH creates project-local isolation. Use the current checkout only for docs-only edits, a single-file small patch, or explicit in-place user instruction, and report `workspace_strategy` in the final status.
 - Multi-task development runs should keep machine-readable progress at `.kh/development/<run-id>/state/progress.json`. The progress state records active task, RED/GREEN evidence, spec/code-quality review status, fix/re-review status, commit SHA, next task, `workspace_strategy`, and `token_optimizer_status`.
+- Hosts that support native progress surfaces can also read `.kh/development/<run-id>/state/host_panel.<host>.json`. KH writes this host progress panel contract for Codex, Antigravity-style Agent Manager, generic CLI shells, and future hosts so the same run state can appear in each host's native panel without depending on Superpowers.
 
 KH does not require `.superpowers/` or `docs/superpowers/` paths. If Superpowers is also installed, those folders are Superpowers-owned project artifacts; KH-owned runtime state should use `.uaf/`, KH local run notes/state should use `.kh/`, and KH shareable deliverables should use `docs/kh/` or the task-specific `docs/` export path.
 
@@ -63,6 +64,8 @@ Recommended KH project artifact layout:
     development/<run-id>/
       state/
         progress.json
+        host_panel.codex.json
+        host_panel.antigravity.json
   docs/
     kh/
       specs/
@@ -195,12 +198,17 @@ The workflow usability layer makes those lifecycle records visible and resumable
 - `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider(...)` records `token_optimizer_provider`: `kh`, `rtk`, `hybrid`, or `passthrough`. RTK is optional; hybrid falls back to KH and exact source-of-truth text stays passthrough.
 - `src.orchestration.role_commands.resolve_role_command(...)` provides short `/kh:*` role command front doors such as `/kh:work`, `/kh:qa`, `/kh:ship`, `/kh:learn`, and `/kh:resume`.
 - `src.orchestration.progress_panel.render_progress_panel(...)` gives long task-plan work a visible status panel with task status, review status, token optimizer status, commit SHA, and next task.
+- `src.orchestration.progress_panel.build_host_progress_panel(...)` and `write_host_progress_panel(...)` produce `host_panel.<host>.json`, a stable JSON contract for Codex task panels, Antigravity-style Agent Manager/subagent panels, generic CLI shells, and future host UIs.
 - `src.orchestration.session_start_context.build_session_start_context(...)` inspects `.kh`, `docs/kh`, and scoped memory candidates at the start of the next session.
-- `src.orchestration.session_postmortem.analyze_codex_session_jsonl(...)` reviews Codex rollout logs after a completed or interrupted session. It flags large-token runs that skipped the token gate, timed-out or still-running reviewers, secret-like command text, missing commit/push evidence, active goals incorrectly closed as final completion, failed verification paths that were not reported, and scope gaps between the original objective and the final milestone.
+- `src.orchestration.session_postmortem.analyze_codex_session_jsonl(...)` reviews Codex rollout logs after a completed or interrupted session. It flags large-token runs that skipped the token gate, timed-out or still-running reviewers, secret-like command text, missing commit/push evidence, active goals incorrectly closed as final completion, user stop requests that were overridden by `goal_context`, failed verification paths that were not reported, and scope gaps between the original objective and the final milestone.
 - `src.orchestration.session_skill_audit.analyze_session_skills(...)` audits a Codex rollout log against all packaged KH skills, separating required, applied, inspected, mentioned, and missing skill evidence.
 - `src.orchestration.windows_dev_server.build_streamlit_launch_plan(...)` produces a Windows-safe Streamlit launch plan with normalized `Path`/`PATH`, redirected logs, visible/hidden window strategy, and a separate HTTP health check.
 
 Completion is also guarded against partial milestones. A scaffold, first vertical slice, or pushed branch is not final completion while the goal remains active. KH postmortem records `scope_completion_delta` so the next task continues missing objective markers instead of turning a useful intermediate result into a false finish. If a promised verification route fails or is unavailable, such as Browser/Playwright QA, the final report must say that explicitly and distinguish it from narrower HTTP/status checks.
+
+User interruption is a hard stop. If the user says stop, pause, cancel, `스탑`, `중단`, or `goal 멈춰`, KH treats that as higher priority than any later automatic `goal_context` continuation. The active goal should be marked `blocked` with `blocked_reason=user_requested_stop`, and postmortem `user_stop_guard` blocks sessions where tools or patches continue afterward.
+
+Stop requests are also resume-safe. KH writes `.kh/development/<run-id>/state/interruption.json`, `.kh/development/<run-id>/content/interruption.md`, and a scoped durable `resume-checkpoint` memory record. On the next request, `session_start_context` reads the interruption checkpoint and memory record before relying on compressed chat context, so work resumes from saved state instead of from memory alone.
 
 Skill usage is separated from skill inspection. For example, reading `token_optimizer/SKILL.md` or quoting `token_optimizer_status` does not count as token optimizer usage; the postmortem requires runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence.
 
