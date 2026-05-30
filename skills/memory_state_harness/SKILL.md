@@ -32,10 +32,11 @@ This is the UAF-native persistent memory harness. It keeps long-lived project or
 4. Save verified project decisions as `MemoryRecord(kind="decision")`.
 5. Save uncertain lessons as candidates first, not committed memory.
 6. When workflow usability or Compound produces `memory_candidates`, call `src.orchestration.runtime_memory.record_workflow_memory_candidates` so the scoped candidate store can be read by the next session.
-7. Append memory lifecycle events to `memory_events.jsonl`.
-8. Keep active and archived conversation memories.
-9. Delete or quarantine conversation memories only when the host reports deletion or the thread disappears from the host registry.
-10. Never store secrets, API keys, private keys, credentials, or one-off transient prompts.
+7. When the user explicitly stops an active workflow, save a durable scoped `MemoryRecord(kind="resume-checkpoint")` through `src.orchestration.interruption_state.write_interruption_checkpoint`; this is operational resume state, not global personal memory.
+8. Append memory lifecycle events to `memory_events.jsonl`.
+9. Keep active and archived conversation memories.
+10. Delete or quarantine conversation memories only when the host reports deletion or the thread disappears from the host registry.
+11. Never store secrets, API keys, private keys, credentials, or one-off transient prompts.
 
 ## Runtime storage rule
 
@@ -63,6 +64,7 @@ Pressure scenario: if a fact came from an older conversation and the source may 
 - `memory_context`: bounded records loaded for the current workflow.
 - `memory_store`: JSON/JSONL paths for records, candidates, events, and scope state.
 - `memory_candidates`: pending records requiring later promotion.
+- `resume_checkpoint`: durable scoped memory record pointing to the latest interruption checkpoint when a user stop must survive context compression.
 - `memory_state`: candidate recording status with recorded, skipped, blocked, and promotion mode.
 - `cleanup_summary`: active, archived, quarantined, and deleted conversation memory results.
 
@@ -70,6 +72,7 @@ Pressure scenario: if a fact came from an older conversation and the source may 
 
 - Do not mix project memory and conversation memory in one namespace.
 - Do not persist secrets, credentials, or raw private outputs as durable memory.
+- Do not rely on compressed chat context after a stop; load the scoped `resume-checkpoint` and its `.kh` interruption file first.
 - Do not delete memory for archived conversations without checking the thread registry when available.
 - Do not treat memory-derived facts as current truth without revalidation when they can drift.
 
@@ -81,5 +84,6 @@ Pressure scenario: if a fact came from an older conversation and the source may 
 - `src.orchestration.memory_state`
 - `src.orchestration.memory_store`
 - `src.orchestration.runtime_memory`
+- `src.orchestration.interruption_state`
 - `src.platforms.codex_thread_registry`
 - `src.tasks.workflows`

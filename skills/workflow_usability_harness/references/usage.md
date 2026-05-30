@@ -19,6 +19,8 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 - Optional role command such as `/kh:work`, `/kh:qa`, or `/kh:learn`.
 - Existing `.kh` state, `docs/kh` handoffs, and scoped memory candidate store.
 - Optional Codex rollout JSONL path when reviewing a finished or interrupted session.
+- Any user stop/pause/cancel message and the goal status immediately after it.
+- Current progress, changed files, remaining work, and scoped memory root for durable interruption resume records.
 
 ## Execution pattern
 
@@ -43,10 +45,11 @@ This harness is also the KH-native place to absorb useful external workflow ergo
    `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts(project_root, progress)`.
 11. Treat generated memory records as candidates unless the user explicitly approves durable memory promotion and scope.
 12. Route next skills from the handoff instead of leaving them as chat-only advice.
-13. When reviewing a real session, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl(...)` and inspect `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, `token_gate`, `subagent_summary`, `secret_findings`, and `git_integration`.
-14. For full skill usage review, call `src.orchestration.session_skill_audit.analyze_session_skills(...)` or `python -m src.orchestration.session_skill_audit --summary <jsonl>`.
-15. Treat skill-file reads and default-prompt mentions as inspection only. Token optimizer usage requires runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence.
-16. For Windows Streamlit or similar local dev-server checks, use `src.orchestration.windows_dev_server.build_streamlit_launch_plan(...)` to avoid repeated hidden-process failures caused by Path/PATH environment quirks.
+13. When reviewing a real session, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl(...)` and inspect `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, `user_stop_guard`, `token_gate`, `subagent_summary`, `secret_findings`, and `git_integration`.
+14. When honoring a user stop, call `src.orchestration.interruption_state.write_interruption_checkpoint(...)` to save `.kh/development/<run-id>/state/interruption.json`, `.kh/development/<run-id>/content/interruption.md`, and a scoped durable `resume-checkpoint` memory record.
+15. For full skill usage review, call `src.orchestration.session_skill_audit.analyze_session_skills(...)` or `python -m src.orchestration.session_skill_audit --summary <jsonl>`.
+16. Treat skill-file reads and default-prompt mentions as inspection only. Token optimizer usage requires runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence.
+17. For Windows Streamlit or similar local dev-server checks, use `src.orchestration.windows_dev_server.build_streamlit_launch_plan(...)` to avoid repeated hidden-process failures caused by Path/PATH environment quirks.
 
 ## Evidence to produce
 
@@ -61,7 +64,8 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 - `compound_candidates.json` containing memory, skill, and scenario candidates.
 - `docs/kh/handoffs/<run-id>-compound.md`.
 - `required_next_skills` or explicit blocked/no-learning rationale.
-- `session_postmortem` when inspecting prior Codex logs, including active-goal completion, verification-claim, and scope-delta guard status.
+- `session_postmortem` when inspecting prior Codex logs, including active-goal completion, verification-claim, scope-delta, and user-stop guard status.
+- `interruption_checkpoint` plus scoped durable memory record when a user-requested stop must survive context compression.
 - `session_skill_audit` when inspecting a session against all packaged KH skills.
 - `token_optimizer_evidence` separating runtime calls, skill doc reads, explicit usage records, and status mentions.
 - `windows_dev_server_launch_plan` when a local Windows app server must stay running for QA.
@@ -75,6 +79,7 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 - If a role command is unknown, fail closed with the known `/kh:*` menu.
 - If memory candidates contain secret-like content, do not persist them; use memory-state safety checks.
 - If a user goal is still active and the session emitted completion language for a scaffold, first slice, or partial milestone, mark `completion_guard=blocked`, record `scope_completion_delta`, and continue the missing objective markers.
+- If the user asked to stop, pause, cancel, or `goal 멈춰`, user intent overrides later `goal_context` auto-continuation. Stop new work, write an interruption checkpoint plus scoped resume memory record, mark the active goal blocked with `blocked_reason=user_requested_stop`, and record `user_stop_guard=passed`; if work continued or the goal stayed active, mark `user_stop_guard=blocked`.
 - If a promised verification path fails or is unavailable, such as Browser/Playwright QA, mark `verification_claim_guard=blocked` unless the final report explicitly names the failed verification and residual risk.
 - If token optimizer was only inspected, keep `token_optimizer_status=blocked` when the token gate requires optimization and require runtime evidence or passthrough before final completion.
 

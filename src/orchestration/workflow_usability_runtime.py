@@ -9,7 +9,7 @@ from src.orchestration.development_progress import (
     write_development_progress,
 )
 from src.orchestration.progress_compound_bridge import write_progress_compound_artifacts
-from src.orchestration.progress_panel import render_progress_panel
+from src.orchestration.progress_panel import render_progress_panel, write_host_progress_panel
 from src.orchestration.runtime_memory import record_workflow_memory_candidates
 from src.orchestration.runtime_token_optimizer import optimize_workflow_task_results
 from src.orchestration.session_start_context import build_session_start_context
@@ -27,6 +27,8 @@ class WorkflowUsabilityRuntimeArtifacts:
     progress: Dict[str, Any] = field(default_factory=dict)
     progress_path: str = ""
     progress_panel: str = ""
+    host_progress_panel: Dict[str, Any] = field(default_factory=dict)
+    host_progress_panel_path: str = ""
     compound: Dict[str, Any] = field(default_factory=dict)
     evidence: List[str] = field(default_factory=list)
     error_type: str = ""
@@ -121,6 +123,9 @@ def apply_workflow_usability_runtime(
             raise ValueError(f"invalid workflow usability progress: {validation['missing']}")
         progress_path = write_development_progress(project_dir, progress)
         panel = render_progress_panel(progress)
+        host_panel_host = str(metadata.get("host_panel_host") or metadata.get("platform") or metadata.get("host") or "generic")
+        host_panel_path = write_host_progress_panel(project_dir, progress, host=host_panel_host)
+        host_panel = progress_to_host_panel(host_panel_path)
         compound_artifacts = write_progress_compound_artifacts(project_dir, progress)
         memory_state = record_workflow_memory_candidates(
             project_dir,
@@ -137,12 +142,15 @@ def apply_workflow_usability_runtime(
             progress=progress.to_dict(),
             progress_path=str(progress_path),
             progress_panel=panel,
+            host_progress_panel=host_panel,
+            host_progress_panel_path=str(host_panel_path),
             compound=compound_artifacts.to_dict(),
             evidence=[
                 "workflow_usability_runtime",
                 "progress_json",
                 "development_progress_valid",
                 "progress_panel",
+                "host_progress_panel",
                 "compound_handoff",
                 *list(token_optimization.get("evidence", [])),
                 *list(memory_state.get("evidence", [])),
@@ -161,6 +169,13 @@ def apply_workflow_usability_runtime(
             error_type=type(exc).__name__,
             message=str(exc),
         )
+
+
+def progress_to_host_panel(path: str | Any) -> Dict[str, Any]:
+    import json
+    from pathlib import Path
+
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def build_workflow_development_progress(

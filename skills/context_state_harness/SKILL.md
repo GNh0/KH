@@ -25,8 +25,9 @@ This is a UAF-native context harness for context-save and context-restore patter
 2. Record decisions, assumptions, blockers, and next actions in structured metadata.
 3. Store context artifacts inside the UAF runtime state directory, not in external user skill folders and not in the target project root by default.
 4. Write a resume handoff snapshot to runtime `.uaf/state/resume_handoff.json` and a human-readable note to `.uaf/state/resume_handoff.md`.
-5. Restore by reading the newest matching context; hosts should validate branch/head/dirty-file state against `git_state` before treating it as authoritative.
-6. Treat stale or conflicting context as blocked, not silently authoritative.
+5. On explicit user stop/pause/cancel, write `.kh/development/<run-id>/state/interruption.json`, `.kh/development/<run-id>/content/interruption.md`, and a scoped durable `resume-checkpoint` memory record through `src.orchestration.interruption_state`.
+6. Restore by reading the newest matching interruption checkpoint, resume handoff, and scoped memory record; hosts should validate branch/head/dirty-file state against `git_state` before treating it as authoritative.
+7. Treat stale or conflicting context as blocked, not silently authoritative.
 
 ## Required outputs
 
@@ -35,6 +36,7 @@ This is a UAF-native context harness for context-save and context-restore patter
 - `decisions`: explicit decisions and assumptions.
 - `remaining_work`: next tasks and verification commands.
 - `resume_handoff`: JSON and Markdown paths for a future host session.
+- `interruption_checkpoint`: JSON/Markdown paths and scoped memory record for user-requested stops.
 
 ## External Benchmark Recipe
 

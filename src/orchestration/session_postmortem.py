@@ -88,6 +88,29 @@ VERIFICATION_COMMAND_PATTERNS = (
     re.compile(r"\bgit\s+diff\s+--check\b", re.IGNORECASE),
 )
 
+USER_STOP_PATTERN = re.compile(
+    r"\b(?:stop|pause|cancel|abort|halt)\b|멈추|멈춰|스탑|중단|그만|정지",
+    re.IGNORECASE,
+)
+USER_RESUME_PATTERN = re.compile(
+    r"\b(?:resume|continue|proceed|go on)\b|계속|이어|재개|진행해|다시\s*시작",
+    re.IGNORECASE,
+)
+GOAL_CONTEXT_PATTERN = re.compile(r"<goal_context>|Continue working toward the active thread goal", re.IGNORECASE)
+STOP_ACK_PATTERN = re.compile(r"멈|스탑|중단|stop|pause|cancel|halt", re.IGNORECASE)
+WORK_CONTINUATION_PATTERN = re.compile(
+    r"\b(?:continue|resume|proceed|implement|patch|test|verify|run)\b|"
+    r"이어서|재개|진행|구현|패치|테스트|검증|작업 범위",
+    re.IGNORECASE,
+)
+ALLOWED_STOP_CHECK_PATTERNS = (
+    re.compile(r"\bgit\s+status\b", re.IGNORECASE),
+    re.compile(r"\bgit\s+diff(?:\s+--stat)?\b", re.IGNORECASE),
+    re.compile(r"\bgit\s+log\b", re.IGNORECASE),
+    re.compile(r"\bgit\s+branch\b", re.IGNORECASE),
+    re.compile(r"\bGet-ChildItem\b", re.IGNORECASE),
+)
+
 
 @dataclass(frozen=True)
 class SecretFinding:
@@ -116,6 +139,7 @@ class SessionPostmortem:
     completion_guard: Dict[str, Any] = field(default_factory=dict)
     verification_claim_guard: Dict[str, Any] = field(default_factory=dict)
     scope_completion_delta: Dict[str, Any] = field(default_factory=dict)
+    user_stop_guard: Dict[str, Any] = field(default_factory=dict)
     secret_findings: List[SecretFinding] = field(default_factory=list)
     git_integration: Dict[str, Any] = field(default_factory=dict)
     verification_commands: List[str] = field(default_factory=list)
@@ -183,7 +207,19 @@ def analyze_codex_session_jsonl(
         "latest_objective": "",
         "active_updates": 0,
         "complete_updates": 0,
+        "terminal_updates": 0,
     }
+    stop_state = {
+        "requests": [],
+        "resume_signals": [],
+        "goal_context_after_stop": 0,
+        "active_goal_updates_after_stop": 0,
+        "terminal_goal_updates_after_stop": 0,
+        "latest_goal_status_after_stop": "",
+        "continued_tool_calls": [],
+        "continued_work_messages": [],
+    }
+    active_stop_line = 0
     task_complete_count = 0
     final_assistant_messages: List[str] = []
     verification_failures: List[Dict[str, Any]] = []
@@ -219,9 +255,19 @@ def analyze_codex_session_jsonl(
         payload_type = str(payload.get("type", ""))
         text = _payload_text(payload)
         instruction_context = payload_type == "message" and str(payload.get("role", "")) in {"developer", "system"}
+        message_role = str(payload.get("role", ""))
 
         if payload_type == "thread_goal_updated":
             _merge_goal_state(goal_state, payload)
+            if active_stop_line:
+                goal = payload.get("goal", {}) or {}
+                status = str(goal.get("status", ""))
+                if status:
+                    stop_state["latest_goal_status_after_stop"] = status
+                if status == "active":
+                    stop_state["active_goal_updates_after_stop"] += 1
+                elif status in {"blocked", "complete"}:
+                    stop_state["terminal_goal_updates_after_stop"] += 1
         if payload_type == "task_complete":
             task_complete_count += 1
             last_message = str(payload.get("last_agent_message", ""))
@@ -229,6 +275,38 @@ def analyze_codex_session_jsonl(
                 final_assistant_messages.append(last_message)
 
         if text and not instruction_context:
+            if payload_type == "message" and message_role == "user":
+                if GOAL_CONTEXT_PATTERN.search(text):
+                    if active_stop_line:
+                        stop_state["goal_context_after_stop"] += 1
+                elif _is_user_stop_request(text):
+                    active_stop_line = line_number
+                    stop_state["requests"].append(
+                        {
+                            "line": line_number,
+                            "sample": _short(redact_sensitive_text(text), 220),
+                        }
+                    )
+                elif active_stop_line and _is_user_resume_request(text):
+                    stop_state["resume_signals"].append(
+                        {
+                            "line": line_number,
+                            "sample": _short(redact_sensitive_text(text), 220),
+                        }
+                    )
+                    active_stop_line = 0
+
+            if active_stop_line and (
+                payload_type == "agent_message" or (payload_type == "message" and message_role == "assistant")
+            ):
+                if _is_work_continuation_message(text):
+                    stop_state["continued_work_messages"].append(
+                        {
+                            "line": line_number,
+                            "sample": _short(redact_sensitive_text(text), 260),
+                        }
+                    )
+
             for skill, pattern in SKILL_PATTERNS.items():
                 if pattern.search(text):
                     skills.add(skill)
@@ -252,6 +330,14 @@ def analyze_codex_session_jsonl(
             raw_arguments = payload.get("arguments") or payload.get("input")
             arguments = _parse_arguments(raw_arguments)
             command = str(arguments.get("command", ""))
+            if active_stop_line and not _is_allowed_after_stop_tool(name, command):
+                stop_state["continued_tool_calls"].append(
+                    {
+                        "line": line_number,
+                        "name": name,
+                        "command": _short(redact_sensitive_text(command or str(raw_arguments or "")), 260),
+                    }
+                )
             if name in {"spawn_agent", "create_agent"}:
                 subagents["spawned"] += 1
             elif name in {"close_agent", "finish_agent"}:
@@ -262,6 +348,15 @@ def analyze_codex_session_jsonl(
                 if _is_verification_command(command) and len(verification_commands) < max_verification_commands:
                     verification_commands.append(redact_sensitive_text(command))
             continue
+
+        if active_stop_line and payload_type in {"patch_apply_end", "patch_apply_begin"}:
+            stop_state["continued_tool_calls"].append(
+                {
+                    "line": line_number,
+                    "name": payload_type,
+                    "command": _short(redact_sensitive_text(_payload_text(payload) or payload_type), 260),
+                }
+            )
 
         if payload_type in {"function_call_output", "custom_tool_call_output"}:
             if _payload_has_timeout(payload):
@@ -278,6 +373,7 @@ def analyze_codex_session_jsonl(
     completion_guard = _build_completion_guard(goal_state, task_complete_count, final_assistant_messages)
     verification_claim_guard = _build_verification_claim_guard(verification_failures, final_assistant_messages)
     scope_completion_delta = _build_scope_completion_delta(goal_state, final_assistant_messages)
+    user_stop_guard = _build_user_stop_guard(stop_state, goal_state)
     actions = _recommended_actions(
         token_status=token_status,
         token_optimizer_evidence=token_optimizer_evidence,
@@ -285,6 +381,7 @@ def analyze_codex_session_jsonl(
         completion_guard=completion_guard,
         verification_claim_guard=verification_claim_guard,
         scope_completion_delta=scope_completion_delta,
+        user_stop_guard=user_stop_guard,
         secret_findings=secret_findings,
         git_state=git_state,
         subagents=subagents,
@@ -298,6 +395,7 @@ def analyze_codex_session_jsonl(
         "active_goal_completion_guard",
         "verification_claim_guard",
         "scope_completion_delta",
+        "user_stop_guard",
         "secret_redaction_scan",
         "git_integration_status",
     ]
@@ -317,6 +415,7 @@ def analyze_codex_session_jsonl(
         completion_guard=completion_guard,
         verification_claim_guard=verification_claim_guard,
         scope_completion_delta=scope_completion_delta,
+        user_stop_guard=user_stop_guard,
         secret_findings=secret_findings[:max_secret_findings],
         git_integration=git_state,
         verification_commands=verification_commands,
@@ -334,6 +433,7 @@ def render_session_postmortem(postmortem: SessionPostmortem) -> str:
         f"Review: {postmortem.review_status}",
         f"Completion guard: {postmortem.completion_guard.get('status', 'unknown')}",
         f"Verification guard: {postmortem.verification_claim_guard.get('status', 'unknown')}",
+        f"User stop guard: {postmortem.user_stop_guard.get('status', 'unknown')}",
         (
             "Subagents: "
             f"{postmortem.subagent_summary.get('spawned', 0)} spawned, "
@@ -448,6 +548,9 @@ def _merge_goal_state(goal_state: Dict[str, Any], payload: Dict[str, Any]) -> No
             goal_state["active_updates"] += 1
         elif status == "complete":
             goal_state["complete_updates"] += 1
+            goal_state["terminal_updates"] += 1
+        elif status == "blocked":
+            goal_state["terminal_updates"] += 1
     if objective:
         goal_state["latest_objective"] = objective
 
@@ -504,6 +607,38 @@ def _build_scope_completion_delta(
     }
 
 
+def _build_user_stop_guard(
+    stop_state: Dict[str, Any],
+    goal_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    requests = list(stop_state.get("requests", []) or [])
+    continued_tool_calls = list(stop_state.get("continued_tool_calls", []) or [])
+    continued_work_messages = list(stop_state.get("continued_work_messages", []) or [])
+    latest_goal_status = str(stop_state.get("latest_goal_status_after_stop") or goal_state.get("latest_status") or "")
+    terminal_updates_after_stop = int(stop_state.get("terminal_goal_updates_after_stop", 0) or 0)
+    active_goal_left_open = bool(requests and latest_goal_status == "active" and terminal_updates_after_stop == 0)
+    reasons: List[str] = []
+    if continued_tool_calls:
+        reasons.append("tool_call_after_user_stop")
+    if continued_work_messages:
+        reasons.append("work_continuation_after_user_stop")
+    if active_goal_left_open:
+        reasons.append("user_stop_left_goal_active")
+    if requests and int(stop_state.get("goal_context_after_stop", 0) or 0) and active_goal_left_open:
+        reasons.append("goal_context_reactivated_after_user_stop")
+    return {
+        "status": "blocked" if reasons else "passed",
+        "stop_request_count": len(requests),
+        "latest_stop_line": requests[-1]["line"] if requests else 0,
+        "goal_context_after_stop": int(stop_state.get("goal_context_after_stop", 0) or 0),
+        "latest_goal_status_after_stop": latest_goal_status,
+        "terminal_goal_updates_after_stop": terminal_updates_after_stop,
+        "continued_tool_calls": continued_tool_calls[:10],
+        "continued_work_messages": continued_work_messages[:10],
+        "reasons": reasons,
+    }
+
+
 def _recommended_actions(
     *,
     token_status: str,
@@ -512,6 +647,7 @@ def _recommended_actions(
     completion_guard: Dict[str, Any],
     verification_claim_guard: Dict[str, Any],
     scope_completion_delta: Dict[str, Any],
+    user_stop_guard: Dict[str, Any],
     secret_findings: List[SecretFinding],
     git_state: Dict[str, Any],
     subagents: Dict[str, Any],
@@ -529,6 +665,10 @@ def _recommended_actions(
         actions.append("Report failed or unavailable verification explicitly before claiming the run is verified.")
     if scope_completion_delta.get("status") == "blocked":
         actions.append("Record scope_completion_delta and continue the missing objective markers instead of stopping at a scaffold milestone.")
+    if user_stop_guard.get("status") == "blocked":
+        actions.append(
+            "User stop/cancel requests override goal_context; stop new work, call update_goal(status=blocked) for active goals, and record user_requested_stop."
+        )
     if secret_findings:
         actions.append("Redact secret-like command text before writing handoffs, memory candidates, or reports.")
     if git_state.get("staged") and not git_state.get("committed"):
@@ -642,6 +782,36 @@ def _claims_completion(text: str) -> bool:
 
 def _mentions_partial_milestone(text: str) -> bool:
     return bool(PARTIAL_MILESTONE_PATTERN.search(text or ""))
+
+
+def _is_user_stop_request(text: str) -> bool:
+    normalized = (text or "").strip()
+    if not normalized or GOAL_CONTEXT_PATTERN.search(normalized):
+        return False
+    lowered = normalized.lower()
+    if "stop loss" in lowered or "stop-loss" in lowered:
+        return False
+    return bool(USER_STOP_PATTERN.search(normalized))
+
+
+def _is_user_resume_request(text: str) -> bool:
+    normalized = (text or "").strip()
+    return bool(normalized and USER_RESUME_PATTERN.search(normalized))
+
+
+def _is_work_continuation_message(text: str) -> bool:
+    normalized = text or ""
+    return bool(WORK_CONTINUATION_PATTERN.search(normalized) and not STOP_ACK_PATTERN.search(normalized))
+
+
+def _is_allowed_after_stop_tool(name: str, command: str) -> bool:
+    normalized_name = str(name or "")
+    if normalized_name == "update_plan":
+        return True
+    if normalized_name != "shell_command":
+        return False
+    normalized_command = re.sub(r"\s+", " ", command or "").strip()
+    return bool(normalized_command and any(pattern.search(normalized_command) for pattern in ALLOWED_STOP_CHECK_PATTERNS))
 
 
 def _scope_markers(text: str) -> List[str]:
