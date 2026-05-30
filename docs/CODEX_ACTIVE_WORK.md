@@ -112,6 +112,28 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed, `practical_confidence_score`: 10.0)
   - `python -m src.orchestration.scenario_evaluator --summary` (30/30 passed, 66 meaningful signals)
   - `git diff --check`
+- Latest plugin composition policy direction for 2.9.15:
+  - Added `plugin-composition-policy` as the top-level lightweight broker before plugin-specific MUST/ALWAYS trigger wording is allowed to select a provider.
+  - Added `src.orchestration.plugin_composition` with `CapabilityProvider`, `ProviderRole`, `PluginCompositionDecision`, and `compose_plugin_route(...)`.
+  - Routing now supports `direct`, `single`, `hybrid`, and `clarify` decisions from a dynamic provider snapshot, not from plugins installed on one PC.
+  - Provider mandatory wording is scoped to selected controller or delegated assistant roles; non-selected self-forcing providers are recorded in `ignored_self_forcing`.
+  - Hybrid composition supports a workflow controller plus assistants for browser QA, repo/PR/CI, knowledge docs, image generation, host automation, and memory/goal/resume.
+  - SIDE subagent review found over-broad explicit provider matching; regression fixes now prevent generic words like `browser`, `pr`, and `pro` from self-selecting unless invocation context is explicit.
+  - Unavailable explicit provider requests are reported through `unavailable_capabilities["provider:<id>"]` before fallback.
+  - Packaged skill count is now 33.
+- Latest verification after plugin composition policy 2.9.15:
+  - `python -m unittest tests.test_plugin_composition_policy tests.test_plugin_packaging tests.test_superpowers_benchmark_alignment` (29 tests)
+  - `python -m src.skills.uaf_skill_catalog --check` (33 valid / 0 invalid)
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool plugin.json`
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (194 files)
+  - `python -m unittest tests.test_interactive_side_evaluator tests.test_uaf_skill_audit tests.test_uaf_skill_catalog tests.test_uaf_skill_quality` (33 tests)
+  - `python -m src.orchestration.interactive_side_evaluator --summary --skills` (33/33 skill SIDE turns passed)
+  - `python -m unittest discover -s tests` (417 tests)
+  - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.3)
+  - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed, `practical_confidence_score`: 10.0)
+  - `python -m src.orchestration.scenario_evaluator --summary` (30/30 passed, 66 meaningful signals)
+  - `git diff --check`
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
   - `python -m json.tool .codex-plugin/plugin.json`

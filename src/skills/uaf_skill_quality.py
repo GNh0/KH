@@ -29,6 +29,7 @@ CORE_PRODUCTION_SKILLS = {
     "memory-state-harness",
     "orchestration-role-graph",
     "parallel-orchestration-harness",
+    "plugin-composition-policy",
     "qa-gate-harness",
     "review-gate-harness",
     "request-complexity-router",

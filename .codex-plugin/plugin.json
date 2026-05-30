@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.14",
-  "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, large-work orchestration bundle with application modes, Superpowers-style project-local artifacts, development progress state, automatic workflow usability runtime, progress-to-Compound bridge, token provider policy, KH role commands, visible progress panels, session-start context restore, skill transition policy, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
+  "version": "2.9.15",
+  "description": "KH Universal Agent Framework skills, capability-based plugin composition, brainstorming handoff, GoalState ledger, large-work orchestration bundle with application modes, Superpowers-style project-local artifacts, development progress state, automatic workflow usability runtime, progress-to-Compound bridge, token provider policy, KH role commands, visible progress panels, session-start context restore, skill transition policy, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -18,11 +18,12 @@
   "interface": {
     "displayName": "KH UAF",
     "shortDescription": "Personal UAF skillbook and orchestration harness.",
-    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, brainstorming handoff for early product/project discovery, GoalState ledger updates with Superpowers-style project-local content/state artifacts, development progress state for task-plan runs, automatic workflow usability runtime hooks, progress-to-Compound automation, token optimizer provider policy, role command entrypoints, visible progress panels, session-start context restore, skill transition policy for non-dead follow-up skills, Compound learning capture with scoped memory candidates, lightweight request-complexity routing, SIDE-style scenario evaluation for routing/evidence/gate/resume behavior, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill target audits, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
+    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, capability-based plugin composition for dynamic provider routing, brainstorming handoff for early product/project discovery, GoalState ledger updates with Superpowers-style project-local content/state artifacts, development progress state for task-plan runs, automatic workflow usability runtime hooks, progress-to-Compound automation, token optimizer provider policy, role command entrypoints, visible progress panels, session-start context restore, skill transition policy for non-dead follow-up skills, Compound learning capture with scoped memory candidates, lightweight request-complexity routing, SIDE-style scenario evaluation for routing/evidence/gate/resume behavior, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill target audits, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
     "developerName": "KH UAF",
     "category": "Productivity",
     "capabilities": [
       "Skills",
+      "Plugin Composition",
       "Brainstorming",
       "Large Work Bundle",
       "Development Progress",
@@ -51,6 +52,9 @@
     ],
     "defaultPrompt": [
       "Use KH UAF to plan and run this project.",
+      "Before applying any plugin-specific MUST/ALWAYS rule, use KH plugin-composition-policy as the lightweight intake broker when multiple plugins, tools, skills, connectors, or future capability providers may apply; choose direct, single-provider, hybrid, or clarify routing by capability fit.",
+      "Plugin mandatory rules apply only after that provider is selected as controller or assistant for a delegated scope; do not let any provider self-select solely from its own trigger wording.",
+      "Prefer controller plus assistant composition when natural: one controller owns the workflow, while specialist providers handle delegated scopes such as repo/PR/CI, browser QA, knowledge docs, image generation, host automation, or memory/goal/resume.",
       "For new product, SaaS, feature, or unclear design requests, start with KH brainstorming-harness.",
       "For heavy, multi-step, or evidence-gated work, create or update KH GoalState before execution and carry required evidence through review, QA, and release.",
       "For large project, SaaS, app, multi-file implementation, or long-running work, create `large_work_orchestration_bundle` evidence before implementation.",

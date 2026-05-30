@@ -26,9 +26,9 @@ class UafSkillAuditTests(unittest.TestCase):
     def test_audit_reports_every_packaged_skill(self):
         report = audit_packaged_skills()
 
-        self.assertEqual(report["total_skills"], 32)
-        self.assertEqual(len(report["skills"]), 32)
-        self.assertEqual(sum(report["execution_levels"].values()), 32)
+        self.assertEqual(report["total_skills"], 33)
+        self.assertEqual(len(report["skills"]), 33)
+        self.assertEqual(sum(report["execution_levels"].values()), 33)
 
     def test_audit_resolves_all_non_template_targets(self):
         report = audit_packaged_skills()

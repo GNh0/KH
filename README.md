@@ -14,7 +14,7 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 
 ## What It Includes
 
-- 32 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 33 packaged skills/harnesses with support files, smoke checks, and runnable demos.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - `brainstorming-harness` for early product/project discovery and KH handoff before architecture or implementation.
@@ -161,6 +161,8 @@ KH UAF maps the compound-engineering loop into explicit skills:
 - Compound: `compound-engineering-harness`, `workflow-skill-distiller`, `memory-state-harness`, `context-state-harness`, goal ledger updates, and SIDE/scenario regression captures.
 
 For heavy, multi-step, or evidence-gated work, create or refresh `GoalState` before execution and keep the goal ledger updated through review, QA, and release. For a new product, SaaS, feature, or unclear design request, start with `brainstorming-harness` before architecture or implementation and write visible run artifacts under `.kh/<skill>/<run-id>/content/` plus `.kh/<skill>/<run-id>/state/`, with shareable summaries under `docs/kh/handoffs/` or the relevant `docs/kh/<type>/` folder. After Plan, Work, and Review, run `compound-engineering-harness` when reusable learning, scoped memory candidates, or regression checks may be needed. For a completed workflow that reveals a reusable pattern, finish by distilling the pattern, adding scoped memory, or adding a scenario regression instead of leaving the learning only in chat.
+
+Before plugin-specific rules run, `plugin-composition-policy` can act as the top-level lightweight broker when multiple plugins, tools, skills, connectors, or future capability providers may apply. It chooses `direct`, `single`, `hybrid`, or `clarify` by capability fit, not by whichever provider has the strongest MUST/ALWAYS trigger wording. In hybrid routes one controller owns the workflow while assistant providers handle delegated scopes such as repo/PR/CI, browser QA, knowledge docs, image generation, host automation, or memory/goal/resume.
 
 For large or long-running work, KH treats `token-optimizer` as a context budget gate. If `estimated_context_tokens`, broad file reads, long command output, expected tool calls, or subagent transcripts are likely to cross the threshold, the workflow must report `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`. Compression is never allowed to lower answer quality or hide source-of-truth details; unsafe content stays `passthrough` or blocks the optimization path.
 

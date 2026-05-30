@@ -36,6 +36,7 @@ from src.orchestration.gate_evaluators import (
 )
 from src.orchestration.quality_harnesses import audit_role_execution
 from src.orchestration.request_classifier import classify_request
+from src.orchestration.plugin_composition import compose_plugin_route
 from src.orchestration.brainstorming import (
     BrainstormDecision,
     BrainstormOption,
@@ -119,6 +120,7 @@ SKILL_OPS_SKILLS = {
 }
 
 ROUTING_SKILLS = {
+    "plugin-composition-policy",
     "request-complexity-router",
     "scenario-evaluation-harness",
 }
@@ -217,6 +219,8 @@ def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]
     if skill_name in SKILL_OPS_SKILLS:
         return _skill_ops_scenario
     if skill_name in ROUTING_SKILLS:
+        if skill_name == "plugin-composition-policy":
+            return _plugin_composition_scenario
         if skill_name == "scenario-evaluation-harness":
             return _scenario_evaluation_scenario
         return _routing_scenario
@@ -816,6 +820,82 @@ def _routing_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dic
         blocked_payload=ambiguous.to_dict(),
         blocked_reason="request is too ambiguous to choose a safe execution depth",
         missing_inputs=["domain or artifact context"],
+        contracts=contracts,
+        artifacts=[],
+    )
+
+
+def _plugin_composition_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    providers = [
+        {
+            "provider_id": "kh",
+            "capabilities": ["workflow_control", "memory_goal_resume", "tdd_review"],
+        },
+        {
+            "provider_id": "visual-checker",
+            "capabilities": ["browser_qa", "screenshot"],
+        },
+        {
+            "provider_id": "repo-service",
+            "capabilities": ["repo_pr_ci"],
+        },
+        {
+            "provider_id": "aggressive-methodology",
+            "capabilities": ["planning_methodology"],
+            "self_forcing_rules": ["MUST use this before any task"],
+        },
+    ]
+    hybrid = compose_plugin_route(
+        "Build a SaaS dashboard, verify the browser screen, and prepare the PR.",
+        providers=providers,
+    )
+    direct = compose_plugin_route(
+        "What is PER?",
+        providers=providers,
+    )
+    continuation = compose_plugin_route(
+        "Continue the current implementation plan.",
+        providers=[
+            {"provider_id": "kh", "capabilities": ["workflow_control"]},
+            {
+                "provider_id": "superpowers",
+                "capabilities": ["planning_methodology", "tdd_review"],
+                "self_forcing_rules": ["MUST use for creative work"],
+            },
+        ],
+        context={"project_markers": [".superpowers"]},
+    )
+    success_payload = {
+        "hybrid": hybrid.to_dict(),
+        "direct": direct.to_dict(),
+        "continuation": continuation.to_dict(),
+        "policy": "provider mandatory wording is scoped to selected controller or assistant roles",
+    }
+    blocked_payload = {
+        "status": "blocked",
+        "route": "clarify",
+        "blocked_reason": "provider snapshot or task objective is too ambiguous for a safe route",
+    }
+    contracts = [
+        _mapping_contract("PluginCompositionDecision", "src.orchestration.plugin_composition", hybrid.to_dict(), "policy-result"),
+        _mapping_contract("PluginCompositionDecision", "src.orchestration.plugin_composition", direct.to_dict(), "policy-result"),
+        _mapping_contract("PluginCompositionDecision", "src.orchestration.plugin_composition", continuation.to_dict(), "policy-result"),
+    ]
+    return _scenario_result(
+        success_contract="PluginCompositionDecision",
+        success_payload=success_payload,
+        success_evidence=[
+            "hybrid route selected controller plus assistants",
+            "light question stayed direct",
+            "self-forcing provider did not self-select",
+            "project-context continuation can select a non-KH controller",
+        ],
+        success_behavior="Choose direct, single, hybrid, or clarify routes from dynamic provider capabilities.",
+        success_side_effects=["writes demo evidence JSON only"],
+        blocked_contract="PluginCompositionDecision",
+        blocked_payload=blocked_payload,
+        blocked_reason=blocked_payload["blocked_reason"],
+        missing_inputs=["provider capabilities", "task objective", "project context"],
         contracts=contracts,
         artifacts=[],
     )

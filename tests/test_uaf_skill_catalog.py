@@ -34,6 +34,7 @@ CORE_SKILLS = {
     "memory-state-harness",
     "orchestration-role-graph",
     "parallel-orchestration-harness",
+    "plugin-composition-policy",
     "role-execution-audit-harness",
     "quality-gates-harness",
     "qa-gate-harness",

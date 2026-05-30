@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.14",
-    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, automatic workflow usability runtime, progress-to-Compound bridge, token optimizer provider policy, KH role command entrypoints, visible progress panels, session-start context restore, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
+  "version": "2.9.15",
+    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, capability-based plugin composition, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, automatic workflow usability runtime, progress-to-Compound bridge, token optimizer provider policy, KH role command entrypoints, visible progress panels, session-start context restore, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "skills": [
@@ -20,6 +20,16 @@
       "description": "Build domain-neutral DomainProfile and WorkDesign metadata for software, operations, analysis, design, and other workflow topics.",
       "module": "src.orchestration.domain_profiles"
     },
+        {
+            "name": "plugin-composition-policy",
+            "description": "Choose direct, single-provider, hybrid, or clarify routing across dynamic plugins, tools, skills, connectors, and future capability providers without letting any provider self-force selection before it is delegated scope.",
+            "usage": "python -m src.skills.uaf_skill_catalog --read plugin-composition-policy"
+        },
+        {
+            "name": "plugin-composition",
+            "description": "Capability-based plugin composition broker that returns controller, assistants, ignored self-forcing providers, unavailable capabilities, and fallback policy.",
+            "module": "src.orchestration.plugin_composition"
+        },
         {
             "name": "brainstorming-harness",
             "description": "Use KH UAF brainstorming for new product, feature, project, SaaS, or design requests before architecture and implementation.",
