@@ -3,10 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.contracts import MemoryRecord
+from src.contracts import MemoryRecord, WorkflowTaskResult
 from src.orchestration.development_progress import (
     DevelopmentRunProgress,
     DevelopmentTaskProgress,
+    read_development_progress,
+    validate_development_progress,
     write_development_progress,
 )
 from src.orchestration.memory_state import MemoryScopeResolver
@@ -28,6 +30,11 @@ from src.orchestration.session_start_context import (
 from src.orchestration.token_optimizer_provider import (
     resolve_token_optimizer_provider,
     validate_token_optimizer_provider,
+)
+from src.orchestration.workflow_usability_runtime import (
+    apply_workflow_usability_runtime,
+    build_workflow_usability_preflight,
+    workflow_usability_enabled,
 )
 
 
@@ -203,6 +210,7 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
 
         for capability in [
             "Progress Compound Bridge",
+            "Workflow Usability Runtime",
             "Token Provider Policy",
             "Role Commands",
             "Progress Panel",
@@ -212,6 +220,7 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
 
         for expected in [
             "workflow-usability-harness",
+            "workflow-usability-runtime",
             "progress-compound-bridge",
             "token-optimizer-provider",
             "role-command-entrypoints",
@@ -221,9 +230,54 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertIn(expected, root_skill_names)
 
         self.assertIn("token_optimizer_provider", prompt)
+        self.assertIn("workflow_usability_auto", prompt)
         self.assertIn("/kh:work", prompt)
         self.assertIn("progress.json", prompt)
         self.assertIn(".kh", prompt)
+
+    def test_runtime_usability_hooks_generate_visible_workflow_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = {
+                "workflow_usability_auto": True,
+                "token_optimizer_provider": "kh",
+                "token_optimizer_status": "considered_not_needed",
+                "workspace_strategy": "project-local-worktree",
+                "goal": {"objective": "Build a workflow."},
+            }
+            preflight = build_workflow_usability_preflight(tmp, metadata)
+            result = apply_workflow_usability_runtime(
+                project_dir=tmp,
+                workflow_id="workflow-demo",
+                file_list=["main.py"],
+                task_results=[
+                    WorkflowTaskResult(
+                        task_id="task-main",
+                        file_name="main.py",
+                        role="implementer",
+                        status="success",
+                        message="done",
+                        metadata={"evidence": ["task runner completed"]},
+                    )
+                ],
+                gate_results=[
+                    {"role": "spec-reviewer", "status": "passed"},
+                    {"role": "code-quality-reviewer", "status": "passed"},
+                ],
+                metadata=metadata,
+                final_goal={"objective": "Build a workflow.", "status": "complete"},
+                workflow_success=True,
+                preflight=preflight,
+            )
+
+            self.assertTrue(workflow_usability_enabled(metadata))
+            self.assertEqual(result.status, "complete")
+            self.assertTrue(Path(result.progress_path).exists())
+            self.assertIn("KH Progress", result.progress_panel)
+            self.assertEqual(result.token_optimizer_provider["provider"], "kh")
+            self.assertTrue(Path(result.compound["paths"]["compound_handoff"]).exists())
+            progress = read_development_progress(result.progress_path)
+            self.assertTrue(validate_development_progress(progress)["valid"])
+            self.assertIn("development_progress_valid", result.evidence)
 
 
 if __name__ == "__main__":

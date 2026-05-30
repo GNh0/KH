@@ -175,6 +175,7 @@ Python callers can use `src.orchestration.skill_application.build_large_work_orc
 The workflow usability layer makes those lifecycle records visible and resumable:
 
 - `workflow-usability-harness` connects progress state, token provider policy, role command entrypoints, progress panels, and session-start context restore.
+- `src.orchestration.workflow_usability_runtime.apply_workflow_usability_runtime(...)` is wired into AgentLoop/app bridge workflow dispatch, so real KH runs can emit session context, token provider policy, progress panel, progress state, and Compound handoff metadata automatically instead of relying on manual helper calls.
 - `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts(...)` turns completed `progress.json` into `CompoundCapture`, `compound_handoff`, memory candidates, skill candidates, scenario candidates, and `docs/kh/handoffs/<run-id>-compound.md`.
 - `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider(...)` records `token_optimizer_provider`: `kh`, `rtk`, `hybrid`, or `passthrough`. RTK is optional; hybrid falls back to KH and exact source-of-truth text stays passthrough.
 - `src.orchestration.role_commands.resolve_role_command(...)` provides short `/kh:*` role command front doors such as `/kh:work`, `/kh:qa`, `/kh:ship`, `/kh:learn`, and `/kh:resume`.

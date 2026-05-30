@@ -4,6 +4,8 @@
 
 Use this skill whenever KH has enough moving parts that the user or next session should not have to reconstruct the workflow from chat. The common trigger is a task-plan run with `.kh/development/<run-id>/state/progress.json`, but the same harness applies to long reviews, subagent packets, QA loops, token-budget decisions, and session resume work.
 
+In AgentLoop, app bridge, and workflow dispatch paths, set `workflow_usability_auto=true` to make the runtime apply this harness automatically. The automatic path writes the same evidence as a manual helper call: session-start context, token provider policy, progress panel, progress state, Compound handoff, and candidates.
+
 This harness is also the KH-native place to absorb useful external workflow ergonomics: visible progress panels, short role command entrypoints, token provider policy, and a final Compound handoff. It should be used as a light control surface. It must not force every request through heavy role DAG execution.
 
 ## Inputs to collect
@@ -21,6 +23,7 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 
 1. Build a session-start context before deep work in an existing checkout:
    `src.orchestration.session_start_context.build_session_start_context(project_root)`.
+   Runtime auto mode performs this before dispatch when `workflow_usability_auto=true`.
 2. If the context recommends progress, handoff, or memory files, inspect those before relying on chat recall.
 3. Resolve the token optimizer provider before reading or producing large content:
    `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider(...)`.

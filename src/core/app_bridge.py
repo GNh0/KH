@@ -20,7 +20,12 @@ def create_app_request(
         "host": app_host,
         "thread_id": thread_id,
         "entrypoint": "app_bridge",
+        "workflow_usability_auto": True,
     }
+    role_metadata.setdefault("workflow_usability_auto", True)
+    role_metadata.setdefault("token_optimizer_provider", "kh")
+    role_metadata.setdefault("token_optimizer_status", "considered_not_needed")
+    role_metadata.setdefault("workspace_strategy", "host-worktree")
 
     return AdapterRequest(
         project_dir=project_dir,

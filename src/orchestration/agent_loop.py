@@ -64,6 +64,11 @@ class AgentLoop:
         metadata = {
             **self.role_metadata,
             **self.build_goal_metadata(requirement),
+            "workflow_usability_auto": True,
+            "token_optimizer_provider": "kh",
+            "token_optimizer_status": "considered_not_needed",
+            "workspace_strategy": "current-checkout",
+            "workflow_usability_run_id": "agent-loop",
         }
         if self.platform_mode == "local":
             metadata["llm_router"] = self.llm

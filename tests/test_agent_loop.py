@@ -36,6 +36,9 @@ class AgentLoopParsingTests(unittest.TestCase):
 
         self.assertIs(metadata["llm_router"], llm)
         self.assertEqual(metadata["goal"]["objective"], "build api")
+        self.assertTrue(metadata["workflow_usability_auto"])
+        self.assertEqual(metadata["token_optimizer_provider"], "kh")
+        self.assertEqual(metadata["token_optimizer_status"], "considered_not_needed")
 
     def test_build_dispatch_metadata_omits_llm_router_for_host_modes(self):
         llm = FakeLLMRouter()
@@ -44,6 +47,7 @@ class AgentLoopParsingTests(unittest.TestCase):
             metadata = loop.build_dispatch_metadata("build api")
 
         self.assertNotIn("llm_router", metadata)
+        self.assertTrue(metadata["workflow_usability_auto"])
 
 
 if __name__ == "__main__":

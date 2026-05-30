@@ -7,6 +7,8 @@ description: Use when KH needs visible progress panels, progress-to-Compound han
 
 This is a personal UAF usability harness. It turns the internal KH lifecycle into host-readable control surfaces so large work does not depend on the agent remembering hidden policy after context compression.
 
+When `workflow_usability_auto` is present in AgentLoop, app bridge, or workflow metadata, the UAF runtime applies this harness automatically after dispatch. The host still controls whether to display the panel, but the metadata and project artifacts are produced without a separate manual helper call.
+
 ## Support files
 
 - Read `references/usage.md` before applying this skill to a real task; it expands triggers, inputs, execution pattern, evidence, and failure handling.
@@ -86,6 +88,7 @@ Each command resolves to a small set of roles, KH skills, and expected outputs. 
 ## UAF implementation targets
 
 - `src.orchestration.progress_compound_bridge`
+- `src.orchestration.workflow_usability_runtime.apply_workflow_usability_runtime`
 - `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts`
 - `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider`
 - `src.orchestration.role_commands.resolve_role_command`

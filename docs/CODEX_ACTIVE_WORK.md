@@ -94,6 +94,24 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
   - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
   - `git diff --check`
+- Latest workflow usability runtime direction for 2.9.14:
+  - Added `src.orchestration.workflow_usability_runtime` so AgentLoop, app bridge, local workflow, and native host dispatch paths can set `workflow_usability_auto` and automatically produce session-start context, token provider policy, valid `.kh/development/<run-id>/state/progress.json`, visible progress panel text, and progress-to-Compound artifacts.
+  - `AgentLoop.build_dispatch_metadata(...)` and `create_app_request(...)` now enable `workflow_usability_auto`, default `token_optimizer_provider` to `kh`, and record `workspace_strategy` for real host/workflow runs.
+  - `dispatch_project_workflow(...)`, `LocalDispatcher`, and `AntigravityDispatcher` now return `metadata["workflow_usability"]`; Antigravity pending mode exposes preflight metadata, while local/native paths write runtime artifacts when auto mode is enabled.
+  - Automatic progress state is validated through `validate_development_progress(...)` before writing, so visible progress and Compound handoff cannot silently drift from KH lifecycle rules.
+  - Plugin package version is now `2.9.14`.
+- Latest verification after automatic workflow usability runtime 2.9.14:
+  - `python -m unittest tests.test_agent_loop tests.test_app_bridge tests.test_dispatcher tests.test_workflows tests.test_workflow_usability_layer tests.test_plugin_packaging tests.test_docs_branding` (63 tests)
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool plugin.json`
+  - `python -m src.skills.uaf_skill_catalog --check` (32 valid / 0 invalid)
+  - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (190 files)
+  - `python -m unittest tests.test_token_optimizer_gate_integration tests.test_command_output_runtime tests.test_skill_transitions` (32 tests)
+  - `python -m unittest discover -s tests` (405 tests)
+  - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed, `practical_confidence_score`: 10.0)
+  - `python -m src.orchestration.scenario_evaluator --summary` (30/30 passed, 66 meaningful signals)
+  - `git diff --check`
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
   - `python -m json.tool .codex-plugin/plugin.json`

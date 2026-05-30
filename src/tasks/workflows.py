@@ -23,6 +23,10 @@ from src.orchestration.role_orchestrator import (
     run_pre_implementation_roles,
     run_review_release_roles,
 )
+from src.orchestration.workflow_usability_runtime import (
+    apply_workflow_usability_runtime,
+    build_workflow_usability_preflight,
+)
 from src.tasks.workflow_checks import WorkflowCheckStage, goal_with_check_requirements
 from src.tasks.runners import (
     LLMCodeGenerationAdapter,
@@ -551,6 +555,14 @@ async def async_project_workflow(
     project_id = _project_id(project_dir)
     workflow_id = f"workflow_{project_id}"
     metadata = metadata or {}
+    workflow_usability_preflight = build_workflow_usability_preflight(project_dir, metadata)
+    if workflow_usability_preflight:
+        provider = workflow_usability_preflight.get("token_optimizer_provider", {})
+        print(
+            "[KH] workflow usability enabled: "
+            f"token_optimizer_provider={provider.get('provider', '')} "
+            f"status={provider.get('status', '')}"
+        )
     check_stage = WorkflowCheckStage()
     goal_metadata = goal_with_check_requirements(metadata.get("goal", {}), metadata)
     memory_context, memory_store_metadata = _workflow_memory_context(project_dir, metadata)
@@ -731,6 +743,20 @@ async def async_project_workflow(
     if final_goal:
         success = role_success and task_success and check_success and final_goal.get("status") == "complete"
 
+    workflow_usability = apply_workflow_usability_runtime(
+        project_dir=project_dir,
+        workflow_id=workflow_id,
+        file_list=list(file_list),
+        task_results=ordered_results,
+        gate_results=gate_results,
+        metadata=metadata,
+        final_goal=final_goal or goal_metadata,
+        workflow_success=success,
+        preflight=workflow_usability_preflight,
+    )
+    if workflow_usability.enabled and workflow_usability.progress_panel and not metadata.get("suppress_progress_panel"):
+        print(workflow_usability.progress_panel.rstrip())
+
     print("[Master] async workflow completed.")
     return WorkflowDispatchResult(
         workflow_id=workflow_id,
@@ -756,6 +782,7 @@ async def async_project_workflow(
             "role_task_results": role_metadata.get("results", []),
             "role_execution_audit": role_execution_audit,
             "retention": retention_summary,
+            "workflow_usability": workflow_usability.to_dict(),
             **check_results.to_metadata(),
             "gate_evidence": gate_evidence,
         },

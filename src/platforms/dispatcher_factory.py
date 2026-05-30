@@ -11,6 +11,11 @@ from src.orchestration.goal_evidence import (
 )
 from src.orchestration.roles import build_default_role_metadata
 from src.orchestration.roles import build_role_gate_results
+from src.orchestration.workflow_usability_runtime import (
+    apply_workflow_usability_runtime,
+    build_workflow_usability_preflight,
+    workflow_usability_enabled,
+)
 from src.platforms.antigravity_native import AntigravityNativeSidecarAdapter
 from src.tasks.workflows import dispatch_project_workflow
 
@@ -79,6 +84,7 @@ class LocalDispatcher:
         evaluated_goal = workflow_result.metadata.get("goal", metadata.get("goal", {}))
         goal_ledger = workflow_result.metadata.get("goal_ledger", {})
         resume_handoff = workflow_result.metadata.get("resume_handoff", {})
+        workflow_usability = workflow_result.metadata.get("workflow_usability", {})
         return AdapterResult(
             status=status,
             message=message,
@@ -91,6 +97,7 @@ class LocalDispatcher:
                 "goal": evaluated_goal,
                 "goal_ledger": goal_ledger,
                 "resume_handoff": resume_handoff,
+                "workflow_usability": workflow_usability,
                 "workflow": workflow_result.to_dict(),
                 "task_results": [
                     result.to_dict()
@@ -130,6 +137,7 @@ class AntigravityDispatcher:
         print("No Antigravity native adapter is configured.")
         print("Optional external callback bridge: POST /api/webhook/subagent-result")
         print(f"Role graph: {json.dumps(metadata.get('orchestration_roles', []))}")
+        preflight = build_workflow_usability_preflight(request.project_dir, metadata)
         sys.stdout.flush()
 
         return AdapterResult(
@@ -144,6 +152,11 @@ class AntigravityDispatcher:
                 "goal": metadata.get("goal", {}),
                 "memory_context": metadata.get("memory_context", {}),
                 "evidence": list(metadata.get("evidence", []) or []),
+                "workflow_usability": {
+                    "enabled": workflow_usability_enabled(metadata),
+                    "status": "pending",
+                    "preflight": preflight,
+                },
                 "request_metadata": _portable_request_metadata(metadata),
                 "native_dispatch": {
                     "status": "pending",
@@ -181,6 +194,16 @@ class AntigravityDispatcher:
             goal=evaluated_goal,
         )
         status = _adapter_status(native_result.status, task_success, evaluated_goal)
+        workflow_usability = apply_workflow_usability_runtime(
+            project_dir=request.project_dir,
+            workflow_id=project_id,
+            file_list=list(request.files),
+            task_results=task_results,
+            gate_results=gate_results,
+            metadata=metadata,
+            final_goal=evaluated_goal or metadata.get("goal", {}),
+            workflow_success=status == "success",
+        )
         return AdapterResult(
             status=status,
             message=native_result.message or "Antigravity native dispatch completed",
@@ -196,6 +219,7 @@ class AntigravityDispatcher:
                 "request_metadata": _portable_request_metadata(metadata),
                 "task_results": [result.to_dict() for result in task_results],
                 "gate_results": gate_results,
+                "workflow_usability": workflow_usability.to_dict(),
                 "native_dispatch": {
                     "status": native_result.status,
                     "adapter": adapter_name,

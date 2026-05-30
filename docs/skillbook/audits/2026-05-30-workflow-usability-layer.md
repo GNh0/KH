@@ -12,6 +12,7 @@ This audit records the KH-native usability layer added after reviewing large tas
 - `src.orchestration.role_commands`: exposes concise `/kh:*` command entrypoints for brainstorming, spec, CEO review, engineering review, work, QA, ship, learn, and resume flows.
 - `src.orchestration.progress_panel`: renders visible task-plan progress with task status, review status, token optimizer status, commit SHA, and next task.
 - `src.orchestration.session_start_context`: inspects `.kh`, `docs/kh`, latest progress/Compound state, and scoped memory candidates at session start.
+- `src.orchestration.workflow_usability_runtime`: applies those helpers automatically inside AgentLoop, app bridge, local workflow, and native host dispatch paths when `workflow_usability_auto` is enabled.
 
 ## Benchmark Mapping
 
