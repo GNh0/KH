@@ -29,6 +29,9 @@ Use this harness when:
 - A user asks for role-driven commands such as brainstorm, spec, work, QA, ship, learn, or resume without needing to know every underlying KH skill name.
 - A task-plan run should show a compact progress panel with task status, review status, token optimizer status, commit SHA, and next task.
 - A new session must recover context from `.kh`, `docs/kh`, and memory candidates before relying on chat context.
+- A finished or interrupted Codex session must be checked for false completion, hidden verification failures, token-gate omissions, reviewer timeouts, subagent cleanup, secret exposure, and git integration.
+- A postmortem must distinguish skill inspection from skill application; reading a skill file is not runtime usage unless there is harness output, module execution, token-savings metadata, or explicit passthrough evidence.
+- Windows local app-server verification needs a reproducible launch plan with normalized `Path`/`PATH`, redirected logs, and a separate HTTP health check.
 
 Do not use this harness to skip planning, review, QA, or Compound. It exposes those steps; it does not replace them.
 
@@ -39,7 +42,9 @@ Do not use this harness to skip planning, review, QA, or Compound. It exposes th
 3. Before broad reads, subagent packets, or long commands, resolve `token_optimizer_provider` through `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider`.
 4. When a user asks for role help, resolve `/kh:*` command entrypoints through `src.orchestration.role_commands.resolve_role_command` instead of inventing one-off role prompts.
 5. After Plan, Work, and Review, call `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts` so progress becomes `CompoundCapture`, `compound_handoff`, memory candidates, skill candidates, scenario candidates, and a Markdown handoff.
-6. Route any next skills from the Compound handoff into `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`.
+6. When reviewing a real Codex session log, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl` and block final-health claims if `completion_guard`, `verification_claim_guard`, or `scope_completion_delta` is blocked.
+7. For Windows Streamlit or similar local dev-server checks, build a launch and health-check plan through `src.orchestration.windows_dev_server.build_streamlit_launch_plan` instead of retrying ad hoc `Start-Process` variants.
+8. Route any next skills from the Compound handoff into `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`.
 
 ## Provider Policy
 
@@ -74,6 +79,8 @@ Each command resolves to a small set of roles, KH skills, and expected outputs. 
 - Visible progress panel for long task-plan runs.
 - `token_optimizer_provider` decision with provider, status, strategy, fallback, and quality rationale.
 - Resolved KH role command entrypoint when a role command is used.
+- `session_postmortem` with `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, token gate, review status, subagent summary, secret scan, and git integration when inspecting a prior session.
+- `windows_dev_server_launch_plan` when Windows local app-server verification needs a stable runner.
 - `compound_capture`, `compound_handoff`, memory candidates, skill candidates, scenario candidates, and Markdown handoff when a progress run reaches review completion.
 - Next-skill routing or an explicit blocked/no-learning rationale.
 
@@ -84,6 +91,9 @@ Each command resolves to a small set of roles, KH skills, and expected outputs. 
 - Do not compress source-of-truth text just to claim token savings.
 - Do not show a progress panel that omits review status, token optimizer status, commit SHA, or next task.
 - Do not start a resumed session from chat memory alone when `.kh`, `docs/kh`, or memory candidates exist.
+- Do not treat a scaffold, first slice, or pushed branch as final completion while the user goal remains active.
+- Do not replace failed Browser/Playwright QA with a narrower HTTP check unless the final report explicitly states the failed verification route and residual risk.
+- Do not mark token optimizer as `used` from skill-file reads, default prompts, or status mentions alone.
 
 ## UAF implementation targets
 
@@ -94,4 +104,6 @@ Each command resolves to a small set of roles, KH skills, and expected outputs. 
 - `src.orchestration.role_commands.resolve_role_command`
 - `src.orchestration.progress_panel.render_progress_panel`
 - `src.orchestration.session_start_context.build_session_start_context`
+- `src.orchestration.session_postmortem.analyze_codex_session_jsonl`
+- `src.orchestration.windows_dev_server.build_streamlit_launch_plan`
 - `tests.test_workflow_usability_layer`

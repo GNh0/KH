@@ -211,6 +211,10 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         for capability in [
             "Progress Compound Bridge",
             "Workflow Usability Runtime",
+            "Session Postmortem",
+            "Completion Guard",
+            "Verification Claim Guard",
+            "Windows Dev Server Runner",
             "Token Provider Policy",
             "Role Commands",
             "Progress Panel",
@@ -226,11 +230,17 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             "role-command-entrypoints",
             "progress-panel",
             "session-start-context",
+            "session-postmortem",
+            "windows-dev-server-runner",
         ]:
             self.assertIn(expected, root_skill_names)
 
         self.assertIn("token_optimizer_provider", prompt)
         self.assertIn("workflow_usability_auto", prompt)
+        self.assertIn("session_postmortem", prompt)
+        self.assertIn("scope_completion_delta", prompt)
+        self.assertIn("skill inspection", prompt)
+        self.assertIn("windows-dev-server-runner", prompt)
         self.assertIn("/kh:work", prompt)
         self.assertIn("progress.json", prompt)
         self.assertIn(".kh", prompt)

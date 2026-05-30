@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.16",
-    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, capability-based plugin composition, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, automatic workflow usability runtime, progress-to-Compound bridge, token optimizer provider policy, KH role command entrypoints, visible progress panels, session-start context restore, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
+  "version": "2.9.17",
+    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, capability-based plugin composition, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, automatic workflow usability runtime, session postmortem gates, progress-to-Compound bridge, token optimizer provider policy, KH role command entrypoints, visible progress panels, session-start context restore, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "skills": [
@@ -114,6 +114,16 @@
       "name": "session-start-context",
       "description": "Build next-session context by inspecting `.kh`, `docs/kh`, latest progress/Compound state, and scoped memory candidates.",
       "module": "src.orchestration.session_start_context"
+    },
+    {
+      "name": "session-postmortem",
+      "description": "Analyze Codex session JSONL logs for token gates, active-goal completion mistakes, failed verification claims, review timeouts, secret exposure, subagent cleanup, and git integration status.",
+      "module": "src.orchestration.session_postmortem"
+    },
+    {
+      "name": "windows-dev-server-runner",
+      "description": "Build Windows-safe Streamlit launch and health-check plans with normalized Path/PATH handling, redirected logs, and explicit visible/hidden window strategy.",
+      "module": "src.orchestration.windows_dev_server"
     },
     {
       "name": "evidence-producers",

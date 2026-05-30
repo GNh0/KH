@@ -187,6 +187,12 @@ The workflow usability layer makes those lifecycle records visible and resumable
 - `src.orchestration.role_commands.resolve_role_command(...)` provides short `/kh:*` role command front doors such as `/kh:work`, `/kh:qa`, `/kh:ship`, `/kh:learn`, and `/kh:resume`.
 - `src.orchestration.progress_panel.render_progress_panel(...)` gives long task-plan work a visible status panel with task status, review status, token optimizer status, commit SHA, and next task.
 - `src.orchestration.session_start_context.build_session_start_context(...)` inspects `.kh`, `docs/kh`, and scoped memory candidates at the start of the next session.
+- `src.orchestration.session_postmortem.analyze_codex_session_jsonl(...)` reviews Codex rollout logs after a completed or interrupted session. It flags large-token runs that skipped the token gate, timed-out or still-running reviewers, secret-like command text, missing commit/push evidence, active goals incorrectly closed as final completion, failed verification paths that were not reported, and scope gaps between the original objective and the final milestone.
+- `src.orchestration.windows_dev_server.build_streamlit_launch_plan(...)` produces a Windows-safe Streamlit launch plan with normalized `Path`/`PATH`, redirected logs, visible/hidden window strategy, and a separate HTTP health check.
+
+Completion is also guarded against partial milestones. A scaffold, first vertical slice, or pushed branch is not final completion while the goal remains active. KH postmortem records `scope_completion_delta` so the next task continues missing objective markers instead of turning a useful intermediate result into a false finish. If a promised verification route fails or is unavailable, such as Browser/Playwright QA, the final report must say that explicitly and distinguish it from narrower HTTP/status checks.
+
+Skill usage is separated from skill inspection. For example, reading `token_optimizer/SKILL.md` or quoting `token_optimizer_status` does not count as token optimizer usage; the postmortem requires runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence.
 
 External benchmarking remains explicit: role-stack office-hours/spec/CEO/eng review/QA/ship handoffs inform KH's front-door, review, QA, and release connections, while KH's Compound step adds reusable learning, memory candidates, and regression capture as a first-class post-review requirement.
 

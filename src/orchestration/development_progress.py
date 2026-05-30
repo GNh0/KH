@@ -20,6 +20,8 @@ STEP_STATUS_VALUES = {
     "with_fixes",
     "not_applicable",
     "blocked",
+    "timeout",
+    "review_incomplete",
 }
 WORKSPACE_STRATEGIES = {
     "current-checkout",
@@ -243,6 +245,12 @@ def derive_task_status(tasks: List[DevelopmentTaskProgress]) -> str:
 def derive_review_status(tasks: List[DevelopmentTaskProgress]) -> str:
     if not tasks:
         return "pending"
+    if any(
+        task.spec_review_status in {"timeout", "review_incomplete"}
+        or task.code_quality_review_status in {"timeout", "review_incomplete"}
+        for task in tasks
+    ):
+        return "review_incomplete"
     if any(
         task.spec_review_status == "blocked" or task.code_quality_review_status == "blocked"
         for task in tasks

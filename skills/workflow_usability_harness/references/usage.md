@@ -2,7 +2,7 @@
 
 ## When to use
 
-Use this skill whenever KH has enough moving parts that the user or next session should not have to reconstruct the workflow from chat. The common trigger is a task-plan run with `.kh/development/<run-id>/state/progress.json`, but the same harness applies to long reviews, subagent packets, QA loops, token-budget decisions, and session resume work.
+Use this skill whenever KH has enough moving parts that the user or next session should not have to reconstruct the workflow from chat. The common trigger is a task-plan run with `.kh/development/<run-id>/state/progress.json`, but the same harness applies to long reviews, subagent packets, QA loops, token-budget decisions, session resume work, and postmortems over Codex session JSONL logs.
 
 In AgentLoop, app bridge, and workflow dispatch paths, set `workflow_usability_auto=true` to make the runtime apply this harness automatically. The automatic path writes the same evidence as a manual helper call: session-start context, token provider policy, progress panel, progress state, Compound handoff, and candidates.
 
@@ -18,6 +18,7 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 - Optional `token_optimizer_provider`: `kh`, `rtk`, `hybrid`, or `passthrough`.
 - Optional role command such as `/kh:work`, `/kh:qa`, or `/kh:learn`.
 - Existing `.kh` state, `docs/kh` handoffs, and scoped memory candidate store.
+- Optional Codex rollout JSONL path when reviewing a finished or interrupted session.
 
 ## Execution pattern
 
@@ -36,6 +37,9 @@ This harness is also the KH-native place to absorb useful external workflow ergo
    `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts(project_root, progress)`.
 9. Treat generated memory records as candidates unless the user explicitly approves durable memory promotion and scope.
 10. Route next skills from the handoff instead of leaving them as chat-only advice.
+11. When reviewing a real session, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl(...)` and inspect `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, `token_gate`, `subagent_summary`, `secret_findings`, and `git_integration`.
+12. Treat skill-file reads and default-prompt mentions as inspection only. Token optimizer usage requires runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence.
+13. For Windows Streamlit or similar local dev-server checks, use `src.orchestration.windows_dev_server.build_streamlit_launch_plan(...)` to avoid repeated hidden-process failures caused by Path/PATH environment quirks.
 
 ## Evidence to produce
 
@@ -48,6 +52,9 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 - `compound_candidates.json` containing memory, skill, and scenario candidates.
 - `docs/kh/handoffs/<run-id>-compound.md`.
 - `required_next_skills` or explicit blocked/no-learning rationale.
+- `session_postmortem` when inspecting prior Codex logs, including active-goal completion, verification-claim, and scope-delta guard status.
+- `token_optimizer_evidence` separating runtime calls, skill doc reads, explicit usage records, and status mentions.
+- `windows_dev_server_launch_plan` when a local Windows app server must stay running for QA.
 
 ## Failure handling
 
@@ -57,6 +64,9 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 - If content is quality-sensitive, choose passthrough and record why compression would lower answer quality.
 - If a role command is unknown, fail closed with the known `/kh:*` menu.
 - If memory candidates contain secret-like content, do not persist them; use memory-state safety checks.
+- If a user goal is still active and the session emitted completion language for a scaffold, first slice, or partial milestone, mark `completion_guard=blocked`, record `scope_completion_delta`, and continue the missing objective markers.
+- If a promised verification path fails or is unavailable, such as Browser/Playwright QA, mark `verification_claim_guard=blocked` unless the final report explicitly names the failed verification and residual risk.
+- If token optimizer was only inspected, keep `token_optimizer_status=blocked` when the token gate requires optimization and require runtime evidence or passthrough before final completion.
 
 ## Quality bar
 
