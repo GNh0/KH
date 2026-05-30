@@ -78,6 +78,22 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
   - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
   - `python -m unittest discover -s tests` (396 tests)
   - `git diff --check`
+- Latest workflow usability layer direction for 2.9.13:
+  - Added `workflow-usability-harness` as the visible KH front door for progress panels, progress-to-Compound handoff, token provider policy, role commands, and session-start context restore.
+  - Added `src.orchestration.progress_compound_bridge` so completed `.kh/development/<run-id>/state/progress.json` can produce `CompoundCapture`, `compound_handoff`, memory candidates, skill candidates, scenario candidates, and `docs/kh/handoffs/<run-id>-compound.md`.
+  - Added `token_optimizer_provider = kh | rtk | hybrid | passthrough`; RTK is optional, hybrid falls back to KH, and quality-sensitive text must pass through.
+  - Added `/kh:*` role command entrypoints and visible progress/session-start helpers.
+  - Packaged skill count is now 32.
+- Latest verification after workflow usability layer 2.9.13:
+  - `python -m json.tool .codex-plugin/plugin.json`
+  - `python -m json.tool plugin.json`
+  - `python -m src.skills.uaf_skill_catalog --check` (32 valid / 0 invalid)
+  - `python -B -c "import pathlib, tokenize; files=list(pathlib.Path('.').rglob('*.py')); [compile(tokenize.open(str(p)).read(), str(p), 'exec') for p in files]; print(f'compiled {len(files)} python files')"` (189 files)
+  - `python -m unittest tests.test_workflow_usability_layer tests.test_compound_engineering_harness tests.test_development_progress tests.test_token_optimizer_gate_integration tests.test_plugin_packaging tests.test_docs_branding tests.test_superpowers_benchmark_alignment` (42 tests)
+  - `python -m unittest discover -s tests` (403 tests)
+  - `python -m src.skills.uaf_skill_quality --summary` (`lowest_quality_score`: 9.6)
+  - `python -m src.benchmarks.practical_quality_gate --summary` (`release_ready`: true, 8/8 KH-Bench tasks passed)
+  - `git diff --check`
 - Latest full verification after host plugin packaging:
   - `python -m json.tool plugin.json`
   - `python -m json.tool .codex-plugin/plugin.json`

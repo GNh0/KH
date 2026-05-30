@@ -12,6 +12,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 - Read `references/usage.md` before applying this skill to a real task; it expands the trigger boundary, inputs, execution pattern, evidence, and failure handling.
 - Use `examples/minimal-workflow.md` as a compact scenario for checking whether the host followed this skill correctly.
 - For task-by-task implementation runs, write progress to `.kh/development/<run-id>/state/progress.json`; the runtime helper is `src.orchestration.development_progress`.
+- Use `workflow-usability-harness` when that progress state should render a visible status panel or produce the post-review Compound handoff automatically.
 - Run `python scripts/smoke_check.py` from this skill folder to verify the support files are present and wired from `SKILL.md`.
 - Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success/blocked mini-demo and verify contract-shaped JSON plus any demo artifacts.
 
@@ -63,14 +64,15 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 5. Decide `token_optimizer_status` for large or long-running work and route long logs or subagent transcripts through `token-optimizer` when needed.
 6. Write a short implementation plan for multi-step work with exact files, tests, and verification commands.
 7. For task-plan work, create `.kh/development/<run-id>/state/progress.json` and update it as each task moves through RED, GREEN, spec review, code-quality review, fix, re-review, commit, and next task.
-8. For behavior changes, add or update a failing test before production edits.
-9. Implement the smallest change that satisfies the test and the user requirement.
-10. Review for scope drift, missing requirements, and risky integration points.
-11. Run fresh verification before claiming completion or committing.
-12. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
-13. Validate `skill_transition_handoff` for large work so required follow-up skills cannot be silently omitted.
-14. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
-15. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
+8. For long task-plan work, render the KH progress panel and, after review, convert progress state to Compound artifacts through `workflow-usability-harness`.
+9. For behavior changes, add or update a failing test before production edits.
+10. Implement the smallest change that satisfies the test and the user requirement.
+11. Review for scope drift, missing requirements, and risky integration points.
+12. Run fresh verification before claiming completion or committing.
+13. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
+14. Validate `skill_transition_handoff` for large work so required follow-up skills cannot be silently omitted.
+15. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
+16. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
 
 ## Gate checks
 
@@ -100,6 +102,7 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - `token_optimizer_status` with token savings, passthrough reason, blocked reason, or `considered_not_needed` rationale for large or long-running workflows.
 - GoalState summary with objective, success criteria, required evidence, current evidence, missing evidence, and goal ledger paths.
 - Development progress state at `.kh/development/<run-id>/state/progress.json` for multi-task implementation runs, with task IDs, active task, RED/GREEN status, spec/code-quality review status, commit SHA, and next task.
+- Visible progress panel and progress-to-Compound artifacts for long task-plan runs when `workflow-usability-harness` is applied.
 - `skill_transition_handoff` for large-work progress and final reports, with required next skills or `skill_transition_policy_passed`.
 - Failing-first test or smoke evidence for behavior changes when practical.
 - Review findings or an explicit no-findings review note.
@@ -122,3 +125,5 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - `src.tasks.workflows`
 - `src.skills.uaf_skill_catalog`
 - `src.orchestration.development_progress`
+- `src.orchestration.progress_panel.render_progress_panel`
+- `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts`

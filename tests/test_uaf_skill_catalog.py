@@ -47,6 +47,7 @@ CORE_SKILLS = {
     "traceability-matrix-harness",
     "token-optimizer",
     "workflow-skill-distiller",
+    "workflow-usability-harness",
 }
 
 REMOVED_EXAMPLE_SKILLS = {
@@ -197,6 +198,7 @@ class UafSkillCatalogTests(unittest.TestCase):
             "memory-state-harness": "persistent memory",
             "request-complexity-router": "Request complexity",
             "scenario-evaluation-harness": "Scenario evaluation",
+            "workflow-usability-harness": "visible progress",
         }
 
         for skill_name, source_label in expected_sources.items():

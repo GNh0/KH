@@ -18,6 +18,8 @@ Use this as an early gate for large work, not only as a rescue step after logs g
 - `passthrough`: content was large but contract-sensitive, source-of-truth, or unsafe to summarize without reducing answer quality.
 - `blocked`: optimization was required but could not preserve required facts or would reduce answer quality.
 
+When a host exposes more than one context optimization path, record `token_optimizer_provider` as `kh`, `rtk`, `hybrid`, or `passthrough`. KH is the built-in Python provider. RTK-style command optimization is optional. Hybrid may use RTK for high-noise command output when available and fall back to KH otherwise. Passthrough is required for source-of-truth content when compression would lower quality.
+
 ## Development evidence quality bar
 
 For Superpowers-style or KH lifecycle work, compression must preserve the evidence that makes the run trustworthy:
@@ -65,6 +67,7 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 ## Required outputs
 
 - `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
+- `token_optimizer_provider`: `kh`, `rtk`, `hybrid`, or `passthrough` when provider policy is relevant.
 - Compact log or code text that preserves errors, file paths, test names, and exit status context.
 - Token-savings estimate or before/after size when used inside a harness result.
 - Token usage before/after statistics when the skill is used as workflow evidence.
@@ -92,5 +95,6 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - `src.skills.token_optimizer.compare_token_usage`
 - `src.skills.token_optimizer.aggregate_token_usage_stats`
 - `src.skills.token_optimizer.estimate_token_count`
+- `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider`
 - `src.contracts.HarnessResult`
 - `tests.test_command_output_runtime`

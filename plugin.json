@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.12",
-    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
+  "version": "2.9.13",
+    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, progress-to-Compound bridge, token optimizer provider policy, KH role command entrypoints, visible progress panels, session-start context restore, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "skills": [
@@ -69,6 +69,36 @@
       "name": "skill-transitions",
       "description": "Validate that KH large-work skill handoffs do not stop at listed skills: memory candidates trigger memory-state, subagent review triggers token decision and role audit, and post-review work closes Compound or routes to distillation.",
       "module": "src.orchestration.skill_transitions"
+    },
+    {
+      "name": "workflow-usability-harness",
+      "description": "Expose KH progress-to-Compound automation, token optimizer provider policy, role command entrypoints, visible progress panels, and session-start context restore.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read workflow-usability-harness"
+    },
+    {
+      "name": "progress-compound-bridge",
+      "description": "Convert `.kh/development/<run-id>/state/progress.json` into CompoundCapture, Compound handoff, memory candidates, skill candidates, scenario candidates, and docs/kh handoff markdown.",
+      "module": "src.orchestration.progress_compound_bridge"
+    },
+    {
+      "name": "token-optimizer-provider",
+      "description": "Resolve `token_optimizer_provider` policy as kh, rtk, hybrid, or passthrough with RTK optional and KH as the safe fallback.",
+      "module": "src.orchestration.token_optimizer_provider"
+    },
+    {
+      "name": "role-command-entrypoints",
+      "description": "Provide concise KH role command entrypoints such as /kh:work, /kh:qa, /kh:ship, /kh:learn, and /kh:resume.",
+      "module": "src.orchestration.role_commands"
+    },
+    {
+      "name": "progress-panel",
+      "description": "Render visible task-plan progress panels with task status, review status, token optimizer status, commit SHA, active task, and next task.",
+      "module": "src.orchestration.progress_panel"
+    },
+    {
+      "name": "session-start-context",
+      "description": "Build next-session context by inspecting `.kh`, `docs/kh`, latest progress/Compound state, and scoped memory candidates.",
+      "module": "src.orchestration.session_start_context"
     },
     {
       "name": "evidence-producers",

@@ -46,6 +46,7 @@ Do not skip this step only because the feature already works. The Compound step 
 8. Hand off to `workflow-skill-distiller`, `scenario-evaluation-harness`, `memory-state-harness`, or `context-state-harness` as appropriate.
 9. Verify the learning by running or adding a check that would catch the same failure next time.
 10. For large work, ensure the final lifecycle report includes `skill_transition_handoff` so the selected next KH skill is either completed, blocked, or visible as required next work.
+11. For task-plan runs, accept progress-to-Compound handoffs from `workflow-usability-harness` so completed `progress.json` becomes `CompoundCapture`, memory candidates, skill candidates, scenario candidates, and `docs/kh/handoffs/<run-id>-compound.md`.
 
 ## Large Work Bundle Reporting
 
@@ -88,6 +89,7 @@ Pressure scenario: the implementation passes tests and review, but the agent sto
 - `src.orchestration.compound.CompoundCapture`
 - `src.orchestration.compound.validate_compound_capture`
 - `src.orchestration.compound.build_compound_handoff`
+- `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts`
 - `tests.test_compound_engineering_harness`
 - `skills/compound_engineering_harness/SKILL.md`
 

@@ -109,6 +109,7 @@ GATE_SKILLS = {
     "qa-gate-harness",
     "quality-gates-harness",
     "review-gate-harness",
+    "workflow-usability-harness",
 }
 
 SKILL_OPS_SKILLS = {

@@ -327,6 +327,17 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
             ["catalog", "read"],
         ),
         _skill_turn(
+            "state-memory",
+            4,
+            "This long task has progress.json now; make it visible and make sure the next session resumes from KH state.",
+            "Use workflow usability to render a progress panel, record token_optimizer_provider, convert progress.json into a Compound handoff, and restore the next session from .kh, docs/kh, and memory candidates.",
+            "workflow-usability-harness",
+            ["progress_panel", "token_optimizer_provider", "compound_handoff", "session_start_context"],
+            "workflow_harness",
+            ["progress", "token", "compound", "session"],
+            additional_skills=["compound-engineering-harness", "context-state-harness"],
+        ),
+        _skill_turn(
             "command-safety",
             1,
             "This hook might rewrite commands; define trust, permissions, and non-blocking behavior.",

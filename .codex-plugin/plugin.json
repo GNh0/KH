@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.12",
-  "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, large-work orchestration bundle with application modes, Superpowers-style project-local artifacts, development progress state, skill transition policy, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
+  "version": "2.9.13",
+  "description": "KH Universal Agent Framework skills, brainstorming handoff, GoalState ledger, large-work orchestration bundle with application modes, Superpowers-style project-local artifacts, development progress state, progress-to-Compound bridge, token provider policy, KH role commands, visible progress panels, session-start context restore, skill transition policy, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "KH UAF",
     "shortDescription": "Personal UAF skillbook and orchestration harness.",
-    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, brainstorming handoff for early product/project discovery, GoalState ledger updates with Superpowers-style project-local content/state artifacts, development progress state for task-plan runs, skill transition policy for non-dead follow-up skills, Compound learning capture with scoped memory candidates, lightweight request-complexity routing, SIDE-style scenario evaluation for routing/evidence/gate/resume behavior, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill target audits, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
+    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, brainstorming handoff for early product/project discovery, GoalState ledger updates with Superpowers-style project-local content/state artifacts, development progress state for task-plan runs, progress-to-Compound automation, token optimizer provider policy, role command entrypoints, visible progress panels, session-start context restore, skill transition policy for non-dead follow-up skills, Compound learning capture with scoped memory candidates, lightweight request-complexity routing, SIDE-style scenario evaluation for routing/evidence/gate/resume behavior, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, goal and memory state, domain design artifacts, DAG-based role orchestration with runtime role artifacts, standard-template functional specification exports, metadata-only deliverable quality, render QA, traceability, role execution audit harnesses, operational skill target audits, evidence-enforced review/QA gates, retention cleanup, and local Python orchestration contracts for Codex workflows.",
     "developerName": "KH UAF",
     "category": "Productivity",
     "capabilities": [
@@ -26,6 +26,11 @@
       "Brainstorming",
       "Large Work Bundle",
       "Development Progress",
+      "Progress Compound Bridge",
+      "Token Provider Policy",
+      "Role Commands",
+      "Progress Panel",
+      "Session Restore",
       "Skill Transitions",
       "Compound Learning",
       "Request Routing",
@@ -59,6 +64,11 @@
       "Keep the goal ledger updated with active task, missing evidence, next action, and visible KH project artifacts when notes or handoffs are produced.",
       "Keep KH project artifacts organized as `.kh/<skill>/<run-id>/content/`, `.kh/<skill>/<run-id>/state/`, and shareable docs under `docs/kh/specs`, `docs/kh/plans`, `docs/kh/decisions`, `docs/kh/qa`, or `docs/kh/handoffs`.",
       "For task-plan implementation, update `.kh/development/<run-id>/state/progress.json` as tasks move through RED, GREEN, spec review, code-quality review, fix, re-review, commit, and next task.",
+      "When `progress.json` reaches review completion, build KH `CompoundCapture`, `compound_handoff`, memory candidates, skill candidates, scenario candidates, and `docs/kh/handoffs/<run-id>-compound.md` through workflow-usability-harness.",
+      "Use `token_optimizer_provider` as a quality-first policy: `kh`, `rtk`, `hybrid`, or `passthrough`; RTK is optional, hybrid falls back to KH, and source-of-truth content must preserve quality.",
+      "Use KH role command entrypoints such as `/kh:brainstorm`, `/kh:spec`, `/kh:ceo-review`, `/kh:eng-review`, `/kh:work`, `/kh:qa`, `/kh:ship`, `/kh:learn`, and `/kh:resume` to route roles and skills without inventing one-off commands.",
+      "For long task-plan runs, render a visible KH progress panel with task status, review status, token optimizer status, commit SHA, active task, and next task.",
+      "At session start or resume, inspect KH session-start context from `.kh`, `docs/kh`, and scoped memory candidates before relying on chat context alone.",
       "Before using subagents, record `subagent_strategy` as `dispatch`, `single-controller`, `review-only`, or `blocked`; use subagents only when independent work, bounded packets, review value, and isolation justify the overhead.",
       "For subagent packets, transcripts, and reviewer output, make a token-optimizer decision; compression is conditional on size, safety, and quality, not automatic.",
       "For large-work progress and final reports, validate skill transitions so memory candidates trigger memory-state-harness, subagent review triggers role-execution-audit-harness, and post-review work closes compound-engineering-harness or routes to workflow-skill-distiller/scenario/memory follow-up.",

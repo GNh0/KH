@@ -14,7 +14,7 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 
 ## What It Includes
 
-- 31 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 32 packaged skills/harnesses with support files, smoke checks, and runnable demos.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - `brainstorming-harness` for early product/project discovery and KH handoff before architecture or implementation.
@@ -171,6 +171,15 @@ Skill transition validation makes the bundle active instead of decorative. After
 Subagents are also decision-gated. KH should record `subagent_strategy`: `dispatch`, `single-controller`, `review-only`, or `blocked` before opening subagents. Subagents are justified by independent work, bounded packets, real review value, and isolation; otherwise the controller should keep the work sequential. Token optimization for subagent packets and transcripts is a required decision, not automatic compression: short or exact reviewer output may be `considered_not_needed` or `passthrough`.
 
 Python callers can use `src.orchestration.skill_application.build_large_work_orchestration_bundle(...)` and `validate_large_work_orchestration_bundle(...)` to create that lightweight evidence without hand-assembling the JSON. For transition checks, use `src.orchestration.skill_transitions.validate_skill_transitions(...)`. For task-plan execution, use `src.orchestration.development_progress.write_development_progress(...)` and `validate_development_progress(...)` to keep `.kh/development/<run-id>/state/progress.json` aligned with the final report fields.
+
+The workflow usability layer makes those lifecycle records visible and resumable:
+
+- `workflow-usability-harness` connects progress state, token provider policy, role command entrypoints, progress panels, and session-start context restore.
+- `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts(...)` turns completed `progress.json` into `CompoundCapture`, `compound_handoff`, memory candidates, skill candidates, scenario candidates, and `docs/kh/handoffs/<run-id>-compound.md`.
+- `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider(...)` records `token_optimizer_provider`: `kh`, `rtk`, `hybrid`, or `passthrough`. RTK is optional; hybrid falls back to KH and exact source-of-truth text stays passthrough.
+- `src.orchestration.role_commands.resolve_role_command(...)` provides short `/kh:*` role command front doors such as `/kh:work`, `/kh:qa`, `/kh:ship`, `/kh:learn`, and `/kh:resume`.
+- `src.orchestration.progress_panel.render_progress_panel(...)` gives long task-plan work a visible status panel with task status, review status, token optimizer status, commit SHA, and next task.
+- `src.orchestration.session_start_context.build_session_start_context(...)` inspects `.kh`, `docs/kh`, and scoped memory candidates at the start of the next session.
 
 External benchmarking remains explicit: role-stack office-hours/spec/CEO/eng review/QA/ship handoffs inform KH's front-door, review, QA, and release connections, while KH's Compound step adds reusable learning, memory candidates, and regression capture as a first-class post-review requirement.
 

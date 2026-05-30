@@ -61,6 +61,7 @@ SKILL_EXECUTION_LEVELS = {
     "traceability-matrix-harness": "python-module",
     "token-optimizer": "python-module",
     "workflow-skill-distiller": "python-module",
+    "workflow-usability-harness": "hybrid-harness",
 }
 
 
