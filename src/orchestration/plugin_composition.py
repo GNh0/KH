@@ -21,6 +21,14 @@ CAPABILITY_ALIASES = {
     "resume": "memory_goal_resume",
     "tdd": "tdd_review",
     "review": "tdd_review",
+    "worktree": "workspace_isolation",
+    "workspace": "workspace_isolation",
+    "verification": "completion_verification",
+    "verify": "completion_verification",
+    "finish": "branch_finishing",
+    "ship": "branch_finishing",
+    "debug": "systematic_debugging",
+    "debugging": "systematic_debugging",
     "workflow": "workflow_control",
 }
 
@@ -30,6 +38,10 @@ CONTROLLER_CAPABILITIES = {
     "domain_orchestration",
     "planning_methodology",
     "tdd_review",
+    "workspace_isolation",
+    "completion_verification",
+    "branch_finishing",
+    "systematic_debugging",
     "repo_pr_ci",
     "knowledge_docs",
 }
@@ -450,6 +462,14 @@ def _best_controller_provider(
             score += 25
         if "tdd_review" in capabilities and classification.domain in {"software", "security", "product-design"}:
             score += 20
+        if "workspace_isolation" in capabilities and classification.complexity in {"medium", "heavy", "high_risk"}:
+            score += 15
+        if "completion_verification" in capabilities and classification.complexity in {"medium", "heavy", "high_risk"}:
+            score += 15
+        if "branch_finishing" in capabilities and classification.domain == "software":
+            score += 12
+        if "systematic_debugging" in capabilities and classification.domain in {"software", "security"}:
+            score += 12
         if "planning_methodology" in capabilities and classification.complexity in {"medium", "heavy"}:
             score += 15
         if "repo_pr_ci" in capabilities and classification.domain == "software":

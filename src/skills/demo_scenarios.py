@@ -106,10 +106,15 @@ ARTIFACT_SKILLS = {
 }
 
 GATE_SKILLS = {
+    "branch-finishing-harness",
     "development-lifecycle-harness",
+    "plan-execution-harness",
     "qa-gate-harness",
     "quality-gates-harness",
     "review-gate-harness",
+    "systematic-debugging-harness",
+    "verification-before-completion-harness",
+    "worktree-isolation-harness",
     "workflow-usability-harness",
 }
 

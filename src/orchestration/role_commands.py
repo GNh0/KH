@@ -59,7 +59,14 @@ ROLE_COMMANDS = [
         phase="work",
         purpose="Run an implementation task through isolated workspace, RED/GREEN, review, and commit.",
         roles=["controller", "implementer", "spec-reviewer", "code-quality-reviewer"],
-        skills=["development-lifecycle-harness", "quality-gates-harness", "subagent-review-pipeline"],
+        skills=[
+            "development-lifecycle-harness",
+            "worktree-isolation-harness",
+            "plan-execution-harness",
+            "quality-gates-harness",
+            "systematic-debugging-harness",
+            "subagent-review-pipeline",
+        ],
         expected_outputs=["progress.json", "verification", "commit_sha"],
     ),
     RoleCommandEntrypoint(
@@ -68,7 +75,12 @@ ROLE_COMMANDS = [
         phase="review",
         purpose="Collect QA, render, regression, and traceability evidence before completion.",
         roles=["qa-verifier", "security-reviewer"],
-        skills=["qa-gate-harness", "artifact-render-qa-harness", "traceability-matrix-harness"],
+        skills=[
+            "qa-gate-harness",
+            "verification-before-completion-harness",
+            "artifact-render-qa-harness",
+            "traceability-matrix-harness",
+        ],
         expected_outputs=["qa_evidence", "manual_test_mapping", "release_blockers"],
     ),
     RoleCommandEntrypoint(
@@ -77,7 +89,13 @@ ROLE_COMMANDS = [
         phase="review",
         purpose="Decide whether the branch is ready to commit, push, PR, or hold.",
         roles=["release-manager", "security-reviewer", "qa-verifier"],
-        skills=["health-check-harness", "review-gate-harness", "qa-gate-harness"],
+        skills=[
+            "health-check-harness",
+            "verification-before-completion-harness",
+            "branch-finishing-harness",
+            "review-gate-harness",
+            "qa-gate-harness",
+        ],
         expected_outputs=["release_decision", "workspace_strategy", "integration_state"],
     ),
     RoleCommandEntrypoint(

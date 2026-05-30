@@ -14,11 +14,12 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 
 ## What It Includes
 
-- 33 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 38 packaged skills/harnesses with support files, smoke checks, and runnable demos.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - `brainstorming-harness` for early product/project discovery and KH handoff before architecture or implementation.
 - `compound-engineering-harness` for mandatory post-review learning capture, scoped memory candidates, system updates, and regression checks.
+- KH-native replacements for Superpowers-style worktree isolation, task-plan execution, systematic debugging, verification-before-completion, and branch finishing.
 - Runtime token optimization for workflow command output and subagent transcripts, including RTK-style command-family savings statistics without requiring RTK as a dependency.
 - Runtime memory candidate recording and full-catalog session skill audits so useful skills are not left as invisible chat advice.
 - DAG role orchestration with CEO, advisor, architect, planner, controller, implementer, reviewers, QA, security, and release roles.
@@ -163,16 +164,20 @@ KH UAF maps the compound-engineering loop into explicit skills:
 
 - Plan: `brainstorming-harness`, `architect-pipeline`, `domain-orchestration-harness`, and `goal-state-harness`.
 - Work: `development-lifecycle-harness`, adapter contracts, role DAG execution, and bounded workflow dispatch.
-- Review: `review-gate-harness`, `qa-gate-harness`, `quality-gates-harness`, security checks, and release gates.
+- Work control: `worktree-isolation-harness`, `plan-execution-harness`, `quality-gates-harness`, and `systematic-debugging-harness`.
+- Review: `review-gate-harness`, `qa-gate-harness`, `verification-before-completion-harness`, security checks, and release gates.
+- Finish: `branch-finishing-harness`, health checks, release gates, commit/push/PR evidence, and cleanup decisions.
 - Compound: `compound-engineering-harness`, `workflow-skill-distiller`, `memory-state-harness`, `context-state-harness`, goal ledger updates, and SIDE/scenario regression captures.
 
 For heavy, multi-step, or evidence-gated work, create or refresh `GoalState` before execution and keep the goal ledger updated through review, QA, and release. For a new product, SaaS, feature, or unclear design request, start with `brainstorming-harness` before architecture or implementation and write visible run artifacts under `.kh/<skill>/<run-id>/content/` plus `.kh/<skill>/<run-id>/state/`, with shareable summaries under `docs/kh/handoffs/` or the relevant `docs/kh/<type>/` folder. After Plan, Work, and Review, run `compound-engineering-harness` when reusable learning, scoped memory candidates, or regression checks may be needed. For a completed workflow that reveals a reusable pattern, finish by distilling the pattern, adding scoped memory, or adding a scenario regression instead of leaving the learning only in chat.
 
 Before plugin-specific rules run, `plugin-composition-policy` can act as the top-level lightweight broker when multiple plugins, tools, skills, connectors, or future capability providers may apply. It chooses `direct`, `single`, `hybrid`, or `clarify` by capability fit, not by whichever provider has the strongest MUST/ALWAYS trigger wording. In hybrid routes one controller owns the workflow while assistant providers handle delegated scopes such as repo/PR/CI, browser QA, knowledge docs, image generation, host automation, or memory/goal/resume.
 
+KH now includes a Superpowers replacement layer for KH-owned projects. `worktree-isolation-harness`, `plan-execution-harness`, `systematic-debugging-harness`, `verification-before-completion-harness`, and `branch-finishing-harness` cover the worktree/TDD/debug/review/finish flows that otherwise made Superpowers useful as a controller. Superpowers can still be used as an assistant provider when explicitly selected, but KH projects should not select it solely because its own skill text says MUST/ALWAYS.
+
 For large or long-running work, KH treats `token-optimizer` as a context budget gate. If `estimated_context_tokens`, broad file reads, long command output, expected tool calls, or subagent transcripts are likely to cross the threshold, the workflow must report `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`. Compression is never allowed to lower answer quality or hide source-of-truth details; unsafe content stays `passthrough` or blocks the optimization path. Workflow usability runtime now calls `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results(...)` for `WorkflowTaskResult` command output and agent transcripts, preserving raw metadata while attaching optimized display records, token savings, and RTK-style command-family stats under `metadata.token_optimizer`.
 
-For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, KH now requires `large_work_orchestration_bundle` evidence before implementation. The bundle records `skill_statuses` for routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation. Each status must be `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`, and each entry carries `application_mode`: `runtime`, `procedural`, `considered`, or `blocked`. This keeps KH light for simple requests while making omissions visible during large work without pretending that procedural use produced runtime adapter evidence.
+For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, KH now requires `large_work_orchestration_bundle` evidence before implementation. The bundle records `skill_statuses` for routing, host orchestration, GoalState, lifecycle, workspace isolation, plan execution, debugging, token optimization, memory, parallel strategy, subagent review, role execution audit, verification-before-completion, branch finishing, Compound, and workflow distillation. Each status must be `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`, and each entry carries `application_mode`: `runtime`, `procedural`, `considered`, or `blocked`. This keeps KH light for simple requests while making omissions visible during large work without pretending that procedural use produced runtime adapter evidence.
 
 Skill transition validation makes the bundle active instead of decorative. After review and before final completion, `src.orchestration.skill_transitions.validate_skill_transitions(...)` checks that memory candidates route to `memory-state-harness`, subagent review routes to `role-execution-audit-harness`, parallel execution routes to `parallel-orchestration-harness`, and Compound handoffs close with a no-learning rationale or route to `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`. This is the KH-native guard against having useful skills listed but never actually entering the run.
 
