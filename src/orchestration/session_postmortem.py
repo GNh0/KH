@@ -416,6 +416,8 @@ def _merge_token_optimizer_evidence(evidence: Dict[str, Any], text: str) -> None
         return
     if re.search(
         r"src\.skills\.token_optimizer|python\s+-m\s+src\.skills\.token_optimizer|"
+        r"src\.orchestration\.runtime_token_optimizer|optimize_workflow_task_results|"
+        r"runtime_token_optimization|metadata\.token_optimizer|"
         r"summarize_command_output|optimize_context_content|summarize_agent_transcript|"
         r"aggregate_token_usage_stats|compare_token_usage",
         text,

@@ -10,6 +10,8 @@ from src.orchestration.development_progress import (
 )
 from src.orchestration.progress_compound_bridge import write_progress_compound_artifacts
 from src.orchestration.progress_panel import render_progress_panel
+from src.orchestration.runtime_memory import record_workflow_memory_candidates
+from src.orchestration.runtime_token_optimizer import optimize_workflow_task_results
 from src.orchestration.session_start_context import build_session_start_context
 from src.orchestration.token_optimizer_provider import resolve_token_optimizer_provider
 
@@ -20,6 +22,8 @@ class WorkflowUsabilityRuntimeArtifacts:
     status: str = "skipped"
     session_start_context: Dict[str, Any] = field(default_factory=dict)
     token_optimizer_provider: Dict[str, Any] = field(default_factory=dict)
+    token_optimization: Dict[str, Any] = field(default_factory=dict)
+    memory_state: Dict[str, Any] = field(default_factory=dict)
     progress: Dict[str, Any] = field(default_factory=dict)
     progress_path: str = ""
     progress_panel: str = ""
@@ -93,12 +97,22 @@ def apply_workflow_usability_runtime(
     metadata = metadata or {}
     preflight = preflight or build_workflow_usability_preflight(project_dir, metadata)
     try:
+        optimized_task_results, token_optimization = optimize_workflow_task_results(
+            task_results,
+            metadata=metadata,
+        )
+        runtime_metadata = dict(metadata)
+        runtime_metadata["token_optimization"] = token_optimization
+        runtime_metadata["token_optimizer_status"] = token_optimization.get(
+            "status",
+            runtime_metadata.get("token_optimizer_status", ""),
+        )
         progress = build_workflow_development_progress(
             workflow_id=workflow_id,
             file_list=file_list,
-            task_results=task_results,
+            task_results=optimized_task_results,
             gate_results=gate_results,
-            metadata=metadata,
+            metadata=runtime_metadata,
             final_goal=final_goal or {},
             workflow_success=workflow_success,
         )
@@ -108,11 +122,18 @@ def apply_workflow_usability_runtime(
         progress_path = write_development_progress(project_dir, progress)
         panel = render_progress_panel(progress)
         compound_artifacts = write_progress_compound_artifacts(project_dir, progress)
+        memory_state = record_workflow_memory_candidates(
+            project_dir,
+            metadata,
+            compound_artifacts.memory_candidates,
+        )
         return WorkflowUsabilityRuntimeArtifacts(
             enabled=True,
             status="complete" if workflow_success else "blocked",
             session_start_context=dict(preflight.get("session_start_context", {})),
             token_optimizer_provider=dict(preflight.get("token_optimizer_provider", {})),
+            token_optimization=token_optimization,
+            memory_state=memory_state,
             progress=progress.to_dict(),
             progress_path=str(progress_path),
             progress_panel=panel,
@@ -123,6 +144,8 @@ def apply_workflow_usability_runtime(
                 "development_progress_valid",
                 "progress_panel",
                 "compound_handoff",
+                *list(token_optimization.get("evidence", [])),
+                *list(memory_state.get("evidence", [])),
                 *list(compound_artifacts.evidence),
             ],
         )
@@ -132,6 +155,8 @@ def apply_workflow_usability_runtime(
             status="blocked",
             session_start_context=dict(preflight.get("session_start_context", {})),
             token_optimizer_provider=dict(preflight.get("token_optimizer_provider", {})),
+            token_optimization={},
+            memory_state={},
             evidence=["workflow_usability_runtime"],
             error_type=type(exc).__name__,
             message=str(exc),
@@ -190,6 +215,8 @@ def build_workflow_development_progress(
             "source": "workflow_usability_runtime",
             "workflow_id": workflow_id,
             "token_optimizer_provider": token_decision.to_dict(),
+            "token_optimization": dict(metadata.get("token_optimization", {})),
+            "memory_state": dict(metadata.get("memory_state", {})),
             "learning_candidates": _learning_candidates(workflow_id, workflow_success, gate_results),
             "memory_candidates": _memory_candidates(workflow_id, workflow_success),
             "scenario_candidates": _scenario_candidates(workflow_id, workflow_success),

@@ -47,10 +47,11 @@ If any of those facts would be lost, do not compress that item; use `passthrough
 5. Alternatively, if you need to pass a large python file to another agent (or summarize it), minify it first by stripping comments and docstrings via AST:
    `python -c "from src.skills.token_optimizer import minify_code; print(minify_code(open('file.py').read()))"`
 6. If command output needs a reusable UAF evidence record, call `src.skills.token_optimizer.summarize_command_output` so the exit code, command family, raw size, filtered size, and token savings metadata are preserved in `HarnessResult`.
-7. For before/after reporting, call `src.skills.token_optimizer.compare_token_usage` for one item or `aggregate_token_usage_stats` for a workflow-level summary. Report `without_token_optimizer`, `with_token_optimizer`, `estimated_tokens_saved`, and `token_savings_ratio`.
-8. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
-9. Final workflow status must include `token_optimizer_status` and either token savings statistics, passthrough reason, blocked reason, or `considered_not_needed` rationale.
-10. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
+7. For real workflow task results, call `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results` or let `workflow-usability-harness` call it automatically. This attaches optimized command/subagent records under `metadata.token_optimizer` without deleting raw task metadata.
+8. For before/after reporting, call `src.skills.token_optimizer.compare_token_usage` for one item or `aggregate_token_usage_stats` for a workflow-level summary. Report `without_token_optimizer`, `with_token_optimizer`, `estimated_tokens_saved`, and `token_savings_ratio`.
+9. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
+10. Final workflow status must include `token_optimizer_status` and either token savings statistics, passthrough reason, blocked reason, or `considered_not_needed` rationale.
+11. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 
 ## External Benchmark Recipe
 
@@ -71,6 +72,8 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - Compact log or code text that preserves errors, file paths, test names, and exit status context.
 - Token-savings estimate or before/after size when used inside a harness result.
 - Token usage before/after statistics when the skill is used as workflow evidence.
+- Runtime workflow evidence under `metadata.token_optimizer` for command outputs and agent transcripts when the workflow has `WorkflowTaskResult` objects.
+- RTK-style `by_command_family` savings statistics when command output is optimized through KH runtime.
 - Fallback note when truncation or minification cannot safely preserve actionable context.
 - Passthrough note when content is contract-sensitive and should not be compressed.
 - Preserved development evidence summary when optimizing a lifecycle run: `task_status`, `review_status`, `commit_sha`, `next_task`, exit code, sandbox retry, file references, and reviewer severity.
@@ -96,5 +99,6 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - `src.skills.token_optimizer.aggregate_token_usage_stats`
 - `src.skills.token_optimizer.estimate_token_count`
 - `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider`
+- `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results`
 - `src.contracts.HarnessResult`
 - `tests.test_command_output_runtime`

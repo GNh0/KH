@@ -31,6 +31,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
   - `src.skills.token_optimizer.compare_token_usage`
   - `src.skills.token_optimizer.aggregate_token_usage_stats`
   - `src.skills.token_optimizer.estimate_token_count`
+  - `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results`
   - `src.contracts.HarnessResult`
   - `tests.test_command_output_runtime`
 
@@ -41,18 +42,20 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 3. For heavy work, decide the `token_optimizer_status` before the first broad file read, long-running command, or subagent dispatch.
 4. Prefer `optimize_context_content` as the default entrypoint. It passes through contract-sensitive text, minifies safe Python code, and uses command-family filters for logs.
 5. For long agent or subagent transcripts, use `summarize_agent_transcript` so task, review, verification, and commit evidence survive compression. For short, exact, or contract-sensitive subagent output, record `considered_not_needed` or `passthrough` instead of compressing.
-6. For file-based logs, run `python -m src.skills.token_optimizer --log-file <path> --max-lines <n>` instead of pasting very long output into `python -c`.
-7. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-8. When optimization is applied, include before/after token usage statistics:
+6. For workflow dispatch results, use `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results(...)` so command output and subagent transcripts are optimized as runtime evidence under `WorkflowTaskResult.metadata.token_optimizer` without deleting raw metadata.
+7. For file-based logs, run `python -m src.skills.token_optimizer --log-file <path> --max-lines <n>` instead of pasting very long output into `python -c`.
+8. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
+9. When optimization is applied, include before/after token usage statistics:
    - `without_token_optimizer`
    - `with_token_optimizer`
    - `estimated_tokens_saved`
    - `token_savings_ratio`
    - `by_strategy` for workflow summaries
-9. When optimization is not applied during heavy work, report `considered_not_needed`, `passthrough`, or `blocked` with a short reason.
-10. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
-11. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-12. Report the difference between capability available in the repository and behavior actually executed in the current run.
+   - RTK-style `by_command_family` stats for optimized command output
+10. When optimization is not applied during heavy work, report `considered_not_needed`, `passthrough`, or `blocked` with a short reason.
+11. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
+12. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+13. Report the difference between capability available in the repository and behavior actually executed in the current run.
 
 ## Evidence to produce
 
@@ -62,6 +65,8 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Before/after token usage statistics for every optimized item or aggregate workflow.
+- Runtime workflow `token_optimization` summary and per-task `metadata.token_optimizer` records when optimizing `WorkflowTaskResult` objects.
+- RTK-style command-family savings statistics for command output, even when KH is the provider.
 - Lifecycle evidence preserved during compression: `task_status`, `review_status`, `commit_sha`, `next_task`, RED/GREEN state, exit code, sandbox retry reason, file references, and reviewer severity.
 - Verification command or review evidence, including failures and blocked states.
 

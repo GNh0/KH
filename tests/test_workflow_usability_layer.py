@@ -211,7 +211,10 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         for capability in [
             "Progress Compound Bridge",
             "Workflow Usability Runtime",
+            "Runtime Token Optimization",
+            "Runtime Memory Candidates",
             "Session Postmortem",
+            "Session Skill Audit",
             "Completion Guard",
             "Verification Claim Guard",
             "Windows Dev Server Runner",
@@ -225,12 +228,15 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         for expected in [
             "workflow-usability-harness",
             "workflow-usability-runtime",
+            "runtime-token-optimizer",
+            "runtime-memory-candidates",
             "progress-compound-bridge",
             "token-optimizer-provider",
             "role-command-entrypoints",
             "progress-panel",
             "session-start-context",
             "session-postmortem",
+            "session-skill-audit",
             "windows-dev-server-runner",
         ]:
             self.assertIn(expected, root_skill_names)
@@ -238,7 +244,9 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         self.assertIn("token_optimizer_provider", prompt)
         self.assertIn("workflow_usability_auto", prompt)
         self.assertIn("session_postmortem", prompt)
+        self.assertIn("session_skill_audit", prompt)
         self.assertIn("scope_completion_delta", prompt)
+        self.assertIn("memory_candidates", prompt)
         self.assertIn("skill inspection", prompt)
         self.assertIn("windows-dev-server-runner", prompt)
         self.assertIn("/kh:work", prompt)
@@ -251,9 +259,13 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
                 "workflow_usability_auto": True,
                 "token_optimizer_provider": "kh",
                 "token_optimizer_status": "considered_not_needed",
+                "token_optimizer_min_tokens": 1,
+                "token_optimizer_max_lines": 8,
+                "memory_root": str(Path(tmp) / ".memory"),
                 "workspace_strategy": "project-local-worktree",
                 "goal": {"objective": "Build a workflow."},
             }
+            noisy_output = "\n".join([*(f"progress {index}" for index in range(80)), "ERROR: runtime failed", "exit code: 1"])
             preflight = build_workflow_usability_preflight(tmp, metadata)
             result = apply_workflow_usability_runtime(
                 project_dir=tmp,
@@ -266,7 +278,15 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
                         role="implementer",
                         status="success",
                         message="done",
-                        metadata={"evidence": ["task runner completed"]},
+                        metadata={
+                            "evidence": ["task runner completed"],
+                            "command_output": {
+                                "command": "python -m unittest",
+                                "stdout": noisy_output,
+                                "stderr": "",
+                                "exit_code": 1,
+                            },
+                        },
                     )
                 ],
                 gate_results=[
@@ -284,9 +304,19 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertTrue(Path(result.progress_path).exists())
             self.assertIn("KH Progress", result.progress_panel)
             self.assertEqual(result.token_optimizer_provider["provider"], "kh")
+            self.assertEqual(result.token_optimization["status"], "used")
+            self.assertEqual(result.memory_state["status"], "candidates_recorded")
+            self.assertEqual(result.memory_state["recorded_count"], 1)
+            self.assertIn("runtime_token_optimization", result.evidence)
+            self.assertIn("memory_candidates_recorded", result.evidence)
+            self.assertTrue(Path(result.memory_state["store"]["candidates_path"]).exists())
             self.assertTrue(Path(result.compound["paths"]["compound_handoff"]).exists())
             progress = read_development_progress(result.progress_path)
             self.assertTrue(validate_development_progress(progress)["valid"])
+            self.assertEqual(progress.token_optimizer_status, "used")
+            task_optimizer = progress.tasks[0].metadata["workflow_task_result"]["metadata"]["token_optimizer"]
+            self.assertEqual(task_optimizer["status"], "used")
+            self.assertIn("ERROR: runtime failed", task_optimizer["records"][0]["stdout"])
             self.assertIn("development_progress_valid", result.evidence)
 
 

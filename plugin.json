@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.17",
-    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, capability-based plugin composition, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, automatic workflow usability runtime, session postmortem gates, progress-to-Compound bridge, token optimizer provider policy, KH role command entrypoints, visible progress panels, session-start context restore, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
+  "version": "2.9.18",
+    "description": "Pure Python agentic orchestration engine for Antigravity, Codex, Claude Code, and domain-general workflows. Features packaged skills with usage references, minimal workflow examples, executable smoke checks, capability-based plugin composition, brainstorming handoff, large-work orchestration bundle evidence with application modes, development progress state, automatic workflow usability runtime, runtime token optimization evidence, runtime memory candidate recording, session skill audits, session postmortem gates, progress-to-Compound bridge, token optimizer provider policy, KH role command entrypoints, visible progress panels, session-start context restore, skill transition validation, Compound learning capture, 10-point advisory skill structure scoring, deterministic offline CLI smoke runs, KH-Bench Verified practical task evaluation with SIDE regression cases, practical release quality gating, domain profiles, work design artifacts, standard-template functional specification exports, metadata-only quality harnesses, operational skill quality validation, DAG-based role artifact waves, evidence-enforced gates, retention cleanup, asyncio bounded workers, Windows app bridge integration, multiprocessing sandboxing, work-level gzip snapshot rollback, and a CLI launcher.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "skills": [
@@ -101,6 +101,16 @@
       "module": "src.orchestration.token_optimizer_provider"
     },
     {
+      "name": "runtime-token-optimizer",
+      "description": "Attach quality-preserving token optimization records to WorkflowTaskResult command outputs and subagent transcripts, including RTK-style command-family savings statistics.",
+      "module": "src.orchestration.runtime_token_optimizer"
+    },
+    {
+      "name": "runtime-memory-candidates",
+      "description": "Record Compound memory candidates into the scoped MemoryStore candidate log without promoting them to durable memory records.",
+      "module": "src.orchestration.runtime_memory"
+    },
+    {
       "name": "role-command-entrypoints",
       "description": "Provide concise KH role command entrypoints such as /kh:work, /kh:qa, /kh:ship, /kh:learn, and /kh:resume.",
       "module": "src.orchestration.role_commands"
@@ -119,6 +129,11 @@
       "name": "session-postmortem",
       "description": "Analyze Codex session JSONL logs for token gates, active-goal completion mistakes, failed verification claims, review timeouts, secret exposure, subagent cleanup, and git integration status.",
       "module": "src.orchestration.session_postmortem"
+    },
+    {
+      "name": "session-skill-audit",
+      "description": "Audit Codex session JSONL logs against the full KH skill catalog, separating required, applied, inspected, mentioned, and missing skill evidence.",
+      "module": "src.orchestration.session_skill_audit"
     },
     {
       "name": "windows-dev-server-runner",

@@ -4,6 +4,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from src.contracts import WorkflowTaskResult
+from src.orchestration.runtime_token_optimizer import optimize_workflow_task_results
 from src.skills.token_optimizer import (
     aggregate_token_usage_stats,
     compare_token_usage,
@@ -324,6 +326,110 @@ SELECT @CUSTCD, @CUSTNM
             "reviewer severity: P1 tenant boundary",
         ]:
             self.assertIn(fact, result.stdout)
+
+    def test_runtime_gate_optimizes_workflow_command_output_and_reports_family_stats(self):
+        task_result = WorkflowTaskResult(
+            task_id="task-1",
+            file_name="tests/test_invoice.py",
+            role="implementer",
+            status="failed",
+            message="test failed",
+            metadata={
+                "command_output": {
+                    "command": "python -m pytest",
+                    "stdout": _pytest_bulk_log(),
+                    "stderr": "",
+                    "exit_code": 1,
+                }
+            },
+        )
+
+        optimized_results, report = optimize_workflow_task_results(
+            [task_result],
+            metadata={
+                "token_optimizer_provider": "kh",
+                "token_optimizer_min_tokens": 1,
+                "token_optimizer_max_lines": 18,
+            },
+        )
+
+        self.assertEqual(report["status"], "used")
+        self.assertEqual(report["provider"]["provider"], "kh")
+        self.assertGreater(report["summary"]["estimated_tokens_saved"], 0)
+        self.assertIn("test", report["rtk_style_stats"]["by_command_family"])
+        self.assertGreater(
+            report["rtk_style_stats"]["by_command_family"]["test"]["estimated_tokens_saved"],
+            0,
+        )
+
+        task_metadata = optimized_results[0].metadata
+        self.assertEqual(task_metadata["token_optimizer"]["status"], "used")
+        record = task_metadata["token_optimizer"]["records"][0]
+        self.assertEqual(record["kind"], "command-output")
+        self.assertEqual(record["exit_code"], 1)
+        self.assertEqual(record["command_family"], "test")
+        self.assertIn("tests/test_invoice.py::test_total_rounding FAILED", record["stdout"])
+        self.assertIn("119999 == 120000", record["stdout"])
+
+    def test_runtime_gate_optimizes_agent_transcript_without_losing_lifecycle_evidence(self):
+        task_result = WorkflowTaskResult(
+            task_id="review-1",
+            file_name="Task 4",
+            role="code-quality-reviewer",
+            status="success",
+            message="review complete",
+            metadata={"agent_transcript": _agent_lifecycle_transcript()},
+        )
+
+        optimized_results, report = optimize_workflow_task_results(
+            [task_result],
+            metadata={
+                "token_optimizer_provider": "kh",
+                "token_optimizer_min_tokens": 1,
+                "token_optimizer_transcript_max_lines": 24,
+            },
+        )
+
+        self.assertEqual(report["status"], "used")
+        record = optimized_results[0].metadata["token_optimizer"]["records"][0]
+        self.assertEqual(record["kind"], "agent-transcript")
+        self.assertGreater(record["token_usage"]["estimated_tokens_saved"], 0)
+        for fact in [
+            "task_status: Task 4 in_progress",
+            "review_status: spec compliant; quality with fixes",
+            "commit_sha: 405edc2248dc57e44f4492fbf11b6d5a0124b2fb",
+            "next_task: Task 5 app shell",
+        ]:
+            self.assertIn(fact, record["transcript"])
+
+    def test_runtime_gate_records_considered_not_needed_for_small_outputs(self):
+        task_result = WorkflowTaskResult(
+            task_id="task-1",
+            file_name="README.md",
+            role="implementer",
+            status="success",
+            message="done",
+            metadata={
+                "command_output": {
+                    "command": "git status --short",
+                    "stdout": "## main...origin/main",
+                    "stderr": "",
+                    "exit_code": 0,
+                }
+            },
+        )
+
+        optimized_results, report = optimize_workflow_task_results(
+            [task_result],
+            metadata={
+                "token_optimizer_provider": "kh",
+                "token_optimizer_min_tokens": 500,
+            },
+        )
+
+        self.assertEqual(report["status"], "considered_not_needed")
+        self.assertEqual(report["summary"]["case_count"], 0)
+        self.assertNotIn("token_optimizer", optimized_results[0].metadata)
 
 
 def _pytest_bulk_log() -> str:

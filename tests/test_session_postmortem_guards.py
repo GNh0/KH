@@ -254,6 +254,41 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         self.assertEqual(postmortem.token_optimizer_status, "used")
         self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 1)
 
+    def test_runtime_token_optimizer_workflow_evidence_counts_as_usage(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 60_000},
+                            "last_token_usage": {"input_tokens": 40_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "workflow usability attached runtime_token_optimization via "
+                            "src.orchestration.runtime_token_optimizer.optimize_workflow_task_results "
+                            "with estimated_tokens_saved=12000"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.token_optimizer_status, "used")
+        self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 1)
+        self.assertEqual(postmortem.token_optimizer_evidence["explicit_usage_records"], 1)
+
     def test_redaction_preserves_shape_without_secret_value(self):
         text = "DATABASE_URL=postgresql+psycopg2://postgres:1111@127.0.0.1/db"
 
