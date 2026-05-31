@@ -10,6 +10,7 @@ from src.orchestration.interruption_state import (
 )
 from src.orchestration.memory_state import MemoryScopeResolver
 from src.orchestration.memory_store import MemoryStore
+from src.orchestration.runtime_memory import build_explicit_cross_scope_memory_import
 
 
 def build_session_start_context(
@@ -18,6 +19,7 @@ def build_session_start_context(
     memory_root: str | Path | None = None,
     max_items: int = 10,
     objective: str = "",
+    explicit_memory_imports: List[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
     root = Path(project_root).resolve()
     latest_progress_path = _latest_path(root / ".kh" / "development", "progress.json")
@@ -37,6 +39,14 @@ def build_session_start_context(
         thread_id=thread_id,
         memory_root=memory_root,
         query=objective or _context_query(latest_progress, interruption_checkpoint, compound_handoff),
+        max_items=max_items,
+    )
+    memory_imports = _explicit_memory_imports(
+        root,
+        thread_id=thread_id,
+        memory_root=memory_root,
+        imports=explicit_memory_imports or [],
+        objective=objective,
         max_items=max_items,
     )
 
@@ -68,6 +78,7 @@ def build_session_start_context(
         "docs_kh": kh_docs,
         "memory_context": memory_context,
         "memory_recall": memory_recall,
+        "memory_imports": memory_imports,
         "memory_candidates": memory_candidates,
         "recommended_reads": _dedupe([item for item in recommended_reads if item])[:max_items],
         "evidence": [
@@ -77,6 +88,7 @@ def build_session_start_context(
             "memory_records",
             "memory_recall",
             "memory_candidates",
+            *(("explicit_cross_scope_memory_import",) if memory_imports else ()),
             *(("interruption_checkpoint",) if interruption_checkpoint else ()),
         ],
     }
@@ -119,6 +131,14 @@ def render_session_start_context(context: Dict[str, Any]) -> str:
         score = item.get("score")
         suffix = f" (score={score})" if score is not None else ""
         lines.append(f"- {item.get('content', '')}{suffix}")
+    lines.append("")
+    lines.append("Explicit Memory Imports")
+    for item in context.get("memory_imports", []) or [{"status": "none"}]:
+        source = item.get("source_scope", {})
+        lines.append(
+            f"- {item.get('status', '')}: {item.get('application_status', '')}"
+            f" source={source.get('namespace', '')}"
+        )
     lines.append("")
     lines.append("Memory Candidates")
     for item in context.get("memory_candidates", []) or [{"content": "none"}]:
@@ -199,6 +219,33 @@ def _memory_recall(
     if memory_root:
         scope = replace(scope, root_path=str(root))
     return MemoryStore(str(root), scope).search_records(query=query, limit=max_items)
+
+
+def _explicit_memory_imports(
+    project_root: Path,
+    thread_id: str,
+    memory_root: str | Path | None,
+    imports: List[Dict[str, Any]],
+    objective: str,
+    max_items: int,
+) -> List[Dict[str, Any]]:
+    results = []
+    for item in imports:
+        metadata = dict(item.get("metadata", {}))
+        metadata.setdefault("cross_scope_memory_import", True)
+        metadata.setdefault("memory_import_max_items", max_items)
+        if memory_root:
+            metadata.setdefault("memory_root", str(Path(memory_root).resolve()))
+        if thread_id:
+            metadata.setdefault("thread_id", thread_id)
+        result = build_explicit_cross_scope_memory_import(
+            str(project_root),
+            metadata,
+            source_scope=item.get("source_scope"),
+            query=item.get("query", objective),
+        )
+        results.append(result)
+    return results
 
 
 def _context_query(

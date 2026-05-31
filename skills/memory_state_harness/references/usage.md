@@ -23,6 +23,8 @@ Do not use this skill only because it is available. Use it when the current task
   - `src.contracts.MemoryEvent`
   - `src.orchestration.memory_state`
   - `src.orchestration.memory_store`
+  - `src.orchestration.runtime_memory`
+  - `src.orchestration.session_start_context`
   - `src.platforms.codex_thread_registry`
   - `src.tasks.workflows`
 
@@ -32,8 +34,10 @@ Do not use this skill only because it is available. Use it when the current task
 2. Read this reference before performing non-trivial work with `memory-state-harness`.
 3. Call or inspect the listed Python implementation targets, then record the exact module/function path and test evidence used.
 4. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-5. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-6. Report the difference between capability available in the repository and behavior actually executed in the current run.
+5. For cross-project or cross-chat recall, require a user-named source scope and use `src.orchestration.runtime_memory.build_explicit_cross_scope_memory_import(...)`; do not treat keyword similarity as approval to read other scopes.
+6. Keep cross-scope results as read-only external context unless `memory_import_approved=true`; applying them to the current scope should default to candidates.
+7. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+8. Report the difference between capability available in the repository and behavior actually executed in the current run.
 
 ## Evidence to produce
 
@@ -41,6 +45,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Concrete input summary and target workspace or artifact paths.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
+- Cross-scope import evidence when applicable: source scope, target scope, query, approval state, external context count, application status, and promotion mode.
 - Verification command or review evidence, including failures and blocked states.
 
 ## Failure handling
