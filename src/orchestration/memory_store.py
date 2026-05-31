@@ -3,7 +3,7 @@ import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.contracts import MemoryEvent, MemoryRecord, MemoryScope
 from src.orchestration.memory_state import MemoryScopeResolver
@@ -132,6 +132,87 @@ class MemoryStore:
             "search_strategy": "keyword_ranked",
         }
 
+    def build_prompt_memory_snapshot(
+        self,
+        query: str = "",
+        max_records: int = 20,
+        max_chars: int = 8_000,
+    ) -> Dict[str, Any]:
+        """Build bounded MEMORY.md/USER.md-style text for host prompt injection."""
+        records = self._records_for_snapshot(query=query, max_records=max_records)
+        all_records = self.load_records()
+        latest_user_records = [
+            record for record in all_records
+            if record.kind.casefold() in {"user", "user-preference", "profile", "preference"}
+        ]
+        memory_records = [
+            record for record in records
+            if record.kind.casefold() not in {"user", "user-preference", "profile", "preference"}
+        ]
+        user_records = latest_user_records[-max_records:] if max_records >= 0 else latest_user_records
+        memory_text, memory_truncated = _bounded_memory_markdown(
+            title="KH Scoped Memory",
+            scope=self.scope,
+            records=memory_records,
+            max_chars=max_chars,
+        )
+        user_text, user_truncated = _bounded_memory_markdown(
+            title="KH Scoped User Memory",
+            scope=self.scope,
+            records=user_records,
+            max_chars=max_chars,
+        )
+        return {
+            "scope": self.scope.to_dict(),
+            "query": query,
+            "record_count": len(records),
+            "memory_record_count": len(memory_records),
+            "user_record_count": len(user_records),
+            "max_records": max_records,
+            "max_chars": max_chars,
+            "memory_md": memory_text,
+            "user_md": user_text,
+            "truncated": memory_truncated or user_truncated,
+            "snapshot_strategy": "bounded_prompt_files",
+        }
+
+    def write_prompt_memory_snapshot(
+        self,
+        query: str = "",
+        max_records: int = 20,
+        max_chars: int = 8_000,
+    ) -> Dict[str, Any]:
+        """Write scoped bounded prompt memory files without using global user memory."""
+        snapshot = self.build_prompt_memory_snapshot(
+            query=query,
+            max_records=max_records,
+            max_chars=max_chars,
+        )
+        self.root_dir.mkdir(parents=True, exist_ok=True)
+        memory_path = self.root_dir / "MEMORY.md"
+        user_path = self.root_dir / "USER.md"
+        memory_path.write_text(snapshot["memory_md"], encoding="utf-8")
+        user_path.write_text(snapshot["user_md"], encoding="utf-8")
+        event = self.append_event(
+            "prompt_memory_snapshot_written",
+            {
+                "query": query,
+                "record_count": snapshot["record_count"],
+                "memory_record_count": snapshot["memory_record_count"],
+                "user_record_count": snapshot["user_record_count"],
+                "truncated": snapshot["truncated"],
+            },
+        )
+        return {
+            **snapshot,
+            "paths": {
+                "memory_md": str(memory_path),
+                "user_md": str(user_path),
+            },
+            "event": event,
+            "evidence": ["bounded_prompt_memory", "memory-state-harness"],
+        }
+
     def append_candidate(self, record: MemoryRecord) -> Dict[str, Any]:
         _reject_unsafe_memory_content(record.content)
         self.root_dir.mkdir(parents=True, exist_ok=True)
@@ -240,6 +321,16 @@ class MemoryStore:
             ),
             encoding="utf-8",
         )
+
+    def _records_for_snapshot(self, query: str, max_records: int) -> List[MemoryRecord]:
+        if query.strip():
+            result = self.search_records(query=query, limit=max_records)
+            return [
+                MemoryRecord.from_dict(record)
+                for record in result.get("records", [])
+            ]
+        records = self.load_records()
+        return records[-max_records:] if max_records >= 0 else records
 
 
 class MemoryCleanupPolicy:
@@ -373,6 +464,39 @@ def _record_score(record: MemoryRecord, terms: List[str]) -> int:
         if term in haystack:
             score += 1
     return score
+
+
+def _bounded_memory_markdown(
+    title: str,
+    scope: MemoryScope,
+    records: List[MemoryRecord],
+    max_chars: int,
+) -> Tuple[str, bool]:
+    lines = [
+        f"# {title}",
+        "",
+        f"- scope: {scope.kind}",
+        f"- namespace: {scope.namespace}",
+        f"- status: {scope.status}",
+        "",
+        "## Records",
+    ]
+    if not records:
+        lines.append("- none")
+    truncated = False
+    for record in records:
+        entry = (
+            f"- [{record.kind}] {record.content} "
+            f"(confidence={record.confidence}, source={record.source or 'unknown'})"
+        )
+        candidate = "\n".join([*lines, entry, ""])
+        if max_chars >= 0 and len(candidate) > max_chars:
+            truncated = True
+            break
+        lines.append(entry)
+    if truncated:
+        lines.append("- truncated: additional scoped memory records omitted by max_chars")
+    return "\n".join(lines).rstrip() + "\n", truncated
 
 
 def _utc_now() -> str:

@@ -26,8 +26,9 @@ This is a UAF-native context harness for context-save and context-restore patter
 3. Store context artifacts inside the UAF runtime state directory, not in external user skill folders and not in the target project root by default.
 4. Write a resume handoff snapshot to runtime `.uaf/state/resume_handoff.json` and a human-readable note to `.uaf/state/resume_handoff.md`.
 5. On explicit user stop/pause/cancel, write `.kh/development/<run-id>/state/interruption.json`, `.kh/development/<run-id>/content/interruption.md`, and a scoped durable `resume-checkpoint` memory record through `src.orchestration.interruption_state`.
-6. Restore by reading the newest matching interruption checkpoint, resume handoff, and scoped memory record; hosts should validate branch/head/dirty-file state against `git_state` before treating it as authoritative.
-7. Treat stale or conflicting context as blocked, not silently authoritative.
+6. Before expected context compression, call `src.orchestration.runtime_memory.write_pre_compaction_memory_flush(...)` with compact decisions, blockers, next action, and verification state so the resume path does not depend on chat context.
+7. Restore by reading the newest matching interruption checkpoint, resume handoff, scoped memory record, and `active_memory_preflight` recall; hosts should validate branch/head/dirty-file state against `git_state` before treating it as authoritative.
+8. Treat stale or conflicting context as blocked, not silently authoritative.
 
 ## Required outputs
 
@@ -37,6 +38,8 @@ This is a UAF-native context harness for context-save and context-restore patter
 - `remaining_work`: next tasks and verification commands.
 - `resume_handoff`: JSON and Markdown paths for a future host session.
 - `interruption_checkpoint`: JSON/Markdown paths and scoped memory record for user-requested stops.
+- `pre_compaction_memory_flush`: scoped memory candidate or durable record for context compression safety.
+- `active_memory_preflight`: restored scoped memory recall before implementation resumes.
 
 ## External Benchmark Recipe
 
@@ -55,6 +58,7 @@ Pressure scenario: if a handoff says tests passed but the current git state diff
 - Do not store resumable runtime state in the target project root unless project-local state was explicitly requested.
 - Do not trust stale context when the git branch, head, or dirty files no longer match.
 - Do not omit blocked reasons, remaining work, or verification commands from handoff state.
+- Do not allow context compaction to erase decisions or next actions that are not yet present in `.kh` state or scoped memory.
 - Do not persist secrets, credentials, or private tool outputs as memory/context records.
 
 ## UAF implementation targets
