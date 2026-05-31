@@ -21,7 +21,7 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 - `compound-engineering-harness` for mandatory post-review learning capture, scoped memory candidates, system updates, and regression checks.
 - KH-native replacements for Superpowers-style worktree isolation, task-plan execution, systematic debugging, verification-before-completion, and branch finishing.
 - Runtime token optimization for workflow command output and subagent transcripts, including RTK-style command-family savings statistics without requiring RTK as a dependency.
-- Runtime memory candidate recording and full-catalog session skill audits so useful skills are not left as invisible chat advice.
+- Runtime memory candidate recording and full-catalog session skill audits with per-skill acceptance checks so useful skills are not left as invisible chat advice.
 - DAG role orchestration with CEO, advisor, architect, planner, controller, implementer, reviewers, QA, security, and release roles.
 - Bounded local workflow dispatch with review, QA, security, release, and evidence gates.
 - Goal state, scoped memory, resume handoff, snapshots, and runtime state.

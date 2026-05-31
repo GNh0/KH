@@ -20,6 +20,8 @@ STATUS_RANK = {
     "applied": 5,
 }
 
+PASSIVE_REFERENCE_PREFIX = "__kh_passive_reference__ "
+
 RUNTIME_MARKERS = {
     "token-optimizer": [
         "src.skills.token_optimizer",
@@ -196,6 +198,148 @@ RUNTIME_MARKERS = {
     ],
 }
 
+ACCEPTANCE_OUTPUT_MARKERS = {
+    "adapter-contract-harness": {
+        "adapter_contract": ["adapterrequest", "adapterresult", "workflowdispatchresult", "adapter contract"],
+        "host_boundary": ["codex", "antigravity", "claude code", "dispatcher", "platform"],
+    },
+    "architect-pipeline": {
+        "design_artifact": ["design_doc", "architecture", "workdesign", "work design", "requirements"],
+        "execution_inputs": ["target_files", "acceptance criteria", "implementation plan", "design blueprint"],
+    },
+    "artifact-render-qa-harness": {
+        "artifact_type": ["docx", "xlsx", "svg", "dxf", "renderable"],
+        "render_evidence": ["readable", "structurally valid", "render qa", "artifact_render"],
+    },
+    "brainstorming-harness": {
+        "options": ["option", "candidate", "direction", "alternatives"],
+        "decision": ["recommendation", "selected", "approved", "decision"],
+    },
+    "branch-finishing-harness": {
+        "integration_state": ["branch_finish_status", "commit_sha", "git push", "pr-ready", "merged", "local only"],
+    },
+    "command-hook-policy-harness": {
+        "hook_policy": ["hook", "rewrite", "trust", "permission precedence", "non-blocking"],
+    },
+    "command-output-harness": {
+        "command_result": ["exit code", "stdout", "stderr", "returncode"],
+        "compression_policy": ["truncated", "filtered", "summarized", "tokens saved", "preserved"],
+    },
+    "compound-engineering-harness": {
+        "compound_capture": ["compoundcapture", "compound_capture", "compound_handoff", "reusable learning"],
+        "followup": ["memory_candidates", "skill_candidates", "scenario candidates", "no_reusable_learning"],
+    },
+    "context-state-harness": {
+        "resume_state": ["resume_handoff", "session_start_context", "interruption", "checkpoint"],
+    },
+    "deliverable-template-quality-harness": {
+        "template_quality": ["required section", "template quality", "section coverage", "deliverable"],
+    },
+    "development-lifecycle-harness": {
+        "workspace": ["workspace_strategy", "worktree", "isolated branch", "current-checkout"],
+        "verification": ["verification_status", "fresh verification", "test passed", "progress.json"],
+    },
+    "domain-orchestration-harness": {
+        "domain_design": ["domainprofile", "workdesign", "domain design", "design artifacts"],
+        "domain_gates": ["qa/qc", "risk", "policy", "final decision"],
+    },
+    "goal-state-harness": {
+        "goal_state": ["goalstate", "goal_ledger", "create_goal", "update_goal"],
+        "completion_evidence": ["evidence_required", "missing_evidence", "blocked_reason", "success_criteria"],
+    },
+    "guard-policy-harness": {
+        "guard_evidence": ["destructive", "approval", "secret", "permission", "edit boundary"],
+    },
+    "harness-evaluator": {
+        "evaluation": ["py_compile", "python -m unittest", "pytest", "compileall", "exit code"],
+    },
+    "health-check-harness": {
+        "health": ["health summary", "release readiness", "quality score", "static checks"],
+    },
+    "host-agent-orchestration": {
+        "host_plan": ["subagent_strategy", "adapterrequest", "tool permissions", "observability"],
+        "accounting": ["subagent_summary", "spawned", "closed", "role results"],
+    },
+    "memory-state-harness": {
+        "memory_scope": ["memory_scope", "memoryscope", "project/chat", "conversation", "scoped durable", "scoped memory"],
+        "memory_record": ["memory_context", "memory_candidates", "memoryrecord", "memory record", "memorystore", "resume-checkpoint"],
+    },
+    "orchestration-role-graph": {
+        "role_graph": ["role graph", "ceo", "advisor", "architect", "reviewer", "release"],
+    },
+    "parallel-orchestration-harness": {
+        "parallel_strategy": ["parallel_strategy", "fan-out", "fan-in", "bounded", "parallel_wave_count"],
+    },
+    "plan-execution-harness": {
+        "progress": ["progress.json", "task_status", "active task", "next_task"],
+        "loop": ["red", "green", "review", "commit_sha"],
+    },
+    "plugin-composition-policy": {
+        "composition": ["controller", "assistant provider", "plugin_composition", "capability fit", "routing"],
+    },
+    "qa-gate-harness": {
+        "qa_evidence": ["qa", "regression", "manual test", "browser qa", "verification"],
+    },
+    "quality-gates-harness": {
+        "quality_gate": ["red/green", "tdd", "failing-first", "review gate", "evidence"],
+    },
+    "request-complexity-router": {
+        "classification": ["classify_request", "request_complexity", "classification", "route", "domain"],
+    },
+    "review-gate-harness": {
+        "review_result": ["review_status", "findings", "with fixes", "reviewer", "approved"],
+    },
+    "role-execution-audit-harness": {
+        "role_audit": ["role_execution_audit", "audit_role_execution", "role results", "parallel waves"],
+    },
+    "scenario-evaluation-harness": {
+        "scenario_result": ["scenario_evaluator", "side", "scenario", "regression", "meaningful_signal"],
+    },
+    "skill-catalog": {
+        "catalog_result": ["uaf_skill_catalog", "total_skills", "valid_skills", "invalid_skills"],
+    },
+    "snapshot-state-harness": {
+        "snapshot": ["snapshot", "rollback", "checkpoint", "snapshotmanager"],
+    },
+    "subagent-review-pipeline": {
+        "review_roles": ["implementer", "spec-reviewer", "code-quality-reviewer", "reviewer"],
+    },
+    "systematic-debugging-harness": {
+        "debug_chain": ["debug_status", "root cause", "hypothesis", "reproduction", "regression evidence"],
+    },
+    "token-optimizer": {
+        "token_decision": ["token_optimizer_status", "runtime_token_optimization", "token optimization"],
+        "savings_or_passthrough": ["estimated_tokens_saved", "tokens saved", "passthrough", "considered_not_needed", "blocked"],
+    },
+    "traceability-matrix-harness": {
+        "traceability": ["traceability", "requirements", "evidence keys", "review gates"],
+    },
+    "verification-before-completion-harness": {
+        "completion_claim": ["completion_claim", "verification_status", "fresh verification"],
+        "command_evidence": ["exit code", "passed", "failed", "blocked", "residual_risk"],
+    },
+    "workflow-skill-distiller": {
+        "distillation": ["workflow-skill-distiller", "skill_candidates", "distilled skill", "reusable workflow"],
+    },
+    "workflow-usability-harness": {
+        "usability_state": ["progress_panel", "host_panel", "session_start_context", "compound_handoff"],
+    },
+    "worktree-isolation-harness": {
+        "workspace_strategy": ["workspace_strategy", "project-local-worktree", "host-worktree", "isolated-branch", ".worktrees"],
+    },
+}
+
+ACCEPTANCE_SEVERITY = {
+    "goal-state-harness": "P1",
+    "token-optimizer": "P1",
+    "review-gate-harness": "P1",
+    "verification-before-completion-harness": "P1",
+    "memory-state-harness": "P2",
+    "host-agent-orchestration": "P2",
+    "role-execution-audit-harness": "P2",
+    "subagent-review-pipeline": "P2",
+}
+
 
 @dataclass(frozen=True)
 class SessionSkillAudit:
@@ -215,7 +359,8 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     path = Path(session_path)
     postmortem = analyze_codex_session_jsonl(path)
     texts = _session_texts(path)
-    combined_text = "\n".join(texts)
+    active_texts = [_strip_passive_prefix(text) for text in texts if not _is_passive_text(text)]
+    combined_text = "\n".join(active_texts)
     catalog = collect_packaged_skills()
     skills = catalog.get("skills", [])
     required = _required_skills(postmortem.to_dict(), combined_text)
@@ -228,15 +373,24 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
         observations = _observations(texts, aliases, name)
         status = observations["status"]
         is_required = name in required
+        acceptance = _acceptance_for_skill(
+            skill_name=name,
+            required=is_required,
+            status=status,
+            observations=observations,
+            postmortem=postmortem.to_dict(),
+        )
         row = {
             "name": name,
             "execution_level": skill.get("execution_level", ""),
             "required": is_required,
             "required_reason": required.get(name, ""),
             "status": status,
+            "acceptance": acceptance,
             "mentions": observations["mentions"],
             "inspections": observations["inspections"],
             "runtime_hits": observations["runtime_hits"],
+            "passive_references": observations["passive_references"],
             "evidence": observations["evidence"][:8],
         }
         skill_rows.append(row)
@@ -248,6 +402,19 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
                     "severity": "P1" if status in {"absent", "mentioned"} else "P2",
                     "reason": required[name],
                     "action": "Record considered/applied/blocked evidence for this required KH skill.",
+                }
+            )
+        if acceptance["status"] == "missing_outputs":
+            issues.append(
+                {
+                    "skill": name,
+                    "status": "missing_outputs",
+                    "severity": ACCEPTANCE_SEVERITY.get(name, "P3"),
+                    "reason": (
+                        f"{name} was observed as {status} but missing required output evidence: "
+                        + ", ".join(acceptance["missing_outputs"])
+                    ),
+                    "action": "Produce the required skill outputs or record an explicit blocked/skipped rationale.",
                 }
             )
 
@@ -343,14 +510,36 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
             }
         )
     subagents = postmortem.get("subagent_summary", {}) or {}
-    if int(subagents.get("spawned", 0) or 0) > int(subagents.get("closed", 0) or 0):
+    spawned = int(subagents.get("spawned", 0) or 0)
+    closed = int(subagents.get("closed", 0) or 0)
+    timed_out = int(subagents.get("timed_out", 0) or 0)
+    closed_while_running = int(subagents.get("closed_while_running", 0) or 0)
+    if spawned > closed or timed_out or closed_while_running:
         issues.append(
             {
                 "skill": "host-agent-orchestration",
                 "status": "blocked",
                 "severity": "P2",
-                "reason": "spawned subagents outnumber closed/accounted subagents",
-                "action": "Close, resume, or explicitly account for every spawned subagent.",
+                "reason": "subagents were not cleanly closed/accounted or reviewers timed out",
+                "action": "Close, resume, re-run, or explicitly account for every spawned/timed-out subagent.",
+            }
+        )
+        issues.append(
+            {
+                "skill": "role-execution-audit-harness",
+                "status": "blocked",
+                "severity": "P2",
+                "reason": "subagent or reviewer execution had incomplete accounting",
+                "action": "Audit role/subagent outputs, timed-out reviewers, and fan-in evidence before completion.",
+            }
+        )
+        issues.append(
+            {
+                "skill": "subagent-review-pipeline",
+                "status": "blocked",
+                "severity": "P2",
+                "reason": "subagent review pipeline had incomplete or timed-out worker/reviewer execution",
+                "action": "Re-run, close, or explicitly account for implementer/spec/code-quality reviewer outputs.",
             }
         )
     return issues
@@ -375,6 +564,7 @@ def summarize_session_skill_audits(paths: Iterable[str | Path]) -> Dict[str, Any
 
 def _session_texts(path: Path) -> List[str]:
     texts: List[str] = []
+    previous_call_was_passive = False
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
@@ -387,7 +577,17 @@ def _session_texts(path: Path) -> List[str]:
             continue
         text = _payload_text(payload)
         if text:
+            payload_type = payload.get("type")
+            passive = _passive_reference(text.lower()) or (
+                payload_type in {"function_call_output", "custom_tool_call_output"}
+                and previous_call_was_passive
+            )
+            if passive:
+                text = PASSIVE_REFERENCE_PREFIX + text
             texts.append(text)
+            previous_call_was_passive = payload_type in {"function_call", "custom_tool_call"} and passive
+        else:
+            previous_call_was_passive = False
     return texts
 
 
@@ -432,25 +632,33 @@ def _observations(texts: List[str], aliases: Set[str], skill_name: str) -> Dict[
     mentions = 0
     inspections = 0
     runtime_hits = 0
+    passive_references = 0
     considered = 0
     evidence: List[str] = []
+    active_evidence: List[str] = []
     runtime_markers = RUNTIME_MARKERS.get(skill_name, [])
 
     for text in texts:
-        lowered = text.lower()
+        passive = _is_passive_text(text)
+        clean_text = _strip_passive_prefix(text)
+        lowered = clean_text.lower()
         alias_hit = any(alias.lower() in lowered for alias in aliases)
         runtime_hit = any(marker.lower() in lowered for marker in runtime_markers)
         if not alias_hit and not runtime_hit:
             continue
         mentions += 1
-        if "skill.md" in lowered or "\\skills\\" in lowered or "/skills/" in lowered:
+        if passive or "skill.md" in lowered or "\\skills\\" in lowered or "/skills/" in lowered:
             inspections += 1
-        if runtime_hit or _explicit_application(lowered, aliases):
+        if passive:
+            passive_references += 1
+        if not passive and (runtime_hit or _explicit_application(lowered, aliases)):
             runtime_hits += 1
-        if any(marker in lowered for marker in ["considered_not_needed", "skipped_with_rationale", "blocked", "passthrough"]):
+        if not passive and any(marker in lowered for marker in ["considered_not_needed", "skipped_with_rationale", "blocked", "passthrough"]):
             considered += 1
         if len(evidence) < 8:
-            evidence.append(_short(text))
+            evidence.append(_short(clean_text))
+        if not passive and len(active_evidence) < 8:
+            active_evidence.append(clean_text)
 
     status = "absent"
     if mentions:
@@ -466,8 +674,138 @@ def _observations(texts: List[str], aliases: Set[str], skill_name: str) -> Dict[
         "mentions": mentions,
         "inspections": inspections,
         "runtime_hits": runtime_hits,
+        "passive_references": passive_references,
         "evidence": evidence,
+        "active_evidence": active_evidence,
     }
+
+
+def _acceptance_for_skill(
+    *,
+    skill_name: str,
+    required: bool,
+    status: str,
+    observations: Dict[str, Any],
+    postmortem: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not required:
+        return {
+            "status": "not_required",
+            "required_outputs": [],
+            "satisfied_outputs": [],
+            "missing_outputs": [],
+        }
+
+    required_outputs = list(ACCEPTANCE_OUTPUT_MARKERS.get(skill_name, {}).keys())
+    if STATUS_RANK.get(status, 0) < STATUS_RANK["considered"]:
+        return {
+            "status": "missing_application",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": [],
+            "missing_outputs": required_outputs,
+        }
+
+    if status in {"considered", "procedural"} and _has_resolution_rationale(observations):
+        return {
+            "status": "resolved_by_rationale",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": [],
+            "missing_outputs": [],
+        }
+
+    guard_status = _postmortem_acceptance_status(skill_name, postmortem)
+    if guard_status == "blocked":
+        return {
+            "status": "blocked",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": [],
+            "missing_outputs": required_outputs,
+        }
+    if guard_status == "passed":
+        return {
+            "status": "passed",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": required_outputs,
+            "missing_outputs": [],
+        }
+
+    if not required_outputs:
+        return {
+            "status": "not_evaluable",
+            "required_outputs": [],
+            "satisfied_outputs": [],
+            "missing_outputs": [],
+        }
+
+    active_text = "\n".join(observations.get("active_evidence", []))
+    lowered = active_text.lower()
+    satisfied_outputs = []
+    missing_outputs = []
+    for output_name, markers in ACCEPTANCE_OUTPUT_MARKERS.get(skill_name, {}).items():
+        if any(marker.lower() in lowered for marker in markers):
+            satisfied_outputs.append(output_name)
+        else:
+            missing_outputs.append(output_name)
+
+    status_value = "passed" if not missing_outputs else "missing_outputs"
+    return {
+        "status": status_value,
+        "required_outputs": required_outputs,
+        "satisfied_outputs": satisfied_outputs,
+        "missing_outputs": missing_outputs,
+    }
+
+
+def _postmortem_acceptance_status(skill_name: str, postmortem: Dict[str, Any]) -> str:
+    if skill_name == "token-optimizer":
+        token_status = postmortem.get("token_optimizer_status", "")
+        if token_status == "blocked":
+            return "blocked"
+        if token_status in {"used", "passthrough", "considered_not_needed"}:
+            return "passed"
+    if skill_name == "review-gate-harness":
+        if postmortem.get("review_status") == "review_incomplete":
+            return "blocked"
+        if postmortem.get("review_status") in {"passed", "with_fixes"}:
+            return "passed"
+    if skill_name == "goal-state-harness":
+        completion_guard = postmortem.get("completion_guard", {}) or {}
+        user_stop_guard = postmortem.get("user_stop_guard", {}) or {}
+        if completion_guard.get("status") == "blocked" or user_stop_guard.get("status") == "blocked":
+            return "blocked"
+        if completion_guard.get("status") == "passed":
+            return "passed"
+    if skill_name in {"host-agent-orchestration", "role-execution-audit-harness", "subagent-review-pipeline"}:
+        subagents = postmortem.get("subagent_summary", {}) or {}
+        if (
+            int(subagents.get("spawned", 0) or 0) > int(subagents.get("closed", 0) or 0)
+            or int(subagents.get("timed_out", 0) or 0)
+            or int(subagents.get("closed_while_running", 0) or 0)
+        ):
+            return "blocked"
+        if int(subagents.get("spawned", 0) or 0):
+            return "passed"
+    if skill_name == "verification-before-completion-harness":
+        verification_guard = postmortem.get("verification_claim_guard", {}) or {}
+        if verification_guard.get("status") == "blocked":
+            return "blocked"
+        if verification_guard.get("status") == "passed":
+            return "passed"
+    return ""
+
+
+def _has_resolution_rationale(observations: Dict[str, Any]) -> bool:
+    text = "\n".join(observations.get("active_evidence", [])).lower()
+    return any(
+        marker in text
+        for marker in [
+            "considered_not_needed",
+            "skipped_with_rationale",
+            "blocked",
+            "passthrough",
+            "no_reusable_learning",
+        ]
+    )
 
 
 def _explicit_application(lowered: str, aliases: Set[str]) -> bool:
@@ -485,6 +823,38 @@ def _explicit_application(lowered: str, aliases: Set[str]) -> bool:
             "used",
         ]
     )
+
+
+def _passive_reference(lowered: str) -> bool:
+    if lowered.startswith(PASSIVE_REFERENCE_PREFIX):
+        return True
+    if "skill.md" in lowered and (
+        "get-content" in lowered
+        or "\\skills\\" in lowered
+        or "/skills/" in lowered
+        or lowered.lstrip().startswith("---")
+        or lowered.lstrip().startswith("# ")
+    ):
+        return True
+    if "uaf_skill_catalog" in lowered and any(flag in lowered for flag in ["--list", "--read", "--check"]):
+        return True
+    if "defaultprompt" in lowered or '"defaultprompt"' in lowered:
+        return True
+    if '"skills": "./skills/"' in lowered or "available skills" in lowered:
+        return True
+    if "\\plugins\\cache\\" in lowered and "\\skills\\" in lowered:
+        return True
+    return False
+
+
+def _is_passive_text(text: str) -> bool:
+    return str(text).startswith(PASSIVE_REFERENCE_PREFIX)
+
+
+def _strip_passive_prefix(text: str) -> str:
+    if _is_passive_text(text):
+        return text[len(PASSIVE_REFERENCE_PREFIX) :]
+    return text
 
 
 def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
@@ -586,6 +956,18 @@ def _mentions_verification(lowered: str) -> bool:
 def _coverage(skill_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     required = [row for row in skill_rows if row["required"]]
     applied = [row for row in required if STATUS_RANK.get(row["status"], 0) >= STATUS_RANK["considered"]]
+    accepted = [
+        row
+        for row in required
+        if row.get("acceptance", {}).get("status")
+        in {"passed", "resolved_by_rationale", "not_evaluable"}
+    ]
+    unaccepted = [
+        row
+        for row in required
+        if row.get("acceptance", {}).get("status")
+        in {"missing_application", "missing_outputs", "blocked"}
+    ]
     return {
         "total_skills": len(skill_rows),
         "observed_skills": sum(1 for row in skill_rows if row["status"] != "absent"),
@@ -593,6 +975,9 @@ def _coverage(skill_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "required_with_evidence": len(applied),
         "required_missing_evidence": len(required) - len(applied),
         "required_missing_skill_names": [row["name"] for row in required if STATUS_RANK.get(row["status"], 0) < STATUS_RANK["considered"]],
+        "required_accepted": len(accepted),
+        "required_unaccepted": len(unaccepted),
+        "required_unaccepted_skill_names": [row["name"] for row in unaccepted],
     }
 
 
