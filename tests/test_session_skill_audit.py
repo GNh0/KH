@@ -284,6 +284,51 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_resume_guard_failure_is_skill_audit_issue(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 80_000},
+                            "last_token_usage": {"input_tokens": 30_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "resume and continue the implementation",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertEqual(audit.postmortem["resume_guard"]["status"], "blocked")
+        self.assertTrue(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["status"] == "blocked"
+                and "resume/restart" in issue["reason"]
+                for issue in audit.issues
+            )
+        )
+
     def test_timed_out_subagent_flags_host_role_and_subagent_skills(self):
         path = self.write_session(
             [

@@ -62,6 +62,7 @@ def build_workflow_usability_preflight(
         thread_id=thread_id,
         memory_root=metadata.get("memory_root") or None,
         max_items=int(metadata.get("session_context_max_items", 10)),
+        objective=str(metadata.get("objective") or metadata.get("request") or metadata.get("goal") or ""),
     )
     token_decision = resolve_token_optimizer_provider(
         token_optimizer_provider=metadata.get("token_optimizer_provider", "kh"),

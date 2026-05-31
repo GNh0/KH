@@ -140,6 +140,7 @@ class SessionPostmortem:
     verification_claim_guard: Dict[str, Any] = field(default_factory=dict)
     scope_completion_delta: Dict[str, Any] = field(default_factory=dict)
     user_stop_guard: Dict[str, Any] = field(default_factory=dict)
+    resume_guard: Dict[str, Any] = field(default_factory=dict)
     secret_findings: List[SecretFinding] = field(default_factory=list)
     git_integration: Dict[str, Any] = field(default_factory=dict)
     verification_commands: List[str] = field(default_factory=list)
@@ -219,7 +220,15 @@ def analyze_codex_session_jsonl(
         "continued_tool_calls": [],
         "continued_work_messages": [],
     }
+    resume_state = {
+        "requests": [],
+        "session_start_context_after_resume": 0,
+        "runtime_token_evidence_after_resume": 0,
+        "large_work_bundle_after_resume": 0,
+        "implementation_tools_after_resume": [],
+    }
     active_stop_line = 0
+    active_resume_line = 0
     task_complete_count = 0
     final_assistant_messages: List[str] = []
     verification_failures: List[Dict[str, Any]] = []
@@ -294,7 +303,22 @@ def analyze_codex_session_jsonl(
                             "sample": _short(redact_sensitive_text(text), 220),
                         }
                     )
+                    resume_state["requests"].append(
+                        {
+                            "line": line_number,
+                            "sample": _short(redact_sensitive_text(text), 220),
+                        }
+                    )
+                    active_resume_line = line_number
                     active_stop_line = 0
+                elif _is_user_resume_request(text):
+                    resume_state["requests"].append(
+                        {
+                            "line": line_number,
+                            "sample": _short(redact_sensitive_text(text), 220),
+                        }
+                    )
+                    active_resume_line = line_number
 
             if active_stop_line and (
                 payload_type == "agent_message" or (payload_type == "message" and message_role == "assistant")
@@ -306,6 +330,8 @@ def analyze_codex_session_jsonl(
                             "sample": _short(redact_sensitive_text(text), 260),
                         }
                     )
+            if active_resume_line:
+                _merge_resume_guard_evidence(resume_state, text)
 
             for skill, pattern in SKILL_PATTERNS.items():
                 if pattern.search(text):
@@ -330,6 +356,16 @@ def analyze_codex_session_jsonl(
             raw_arguments = payload.get("arguments") or payload.get("input")
             arguments = _parse_arguments(raw_arguments)
             command = str(arguments.get("command", ""))
+            if active_resume_line:
+                _merge_resume_guard_evidence(resume_state, command or str(raw_arguments or ""))
+                if _is_resume_implementation_tool(name, command or str(raw_arguments or "")):
+                    resume_state["implementation_tools_after_resume"].append(
+                        {
+                            "line": line_number,
+                            "name": name,
+                            "command": _short(redact_sensitive_text(command or str(raw_arguments or "")), 260),
+                        }
+                    )
             if active_stop_line and not _is_allowed_after_stop_tool(name, command):
                 stop_state["continued_tool_calls"].append(
                     {
@@ -374,6 +410,7 @@ def analyze_codex_session_jsonl(
     verification_claim_guard = _build_verification_claim_guard(verification_failures, final_assistant_messages)
     scope_completion_delta = _build_scope_completion_delta(goal_state, final_assistant_messages)
     user_stop_guard = _build_user_stop_guard(stop_state, goal_state)
+    resume_guard = _build_resume_guard(resume_state, token_info)
     actions = _recommended_actions(
         token_status=token_status,
         token_optimizer_evidence=token_optimizer_evidence,
@@ -382,6 +419,7 @@ def analyze_codex_session_jsonl(
         verification_claim_guard=verification_claim_guard,
         scope_completion_delta=scope_completion_delta,
         user_stop_guard=user_stop_guard,
+        resume_guard=resume_guard,
         secret_findings=secret_findings,
         git_state=git_state,
         subagents=subagents,
@@ -396,6 +434,7 @@ def analyze_codex_session_jsonl(
         "verification_claim_guard",
         "scope_completion_delta",
         "user_stop_guard",
+        "resume_guard",
         "secret_redaction_scan",
         "git_integration_status",
     ]
@@ -416,6 +455,7 @@ def analyze_codex_session_jsonl(
         verification_claim_guard=verification_claim_guard,
         scope_completion_delta=scope_completion_delta,
         user_stop_guard=user_stop_guard,
+        resume_guard=resume_guard,
         secret_findings=secret_findings[:max_secret_findings],
         git_integration=git_state,
         verification_commands=verification_commands,
@@ -434,6 +474,7 @@ def render_session_postmortem(postmortem: SessionPostmortem) -> str:
         f"Completion guard: {postmortem.completion_guard.get('status', 'unknown')}",
         f"Verification guard: {postmortem.verification_claim_guard.get('status', 'unknown')}",
         f"User stop guard: {postmortem.user_stop_guard.get('status', 'unknown')}",
+        f"Resume guard: {postmortem.resume_guard.get('status', 'unknown')}",
         (
             "Subagents: "
             f"{postmortem.subagent_summary.get('spawned', 0)} spawned, "
@@ -526,6 +567,29 @@ def _merge_token_optimizer_evidence(evidence: Dict[str, Any], text: str) -> None
         evidence["runtime_calls"] = int(evidence.get("runtime_calls", 0)) + 1
     if re.search(r"token_savings_ratio|estimated_tokens_saved|without_token_optimizer|with_token_optimizer", text, re.IGNORECASE):
         evidence["explicit_usage_records"] = int(evidence.get("explicit_usage_records", 0)) + 1
+
+
+def _merge_resume_guard_evidence(resume_state: Dict[str, Any], text: str) -> None:
+    if not text:
+        return
+    if re.search(r"session_start_context|build_session_start_context|read_latest_interruption_checkpoint", text, re.IGNORECASE):
+        resume_state["session_start_context_after_resume"] = int(
+            resume_state.get("session_start_context_after_resume", 0)
+        ) + 1
+    if re.search(
+        r"src\.skills\.token_optimizer|src\.orchestration\.runtime_token_optimizer|"
+        r"runtime_token_optimization|estimated_tokens_saved|summarize_command_output|"
+        r"optimize_workflow_task_results|metadata\.token_optimizer",
+        text,
+        re.IGNORECASE,
+    ):
+        resume_state["runtime_token_evidence_after_resume"] = int(
+            resume_state.get("runtime_token_evidence_after_resume", 0)
+        ) + 1
+    if re.search(r"large_work_orchestration_bundle|skill_statuses|skill_transition_handoff", text, re.IGNORECASE):
+        resume_state["large_work_bundle_after_resume"] = int(
+            resume_state.get("large_work_bundle_after_resume", 0)
+        ) + 1
 
 
 def _derive_review_status(subagents: Dict[str, Any], review_with_fixes: bool) -> str:
@@ -639,6 +703,31 @@ def _build_user_stop_guard(
     }
 
 
+def _build_resume_guard(resume_state: Dict[str, Any], token_gate: Dict[str, Any]) -> Dict[str, Any]:
+    requests = list(resume_state.get("requests", []) or [])
+    implementation_tools = list(resume_state.get("implementation_tools_after_resume", []) or [])
+    session_context_count = int(resume_state.get("session_start_context_after_resume", 0) or 0)
+    token_runtime_count = int(resume_state.get("runtime_token_evidence_after_resume", 0) or 0)
+    bundle_count = int(resume_state.get("large_work_bundle_after_resume", 0) or 0)
+    reasons: List[str] = []
+    if requests and implementation_tools and not session_context_count:
+        reasons.append("resume_without_session_start_context")
+    if requests and implementation_tools and token_gate.get("required") and not token_runtime_count:
+        reasons.append("resume_without_runtime_token_optimizer")
+    if requests and implementation_tools and not bundle_count:
+        reasons.append("resume_without_large_work_skill_bundle")
+    return {
+        "status": "blocked" if reasons else "passed",
+        "resume_request_count": len(requests),
+        "latest_resume_line": requests[-1]["line"] if requests else 0,
+        "session_start_context_after_resume": session_context_count,
+        "runtime_token_evidence_after_resume": token_runtime_count,
+        "large_work_bundle_after_resume": bundle_count,
+        "implementation_tools_after_resume": implementation_tools[:10],
+        "reasons": reasons,
+    }
+
+
 def _recommended_actions(
     *,
     token_status: str,
@@ -648,6 +737,7 @@ def _recommended_actions(
     verification_claim_guard: Dict[str, Any],
     scope_completion_delta: Dict[str, Any],
     user_stop_guard: Dict[str, Any],
+    resume_guard: Dict[str, Any],
     secret_findings: List[SecretFinding],
     git_state: Dict[str, Any],
     subagents: Dict[str, Any],
@@ -667,7 +757,11 @@ def _recommended_actions(
         actions.append("Record scope_completion_delta and continue the missing objective markers instead of stopping at a scaffold milestone.")
     if user_stop_guard.get("status") == "blocked":
         actions.append(
-            "User stop/cancel requests override goal_context; stop new work, call update_goal(status=blocked) for active goals, and record user_requested_stop."
+            "User stop/cancel requests override goal_context; stop new work, block the active goal only when host policy allows it, otherwise write interruption checkpoint evidence and ignore automated goal_context until a fresh user resume."
+        )
+    if resume_guard.get("status") == "blocked":
+        actions.append(
+            "Resume/restart requests must run KH session_start_context, runtime token optimization or passthrough, and large_work_orchestration_bundle evidence before implementation tools."
         )
     if secret_findings:
         actions.append("Redact secret-like command text before writing handoffs, memory candidates, or reports.")
@@ -812,6 +906,22 @@ def _is_allowed_after_stop_tool(name: str, command: str) -> bool:
         return False
     normalized_command = re.sub(r"\s+", " ", command or "").strip()
     return bool(normalized_command and any(pattern.search(normalized_command) for pattern in ALLOWED_STOP_CHECK_PATTERNS))
+
+
+def _is_resume_implementation_tool(name: str, command: str) -> bool:
+    normalized_name = str(name or "")
+    normalized_command = re.sub(r"\s+", " ", command or "").strip()
+    if normalized_name in {"apply_patch", "custom_tool_call"}:
+        return True
+    if normalized_name != "shell_command":
+        return False
+    if not normalized_command:
+        return False
+    if re.search(r"\b(git\s+commit|git\s+push|git\s+add)\b", normalized_command, re.IGNORECASE):
+        return True
+    if _is_verification_command(normalized_command):
+        return True
+    return False
 
 
 def _scope_markers(text: str) -> List[str]:

@@ -237,9 +237,47 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertTrue(context["docs_kh"])
             self.assertEqual(context["memory_candidates"][0]["content"], "Read KH progress and Compound before continuing.")
             self.assertEqual(context["memory_context"]["record_count"], 0)
+            self.assertEqual(context["memory_recall"]["records"], [])
             self.assertIn("KH Session Start Context", rendered)
             self.assertIn("Memory Records", rendered)
+            self.assertIn("Memory Recall", rendered)
             self.assertIn("Memory Candidates", rendered)
+
+    def test_session_start_context_searches_relevant_memory_for_objective(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_dir = root / ".memory"
+            scope = MemoryScopeResolver.project_scope(str(root))
+            store = MemoryStore(str(memory_dir), scope)
+            store.save_record(
+                MemoryRecord(
+                    record_id="resume-lesson",
+                    kind="decision",
+                    content="After user stop, load resume checkpoint before implementation.",
+                    scope="project",
+                    source="test",
+                )
+            )
+            store.save_record(
+                MemoryRecord(
+                    record_id="unrelated",
+                    kind="decision",
+                    content="Use green accent for dashboard charts.",
+                    scope="project",
+                    source="test",
+                )
+            )
+
+            context = build_session_start_context(
+                root,
+                memory_root=memory_dir,
+                objective="continue implementation from resume checkpoint",
+            )
+            rendered = render_session_start_context(context)
+
+            self.assertEqual(context["memory_recall"]["search_strategy"], "keyword_ranked")
+            self.assertEqual(context["memory_recall"]["records"][0]["record_id"], "resume-lesson")
+            self.assertIn("After user stop, load resume checkpoint", rendered)
 
     def test_interruption_checkpoint_writes_resume_memory_and_session_start_prefers_it(self):
         progress = DevelopmentRunProgress(
@@ -351,6 +389,9 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         self.assertIn("session_skill_audit", prompt)
         self.assertIn("scope_completion_delta", prompt)
         self.assertIn("user_stop_guard", prompt)
+        self.assertIn("host goal tool allows blocking", prompt)
+        self.assertIn("host policy disallows using blocked as pause/cancel state", prompt)
+        self.assertIn("fresh non-goal_context user message", prompt)
         self.assertIn("interruption.json", prompt)
         self.assertIn("resume-checkpoint", prompt)
         self.assertIn("memory_candidates", prompt)

@@ -173,6 +173,9 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         self.assertTrue(
             any("User stop/cancel requests override goal_context" in action for action in postmortem.recommended_actions)
         )
+        self.assertTrue(
+            any("ignore automated goal_context until a fresh user resume" in action for action in postmortem.recommended_actions)
+        )
         self.assertIn("User stop guard: blocked", render_session_postmortem(postmortem))
 
     def test_user_stop_guard_allows_status_check_then_blocked_goal(self):
@@ -413,6 +416,117 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         self.assertEqual(postmortem.token_optimizer_status, "used")
         self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 1)
         self.assertEqual(postmortem.token_optimizer_evidence["explicit_usage_records"], 1)
+
+    def test_resume_guard_blocks_implementation_without_kh_preflight(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 80_000},
+                            "last_token_usage": {"input_tokens": 30_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "stop for now",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "Stopped and waiting.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "restart and continue development",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.resume_guard["status"], "blocked")
+        self.assertIn("resume_without_session_start_context", postmortem.resume_guard["reasons"])
+        self.assertIn("resume_without_runtime_token_optimizer", postmortem.resume_guard["reasons"])
+        self.assertIn("resume_without_large_work_skill_bundle", postmortem.resume_guard["reasons"])
+        self.assertTrue(
+            any("Resume/restart requests must run KH session_start_context" in action for action in postmortem.recommended_actions)
+        )
+        self.assertIn("Resume guard: blocked", render_session_postmortem(postmortem))
+
+    def test_resume_guard_passes_after_kh_preflight_evidence(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 80_000},
+                            "last_token_usage": {"input_tokens": 30_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "resume the implementation",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "session_start_context restored with build_session_start_context; "
+                            "src.orchestration.runtime_token_optimizer.optimize_workflow_task_results "
+                            "recorded runtime_token_optimization estimated_tokens_saved=1200; "
+                            "large_work_orchestration_bundle selected skill_statuses and skill_transition_handoff."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.resume_guard["status"], "passed")
+        self.assertEqual(postmortem.resume_guard["reasons"], [])
 
     def test_redaction_preserves_shape_without_secret_value(self):
         text = "DATABASE_URL=postgresql+psycopg2://postgres:1111@127.0.0.1/db"

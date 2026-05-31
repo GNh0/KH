@@ -13,6 +13,14 @@ SECRET_PATTERN = re.compile(
     r"(api[_-]?key\s*=|secret\s*=|token\s*=|-----BEGIN\s+[A-Z ]*PRIVATE KEY-----|sk-[A-Za-z0-9_-]{12,})",
     re.IGNORECASE,
 )
+INJECTION_PATTERN = re.compile(
+    r"(ignore\s+(?:all\s+)?(?:previous|prior|system|developer)\s+instructions|"
+    r"disregard\s+(?:all\s+)?(?:previous|prior|system|developer)\s+instructions|"
+    r"reveal\s+(?:the\s+)?system\s+prompt|exfiltrat(?:e|ion)|send\s+.*(?:secret|credential|private\s+key))",
+    re.IGNORECASE,
+)
+INVISIBLE_CONTROL_PATTERN = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060-\u206f]")
+MAX_MEMORY_CONTENT_CHARS = 4_000
 
 
 class MemoryStore:
@@ -48,8 +56,16 @@ class MemoryStore:
         ]
 
     def save_record(self, record: MemoryRecord) -> MemoryRecord:
-        _reject_secret_like_content(record.content)
+        _reject_unsafe_memory_content(record.content)
         records = self.load_records()
+        duplicate = _find_duplicate_record(records, record.content, exclude_record_id=record.record_id)
+        if duplicate:
+            self.append_event(
+                "memory_duplicate_skipped",
+                {"duplicate_of": duplicate.record_id, "kind": duplicate.kind},
+                record_id=record.record_id,
+            )
+            return duplicate
         by_id = {existing.record_id: existing for existing in records}
         timestamp = _utc_now()
         record_to_save = MemoryRecord(
@@ -81,9 +97,61 @@ class MemoryStore:
             "records": [record.to_dict() for record in selected_records],
         }
 
+    def search_records(self, query: str, limit: int = 10) -> Dict[str, Any]:
+        """Return bounded keyword-ranked memory records without external vector dependencies."""
+        terms = _search_terms(query)
+        records = self.load_records()
+        if not terms:
+            selected = records[-limit:] if limit >= 0 else records
+            return {
+                "scope": self.scope.to_dict(),
+                "query": query,
+                "record_count": len(records),
+                "records": [
+                    {**record.to_dict(), "score": 0}
+                    for record in selected
+                ],
+                "search_strategy": "latest",
+            }
+
+        scored = []
+        for record in records:
+            score = _record_score(record, terms)
+            if score:
+                scored.append((score, record))
+        scored.sort(key=lambda item: (-item[0], item[1].updated_at or item[1].created_at, item[1].record_id))
+        selected_scored = scored[:limit] if limit >= 0 else scored
+        return {
+            "scope": self.scope.to_dict(),
+            "query": query,
+            "record_count": len(records),
+            "records": [
+                {**record.to_dict(), "score": score}
+                for score, record in selected_scored
+            ],
+            "search_strategy": "keyword_ranked",
+        }
+
     def append_candidate(self, record: MemoryRecord) -> Dict[str, Any]:
-        _reject_secret_like_content(record.content)
+        _reject_unsafe_memory_content(record.content)
         self.root_dir.mkdir(parents=True, exist_ok=True)
+        duplicate_record = _find_duplicate_record(self.load_records(), record.content)
+        duplicate_candidate = _find_duplicate_candidate(self.read_candidates(), record.content)
+        if duplicate_record or duplicate_candidate:
+            duplicate_id = (
+                duplicate_record.record_id
+                if duplicate_record
+                else str(duplicate_candidate.get("record_id", ""))
+            )
+            self.append_event(
+                "memory_candidate_duplicate_skipped",
+                {"duplicate_of": duplicate_id, "kind": record.kind},
+                record_id=record.record_id,
+            )
+            candidate = record.to_dict()
+            candidate["candidate_status"] = "duplicate"
+            candidate["duplicate_of"] = duplicate_id
+            return candidate
         candidate = record.to_dict()
         candidate["candidate_status"] = "pending"
         candidate["created_at"] = candidate.get("created_at") or _utc_now()
@@ -243,8 +311,68 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
 
 
 def _reject_secret_like_content(content: str) -> None:
+    _reject_unsafe_memory_content(content)
+
+
+def _reject_unsafe_memory_content(content: str) -> None:
+    if len(content or "") > MAX_MEMORY_CONTENT_CHARS:
+        raise ValueError("memory content exceeds maximum durable entry size")
+    if INVISIBLE_CONTROL_PATTERN.search(content or ""):
+        raise ValueError("memory content contains invisible control characters")
     if SECRET_PATTERN.search(content or ""):
         raise ValueError("memory content appears to contain a secret")
+    if INJECTION_PATTERN.search(content or ""):
+        raise ValueError("memory content appears to contain prompt-injection text")
+
+
+def _find_duplicate_record(
+    records: Iterable[MemoryRecord],
+    content: str,
+    exclude_record_id: str = "",
+) -> Optional[MemoryRecord]:
+    normalized = _normalize_memory_content(content)
+    if not normalized:
+        return None
+    for record in records:
+        if exclude_record_id and record.record_id == exclude_record_id:
+            continue
+        if _normalize_memory_content(record.content) == normalized:
+            return record
+    return None
+
+
+def _find_duplicate_candidate(candidates: Iterable[Dict[str, Any]], content: str) -> Optional[Dict[str, Any]]:
+    normalized = _normalize_memory_content(content)
+    if not normalized:
+        return None
+    for candidate in candidates:
+        if _normalize_memory_content(str(candidate.get("content", ""))) == normalized:
+            return candidate
+    return None
+
+
+def _normalize_memory_content(content: str) -> str:
+    return re.sub(r"\s+", " ", str(content or "").strip()).casefold()
+
+
+def _search_terms(query: str) -> List[str]:
+    return [
+        term.casefold()
+        for term in re.findall(r"[A-Za-z0-9_.:/-]{2,}", query or "")
+    ][:12]
+
+
+def _record_score(record: MemoryRecord, terms: List[str]) -> int:
+    content = record.content.casefold()
+    metadata = json.dumps(record.metadata, sort_keys=True).casefold()
+    haystack = f"{record.kind} {record.source} {record.confidence} {metadata}".casefold()
+    score = 0
+    for term in terms:
+        if term in content:
+            score += 3
+        if term in haystack:
+            score += 1
+    return score
 
 
 def _utc_now() -> str:
