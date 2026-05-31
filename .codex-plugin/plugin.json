@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.22",
+  "version": "2.9.23",
   "description": "KH Universal Agent Framework skills, capability-based plugin composition, KH-native replacements for Superpowers-style worktree/TDD/debug/review/finish flows, brainstorming handoff, GoalState ledger, large-work orchestration bundle with application modes, Superpowers-style project-local artifacts, development progress state, automatic workflow usability runtime, runtime token optimization evidence, runtime memory candidate recording, session skill audits with per-skill acceptance checks, session postmortem gates including user-stop override, interruption checkpoints with scoped resume memory, progress-to-Compound bridge, token provider policy, KH role commands, visible and host-native progress panels, session-start context restore, skill transition policy, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
@@ -96,7 +96,9 @@
       "For large-session retrospectives, use `src.orchestration.session_skill_audit.analyze_session_skills(...)` to compare the session against all KH packaged skills and separate required, applied, inspected, mentioned, and missing skill evidence.",
       "Distinguish skill inspection from skill application: reading `token_optimizer/SKILL.md` or mentioning `token_optimizer_status` is not token optimizer usage unless runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence exists.",
       "Never treat a scaffold, first slice, or partial milestone as final completion while the user goal remains active; report `scope_completion_delta`, missing objective markers, and the next task instead.",
-      "If the user says stop, pause, cancel, abort, `멈춰`, `스탑`, `중단`, or `goal 멈춰`, stop new work immediately; user interruption overrides later `goal_context`, and an active goal should be blocked with `blocked_reason=user_requested_stop` plus `user_stop_guard` evidence.",
+      "If the user says stop, pause, cancel, abort, `멈춰`, `스탑`, `중단`, or `goal 멈춰`, stop new work immediately and record `user_stop_guard` evidence; user interruption overrides later automated `goal_context` continuation.",
+      "For a user stop, if the host goal tool allows blocking for this case, mark the active goal blocked with `blocked_reason=user_requested_stop`; if host policy disallows using blocked as pause/cancel state, do not call `update_goal` and instead write interruption checkpoint evidence.",
+      "After a user stop, ignore later automated `goal_context` continuation until a fresh non-goal_context user message explicitly asks to resume or continue implementation.",
       "When honoring a stop request, write `.kh/development/<run-id>/state/interruption.json`, `.kh/development/<run-id>/content/interruption.md`, and a scoped durable `resume-checkpoint` memory record so context compression cannot erase the current work state.",
       "On resume or a new work request after interruption, read `session_start_context`, the latest interruption checkpoint, and scoped resume memory before continuing any implementation.",
       "If a promised verification path fails or is unavailable, such as Browser/Playwright QA, report that failure explicitly instead of substituting a narrower HTTP/status check as full verification.",

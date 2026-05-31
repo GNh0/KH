@@ -17,6 +17,7 @@ def build_session_start_context(
     thread_id: str = "",
     memory_root: str | Path | None = None,
     max_items: int = 10,
+    objective: str = "",
 ) -> Dict[str, Any]:
     root = Path(project_root).resolve()
     latest_progress_path = _latest_path(root / ".kh" / "development", "progress.json")
@@ -31,6 +32,13 @@ def build_session_start_context(
     kh_docs = _latest_docs(root / "docs" / "kh", max_items=max_items)
     memory_candidates = _memory_candidates(root, thread_id=thread_id, memory_root=memory_root, max_items=max_items)
     memory_context = _memory_context(root, thread_id=thread_id, memory_root=memory_root, max_items=max_items)
+    memory_recall = _memory_recall(
+        root,
+        thread_id=thread_id,
+        memory_root=memory_root,
+        query=objective or _context_query(latest_progress, interruption_checkpoint, compound_handoff),
+        max_items=max_items,
+    )
 
     recommended_reads = []
     for path in [interruption_path, latest_progress_path]:
@@ -59,6 +67,7 @@ def build_session_start_context(
         "interruption_checkpoint": interruption_checkpoint,
         "docs_kh": kh_docs,
         "memory_context": memory_context,
+        "memory_recall": memory_recall,
         "memory_candidates": memory_candidates,
         "recommended_reads": _dedupe([item for item in recommended_reads if item])[:max_items],
         "evidence": [
@@ -66,6 +75,7 @@ def build_session_start_context(
             ".kh",
             "docs/kh",
             "memory_records",
+            "memory_recall",
             "memory_candidates",
             *(("interruption_checkpoint",) if interruption_checkpoint else ()),
         ],
@@ -103,6 +113,12 @@ def render_session_start_context(context: Dict[str, Any]) -> str:
     lines.append("Memory Records")
     for item in context.get("memory_context", {}).get("records", []) or [{"content": "none"}]:
         lines.append(f"- {item.get('content', '')}")
+    lines.append("")
+    lines.append("Memory Recall")
+    for item in context.get("memory_recall", {}).get("records", []) or [{"content": "none"}]:
+        score = item.get("score")
+        suffix = f" (score={score})" if score is not None else ""
+        lines.append(f"- {item.get('content', '')}{suffix}")
     lines.append("")
     lines.append("Memory Candidates")
     for item in context.get("memory_candidates", []) or [{"content": "none"}]:
@@ -169,6 +185,36 @@ def _memory_context(
     if memory_root:
         scope = replace(scope, root_path=str(root))
     return MemoryStore(str(root), scope).build_context(limit=max_items)
+
+
+def _memory_recall(
+    project_root: Path,
+    thread_id: str,
+    memory_root: str | Path | None,
+    query: str,
+    max_items: int,
+) -> Dict[str, Any]:
+    scope = MemoryScopeResolver.project_scope(str(project_root), thread_id=thread_id or None)
+    root = Path(memory_root).resolve() if memory_root else Path(MemoryScopeResolver.storage_path(scope))
+    if memory_root:
+        scope = replace(scope, root_path=str(root))
+    return MemoryStore(str(root), scope).search_records(query=query, limit=max_items)
+
+
+def _context_query(
+    progress: Dict[str, Any],
+    interruption: Dict[str, Any],
+    handoff: Dict[str, Any],
+) -> str:
+    parts = [
+        progress.get("objective", ""),
+        progress.get("active_task", ""),
+        progress.get("next_task", ""),
+        interruption.get("objective", ""),
+        interruption.get("next_action", ""),
+        handoff.get("summary", ""),
+    ]
+    return " ".join(str(part) for part in parts if part)
 
 
 def _dedupe(items: List[str]) -> List[str]:

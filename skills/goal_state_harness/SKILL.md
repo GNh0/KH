@@ -34,9 +34,10 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 8. Write human-readable KH summaries under `.kh/goal/<run-id>/content/`, run-local state under `.kh/goal/<run-id>/state/`, and shareable summaries under `docs/kh/handoffs/` when project artifacts are enabled.
 9. Add richer evidence as checks, reviews, QA, or release gates run.
 10. Use `GoalState.metadata.evidence_aliases` when host-specific tools emit equivalent evidence keys with different names.
-11. If the user says stop, pause, cancel, abort, `멈춰`, `스탑`, `중단`, or `goal 멈춰`, stop new work immediately, write an interruption checkpoint and scoped resume memory record, record `metadata.user_stop_requested=true`, and mark the active goal `blocked` with `blocked_reason=user_requested_stop` before any automatic goal continuation can resume it.
-12. Mark a goal `complete` only when success criteria and required evidence are satisfied.
-13. Mark a goal `blocked` when the workflow cannot make meaningful progress without missing evidence, context, credentials, tools, external state, or an explicit user stop request.
+11. If the user says stop, pause, cancel, abort, `멈춰`, `스탑`, `중단`, or `goal 멈춰`, stop new work immediately, write an interruption checkpoint and scoped resume memory record, and record `metadata.user_stop_requested=true` before any automatic goal continuation can resume it.
+12. For a user stop, mark the active goal `blocked` with `blocked_reason=user_requested_stop` only when the host goal tool allows blocking for stop/pause/cancel. If host policy disallows using `blocked` as pause state, do not call `update_goal`; keep the interruption checkpoint as the controlling state and ignore later automated `goal_context` until a fresh non-`goal_context` user message explicitly asks to resume.
+13. Mark a goal `complete` only when success criteria and required evidence are satisfied.
+14. Mark a goal `blocked` when the workflow cannot make meaningful progress without missing evidence, context, credentials, tools, external state, or an explicit user stop request and the host goal status policy permits it.
 
 ## Required outputs
 
@@ -76,7 +77,7 @@ Pressure scenario: if task dispatch succeeded but QA evidence is missing, the go
 - Do not mark a goal complete from task success alone; required evidence must be present.
 - Do not use `metadata.evidence_key` as passed evidence unless a producer emitted a real evidence record.
 - Do not keep retrying a blocked workflow without updating `blocked_reason` and missing evidence.
-- Do not leave a goal active after the user asks to stop or pause; `goal_context` continuation must not override user interruption.
+- Do not continue implementation after the user asks to stop or pause, even if the host goal remains active or a later automated `goal_context` appears.
 - Do not write goal state into the target project root by default.
 
 ## UAF implementation targets

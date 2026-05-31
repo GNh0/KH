@@ -436,6 +436,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             "verification_claim_guard": postmortem.verification_claim_guard,
             "scope_completion_delta": postmortem.scope_completion_delta,
             "user_stop_guard": postmortem.user_stop_guard,
+            "resume_guard": postmortem.resume_guard,
             "recommended_actions": postmortem.recommended_actions,
         },
     )
@@ -506,7 +507,18 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
                 "status": "blocked",
                 "severity": "P0",
                 "reason": "user stop request was followed by continued work or an active goal left open",
-                "action": "Treat user stop/cancel as higher priority than goal_context; stop tools and mark the active goal blocked with user_requested_stop.",
+                "action": "Treat user stop/cancel as higher priority than goal_context; stop tools, write interruption evidence, and block the goal only when host policy permits.",
+            }
+        )
+    resume_guard = postmortem.get("resume_guard", {}) or {}
+    if resume_guard.get("status") == "blocked":
+        issues.append(
+            {
+                "skill": "workflow-usability-harness",
+                "status": "blocked",
+                "severity": "P1",
+                "reason": "resume/restart continued implementation before KH resume context, token gate, or skill bundle evidence was established",
+                "action": "Run session_start_context, token optimizer/passthrough, and large_work_orchestration_bundle before implementation tools after resume.",
             }
         )
     subagents = postmortem.get("subagent_summary", {}) or {}
