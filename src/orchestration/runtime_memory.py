@@ -241,6 +241,210 @@ def write_pre_compaction_memory_flush(
     }
 
 
+def build_explicit_cross_scope_memory_import(
+    project_dir: str,
+    metadata: Dict[str, Any] | None,
+    source_scope: MemoryScope | Dict[str, Any] | None = None,
+    query: str = "",
+) -> Dict[str, Any]:
+    """Read another scope only when the user explicitly requested that source.
+
+    Cross-scope recall is intentionally separate from active memory preflight.
+    The default result is read-only external context; importing into the current
+    scope requires explicit approval and defaults to candidates, not durable
+    records.
+    """
+    metadata = metadata or {}
+    provider = resolve_memory_provider(metadata)
+    requested = bool(metadata.get("cross_scope_memory_import"))
+    if not requested:
+        return {
+            "status": "skipped_with_rationale",
+            "application_status": "not_requested",
+            "provider": provider,
+            "rationale": "cross-scope memory import requires metadata.cross_scope_memory_import=true",
+            "evidence": ["memory-state-harness"],
+        }
+    if provider["status"] == "blocked":
+        return {
+            "status": "blocked",
+            "application_status": "not_applied",
+            "provider": provider,
+            "evidence": ["memory-state-harness", "explicit_cross_scope_memory_import"],
+        }
+    if provider["provider"] == "passthrough":
+        return {
+            "status": "skipped_with_rationale",
+            "application_status": "not_applied",
+            "provider": provider,
+            "rationale": "memory provider passthrough selected",
+            "evidence": ["memory-state-harness", "explicit_cross_scope_memory_import"],
+        }
+
+    try:
+        resolved_source_scope = _source_memory_scope(source_scope, metadata)
+    except ValueError as exc:
+        return {
+            "status": "blocked",
+            "application_status": "not_applied",
+            "provider": provider,
+            "blocked": {"error_type": type(exc).__name__, "message": str(exc)},
+            "evidence": ["memory-state-harness", "explicit_cross_scope_memory_import"],
+        }
+    if resolved_source_scope.status == "deleted":
+        return {
+            "status": "blocked",
+            "application_status": "not_applied",
+            "provider": provider,
+            "source_scope": resolved_source_scope.to_dict(),
+            "blocked": {"error_type": "DeletedSourceScope", "message": "source memory scope is deleted"},
+            "evidence": ["memory-state-harness", "explicit_cross_scope_memory_import"],
+        }
+
+    target_scope = _memory_scope(project_dir, metadata)
+    target_store = MemoryStore(str(MemoryScopeResolver.storage_path(target_scope)), target_scope)
+    source_store = MemoryStore(str(MemoryScopeResolver.storage_path(resolved_source_scope)), resolved_source_scope)
+    max_items = int(metadata.get("memory_import_max_items", metadata.get("memory_max_items", 10)))
+    search_query = query or _memory_query(metadata, "")
+    external_context = source_store.search_records(query=search_query, limit=max_items)
+    external_context["source_scope"] = resolved_source_scope.to_dict()
+    external_context["target_scope"] = target_scope.to_dict()
+
+    approved = bool(metadata.get("memory_import_approved"))
+    should_apply = bool(metadata.get("memory_import_apply"))
+    promote = bool(metadata.get("memory_import_promote"))
+    if not approved:
+        event = target_store.append_event(
+            "cross_scope_memory_import_reviewed",
+            {
+                "approval_status": "approval_required",
+                "application_status": "read_only_external_context",
+                "source_scope": resolved_source_scope.to_dict(),
+                "query": search_query,
+                "record_count": len(external_context.get("records", [])),
+            },
+        )
+        return {
+            "status": "approval_required",
+            "application_status": "read_only_external_context",
+            "provider": provider,
+            "source_scope": resolved_source_scope.to_dict(),
+            "target_scope": target_scope.to_dict(),
+            "external_context": external_context,
+            "recorded_count": 0,
+            "promotion": "external_context_only",
+            "approval": {
+                "required": True,
+                "approved": False,
+                "rationale": "Source memory was recalled read-only; current scope was not modified.",
+            },
+            "event": event,
+            "evidence": [
+                "memory-state-harness",
+                "explicit_cross_scope_memory_import",
+                "read_only_external_context",
+            ],
+        }
+
+    if not should_apply:
+        event = target_store.append_event(
+            "cross_scope_memory_import_reviewed",
+            {
+                "approval_status": "approved_read_only",
+                "application_status": "read_only_external_context",
+                "source_scope": resolved_source_scope.to_dict(),
+                "query": search_query,
+                "record_count": len(external_context.get("records", [])),
+            },
+        )
+        return {
+            "status": "approved_read_only",
+            "application_status": "read_only_external_context",
+            "provider": provider,
+            "source_scope": resolved_source_scope.to_dict(),
+            "target_scope": target_scope.to_dict(),
+            "external_context": external_context,
+            "recorded_count": 0,
+            "promotion": "external_context_only",
+            "approval": {
+                "required": True,
+                "approved": True,
+                "rationale": "User approved reading the source, but import_apply=false kept it out of current memory.",
+            },
+            "event": event,
+            "evidence": [
+                "memory-state-harness",
+                "explicit_cross_scope_memory_import",
+                "read_only_external_context",
+            ],
+        }
+
+    imported: List[Dict[str, Any]] = []
+    blocked: List[Dict[str, str]] = []
+    for source_record in external_context.get("records", []):
+        record = _import_record_from_external_context(
+            target_scope=target_scope,
+            source_scope=resolved_source_scope,
+            source_record=source_record,
+            query=search_query,
+            promotion="durable_record" if promote else "candidate",
+        )
+        try:
+            if promote:
+                imported.append(target_store.save_record(record).to_dict())
+            else:
+                imported.append(target_store.append_candidate(record))
+        except ValueError as exc:
+            blocked.append(
+                {
+                    "record_id": record.record_id,
+                    "source_record_id": str(source_record.get("record_id", "")),
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+
+    status = "records_imported" if promote and imported else "candidates_recorded" if imported else "no_records"
+    if blocked and not imported:
+        status = "blocked"
+    event = target_store.append_event(
+        "cross_scope_memory_import_applied",
+        {
+            "approval_status": "approved",
+            "application_status": "durable_imported" if promote else "candidate_imported",
+            "source_scope": resolved_source_scope.to_dict(),
+            "query": search_query,
+            "recorded_count": len(imported),
+            "blocked_count": len(blocked),
+            "promotion": "durable_record" if promote else "candidate",
+        },
+    )
+    return {
+        "status": status,
+        "application_status": "durable_imported" if promote else "candidate_imported",
+        "provider": provider,
+        "source_scope": resolved_source_scope.to_dict(),
+        "target_scope": target_scope.to_dict(),
+        "external_context": external_context,
+        "recorded": imported,
+        "recorded_count": len(imported),
+        "blocked": blocked,
+        "blocked_count": len(blocked),
+        "promotion": "durable_record" if promote else "candidate",
+        "approval": {
+            "required": True,
+            "approved": True,
+            "rationale": "Explicit cross-scope import was approved by the caller.",
+        },
+        "event": event,
+        "evidence": [
+            "memory-state-harness",
+            "explicit_cross_scope_memory_import",
+            "memory_import_applied",
+        ],
+    }
+
+
 def record_workflow_memory_candidates(
     project_dir: str,
     metadata: Dict[str, Any] | None,
@@ -326,6 +530,41 @@ def _memory_scope(project_dir: str, metadata: Dict[str, Any]) -> MemoryScope:
     return scope
 
 
+def _source_memory_scope(
+    source_scope: MemoryScope | Dict[str, Any] | None,
+    metadata: Dict[str, Any],
+) -> MemoryScope:
+    if isinstance(source_scope, MemoryScope):
+        scope = source_scope
+    elif isinstance(source_scope, dict):
+        scope = MemoryScope.from_dict(source_scope)
+    else:
+        source_project_dir = str(metadata.get("memory_import_source_project_dir", "")).strip()
+        source_thread_id = metadata.get("memory_import_source_thread_id")
+        source_conversation_root = str(
+            metadata.get("memory_import_conversation_root", metadata.get("conversation_memory_root", ""))
+        )
+        if source_project_dir:
+            scope = MemoryScopeResolver.project_scope(
+                project_dir=source_project_dir,
+                thread_id=source_thread_id,
+                project_id=str(metadata.get("memory_import_source_project_id", "")),
+            )
+        elif source_thread_id:
+            scope = MemoryScopeResolver.conversation_scope(
+                thread_id=str(source_thread_id),
+                conversation_memory_root=source_conversation_root,
+            )
+        else:
+            raise ValueError("cross-scope import requires source_scope or memory_import_source_project_dir/thread_id")
+    source_root = str(metadata.get("memory_import_source_root", "")).strip()
+    if source_root:
+        scope = replace(scope, root_path=str(Path(source_root).resolve()))
+    if not scope.root_path:
+        raise ValueError("cross-scope import source scope requires root_path")
+    return scope
+
+
 def _candidate_record(candidate: MemoryRecord, scope: MemoryScope) -> MemoryRecord:
     return MemoryRecord(
         record_id=candidate.record_id,
@@ -337,6 +576,41 @@ def _candidate_record(candidate: MemoryRecord, scope: MemoryScope) -> MemoryReco
         created_at=candidate.created_at,
         updated_at=candidate.updated_at,
         metadata={**dict(candidate.metadata), "candidate_scope": candidate.scope},
+    )
+
+
+def _import_record_from_external_context(
+    target_scope: MemoryScope,
+    source_scope: MemoryScope,
+    source_record: Dict[str, Any],
+    query: str,
+    promotion: str,
+) -> MemoryRecord:
+    content = str(source_record.get("content", ""))
+    source_record_id = str(source_record.get("record_id", ""))
+    return MemoryRecord(
+        record_id=_stable_memory_id(
+            "import",
+            target_scope.namespace,
+            source_scope.namespace,
+            source_record_id,
+            content,
+        ),
+        kind="memory-import",
+        content=content,
+        scope=target_scope.kind,
+        source="explicit_cross_scope_memory_import",
+        confidence=str(source_record.get("confidence", "medium")),
+        metadata={
+            "source_scope": source_scope.to_dict(),
+            "source_record_id": source_record_id,
+            "source_kind": source_record.get("kind", ""),
+            "source_record_scope": source_record.get("scope", ""),
+            "source_record_updated_at": source_record.get("updated_at", ""),
+            "query": query,
+            "import_status": promotion,
+            "source_score": source_record.get("score", 0),
+        },
     )
 
 

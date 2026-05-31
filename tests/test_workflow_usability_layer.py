@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from src.contracts import MemoryRecord, WorkflowTaskResult
@@ -278,6 +279,56 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertEqual(context["memory_recall"]["search_strategy"], "keyword_ranked")
             self.assertEqual(context["memory_recall"]["records"][0]["record_id"], "resume-lesson")
             self.assertIn("After user stop, load resume checkpoint", rendered)
+
+    def test_session_start_context_imports_explicit_external_memory_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            source = root / "source"
+            target_memory = root / "target-memory"
+            source_memory = root / "source-memory"
+            source_scope = replace(
+                MemoryScopeResolver.project_scope(str(source), thread_id="source-thread"),
+                root_path=str(source_memory),
+            )
+            MemoryStore(str(source_memory), source_scope).save_record(
+                MemoryRecord(
+                    record_id="source-decision",
+                    kind="decision",
+                    content="Keep imported memory read-only until the user approves applying it.",
+                    scope=source_scope.kind,
+                    source="source-session",
+                )
+            )
+
+            context = build_session_start_context(
+                target,
+                thread_id="target-thread",
+                memory_root=target_memory,
+                objective="memory import approval",
+                explicit_memory_imports=[
+                    {
+                        "source_scope": source_scope.to_dict(),
+                        "query": "imported memory approval",
+                        "metadata": {"cross_scope_memory_import": True},
+                    }
+                ],
+            )
+            rendered = render_session_start_context(context)
+
+            self.assertEqual(context["memory_context"]["record_count"], 0)
+            self.assertEqual(context["memory_imports"][0]["status"], "approval_required")
+            self.assertEqual(context["memory_imports"][0]["application_status"], "read_only_external_context")
+            self.assertEqual(
+                context["memory_imports"][0]["external_context"]["records"][0]["record_id"],
+                "source-decision",
+            )
+            target_scope = replace(
+                MemoryScopeResolver.project_scope(str(target), thread_id="target-thread"),
+                root_path=str(target_memory),
+            )
+            self.assertEqual(MemoryStore(str(target_memory), target_scope).read_candidates(), [])
+            self.assertIn("Explicit Memory Imports", rendered)
 
     def test_interruption_checkpoint_writes_resume_memory_and_session_start_prefers_it(self):
         progress = DevelopmentRunProgress(

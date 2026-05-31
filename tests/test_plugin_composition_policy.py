@@ -211,7 +211,7 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         prompts = "\n".join(manifest["interface"]["defaultPrompt"])
         root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
 
-        self.assertEqual(manifest["version"], "2.9.24")
+        self.assertEqual(manifest["version"], "2.9.25")
         self.assertIn("Plugin Composition", manifest["interface"]["capabilities"])
         self.assertIn("plugin-composition-policy", root_skill_names)
         self.assertIn("plugin-composition", root_skill_names)
