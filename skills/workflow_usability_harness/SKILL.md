@@ -40,18 +40,20 @@ Do not use this harness to skip planning, review, QA, or Compound. It exposes th
 ## Core Flow
 
 1. At the start of a new or resumed session, call `src.orchestration.session_start_context.build_session_start_context` and read the recommended KH state/docs/memory candidate paths.
-2. During task-plan implementation, keep `src.orchestration.development_progress` current and render `src.orchestration.progress_panel.render_progress_panel` after meaningful state changes.
-3. For host-native progress UI, call `src.orchestration.progress_panel.write_host_progress_panel` so `.kh/development/<run-id>/state/host_panel.<host>.json` mirrors the same run state for Codex, Antigravity-style Agent Manager, generic CLI shells, or future hosts.
-4. Before broad reads, subagent packets, or long commands, resolve `token_optimizer_provider` through `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider`.
-5. When workflow task results contain long command output or subagent transcripts, route them through `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results` so runtime evidence includes preserved failure context, token savings, and RTK-style command-family statistics.
-6. When Compound or workflow usability produces memory candidates, call `src.orchestration.runtime_memory.record_workflow_memory_candidates` so they are persisted as scoped candidates without durable promotion.
-7. When a user asks for role help, resolve `/kh:*` command entrypoints through `src.orchestration.role_commands.resolve_role_command` instead of inventing one-off role prompts.
-8. After Plan, Work, and Review, call `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts` so progress becomes `CompoundCapture`, `compound_handoff`, memory candidates, skill candidates, scenario candidates, and a Markdown handoff.
-9. When reviewing a real Codex session log, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl` and block final-health claims if `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, or `user_stop_guard` is blocked.
-10. When a user stop is honored, call `src.orchestration.interruption_state.write_interruption_checkpoint` so `.kh` state and scoped durable memory both preserve what was done, what remains, and where to resume.
-11. For full-catalog skill usage review, call `src.orchestration.session_skill_audit.analyze_session_skills` or the module CLI so every KH packaged skill is classified as required, applied, inspected, mentioned, or missing.
-12. For Windows Streamlit or similar local dev-server checks, build a launch and health-check plan through `src.orchestration.windows_dev_server.build_streamlit_launch_plan` instead of retrying ad hoc `Start-Process` variants.
-13. Route any next skills from the Compound handoff into `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`.
+2. Run `src.orchestration.runtime_memory.build_active_memory_preflight` so scoped recall and bounded `MEMORY.md`/`USER.md` prompt snapshots are ready before implementation.
+3. During task-plan implementation, keep `src.orchestration.development_progress` current and render `src.orchestration.progress_panel.render_progress_panel` after meaningful state changes.
+4. For host-native progress UI, call `src.orchestration.progress_panel.write_host_progress_panel` so `.kh/development/<run-id>/state/host_panel.<host>.json` mirrors the same run state for Codex, Antigravity-style Agent Manager, generic CLI shells, or future hosts.
+5. Before broad reads, subagent packets, or long commands, resolve `token_optimizer_provider` through `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider`.
+6. When workflow task results contain long command output or subagent transcripts, route them through `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results` so runtime evidence includes preserved failure context, token savings, and RTK-style command-family statistics.
+7. Before expected host context compaction, call `src.orchestration.runtime_memory.write_pre_compaction_memory_flush` so decisions, blockers, next tasks, and verification state survive compression.
+8. When Compound or workflow usability produces memory candidates, call `src.orchestration.runtime_memory.record_workflow_memory_candidates` so they are persisted as scoped candidates without durable promotion.
+9. When a user asks for role help, resolve `/kh:*` command entrypoints through `src.orchestration.role_commands.resolve_role_command` instead of inventing one-off role prompts.
+10. After Plan, Work, and Review, call `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts` so progress becomes `CompoundCapture`, `compound_handoff`, memory candidates, skill candidates, scenario candidates, and a Markdown handoff.
+11. When reviewing a real Codex session log, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl` and block final-health claims if `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, or `user_stop_guard` is blocked.
+12. When a user stop is honored, call `src.orchestration.interruption_state.write_interruption_checkpoint` so `.kh` state and scoped durable memory both preserve what was done, what remains, and where to resume.
+13. For full-catalog skill usage review, call `src.orchestration.session_skill_audit.analyze_session_skills` or the module CLI so every KH packaged skill is classified as required, applied, inspected, mentioned, or missing.
+14. For Windows Streamlit or similar local dev-server checks, build a launch and health-check plan through `src.orchestration.windows_dev_server.build_streamlit_launch_plan` instead of retrying ad hoc `Start-Process` variants.
+15. Route any next skills from the Compound handoff into `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`.
 
 ## Provider Policy
 
@@ -88,6 +90,8 @@ Each command resolves to a small set of roles, KH skills, and expected outputs. 
 - `token_optimizer_provider` decision with provider, status, strategy, fallback, and quality rationale.
 - Runtime `token_optimization` summary with status, token usage savings, preserved command/subagent evidence, and RTK-style command-family statistics when task outputs cross the threshold.
 - Runtime `memory_state` summary with scoped candidate recording paths and promotion mode.
+- Runtime `active_memory_preflight` summary with scoped recall and bounded prompt snapshot paths.
+- Runtime `pre_compaction_memory_flush` summary when compression could otherwise erase decisions or next actions.
 - `session_skill_audit` when inspecting a prior session against all KH packaged skills.
 - Resolved KH role command entrypoint when a role command is used.
 - `session_postmortem` with `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, `user_stop_guard`, token gate, review status, subagent summary, secret scan, and git integration when inspecting a prior session.

@@ -350,6 +350,10 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             "Workflow Usability Runtime",
             "Runtime Token Optimization",
             "Runtime Memory Candidates",
+            "Active Memory Preflight",
+            "Bounded Prompt Memory",
+            "Pre-Compaction Memory Flush",
+            "Memory Provider Policy",
             "Session Postmortem",
             "Session Skill Audit",
             "Completion Guard",
@@ -370,6 +374,9 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             "workflow-usability-runtime",
             "runtime-token-optimizer",
             "runtime-memory-candidates",
+            "active-memory-preflight",
+            "pre-compaction-memory-flush",
+            "memory-provider-policy",
             "progress-compound-bridge",
             "token-optimizer-provider",
             "role-command-entrypoints",
@@ -417,6 +424,8 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             }
             noisy_output = "\n".join([*(f"progress {index}" for index in range(80)), "ERROR: runtime failed", "exit code: 1"])
             preflight = build_workflow_usability_preflight(tmp, metadata)
+            self.assertEqual(preflight["active_memory_preflight"]["status"], "applied")
+            self.assertIn("bounded_prompt_memory", preflight["active_memory_preflight"]["evidence"])
             result = apply_workflow_usability_runtime(
                 project_dir=tmp,
                 workflow_id="workflow-demo",

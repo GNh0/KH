@@ -22,6 +22,10 @@ KH should not copy global always-on personal memory by default. For UAF work, pr
 
 - `MemoryStore.search_records(...)` provides local keyword-ranked recall without external embeddings.
 - `session_start_context` now returns `memory_recall` in addition to latest memory records and memory candidates.
+- `runtime_memory.build_active_memory_preflight(...)` runs KH-scoped active recall before implementation and writes bounded prompt snapshots.
+- `runtime_memory.write_pre_compaction_memory_flush(...)` stores compact decisions, blockers, next actions, and verification state before context compression.
+- `MemoryStore.write_prompt_memory_snapshot(...)` writes scoped `MEMORY.md` and `USER.md` files without promoting facts to global memory.
+- `runtime_memory.resolve_memory_provider(...)` records local, external, hybrid, or passthrough memory provider policy with fallback/block evidence.
 - `workflow_usability_runtime` passes the current objective into session-start recall.
 - Memory writes reject secret-like content, prompt-injection text, invisible control characters, oversized entries, and duplicates.
 - Duplicate record/candidate skips are recorded as memory lifecycle events.
@@ -30,5 +34,5 @@ KH should not copy global always-on personal memory by default. For UAF work, pr
 
 - Optional embedding-backed recall provider behind the same `MemoryStore`/`MemoryScope` contract.
 - Capacity compaction for high-value memory records when the store grows beyond a configurable token budget.
-- Pre-compaction memory flush hook when a host exposes an explicit compaction event.
+- Native host compaction-event integration when Codex/Antigravity exposes an explicit event.
 - Human-review promotion workflow from candidates into durable records.

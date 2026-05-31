@@ -10,7 +10,10 @@ from src.orchestration.development_progress import (
 )
 from src.orchestration.progress_compound_bridge import write_progress_compound_artifacts
 from src.orchestration.progress_panel import render_progress_panel, write_host_progress_panel
-from src.orchestration.runtime_memory import record_workflow_memory_candidates
+from src.orchestration.runtime_memory import (
+    build_active_memory_preflight,
+    record_workflow_memory_candidates,
+)
 from src.orchestration.runtime_token_optimizer import optimize_workflow_task_results
 from src.orchestration.session_start_context import build_session_start_context
 from src.orchestration.token_optimizer_provider import resolve_token_optimizer_provider
@@ -57,12 +60,18 @@ def build_workflow_usability_preflight(
 
     metadata = metadata or {}
     thread_id = _thread_id_from_metadata(metadata)
+    objective = str(metadata.get("objective") or metadata.get("request") or metadata.get("goal") or "")
     session_context = build_session_start_context(
         project_dir,
         thread_id=thread_id,
         memory_root=metadata.get("memory_root") or None,
         max_items=int(metadata.get("session_context_max_items", 10)),
-        objective=str(metadata.get("objective") or metadata.get("request") or metadata.get("goal") or ""),
+        objective=objective,
+    )
+    active_memory = build_active_memory_preflight(
+        project_dir,
+        metadata,
+        objective=objective,
     )
     token_decision = resolve_token_optimizer_provider(
         token_optimizer_provider=metadata.get("token_optimizer_provider", "kh"),
@@ -74,10 +83,12 @@ def build_workflow_usability_preflight(
     return {
         "enabled": True,
         "session_start_context": session_context,
+        "active_memory_preflight": active_memory,
         "token_optimizer_provider": token_decision.to_dict(),
         "evidence": [
             "workflow_usability_preflight",
             "session_start_context",
+            *list(active_memory.get("evidence", [])),
             "token_optimizer_provider",
         ],
     }

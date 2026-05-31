@@ -153,6 +153,37 @@ class MemoryStoreTests(unittest.TestCase):
             self.assertEqual(result["records"][0]["record_id"], "decision-1")
             self.assertGreater(result["records"][0]["score"], 0)
 
+    def test_memory_store_writes_bounded_prompt_memory_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scope = MemoryScopeResolver.project_scope(tmp)
+            store = MemoryStore(MemoryScopeResolver.storage_path(scope), scope)
+            store.save_record(
+                MemoryRecord(
+                    record_id="decision-1",
+                    kind="decision",
+                    content="Load scoped memory before resuming implementation.",
+                    scope=scope.kind,
+                    source="test",
+                )
+            )
+            store.save_record(
+                MemoryRecord(
+                    record_id="preference-1",
+                    kind="user-preference",
+                    content="Prefer concise Korean status updates.",
+                    scope=scope.kind,
+                    source="test",
+                )
+            )
+
+            snapshot = store.write_prompt_memory_snapshot(query="memory implementation", max_records=10)
+
+            self.assertTrue(Path(snapshot["paths"]["memory_md"]).exists())
+            self.assertTrue(Path(snapshot["paths"]["user_md"]).exists())
+            self.assertIn("Load scoped memory", Path(snapshot["paths"]["memory_md"]).read_text(encoding="utf-8"))
+            self.assertIn("Prefer concise Korean", Path(snapshot["paths"]["user_md"]).read_text(encoding="utf-8"))
+            self.assertEqual(store.read_events()[-1]["event_type"], "prompt_memory_snapshot_written")
+
     def test_trim_events_keeps_latest_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
             scope = MemoryScopeResolver.project_scope(tmp)
