@@ -1,6 +1,6 @@
 ---
 name: compound-engineering-harness
-description: Use when Plan, Work, and Review are complete and the work may produce reusable lessons, scoped memory candidates, system updates, or regression checks.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when Plan, Work, and Review are complete and the work may produce reusable lessons, scoped memory candidates, system updates, or regression checks.
 ---
 
 # Compound Engineering Harness

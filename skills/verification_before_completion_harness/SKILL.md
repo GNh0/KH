@@ -1,6 +1,6 @@
 ---
 name: verification-before-completion-harness
-description: Use when a UAF workflow is about to claim completion, commit, push, ship, or hand off work and must prove fresh verification evidence first.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow is about to claim completion, commit, push, ship, or hand off work and must prove fresh verification evidence first.
 ---
 
 # Verification Before Completion Harness

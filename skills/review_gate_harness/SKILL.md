@@ -1,6 +1,6 @@
 ---
 name: review-gate-harness
-description: Use when a UAF workflow needs structured pre-landing review gates, actionable findings, or reviewer status normalization.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow needs structured pre-landing review gates, actionable findings, or reviewer status normalization.
 ---
 
 # Review Gate Harness

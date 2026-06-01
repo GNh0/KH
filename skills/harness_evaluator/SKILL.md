@@ -1,6 +1,6 @@
 ---
 name: harness-evaluator
-description: Use when Python code needs isolated syntax, runtime, or module verification before presenting results.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when Python code needs isolated syntax, runtime, or module verification before presenting results.
 ---
 # Harness Evaluator Skill
 

@@ -1,6 +1,6 @@
 ---
 name: context-state-harness
-description: Use when a UAF workflow needs resumable context, decision capture, handoff notes, or state restore across agent runs.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow needs resumable context, decision capture, handoff notes, or state restore across agent runs.
 ---
 
 # Context State Harness

@@ -1,6 +1,6 @@
 ---
 name: orchestration-role-graph
-description: Use when inspecting or extending the default UAF orchestration roles such as CEO, advisor, architect, controller, implementer, reviewers, QA, security, and release.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when inspecting or extending the default UAF orchestration roles such as CEO, advisor, architect, controller, implementer, reviewers, QA, security, and release.
 ---
 
 # Orchestration Role Graph

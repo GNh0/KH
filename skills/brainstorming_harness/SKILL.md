@@ -1,6 +1,6 @@
 ---
 name: brainstorming-harness
-description: Use when a user is starting a feature, product, project, SaaS, or design idea and the direction is not approved yet.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a user is starting a feature, product, project, SaaS, or design idea and the direction is not approved yet.
 ---
 
 # Brainstorming Harness

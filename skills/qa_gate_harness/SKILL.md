@@ -1,6 +1,6 @@
 ---
 name: qa-gate-harness
-description: Use when a UAF workflow needs QA checks, regression evidence, manual test mapping, or browser/app verification results.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow needs QA checks, regression evidence, manual test mapping, or browser/app verification results.
 ---
 
 # QA Gate Harness

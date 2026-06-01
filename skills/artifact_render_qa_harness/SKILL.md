@@ -1,6 +1,6 @@
 ---
 name: artifact-render-qa-harness
-description: Use when UAF deliverables must prove generated DOCX, XLSX, SVG, or DXF files are readable and structurally valid.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when UAF deliverables must prove generated DOCX, XLSX, SVG, or DXF files are readable and structurally valid.
 ---
 
 # Artifact Render QA Harness

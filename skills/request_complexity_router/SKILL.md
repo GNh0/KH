@@ -1,6 +1,6 @@
 ---
 name: request-complexity-router
-description: Use when deciding whether a user request should be answered directly, handled with a lightweight skill/module, or escalated to GoalState, role DAG, evidence gates, or high-risk review.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when deciding whether a user request should be answered directly, handled with a lightweight skill/module, or escalated to GoalState, role DAG, evidence gates, or high-risk review.
 ---
 # Request Complexity Router
 

@@ -1,6 +1,6 @@
 ---
 name: command-hook-policy-harness
-description: Use when defining UAF command rewrite hooks, trust checks, permission precedence, integrity verification, or non-blocking hook behavior.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when defining UAF command rewrite hooks, trust checks, permission precedence, integrity verification, or non-blocking hook behavior.
 ---
 
 # Command Hook Policy Harness

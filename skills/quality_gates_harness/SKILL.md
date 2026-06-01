@@ -1,6 +1,6 @@
 ---
 name: quality-gates-harness
-description: Use when a UAF workflow needs failing-test-first implementation, systematic debugging, review gates, or evidence-based completion checks.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow needs failing-test-first implementation, systematic debugging, review gates, or evidence-based completion checks.
 ---
 
 # Quality Gates Harness

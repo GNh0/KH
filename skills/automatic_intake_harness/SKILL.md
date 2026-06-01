@@ -1,6 +1,6 @@
 ---
 name: automatic-intake-harness
-description: Use when non-trivial Codex, Antigravity-style, Claude Code, or local agent work involves project files, code changes, deliverables, reviews, long logs, verification, subagents, persistence, or high-risk actions, even if the user did not name KH, UAF, a skill, or a harness.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when non-trivial Codex, Antigravity-style, Claude Code, or local agent work involves project files, code changes, deliverables, reviews, long logs, verification, subagents, persistence, or high-risk actions, even if the user did not name KH, UAF, a skill, or a harness.
 ---
 
 # Automatic Intake Harness

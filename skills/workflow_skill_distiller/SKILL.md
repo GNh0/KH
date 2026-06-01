@@ -1,6 +1,6 @@
 ---
 name: workflow-skill-distiller
-description: Use when turning a repeated user workflow, completed interaction, or project-specific process into a reusable UAF skill folder.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when turning a repeated user workflow, completed interaction, or project-specific process into a reusable UAF skill folder.
 ---
 
 # Workflow Skill Distiller

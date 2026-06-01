@@ -1,6 +1,6 @@
 ---
 name: snapshot-state-harness
-description: Use when UAF workflows need rollback points, compressed file snapshots, state restore, or safe checkpoint metadata before generated code changes.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when UAF workflows need rollback points, compressed file snapshots, state restore, or safe checkpoint metadata before generated code changes.
 ---
 
 # Snapshot State Harness
