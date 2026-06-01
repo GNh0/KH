@@ -357,6 +357,102 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertIn(("role-execution-audit-harness", "blocked"), issues)
         self.assertIn(("subagent-review-pipeline", "blocked"), issues)
 
+    def test_developer_skill_inventory_does_not_count_as_observed_usage(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": (
+                            "Available skills: token-optimizer, goal-state-harness, "
+                            "parallel-orchestration-harness, subagent-review-pipeline."
+                        ),
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertEqual(audit.coverage["observed_skills"], 0)
+        self.assertEqual(rows["token-optimizer"]["status"], "absent")
+        self.assertEqual(rows["goal-state-harness"]["status"], "absent")
+        self.assertEqual(rows["parallel-orchestration-harness"]["status"], "absent")
+
+    def test_skill_doc_and_catalog_outputs_do_not_count_as_runtime_usage(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "Exit code: 0\n"
+                            "---\n"
+                            "name: parallel-orchestration-harness\n"
+                            "description: Use when a task needs bounded parallel worker execution.\n"
+                            "---\n"
+                            "# Parallel Orchestration Harness\n"
+                            "## Support files\n"
+                            "## UAF implementation targets\n"
+                            "- src.orchestration.role_orchestrator\n"
+                            "parallel_wave_count fan-in fan-out"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "adapter_contract_harness command_output_harness "
+                            "parallel_orchestration_harness request_complexity_router "
+                            "subagent_review_pipeline workflow_usability_harness"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertEqual(rows["parallel-orchestration-harness"]["status"], "inspected")
+        self.assertEqual(rows["subagent-review-pipeline"]["status"], "inspected")
+        self.assertEqual(audit.coverage["runtime_applied_skills"], 0)
+
+    def test_stale_kh_cache_skill_read_failure_is_audit_issue(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "Exit code: 1\n"
+                            "Get-Content : 'C:\\Users\\KONEIT\\.codex\\plugins\\cache\\"
+                            "kh-uaf-marketplace\\kh-uaf\\2.9.25\\skills\\parallel_orchestration_harness\\SKILL.md' "
+                            "경로는 존재하지 않으므로 찾을 수 없습니다."
+                        ),
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "skill-catalog"
+                and issue["status"] == "stale_skill_cache_path"
+                and issue["severity"] == "P1"
+                for issue in audit.issues
+            )
+        )
+
     def test_kh_plugin_request_requires_front_door_before_source_work(self):
         path = self.write_session(
             [
@@ -474,6 +570,50 @@ class SessionSkillAuditTests(unittest.TestCase):
                 for issue in audit.issues
             )
         )
+
+    def test_kh_front_door_command_counts_as_front_door_evidence(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use the KH plugin for this source analysis.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python -m src.orchestration.kh_front_door "
+                            "--prompt \"Use the KH plugin for this source analysis.\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.cs",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "plugin-composition-policy"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+        self.assertIn("runtime_applied_skills", audit.coverage)
 
 
 if __name__ == "__main__":

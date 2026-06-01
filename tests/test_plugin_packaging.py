@@ -79,6 +79,7 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn("name: kh-uaf", content)
         self.assertIn("front-door auto routing", content)
         self.assertIn("Users should not need to name every harness", content)
+        self.assertIn("src.orchestration.kh_front_door", content)
         self.assertIn("python -m src.skills.uaf_skill_catalog --check", content)
         self.assertIn("skills/", content)
 
@@ -88,6 +89,8 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertEqual(manifest["name"], "kh-uaf")
         self.assertTrue(Path("skills").is_dir())
         self.assertTrue((Path("skills") / "goal_state_harness" / "SKILL.md").is_file())
+        skill_names = {skill["name"] for skill in manifest["skills"]}
+        self.assertIn("kh-front-door", skill_names)
 
     def test_readme_documents_codex_and_antigravity_install_paths(self):
         content = Path("README.md").read_text(encoding="utf-8")
@@ -105,6 +108,7 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn(".codex-plugin/plugin.json", content)
         self.assertIn("root `plugin.json`", content)
         self.assertIn("Offline output is smoke-only", content)
+        self.assertIn("src.orchestration.kh_front_door", content)
 
     def test_korean_readme_links_back_to_english_readme(self):
         content = Path("README.ko.md").read_text(encoding="utf-8")

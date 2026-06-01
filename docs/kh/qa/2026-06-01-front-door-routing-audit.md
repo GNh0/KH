@@ -40,6 +40,19 @@ The audit now emits a P1 issue:
 
 The fix also updates the root `SKILL.md`, the Antigravity/Codex wrapper skill, README files, and plugin default prompt so the contract is visible to hosts.
 
+Follow-up correction after reviewing the same failure mode:
+
+- Added `src.orchestration.kh_front_door` as an executable intake command.
+- The command resolves the current repo-local `skills/` folder or latest installed Codex cache, validates host-provided skill paths, and reports stale cache paths before any source work starts.
+- The command runs `compose_plugin_route(...)` and `classify_request(...)`, returns selected skills, and marks only the front-door modules as runtime-applied. Skills selected for later work are explicitly recorded as selected/skipped with rationale instead of being falsely claimed as executed.
+- `session-skill-audit` now accepts `python -m src.orchestration.kh_front_door ...` as front-door evidence and reports runtime-applied skill counts separately from passive observed skills.
+
+Recommended front-door command:
+
+```powershell
+python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
+```
+
 ## Verification Evidence
 
 Target session audit after the fix:

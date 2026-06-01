@@ -16,6 +16,11 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 
 ## Current Verified State
 
+- Latest active correction after 2.9.26 audit follow-up:
+  - Problem: a host can list KH skills but still fail to use them because it reads stale plugin cache paths or starts source work without a single executable intake step.
+  - Runtime fix: `src.orchestration.kh_front_door` now provides `python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary`.
+  - The front door resolves repo-local or latest installed cache skills, flags stale host-provided KH skill paths, runs plugin composition and request classification, returns recommended skills, and separates runtime-applied front-door modules from skills selected for later execution.
+  - Audit fix: `session-skill-audit` treats the front-door command as valid front-door evidence and exposes `runtime_applied_skills` separately from passive observed skills.
 - Latest active correction for 2.9.26:
   - Problem: session `019e8078-4bde-7813-a1db-5025a3881511` explicitly requested KH plugin usage for `C_KONE110_codex`, but source/work commands started before KH front-door routing evidence.
   - Product rule: users should not need to name every KH skill/harness. A request to use KH, KH UAF, KH plugin, KH skills/harnesses, or `/kh:*` must trigger front-door auto routing first.
