@@ -4,6 +4,14 @@ description: Use when Python code needs isolated syntax, runtime, or module veri
 ---
 # Harness Evaluator Skill
 
+## KH Entry Contract
+
+- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
+- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
+- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
+- Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
+
 This skill acts as a Tester/Evaluator for your code. It runs the code in an isolated subprocess with AST validation to prevent Remote Code Execution (RCE) and infinite loops.
 
 ## Support files

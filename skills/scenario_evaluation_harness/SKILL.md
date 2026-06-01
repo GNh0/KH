@@ -4,6 +4,14 @@ description: Use when validating KH UAF against repeated SIDE-style human usage 
 ---
 # Scenario Evaluation Harness
 
+## KH Entry Contract
+
+- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
+- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
+- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
+- Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
+
 This skill runs a deterministic scenario matrix that behaves like small SIDE groups: human-style users, domain experts, evidence/gate reviewers, resume reviewers, repeated multi-turn user probes, and KH-assistant SIDE transcript checks. It converts chatbot usage patterns into traceable regression data instead of relying on one-off manual impressions.
 
 Source label: Scenario evaluation harness.

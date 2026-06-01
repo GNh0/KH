@@ -48,6 +48,8 @@ front-door 결과는 다음을 구분해야 합니다.
 
 단순 개념 설명, 짧은 번역, 한 줄 답변처럼 light/direct로 분류되는 요청은 무겁게 처리하지 않습니다.
 
+사용자가 한 번이라도 "앞으로 KH 스킬/하네스를 적극적으로 써라", "항상 KH를 활용해라"처럼 대화나 프로젝트 범위의 지시를 했다면 이후 작업성 요청에는 `kh_active_directive=active`가 유지되어야 합니다. 후속 요청에서 KH 이름을 다시 말하지 않아도 front-door를 먼저 실행해야 하며, 이를 빼먹으면 `session-skill-audit`가 P1 누락으로 잡습니다.
+
 ## Codex 플러그인 설치
 
 Codex 앱에서 `Plugins -> Manage -> Add marketplace`를 열고 다음 값을 입력합니다.
@@ -141,7 +143,7 @@ python -B -m src.benchmarks.practical_quality_gate --summary
 
 Codex에서 플러그인을 업그레이드하기 전의 기존 세션과 서브에이전트는 이전 캐시를 계속 사용할 수 있습니다.
 
-예를 들어 배포가 `2.9.30`이어도 현재 세션이 `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.29`에서 시작했다면 새 스킬은 바로 적용되지 않을 수 있습니다.
+예를 들어 배포가 `2.9.32`이어도 현재 세션이 `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.31`에서 시작했다면 새 스킬은 바로 적용되지 않을 수 있습니다.
 
 이 경우:
 

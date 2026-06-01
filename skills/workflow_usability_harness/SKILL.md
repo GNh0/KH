@@ -5,6 +5,14 @@ description: Use when KH needs visible progress panels, progress-to-Compound han
 
 # Workflow Usability Harness
 
+## KH Entry Contract
+
+- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
+- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
+- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
+- Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
+
 This is a personal UAF usability harness. It turns the internal KH lifecycle into host-readable control surfaces so large work does not depend on the agent remembering hidden policy after context compression.
 
 When `workflow_usability_auto` is present in AgentLoop, app bridge, or workflow metadata, the UAF runtime applies this harness automatically after dispatch. The host still controls whether to display the panel, but the metadata and project artifacts are produced without a separate manual helper call.

@@ -580,6 +580,8 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     front_door_seen = False
     trigger_sample = ""
     trigger_kind = ""
+    kh_active_directive_seen = False
+    kh_active_directive_sample = ""
 
     for event in _session_payload_events(path):
         payload = event.get("payload", {})
@@ -590,11 +592,25 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         lowered = text.lower()
 
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
-            if _is_kh_front_door_request(lowered) or _is_automatic_intake_request(text):
+            active_directive = _is_kh_active_directive(text)
+            if active_directive:
+                kh_active_directive_seen = True
+                kh_active_directive_sample = _short(text)
+                if not _is_kh_active_followup_request(text):
+                    continue
+
+            if (
+                _is_kh_front_door_request(lowered)
+                or _is_automatic_intake_request(text)
+                or (kh_active_directive_seen and _is_kh_active_followup_request(text))
+            ):
                 waiting_for_front_door = True
                 front_door_seen = False
                 trigger_sample = _short(text)
-                trigger_kind = "explicit_kh" if _is_kh_front_door_request(lowered) else "automatic_intake"
+                if kh_active_directive_seen and not _is_kh_front_door_request(lowered):
+                    trigger_kind = "kh_active_directive"
+                else:
+                    trigger_kind = "explicit_kh" if _is_kh_front_door_request(lowered) else "automatic_intake"
             continue
 
         if not waiting_for_front_door:
@@ -617,10 +633,12 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                     "action": (
                         "For non-trivial work, first run KH front-door routing through always-on-front-door: inspect "
                         "the KH skill/root guide or skill catalog, classify the request, select a skill bundle automatically, and only then "
-                        "start source exploration or edits. Users should not need to name KH, skills, or harnesses."
+                        "start source exploration or edits. Users should not need to name KH, skills, or harnesses. "
+                        "If an earlier user message requested active KH skill/harness use, carry that kh_active_directive into later work-bearing turns."
                     ),
                     "trigger_kind": trigger_kind,
                     "trigger": trigger_sample,
+                    "kh_active_directive": kh_active_directive_sample if trigger_kind == "kh_active_directive" else "",
                     "first_work": _short(text),
                 }
             )
@@ -710,6 +728,95 @@ def _is_kh_front_door_request(lowered: str) -> bool:
             "사용",
             "써",
             "쓰",
+        ]
+    )
+
+
+def _is_kh_active_directive(text: str) -> bool:
+    lowered = text.lower()
+    if not any(marker in lowered for marker in ["kh", "uaf"]):
+        return False
+    if not any(marker in lowered for marker in ["skill", "skills", "harness", "harnesses", "스킬", "하네스"]):
+        return False
+    if not any(
+        marker in lowered
+        for marker in [
+            "use",
+            "using",
+            "apply",
+            "applied",
+            "활용",
+            "사용",
+            "쓰",
+            "적용",
+            "불러",
+        ]
+    ):
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "always",
+            "default",
+            "by default",
+            "keep using",
+            "actively",
+            "active",
+            "subsequent",
+            "future",
+            "later",
+            "without mentioning",
+            "do not require",
+            "앞으로",
+            "항상",
+            "기본",
+            "계속",
+            "적극",
+            "후속",
+            "나중",
+            "언급하지",
+            "명시하지",
+        ]
+    )
+
+
+def _is_kh_active_followup_request(text: str) -> bool:
+    if _is_automatic_intake_request(text):
+        return True
+    lowered = text.lower()
+    if _is_kh_front_door_evidence(lowered):
+        return False
+    if "?" in text and not any(marker in lowered for marker in ["check", "verify", "review", "봐", "확인", "검증"]):
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "continue",
+            "finish",
+            "handle",
+            "work on",
+            "do it",
+            "make it",
+            "update",
+            "fix",
+            "verify",
+            "review",
+            "test",
+            "commit",
+            "push",
+            "처리",
+            "작업",
+            "진행",
+            "마무리",
+            "수정",
+            "고쳐",
+            "만들",
+            "확인",
+            "검증",
+            "테스트",
+            "커밋",
+            "푸쉬",
+            "업데이트",
         ]
     )
 
@@ -943,8 +1050,12 @@ def _observations(texts: List[str], aliases: Set[str], skill_name: str) -> Dict[
         passive = _is_passive_text(text)
         clean_text = _strip_passive_prefix(text)
         lowered = clean_text.lower()
-        alias_hit = any(alias.lower() in lowered for alias in aliases)
-        runtime_hit = any(marker.lower() in lowered for marker in runtime_markers)
+        front_door_status = _front_door_skill_status(clean_text, skill_name)
+        alias_hit = bool(front_door_status) or any(alias.lower() in lowered for alias in aliases)
+        runtime_hit = (
+            front_door_status == "applied"
+            or (not front_door_status and any(marker.lower() in lowered for marker in runtime_markers))
+        )
         if not alias_hit and not runtime_hit:
             continue
         mentions += 1
@@ -952,9 +1063,13 @@ def _observations(texts: List[str], aliases: Set[str], skill_name: str) -> Dict[
             inspections += 1
         if passive:
             passive_references += 1
-        if not passive and (runtime_hit or _explicit_application(lowered, aliases)):
+        explicit_hit = False if front_door_status and front_door_status != "applied" else _explicit_application(lowered, aliases)
+        if not passive and (runtime_hit or explicit_hit):
             runtime_hits += 1
-        if not passive and any(marker in lowered for marker in ["considered_not_needed", "skipped_with_rationale", "blocked", "passthrough"]):
+        if not passive and (
+            front_door_status in {"selected", "considered", "skipped", "blocked"}
+            or any(marker in lowered for marker in ["considered_not_needed", "skipped_with_rationale", "blocked", "passthrough"])
+        ):
             considered += 1
         if len(evidence) < 8:
             evidence.append(_short(clean_text))
@@ -979,6 +1094,44 @@ def _observations(texts: List[str], aliases: Set[str], skill_name: str) -> Dict[
         "evidence": evidence,
         "active_evidence": active_evidence,
     }
+
+
+def _front_door_skill_status(text: str, skill_name: str) -> str:
+    data = _front_door_json(text)
+    if not data:
+        return ""
+    runtime_applied = {str(item) for item in data.get("runtime_applied_skills", []) or []}
+    if skill_name in runtime_applied:
+        return "applied"
+    selected = {str(item) for item in data.get("selected_not_executed_skills", []) or []}
+    if skill_name in selected:
+        return "selected"
+    status_summary = data.get("skill_status_summary", {}) or {}
+    if isinstance(status_summary, dict) and skill_name in status_summary:
+        summary = status_summary.get(skill_name, {}) or {}
+        status = str(summary.get("status", ""))
+        if status == "applied":
+            return "applied"
+        if status == "blocked":
+            return "blocked"
+        if status:
+            return "skipped"
+    return ""
+
+
+def _front_door_json(text: str) -> Dict[str, Any]:
+    lowered = text.lower()
+    if not _looks_like_front_door_runtime_output(lowered):
+        return {}
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _acceptance_for_skill(
@@ -1150,6 +1303,8 @@ def _explicit_application(lowered: str, aliases: Set[str]) -> bool:
 def _passive_reference(lowered: str) -> bool:
     if lowered.startswith(PASSIVE_REFERENCE_PREFIX):
         return True
+    if _looks_like_front_door_runtime_output(lowered):
+        return False
     if _looks_like_skill_doc_output(lowered):
         return True
     if _looks_like_skill_catalog_listing(lowered):
@@ -1171,6 +1326,15 @@ def _passive_reference(lowered: str) -> bool:
     if "\\plugins\\cache\\" in lowered and "\\skills\\" in lowered:
         return True
     return False
+
+
+def _looks_like_front_door_runtime_output(lowered: str) -> bool:
+    return (
+        "front_door_status" in lowered
+        and "runtime_applied_skills" in lowered
+        and "selected_not_executed_skills" in lowered
+        and "skill_status_summary" in lowered
+    )
 
 
 def _looks_like_skill_doc_output(lowered: str) -> bool:

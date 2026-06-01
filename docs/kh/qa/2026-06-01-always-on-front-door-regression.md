@@ -1,29 +1,24 @@
 # Always-On Front Door Regression Audit
 
 Date: 2026-06-01
-Branch: codex-runtime
+Branches: main, codex-runtime
 
 ## Problem
 
 Fresh Codex sessions had KH UAF skills available but still performed ordinary work without entering KH front-door intake. This made `automatic-intake-harness` too easy to miss unless the user explicitly named KH or a harness.
 
-The key failing session was:
+The key failing sessions were:
 
 - `019e8178-ac99-7800-a024-0969f49b6285`
+- `019e813d-c26b-7d82-82df-d6f052c83dc7`
 
-Session audit result before this change:
-
-- `observed_skills: 0`
-- `runtime_applied_skills: 0`
-- `required_skills: 13`
-- `required_missing_evidence: 13`
-- `issue_count: 15`
-
-The session contained KH UAF skills in the host skill list, but plugin `defaultPrompt` was not present in the live session payload. Therefore manifest prompt text cannot be treated as a reliable always-on execution mechanism.
+Both sessions contained KH UAF skills in the host skill list, but they produced no front-door runtime evidence.
 
 ## Root Cause
 
-The installed plugin exposed many KH skills, but the host still had to choose one based on skill metadata. `automatic-intake-harness` described the right behavior, but it competed with more concrete skills such as image/browser/document/code workflows. In blind ordinary requests, the model could pick the concrete output skill first and never run KH front-door.
+The installed plugin exposed many KH skills, but the host still had to choose one based on skill metadata. `automatic-intake-harness` described the right behavior, but it competed with more concrete skills such as browser, document, code, or app workflows. In blind ordinary requests, the model could pick the concrete output skill first and never run KH front-door.
+
+Manifest `defaultPrompt` is useful but cannot be treated as reliable runtime evidence. Some historical sessions showed KH skills in the available list while no plugin default prompt text was present in the live payload.
 
 ## Change
 
@@ -38,11 +33,19 @@ Runtime and audit wiring were updated:
 
 - `src.orchestration.kh_front_door.FRONT_DOOR_SKILLS`
 - `src.orchestration.session_skill_audit`
+- `src.orchestration.request_classifier`
 - `src.skills.uaf_skill_catalog`
 - `src.skills.uaf_skill_quality`
 - `src.skills.demo_scenarios`
 - `src.orchestration.interactive_side_evaluator`
 - plugin manifests and README surfaces
+
+Follow-up hardening after a live 2.9.30 blind subagent run:
+
+- `session_skill_audit` treats `kh_front_door` JSON output from an installed Codex plugin cache path as runtime evidence instead of passive SKILL.md/cache text.
+- `session_skill_audit` separates skills in `runtime_applied_skills` from skills in `selected_not_executed_skills`, so selected follow-up harnesses are not inflated into runtime execution.
+- `request_classifier` no longer treats the Korean word `실행` by itself as a destructive action.
+- UI requests such as filter-button behavior with residual-risk notes stay software work instead of security high-risk.
 
 ## Acceptance Criteria
 
@@ -51,17 +54,61 @@ Runtime and audit wiring were updated:
 - Front-door summary includes `always-on-front-door` in `runtime_applied_skills`.
 - Session audit flags non-trivial work that starts without front-door as a P1 `always-on-front-door` miss.
 - Blind post-upgrade subagent sessions are tested with ordinary prompts that do not mention KH, UAF, skill, harness, or front-door.
+- Front-door runtime output from `kh-uaf/2.9.30` cache paths is accepted as active runtime evidence.
+- Selected follow-up harnesses are reported as selected or skipped, not as runtime applied.
 
 ## Local Verification
 
 - `python -B -m src.skills.uaf_skill_catalog --check`: passed, `40 valid / 0 invalid`.
 - `python -B skills\always_on_front_door\scripts\smoke_check.py`: passed, including a packaged test reference for the slim runtime branch.
 - `python -B skills\always_on_front_door\scripts\demo.py --output-dir <external temp>`: passed, with success and stale-cache blocked cases.
-- `python -B -m src.orchestration.kh_front_door --prompt "간단한 웹 대시보드 하나 만들고 검증까지 해줘" --project <target> --host codex --summary`: passed, `runtime_applied_skills` included `always-on-front-door`, `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`.
+- `python -B -m src.orchestration.kh_front_door --prompt "<ordinary dashboard request>" --project <target> --host codex --summary`: passed, `runtime_applied_skills` included `always-on-front-door`, `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`.
 - `python -B -m src.orchestration.session_skill_audit <019e8178...jsonl> --summary`: failed the historical session as expected and now reports `always-on-front-door` as required/missing.
-- `python -B -m src.orchestration.plugin_install_audit --summary --repo <repo>`: `attention_required` until Codex upgrades from installed `2.9.29` to source `2.9.30`.
-- `python -B -m src.skills.uaf_skill_quality --summary`: still fails overall on `codex-runtime` because this slim branch does not package full test files and several pre-existing core skills score below the strict 9.0 gate; `always-on-front-door` is no longer in `low_quality_skills` after support-file and packaged-test-reference hardening.
+- `python -B -m src.orchestration.plugin_install_audit --summary --repo <repo>` after user upgrade: `ok`, installed cache `2.9.30`, expected source version `2.9.30`.
+- `python -B -m unittest discover -s tests`: passed, `488 tests`.
+- `python -B -m src.skills.uaf_skill_quality --summary`: passed, `40 valid`, `lowest_quality_score: 9.3`, `low_quality_skills: []`.
+- `python -B -m src.benchmarks.kh_bench_verified --summary`: passed, `8/8`.
+- `python -B -m src.benchmarks.practical_quality_gate --summary`: passed, `release_ready: true`, `practical_confidence_score: 10.0`.
+
+## 2.9.32 Structure Rework
+
+The first implementation still left KH too dependent on a model voluntarily remembering long skill text. The 2.9.32 rework makes the entry loop more Superpowers-like:
+
+- The Codex plugin `defaultPrompt` was rewritten around a short `KH ENTRY LOOP` instead of a long feature inventory.
+- All 40 packaged `SKILL.md` files now contain a common `## KH Entry Contract`.
+- The shared contract says every non-trivial turn starts through `always-on-front-door`, `kh_active_directive=active` carries across later work-bearing turns, selected skills are not execution evidence, and a skill is `applied` only after concrete runtime/gate/artifact/passthrough/blocked evidence.
+- `session_skill_audit` now detects a prior "actively use KH skills/harnesses" instruction and flags later ordinary work that skips front-door as `trigger_kind: kh_active_directive`.
+- Tests lock this down through `test_all_packaged_skills_share_kh_entry_contract` and the new `kh_active_directive` session-audit cases.
+
+Verification after this rework:
+
+- `python -B -m unittest discover -s tests`: passed, `488 tests`.
+- `python -B -m src.skills.uaf_skill_catalog --check`: passed, `40 valid / 0 invalid`.
+- `python -B -m src.skills.uaf_skill_quality --summary`: passed, `lowest_quality_score: 9.3`, `low_quality_skills: []`.
+- `python -B -m src.benchmarks.kh_bench_verified --summary`: passed, `8/8`.
+- `python -B -m src.benchmarks.practical_quality_gate --summary`: passed, `release_ready: true`.
+- `git diff --check`: passed.
+
+## Blind Subagent Verification
+
+Blind prompt sent to subagent `019e81b8-e19c-7b01-add2-ee6957be73c9` did not mention KH, UAF, skill, harness, or front-door. It only asked for a small static KPI dashboard under `C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindAutoRoute_20260601_A`.
+
+Evidence:
+
+- Active session skill list used installed cache paths under `kh-uaf/2.9.30`.
+- The subagent inspected `always-on-front-door` and `automatic-intake-harness` without being told to do so.
+- The subagent ran `python -m src.orchestration.kh_front_door ...` from `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.30`.
+- The front-door output reported `front_door_status: ok`.
+- Runtime-applied front-door skills were `always-on-front-door`, `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`.
+- Generated deliverable files were created only in the requested target folder.
+- Local verification report passed static file checks, no external dependencies, KPI data/cards/table checks, and filter-button simulation.
+
+Post-fix session audit of that same blind run:
+
+- `runtime_applied_skill_names` includes `always-on-front-door`, `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`.
+- `selected_not_executed_skills` are no longer counted as runtime applied.
+- The remaining audit findings are about follow-up harnesses not fully executed, not about missing front-door intake.
 
 ## Residual Risk
 
-This patch improves host-visible skill selection, but it cannot force the Codex host to load or obey a skill. If a blind fresh session still ignores `always-on-front-door`, the remaining fix needs a Codex host-level always-on hook or marketplace/runtime prompt injection behavior, not another README claim.
+This patch proves the upgraded 2.9.30 plugin can be selected automatically in a blind subagent session. It still cannot force the Codex host to load or obey a skill in every possible future session. If a fresh session has no KH UAF skills in its available skill list, the remaining fix is host/plugin loading. If it loads KH but skips all front-door evidence again, `session_skill_audit` should now flag that as a P1 `always-on-front-door` miss.

@@ -14,6 +14,8 @@ Use it before any more specific skill when a request includes one or more of:
 
 Do not use it for clearly light direct answers such as a definition, translation, one-line command explanation, or a tiny fact where no artifact, command, state, or verification evidence is needed.
 
+Persistent directive: if an earlier message in the same conversation or project says to actively, always, by default, or continuously use KH/UAF skills or harnesses, later work-bearing requests should be treated as `kh_active_directive=active` even when the later wording omits KH names. The active directive ends only when the user explicitly opts out.
+
 Execution level: `python-module`.
 
 Implementation targets:
@@ -33,6 +35,7 @@ actual_runtime_path: `src.orchestration.kh_front_door.build_kh_front_door` or `p
 - `prompt`: the user's request as written.
 - `project`: the current working directory or explicit target project path.
 - `host`: `codex`, `antigravity`, `claude-code`, or `local`.
+- `kh_active_directive`: active/inactive, including the earlier user message that established it when available.
 - optional `host_skill_paths`: host-provided skill file paths that may need stale-cache checking.
 
 ## Execution pattern
@@ -56,6 +59,7 @@ Then:
 Minimum evidence for a non-trivial request:
 
 - `front_door_status: ok`
+- `kh_active_directive` status when carryover from a previous turn is in force
 - classification with complexity, domain, confidence, and recommended execution
 - plugin route
 - `runtime_applied_skills`

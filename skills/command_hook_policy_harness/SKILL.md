@@ -5,6 +5,14 @@ description: Use when defining UAF command rewrite hooks, trust checks, permissi
 
 # Command Hook Policy Harness
 
+## KH Entry Contract
+
+- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
+- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
+- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
+- Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
+
 This is a personal UAF hook and permission harness for command rewrite, trust, and safety policy. It must not install or require external hooks by default.
 
 ## Support files

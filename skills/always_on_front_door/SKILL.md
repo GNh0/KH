@@ -5,6 +5,14 @@ description: Use when any non-trivial Codex, Antigravity-style, Claude Code, or 
 
 # Always On Front Door
 
+## KH Entry Contract
+
+- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
+- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
+- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
+- Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
+
 This is the host-visible bootstrap skill for KH UAF. Its job is to make automatic intake harder to miss in ordinary sessions where the user asks for real work without naming KH internals.
 
 ## Support files
@@ -18,20 +26,22 @@ This is the host-visible bootstrap skill for KH UAF. Its job is to make automati
 
 1. Before using any other non-trivial skill or plugin, decide whether the user request is direct/light or work-bearing.
 2. Work-bearing means project files, code changes, generated assets/documents, long logs, review, QA, verification, subagents, persistence, branch work, or risky commands.
-3. If work-bearing, run KH front-door intake before source reads, shell exploration, image generation, document generation, browser QA, or subagent dispatch:
+3. If an earlier message in the same conversation or project asked the assistant to actively, always, or by default use KH/UAF skills or harnesses, keep `kh_active_directive=active` for later work-bearing turns until the user explicitly opts out.
+4. If work-bearing, run KH front-door intake before source reads, shell exploration, image generation, document generation, browser QA, or subagent dispatch:
 
 ```bash
 python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
 ```
 
-4. Treat only the intake command's `runtime_applied_skills` as executed.
-5. Treat `selected_not_executed_skills` as selected follow-up work until concrete module, gate, artifact, command-output, or passthrough evidence exists.
-6. If the command is unavailable, explicitly record `blocked` with the missing path or import error before continuing.
-7. When another plugin is also useful, apply front-door first, then route by capability; do not let image/browser/document/code skills bypass intake.
+5. Treat only the intake command's `runtime_applied_skills` as executed.
+6. Treat `selected_not_executed_skills` as selected follow-up work until concrete module, gate, artifact, command-output, or passthrough evidence exists.
+7. If the command is unavailable, explicitly record `blocked` with the missing path or import error before continuing.
+8. When another plugin is also useful, apply front-door first, then route by capability; do not let image/browser/document/code skills bypass intake.
 
 ## Required outputs
 
 - `front_door_status`, request classification, and plugin route.
+- `kh_active_directive` as active/inactive when the user has asked for persistent KH skill/harness use in the conversation or project.
 - `runtime_applied_skills` and `selected_not_executed_skills`.
 - `skill_status_summary` with applied, selected, skipped, or blocked status.
 - A short note when a request is intentionally direct/light and no KH runtime work is needed.
@@ -42,6 +52,7 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 - Do not assume plugin `defaultPrompt` was injected into the live session.
 - Do not count a SKILL.md read, plugin listing, or marketplace metadata as runtime application.
 - Do not ask the user to name KH skills before applying this bootstrap.
+- Do not forget a prior "actively use KH skills/harnesses" instruction just because the later task wording omits KH names.
 
 ## UAF implementation targets
 
