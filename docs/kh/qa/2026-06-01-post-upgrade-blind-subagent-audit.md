@@ -104,25 +104,26 @@ Trigger: A new ordinary Codex session, `019e813d-c26b-7d82-82df-d6f052c83dc7`, w
 
 ### Local Marketplace Configuration Finding
 
-The Codex marketplace config did not point at the active development branch:
-
 - Config file: `C:\Users\KONEIT\.codex\config.toml`
 - Marketplace block: `[marketplaces.kh-uaf-marketplace]`
-- Previous local ref: `main`
-- Previous local revision: `078adea27a0f0e2db15fb511b97e69341a785dd6`
+- Expected local marketplace ref: `main`
+- Local marketplace revision observed: `078adea27a0f0e2db15fb511b97e69341a785dd6`
 - Installed cache present during the audit: `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.27`
-- Active source branch with the latest fixes: `codex-runtime`
-- Active source revision: `c42892c6824d2aa4aa143665f7d40e49ec6d28f0`
+- Marketplace descriptor checked: `.agents/plugins/marketplace.json`
+- Plugin source ref in marketplace descriptor: `codex-runtime`
+- Active source revision at the time of the audit: `c42892c6824d2aa4aa143665f7d40e49ec6d28f0`
 - Active source plugin version: `2.9.28`
 
-The repository marketplace file already points to `codex-runtime`, but the user's local Codex config still held the older `main` ref from the prior marketplace add. This means pressing upgrade against that local config could keep reinstalling the `main` line instead of the newer `codex-runtime` line.
+Correction: the local Codex marketplace `ref = "main"` is expected for this setup. It fetches the marketplace descriptor from `main`; the descriptor itself already points the `kh-uaf` plugin source at `codex-runtime`. Therefore `ref = "main"` is not evidence that the plugin should reinstall from `main`.
 
-Local corrective action performed:
+Temporary local action and correction:
 
-- Backed up `C:\Users\KONEIT\.codex\config.toml` to `C:\Users\KONEIT\.codex\config.toml.kh-uaf-ref-backup`.
-- Changed local marketplace ref from `main` to `codex-runtime`.
+- The marketplace ref was briefly changed from `main` to `codex-runtime` during the audit because the marketplace-ref layer was misread as the plugin-source layer.
+- This was incorrect for the user's intended marketplace setup.
+- The config was restored to `ref = "main"`.
+- A backup remains at `C:\Users\KONEIT\.codex\config.toml.kh-uaf-ref-backup`.
 
-This does not hot-reload the active Codex session skill list. A fresh marketplace upgrade/reload is still required before new sessions reliably receive plugin version `2.9.28`.
+The remaining live issue is not that the marketplace ref was `main`. The remaining issue is that the active Codex session and installed cache still exposed plugin `2.9.27` during the test. A fresh marketplace upgrade/reload must be verified by checking the installed cache path and the active session skill list for `2.9.28`.
 
 ### Session `019e813d-c26b-7d82-82df-d6f052c83dc7`
 
@@ -201,6 +202,6 @@ The post-upgrade state is mixed:
 - Controller-mediated routing works.
 - One blind subagent picked up KH intake.
 - Another blind subagent and the user's separate plain dashboard session did not pick up KH intake.
-- The local Codex marketplace config was stale and still pointed at `main`, so the current installed cache was `2.9.27` even though the active fix branch is `codex-runtime` with plugin version `2.9.28`.
+- The installed cache and active session skill list still exposed `2.9.27` during the audit even though the marketplace descriptor points the plugin source at `codex-runtime`, where `2.9.28` was available.
 
 Therefore KH UAF should not claim that blind automatic adoption is solved. The honest claim is that automatic-intake instructions and audit tooling exist, but host/subagent compliance is still not deterministic unless the controller runs front-door intake before delegation or the Codex host provides a hard preflight hook.
