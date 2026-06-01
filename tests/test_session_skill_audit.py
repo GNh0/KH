@@ -696,7 +696,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_kh_plugin_request_passes_when_front_door_runs_first(self):
+    def test_skill_catalog_or_doc_read_does_not_satisfy_front_door_order(self):
         path = self.write_session(
             [
                 {
@@ -713,6 +713,75 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "type": "function_call",
                         "name": "shell_command",
                         "arguments": "python -m src.skills.uaf_skill_catalog --list",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "---\n"
+                            "name: always-on-front-door\n"
+                            "description: Use when any non-trivial request should be handled first.\n"
+                            "---\n"
+                            "# Always On Front Door\n"
+                            "Required outputs include front_door_status and runtime_applied_skills."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "plugin_composition selected KH as controller, "
+                            "request_complexity classification=medium, "
+                            "skill_application bundle recorded considered_not_needed entries."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.cs",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
+    def test_kh_plugin_request_passes_when_front_door_runs_first(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use the KH plugin for this source analysis.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python -m src.orchestration.kh_front_door "
+                            "--prompt \"Use the KH plugin for this source analysis.\" --summary"
+                        ),
                     },
                 },
                 {

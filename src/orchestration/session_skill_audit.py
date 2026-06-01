@@ -616,7 +616,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         if not waiting_for_front_door:
             continue
 
-        if _is_kh_front_door_evidence(lowered):
+        if _is_front_door_order_evidence(payload, lowered):
             front_door_seen = True
             continue
 
@@ -628,12 +628,13 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                     "severity": "P1",
                     "reason": (
                         "A KH-capable session started non-trivial source/work commands before "
-                        "always-on front-door intake, skill catalog, request classification, or skill bundle evidence."
+                        "always-on front-door runtime intake."
                     ),
                     "action": (
-                        "For non-trivial work, first run KH front-door routing through always-on-front-door: inspect "
-                        "the KH skill/root guide or skill catalog, classify the request, select a skill bundle automatically, and only then "
-                        "start source exploration or edits. Users should not need to name KH, skills, or harnesses. "
+                        "For non-trivial work, the first standalone work-bearing tool call must run "
+                        "`python -m src.orchestration.kh_front_door ... --summary`, or record an explicit blocked/direct rationale. "
+                        "Reading SKILL.md, listing the catalog, mentioning always-on-front-door, or running target-folder checks in the "
+                        "same pre-intake batch does not satisfy the entry contract. Users should not need to name KH, skills, or harnesses. "
                         "If an earlier user message requested active KH skill/harness use, carry that kh_active_directive into later work-bearing turns."
                     ),
                     "trigger_kind": trigger_kind,
@@ -966,6 +967,22 @@ def _is_kh_front_door_evidence(lowered: str) -> bool:
             "workflow_usability_auto",
         ]
     )
+
+
+def _is_front_door_order_evidence(payload: Dict[str, Any], lowered: str) -> bool:
+    payload_type = str(payload.get("type", ""))
+    tool_name = str(payload.get("name", "")).lower()
+    if payload_type in {"function_call", "custom_tool_call"}:
+        if tool_name in {"shell_command", "functions.shell_command"}:
+            return (
+                "src.orchestration.kh_front_door" in lowered
+                or " -m src.orchestration.kh_front_door" in lowered
+                or "python -m src.orchestration.kh_front_door" in lowered
+            )
+        return False
+    if payload_type == "function_call_output":
+        return _looks_like_front_door_runtime_output(lowered)
+    return False
 
 
 def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:

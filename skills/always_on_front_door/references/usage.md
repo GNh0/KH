@@ -12,7 +12,7 @@ Use it before any more specific skill when a request includes one or more of:
 - command output, logs, review, QA, tests, or verification
 - subagents, delegation, persistence, memory, branch finishing, or risky commands
 
-Target-folder checks, `Test-Path`, `Get-ChildItem`, `rg`, file reads, MEMORY.md searches, browser/document/image actions, and plugin-specific work are already work exploration. They must happen after this front-door step unless the request is light/direct or the front-door command is unavailable and the blocked rationale is recorded first.
+Target-folder checks, `Test-Path`, `Get-ChildItem`, `rg`, file reads, MEMORY.md searches, browser/document/image actions, and plugin-specific work are already work exploration. They must happen after this front-door step unless the request is light/direct or the front-door command is unavailable and the blocked rationale is recorded first. Do not run those checks in the same parallel batch as the front-door command; the front-door command or blocked/direct rationale must be the first standalone work-bearing action.
 
 Do not use it for clearly light direct answers such as a definition, translation, one-line command explanation, or a tiny fact where no artifact, command, state, or verification evidence is needed.
 
@@ -86,6 +86,6 @@ If a different skill starts first:
 
 ## Quality bar
 
-This skill succeeds only when it changes execution order. Reading this file, listing installed plugins, or mentioning KH does not count. The next non-trivial action must be the front-door command or an explicit blocked/direct rationale.
+This skill succeeds only when it changes execution order. Reading this file, listing installed plugins, mentioning KH, or saying "I will use always-on-front-door" does not count. The next non-trivial action must be the front-door command or an explicit blocked/direct rationale.
 
 The skill should be reviewed against `tests.test_kh_front_door_always_on` in a full source checkout. In a slim runtime branch where `tests/` is intentionally not packaged, that target is a packaged test reference and still documents the expected regression test.
