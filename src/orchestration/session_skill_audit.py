@@ -48,28 +48,24 @@ RUNTIME_MARKERS = {
         "compound_handoff",
     ],
     "development-lifecycle-harness": [
+        "development_lifecycle",
         "progress.json",
-        "RED",
-        "GREEN",
-        "workspace_strategy",
-        "task_status",
+        "tdd_red_green",
+        "development lifecycle applied",
     ],
     "worktree-isolation-harness": [
-        "worktree-isolation-harness",
         "workspace_strategy",
         "project-local-worktree",
         "host-worktree",
         ".worktrees",
     ],
     "plan-execution-harness": [
-        "plan-execution-harness",
         "progress.json",
         "active task",
         "next_task",
         "task_status",
     ],
     "systematic-debugging-harness": [
-        "systematic-debugging-harness",
         "root cause",
         "hypothesis",
         "debug_status",
@@ -80,7 +76,7 @@ RUNTIME_MARKERS = {
         "goal_ledger",
         "create_goal",
         "update_goal",
-        "evidence_required",
+        "goal_state applied",
     ],
     "compound-engineering-harness": [
         "CompoundCapture",
@@ -89,15 +85,14 @@ RUNTIME_MARKERS = {
         "progress_compound_bridge",
     ],
     "workflow-skill-distiller": [
-        "workflow-skill-distiller",
         "skill_candidates",
         "distilled skill",
     ],
     "subagent-review-pipeline": [
-        "subagent",
+        "subagent_strategy",
         "spec-reviewer",
         "code-quality-reviewer",
-        "reviewer",
+        "WorkflowTaskResult",
     ],
     "role-execution-audit-harness": [
         "role_execution_audit",
@@ -105,35 +100,31 @@ RUNTIME_MARKERS = {
         "role execution audited",
     ],
     "parallel-orchestration-harness": [
-        "parallel",
         "spawn_agent",
         "create_agent",
         "parallel_wave_count",
-        "worktree",
+        "fan-out",
+        "fan-in",
     ],
     "quality-gates-harness": [
         "TDD",
         "RED/GREEN",
         "failing-first",
-        "test passed",
-        "verification",
+        "quality_gate",
     ],
     "qa-gate-harness": [
         "qa gate",
-        "QA",
         "browser qa",
         "manual test",
-        "verification",
+        "qa_evidence",
     ],
     "verification-before-completion-harness": [
-        "verification-before-completion-harness",
         "fresh verification",
         "verification_status",
         "completion_claim",
         "verification_claim_guard",
     ],
     "branch-finishing-harness": [
-        "branch-finishing-harness",
         "branch_finish_status",
         "commit_sha",
         "git push",
@@ -143,14 +134,14 @@ RUNTIME_MARKERS = {
         "review gate",
         "review_status",
         "with fixes",
-        "findings",
+        "review_gate applied",
     ],
     "command-output-harness": [
-        "command output",
-        "exit code",
-        "stderr",
-        "stdout",
-        "returncode",
+        "summarize_command_output",
+        "compression_policy",
+        "command_output_harness",
+        "tokens saved",
+        "preserved_fact",
     ],
     "harness-evaluator": [
         "py_compile",
@@ -159,29 +150,26 @@ RUNTIME_MARKERS = {
         "pytest",
     ],
     "guard-policy-harness": [
-        "destructive",
-        "permission",
-        "approval",
-        "secret",
-        "delete",
+        "guard_policy",
+        "guard_evidence",
+        "destructive-command",
+        "permission gate",
+        "edit boundary",
     ],
     "snapshot-state-harness": [
         "SnapshotManager",
-        "snapshot",
+        "snapshot_state",
         "rollback",
-        "worktree",
+        "snapshot manifest",
     ],
     "request-complexity-router": [
         "request_complexity",
         "classify_request",
-        "light",
-        "medium",
-        "heavy",
+        "request classification",
     ],
     "plugin-composition-policy": [
         "plugin_composition",
-        "plugin-composition-policy",
-        "controller",
+        "compose_plugin_route",
         "assistant provider",
     ],
     "skill-catalog": [
@@ -193,7 +181,6 @@ RUNTIME_MARKERS = {
     "scenario-evaluation-harness": [
         "scenario_evaluator",
         "SIDE",
-        "scenario",
         "regression",
     ],
 }
@@ -1061,13 +1048,9 @@ def _passive_reference(lowered: str) -> bool:
 
 
 def _looks_like_skill_doc_output(lowered: str) -> bool:
-    return (
-        "---" in lowered
-        and "name:" in lowered
-        and "description: use when" in lowered
-        and "## support files" in lowered
-        and "## uaf implementation targets" in lowered
-    )
+    if "---" in lowered and "name:" in lowered and "description: use when" in lowered:
+        return True
+    return "usage reference" in lowered and "when to use" in lowered and "uaf" in lowered
 
 
 def _looks_like_skill_catalog_listing(lowered: str) -> bool:
