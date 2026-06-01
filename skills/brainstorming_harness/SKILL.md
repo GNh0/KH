@@ -37,7 +37,7 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 
 ## Core Flow
 
-1. Inspect current project context first when a repository exists.
+1. After front-door routing, inspect only the explicit target project/folder when it exists. If the target folder does not exist yet, create or plan inside that exact target; do not list the parent directory or read sibling folders from earlier tests/runs.
 2. If the next choices are visual, offer a visual companion in its own message.
 3. Ask one question at a time. Prefer 2-3 clear choices with a recommendation.
 4. Capture decisions as structured records: `objective`, `target_user`, `problem`, `options`, `recommendation`, `constraints`, `decisions`, and `open_questions`.
@@ -98,6 +98,7 @@ Pressure scenario: a user says "I want to build a SaaS." The agent should not sc
 - Do not ask a batch of broad questions at once. One question at a time keeps the user in control.
 - Do not use this harness to delay obvious small tasks.
 - Do not store private or sensitive business assumptions outside the selected project/conversation scope.
+- Do not read previous scenario folders, sibling workspaces, or older brainstorm outputs to seed a new brainstorming target unless the user explicitly asks for reuse, comparison, or migration.
 
 ## Required outputs
 
@@ -116,3 +117,4 @@ Pressure scenario: a user says "I want to build a SaaS." The agent should not sc
 - Asking five questions at once.
 - Presenting only one approach before recommending it.
 - Losing product names, repo decisions, or MVP scope during context compression.
+- Letting sibling test outputs or earlier run folders influence a new brainstorm without explicit user permission.

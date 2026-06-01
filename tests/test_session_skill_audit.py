@@ -908,6 +908,105 @@ class SessionSkillAuditTests(unittest.TestCase):
         )
         self.assertIn("runtime_applied_skills", audit.coverage)
 
+    def test_sibling_run_read_is_cross_scope_context_leak(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            r"C:\Users\KONEIT\Desktop\Jang\SKillsTest\BrainstormAutoRoute_20260601_F "
+                            "folder needs independent brainstorming."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python -m src.orchestration.kh_front_door "
+                            "--prompt \"independent brainstorming\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            r"rg -n ""추천|리스크"" "
+                            r"'C:\Users\KONEIT\Desktop\Jang\SKillsTest\BrainstormAutoRoute_20260601_E'"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "guard-policy-harness"
+                and issue["status"] == "cross_scope_context_leak"
+                and "BrainstormAutoRoute_20260601_E" in " ".join(issue.get("samples", []))
+                for issue in audit.issues
+            )
+        )
+
+    def test_exact_target_read_is_not_cross_scope_context_leak(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            r"C:\Users\KONEIT\Desktop\Jang\SKillsTest\BrainstormAutoRoute_20260601_F "
+                            "folder needs independent brainstorming."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python -m src.orchestration.kh_front_door "
+                            "--prompt \"independent brainstorming\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            r"Get-ChildItem -LiteralPath "
+                            r"'C:\Users\KONEIT\Desktop\Jang\SKillsTest\BrainstormAutoRoute_20260601_F'"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "guard-policy-harness"
+                and issue["status"] == "cross_scope_context_leak"
+                for issue in audit.issues
+            )
+        )
+
     def test_kh_front_door_output_from_plugin_cache_counts_as_runtime_status_split(self):
         front_door_output = {
             "front_door_status": "ok",

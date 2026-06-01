@@ -1,6 +1,6 @@
 ---
 name: kh-uaf
-description: Use before non-trivial Antigravity-style workspace work such as project file edits, code changes, deliverables, long logs, reviews, QA, verification, subagents, persistent state, or high-risk actions, even when the user did not name KH UAF.
+description: Use FIRST before non-trivial Antigravity-style workspace work such as memory lookup, target or sibling folder inspection, project file edits, code changes, deliverables, long logs, reviews, QA, verification, subagents, persistent state, or high-risk actions, even when the user did not name KH UAF.
 ---
 
 # KH UAF
@@ -10,7 +10,7 @@ This workspace includes KH UAF, a personal skillbook and Python-first orchestrat
 ## How to Use
 
 1. Treat the repository root as the packaged UAF source, not as the target project's runtime state folder.
-2. For non-trivial work, run KH front-door auto routing before source exploration or edits even when the user did not name KH, UAF, skill, harness, plugin, front door, router, or catalog. Keep simple direct questions cheap after intake classifies them as light.
+2. For non-trivial work, run KH front-door auto routing before memory lookup, target/sibling folder scans, source exploration, or edits even when the user did not name KH, UAF, skill, harness, plugin, front door, router, or catalog. Keep simple direct questions cheap after intake classifies them as light.
 3. Prefer the executable front-door command so stale plugin cache paths and passive skill-list mentions do not count as usage:
 
 ```bash
@@ -19,7 +19,7 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 
 4. If the command is unavailable, read `always-on-front-door`, `automatic-intake-harness`, `SKILL.md`, `plugin-composition-policy`, `request-complexity-router`, or the packaged skill catalog to classify the request and select the minimal skill bundle automatically. Users should not need to name every harness.
 5. Record selected, considered, skipped, and blocked skills with evidence; then start source reads, edits, role DAG execution, or deliverable generation.
-6. Before delegating non-trivial work to a subagent, the controller should run front-door intake and pass a bounded task packet. After the subagent returns, audit whether the selected skills were actually used, skipped with rationale, or missing. Do not assume subagents will automatically enter KH just because the plugin is installed.
+6. Before delegating non-trivial work to a subagent, the controller should run front-door intake and pass a bounded task packet. A subagent should also run front-door first for its own non-trivial task before memory lookup or workspace inspection. After the subagent returns, audit whether the selected skills were actually used, skipped with rationale, or missing.
 7. Use `README.md` for install and host integration instructions.
 8. Validate the skill pack before relying on it:
 
