@@ -12,9 +12,11 @@ Use it before any more specific skill when a request includes one or more of:
 - command output, logs, review, QA, tests, or verification
 - subagents, delegation, persistence, memory, branch finishing, or risky commands
 
+Target-folder checks, `Test-Path`, `Get-ChildItem`, `rg`, file reads, MEMORY.md searches, browser/document/image actions, and plugin-specific work are already work exploration. They must happen after this front-door step unless the request is light/direct or the front-door command is unavailable and the blocked rationale is recorded first.
+
 Do not use it for clearly light direct answers such as a definition, translation, one-line command explanation, or a tiny fact where no artifact, command, state, or verification evidence is needed.
 
-Persistent directive: if an earlier message in the same conversation or project says to actively, always, by default, or continuously use KH/UAF skills or harnesses, later work-bearing requests should be treated as `kh_active_directive=active` even when the later wording omits KH names. The active directive ends only when the user explicitly opts out.
+Persistent directive: if an earlier message in the same conversation or project says to actively, aggressively, always, by default, or continuously use KH/UAF skills or harnesses, later work-bearing requests should be treated as `kh_active_directive=active` even when the later wording omits KH names. The active directive ends only when the user explicitly opts out.
 
 Execution level: `python-module`.
 

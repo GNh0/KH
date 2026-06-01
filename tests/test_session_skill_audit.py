@@ -594,6 +594,56 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_kh_active_directive_detects_real_korean_usage_phrase(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "\uc55e\uc73c\ub85c \uc774 \ub300\ud654\uc5d0\uc11c\ub294 KH "
+                            "\uc2a4\ud0ac/\ud558\ub124\uc2a4\ub97c \uc801\uadf9\uc801\uc73c\ub85c "
+                            "\uc368\uc11c \uc791\uc5c5\ud574\uc918."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\Carryover "
+                            "\ud3f4\ub354\uc5d0 \uc791\uc740 KPI \ub300\uc2dc\ubcf4\ub4dc\ub97c "
+                            "\ub9cc\ub4e4\uc5b4\uc918."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Test-Path -LiteralPath 'C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\Carryover'",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                and issue["trigger_kind"] == "kh_active_directive"
+                and issue["kh_active_directive"]
+                for issue in audit.issues
+            )
+        )
+
     def test_kh_active_directive_passes_when_later_front_door_runs_first(self):
         path = self.write_session(
             [

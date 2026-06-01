@@ -112,3 +112,17 @@ Post-fix session audit of that same blind run:
 ## Residual Risk
 
 This patch proves the upgraded 2.9.30 plugin can be selected automatically in a blind subagent session. It still cannot force the Codex host to load or obey a skill in every possible future session. If a fresh session has no KH UAF skills in its available skill list, the remaining fix is host/plugin loading. If it loads KH but skips all front-door evidence again, `session_skill_audit` should now flag that as a P1 `always-on-front-door` miss.
+
+## 2.9.33 Carryover Regression
+
+Post-upgrade subagent session `019e8202-72ca-7232-a46f-783a45bf1a7f` used an ordinary dashboard request without naming KH. The session ran `kh_front_door` from installed cache `kh-uaf/2.9.32` before work exploration and `session_skill_audit` reported runtime-applied skills: `always-on-front-door`, `automatic-intake-harness`, `goal-state-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`. This proved the blind case was improved.
+
+Post-upgrade carryover subagent session `019e8202-975a-7e70-a274-dc92f5bda645` first received "use KH skills/harnesses actively" and then an ordinary dashboard request. It still ran `Test-Path` and a `MEMORY.md` search before `kh_front_door`, so `session_skill_audit` correctly reported P1 `missing_front_door`. That is a real failure, not a false pass.
+
+Fixes added in 2.9.33:
+
+- `session_skill_audit` now recognizes real Korean active-use wording such as "KH 스킬/하네스를 적극적으로 써서 작업해줘" as `kh_active_directive`.
+- Codex `defaultPrompt` now explicitly says `Test-Path`, `Get-ChildItem`, `rg`, file reads, MEMORY.md searches, and browser/document/image/plugin actions are work exploration and must happen after front-door intake.
+- `always-on-front-door` usage docs now call out target-folder checks and memory lookup as forbidden pre-intake work for non-trivial requests.
+
+Verification target after installing 2.9.33: repeat the carryover subagent scenario and require zero `missing_front_door` issues for the second turn.
