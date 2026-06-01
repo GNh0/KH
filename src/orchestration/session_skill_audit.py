@@ -418,6 +418,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
                 }
             )
 
+    issues.extend(_kh_front_door_issues(path))
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
     coverage = _coverage(skill_rows)
     return SessionSkillAudit(
@@ -555,6 +556,142 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
             }
         )
     return issues
+
+
+def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    waiting_for_front_door = False
+    front_door_seen = False
+    trigger_sample = ""
+
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        text = _payload_text(payload)
+        lowered = text.lower()
+
+        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+            if _is_kh_front_door_request(lowered):
+                waiting_for_front_door = True
+                front_door_seen = False
+                trigger_sample = _short(text)
+            continue
+
+        if not waiting_for_front_door:
+            continue
+
+        if _is_kh_front_door_evidence(lowered):
+            front_door_seen = True
+            continue
+
+        if _is_non_kh_work_start(payload, lowered) and not front_door_seen:
+            issues.append(
+                {
+                    "skill": "plugin-composition-policy",
+                    "status": "missing_front_door",
+                    "severity": "P1",
+                    "reason": (
+                        "KH was explicitly requested, but source/work commands started before "
+                        "KH front-door intake, skill catalog, request classification, or skill bundle evidence."
+                    ),
+                    "action": (
+                        "When KH is requested, first run KH front-door routing: inspect the KH skill/root guide "
+                        "or skill catalog, classify the request, select a skill bundle automatically, and only then "
+                        "start source exploration or edits. Users should not need to name every harness."
+                    ),
+                    "trigger": trigger_sample,
+                    "first_work": _short(text),
+                }
+            )
+            waiting_for_front_door = False
+    return issues
+
+
+def _session_payload_events(path: Path) -> List[Dict[str, Any]]:
+    events: List[Dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "response_item" and isinstance(event.get("payload"), dict):
+            events.append(event)
+    return events
+
+
+def _is_kh_front_door_request(lowered: str) -> bool:
+    if "kh" not in lowered:
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "plugin",
+            "플러그",
+            "skill",
+            "스킬",
+            "harness",
+            "하네스",
+            "uaf",
+            "사용",
+            "써",
+            "쓰",
+        ]
+    )
+
+
+def _is_kh_front_door_evidence(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in [
+            "uaf_skill_catalog",
+            "src.skills.uaf_skill_catalog",
+            "kh-uaf",
+            "universal-agent-framework",
+            "kh front-door",
+            "front_door_auto_route",
+            "plugin_composition",
+            "plugin-composition-policy",
+            "request_complexity",
+            "classify_request",
+            "skill_application",
+            "large_work_orchestration_bundle",
+            "session_start_context",
+            "workflow_usability_auto",
+        ]
+    )
+
+
+def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:
+    payload_type = str(payload.get("type", ""))
+    if payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    if _is_kh_front_door_evidence(lowered):
+        return False
+    tool_name = str(payload.get("name", "")).lower()
+    if tool_name in {"apply_patch"}:
+        return True
+    if tool_name not in {"shell_command", "functions.shell_command"}:
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "get-childitem",
+            "select-string",
+            "rg ",
+            "git ",
+            "get-content",
+            "python ",
+            "copy-item",
+            "move-item",
+            "remove-item",
+            "set-content",
+            "add-content",
+        ]
+    )
 
 
 def summarize_session_skill_audits(paths: Iterable[str | Path]) -> Dict[str, Any]:
