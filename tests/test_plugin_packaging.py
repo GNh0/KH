@@ -77,6 +77,8 @@ class PluginPackagingTests(unittest.TestCase):
 
         content = skill_path.read_text(encoding="utf-8")
         self.assertIn("name: kh-uaf", content)
+        self.assertIn("front-door auto routing", content)
+        self.assertIn("Users should not need to name every harness", content)
         self.assertIn("python -m src.skills.uaf_skill_catalog --check", content)
         self.assertIn("skills/", content)
 

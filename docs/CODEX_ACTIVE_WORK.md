@@ -16,6 +16,14 @@ Make UAF a domain-general, evidence-driven orchestration framework while preserv
 
 ## Current Verified State
 
+- Latest active correction for 2.9.26:
+  - Problem: session `019e8078-4bde-7813-a1db-5025a3881511` explicitly requested KH plugin usage for `C_KONE110_codex`, but source/work commands started before KH front-door routing evidence.
+  - Product rule: users should not need to name every KH skill/harness. A request to use KH, KH UAF, KH plugin, KH skills/harnesses, or `/kh:*` must trigger front-door auto routing first.
+  - Front-door evidence means root guide or skill catalog inspection, `plugin-composition-policy`, `request-complexity-router`, automatic minimal skill bundle selection, and selected/considered/skipped/blocked evidence before source reads or edits.
+  - `src.orchestration.session_skill_audit` now emits P1 `plugin-composition-policy/missing_front_door` when that contract is violated.
+  - Audit record: `docs/kh/qa/2026-06-01-front-door-routing-audit.md`.
+  - Branching note: `main` keeps tests/docs/audits; Codex marketplace installs runtime behavior from `codex-runtime`, so runtime prompt/code changes must be applied there too.
+  - Verification: targeted unit tests passed (39 and 42 tests), full `python -B -m unittest discover -s tests` passed (469 tests), catalog check 38/38, skill quality lowest 9.3, practical quality gate release-ready with 8/8 KH-Bench tasks and confidence 10.0, JSON manifests valid, diff check clean.
 - Repository: `GNh0/KH`, local path `C:\Users\User\Documents\Codex\KH`.
 - Core direction approved by user: improve incrementally, taking useful ideas from external references while keeping KH/UAF branded as a personal skillbook.
 - Python core should remain the stable center for now.

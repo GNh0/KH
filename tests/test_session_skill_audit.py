@@ -357,6 +357,124 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertIn(("role-execution-audit-harness", "blocked"), issues)
         self.assertIn(("subagent-review-pipeline", "blocked"), issues)
 
+    def test_kh_plugin_request_requires_front_door_before_source_work(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use the KH plugin for this source analysis.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.cs",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "plugin-composition-policy"
+                and issue["status"] == "missing_front_door"
+                and issue["severity"] == "P1"
+                for issue in audit.issues
+            )
+        )
+
+    def test_korean_kh_request_requires_front_door_before_source_work(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "이 폴더 작업은 KH 플러그인을 사용해서 처리해줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-Content -Path .\\Program.cs -TotalCount 120",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "plugin-composition-policy"
+                and issue["status"] == "missing_front_door"
+                and issue["severity"] == "P1"
+                for issue in audit.issues
+            )
+        )
+
+    def test_kh_plugin_request_passes_when_front_door_runs_first(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use the KH plugin for this source analysis.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "python -m src.skills.uaf_skill_catalog --list",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "plugin_composition selected KH as controller, "
+                            "request_complexity classification=medium, "
+                            "skill_application bundle recorded considered_not_needed entries."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.cs",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "plugin-composition-policy"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

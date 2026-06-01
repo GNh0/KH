@@ -10,16 +10,19 @@ This workspace includes KH UAF, a personal skillbook and Python-first orchestrat
 ## How to Use
 
 1. Treat the repository root as the packaged UAF source, not as the target project's runtime state folder.
-2. Read the packaged skills under `skills/` when a task needs a specific workflow.
-3. Use `README.md` for install and host integration instructions.
-4. Use `SKILL.md` for the root UAF operating guide.
-5. Validate the skill pack before relying on it:
+2. When a user says to use KH, KH UAF, the KH plugin, KH skills/harnesses, or `/kh:*`, run KH front-door auto routing before source exploration or edits.
+3. Read `SKILL.md`, `plugin-composition-policy`, `request-complexity-router`, or the packaged skill catalog to classify the request and select the minimal skill bundle automatically. Users should not need to name every harness.
+4. Record selected, considered, skipped, and blocked skills with evidence; then start source reads, edits, role DAG execution, or deliverable generation.
+5. Use `README.md` for install and host integration instructions.
+6. Validate the skill pack before relying on it:
 
 ```bash
 python -m src.skills.uaf_skill_catalog --check
 ```
 
 For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, create `large_work_orchestration_bundle` evidence before implementation. Its `skill_statuses` must account for routing, host orchestration, GoalState, lifecycle, token optimization, memory, parallel strategy, subagent review, role execution audit, Compound, and workflow distillation as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`, with `application_mode` set to `runtime`, `procedural`, `considered`, or `blocked`.
+
+If a session explicitly requests KH but starts source/work commands before this front-door evidence exists, treat it as a P1 `missing_front_door` failure in `session-skill-audit`.
 
 ## Useful Entry Points
 

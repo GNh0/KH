@@ -7,6 +7,18 @@ description: "A pure-local, highly concurrent, and sandboxed AI/domain orchestra
 
 This is a local-first, zero-dependency, and hyper-concurrent agentic orchestration framework. It uses a Pure Python `asyncio` architecture to bypass traditional broker limits, can carry domain-neutral design artifacts through workflows, routes user-facing deliverables to the target project's `docs/` folder by work type, keeps harness-only quality evidence in metadata, and can safely test Python code on Windows via `multiprocessing`-based sandboxing.
 
+## Front-Door Auto Routing
+
+When a user asks to use KH, KH UAF, the KH plugin, KH skills/harnesses, or a `/kh:*` role command, do not wait for the user to enumerate individual skills. Run the KH front door first:
+
+1. Inspect this root guide or the packaged skill catalog.
+2. Apply `plugin-composition-policy` to decide whether KH is controller, assistant, hybrid, or not needed.
+3. Apply `request-complexity-router` to choose direct answer, lightweight skill/module, GoalState, role DAG, evidence gates, or high-risk review.
+4. Select and record the minimal skill bundle automatically, with every relevant skill marked `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.
+5. Only then start source exploration, edits, role DAG execution, or deliverable generation.
+
+This is a required usability contract. A KH session that starts work after an explicit KH request without front-door evidence should be treated as a `missing_front_door` audit failure.
+
 ## Requirements
 - Python 3.9+
 - OS: Windows / Linux / macOS
