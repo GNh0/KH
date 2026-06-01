@@ -1099,12 +1099,32 @@ def _has_resolution_rationale(observations: Dict[str, Any]) -> bool:
 def _explicit_application(lowered: str, aliases: Set[str]) -> bool:
     if not any(alias.lower() in lowered for alias in aliases):
         return False
+    if any(
+        marker in lowered
+        for marker in [
+            "not used",
+            "did not use",
+            "was not used",
+            "not applied",
+            "did not apply",
+            "was not applied",
+            "not executed",
+            "did not execute",
+        ]
+    ):
+        return False
     return any(
         marker in lowered
         for marker in [
             '"status": "applied"',
             "'status': 'applied'",
             "status=applied",
+            " was used",
+            " used ",
+            " was applied",
+            " applied ",
+            " executed",
+            " ran ",
             "application_mode",
             '"runtime"',
             "'runtime'",
