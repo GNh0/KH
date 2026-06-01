@@ -24,6 +24,13 @@ STATUS_RANK = {
 PASSIVE_REFERENCE_PREFIX = "__kh_passive_reference__ "
 
 RUNTIME_MARKERS = {
+    "always-on-front-door": [
+        "always-on-front-door",
+        "kh_front_door",
+        "src.orchestration.kh_front_door",
+        "front_door_status",
+        "runtime_applied_skills",
+    ],
     "automatic-intake-harness": [
         "automatic-intake-harness",
         "kh_front_door",
@@ -197,6 +204,10 @@ RUNTIME_MARKERS = {
 }
 
 ACCEPTANCE_OUTPUT_MARKERS = {
+    "always-on-front-door": {
+        "intake_evidence": ["kh_front_door", "front_door_status", "classification", "plugin_route"],
+        "status_split": ["runtime_applied_skills", "selected_not_executed_skills", "skill_status_summary"],
+    },
     "automatic-intake-harness": {
         "intake_evidence": ["kh_front_door", "front_door_status", "classification", "plugin_route"],
         "status_split": ["runtime_applied_skills", "selected_not_executed_skills", "skill_status_summary"],
@@ -332,6 +343,7 @@ ACCEPTANCE_OUTPUT_MARKERS = {
 }
 
 ACCEPTANCE_SEVERITY = {
+    "always-on-front-door": "P1",
     "automatic-intake-harness": "P1",
     "goal-state-harness": "P1",
     "token-optimizer": "P1",
@@ -595,16 +607,16 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         if _is_non_kh_work_start(payload, lowered) and not front_door_seen:
             issues.append(
                 {
-                    "skill": "automatic-intake-harness",
+                    "skill": "always-on-front-door",
                     "status": "missing_front_door",
                     "severity": "P1",
                     "reason": (
                         "A KH-capable session started non-trivial source/work commands before "
-                        "automatic front-door intake, skill catalog, request classification, or skill bundle evidence."
+                        "always-on front-door intake, skill catalog, request classification, or skill bundle evidence."
                     ),
                     "action": (
-                        "For non-trivial work, first run KH front-door routing: inspect the KH skill/root guide "
-                        "or skill catalog, classify the request, select a skill bundle automatically, and only then "
+                        "For non-trivial work, first run KH front-door routing through always-on-front-door: inspect "
+                        "the KH skill/root guide or skill catalog, classify the request, select a skill bundle automatically, and only then "
                         "start source exploration or edits. Users should not need to name KH, skills, or harnesses."
                     ),
                     "trigger_kind": trigger_kind,
@@ -785,6 +797,7 @@ def _is_kh_front_door_evidence(lowered: str) -> bool:
             "kh_front_door",
             "src.orchestration.kh_front_door",
             "automatic-intake-harness",
+            "always-on-front-door",
             "front_door_auto_route",
             "front_door_status",
             "plugin_composition",
@@ -1200,6 +1213,7 @@ def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
     verification_commands = postmortem.get("verification_commands", []) or []
 
     if _has_nontrivial_work_signals(postmortem, lowered):
+        _add(required, "always-on-front-door", "non-trivial KH-capable session should enter KH front-door before any other work")
         _add(required, "automatic-intake-harness", "non-trivial KH-capable session should start with automatic intake")
         _add(required, "plugin-composition-policy", "automatic intake should choose direct, single-provider, hybrid, or clarify route")
         _add(required, "request-complexity-router", "automatic intake should classify request complexity before work")

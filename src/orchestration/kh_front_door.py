@@ -18,6 +18,7 @@ from src.skills.uaf_skill_catalog import collect_packaged_skills
 
 
 FRONT_DOOR_SKILLS = [
+    "always-on-front-door",
     "automatic-intake-harness",
     "plugin-composition-policy",
     "request-complexity-router",
@@ -375,7 +376,14 @@ def _front_door_skill_statuses(
 ) -> Dict[str, Dict[str, Any]]:
     statuses: Dict[str, Dict[str, Any]] = {}
     for skill in recommended_skills:
-        if skill == "automatic-intake-harness":
+        if skill == "always-on-front-door":
+            statuses[skill] = _status(
+                "applied",
+                "runtime",
+                "always-on-front-door forced KH intake before any other non-trivial skill or plugin.",
+                ["kh_front_door", "classification", "plugin_route", "runtime_applied_skills"],
+            )
+        elif skill == "automatic-intake-harness":
             statuses[skill] = _status(
                 "applied",
                 "runtime",

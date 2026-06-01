@@ -126,6 +126,7 @@ SKILL_OPS_SKILLS = {
 }
 
 ROUTING_SKILLS = {
+    "always-on-front-door",
     "automatic-intake-harness",
     "plugin-composition-policy",
     "request-complexity-router",
@@ -226,7 +227,7 @@ def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]
     if skill_name in SKILL_OPS_SKILLS:
         return _skill_ops_scenario
     if skill_name in ROUTING_SKILLS:
-        if skill_name == "automatic-intake-harness":
+        if skill_name in {"always-on-front-door", "automatic-intake-harness"}:
             return _automatic_intake_scenario
         if skill_name == "plugin-composition-policy":
             return _plugin_composition_scenario

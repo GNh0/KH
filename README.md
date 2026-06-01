@@ -20,18 +20,19 @@ Users should not need to name KH, UAF, or any individual skill/harness for non-t
 python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
 ```
 
-1. Apply `automatic-intake-harness` to decide whether ordinary user wording needs KH intake.
+1. Apply `always-on-front-door` and `automatic-intake-harness` to decide whether ordinary user wording needs KH intake.
 2. Inspect the KH root guide or packaged skill catalog.
 3. Route through `plugin-composition-policy` and `request-complexity-router`.
 4. Select the minimal skill bundle automatically.
 5. Record each selected, considered, skipped, or blocked skill with evidence.
 6. Start source reads, edits, role DAG execution, or deliverable generation only after that intake step.
 
-This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `missing_front_door` issue when a KH-capable session begins non-trivial work before the front door runs, unless the request was classified as light/direct or plugin composition did not select KH.
+This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `always-on-front-door` `missing_front_door` issue when a KH-capable session begins non-trivial work before the front door runs, unless the request was classified as light/direct or plugin composition did not select KH.
 
 ## What It Includes
 
-- 39 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 40 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- `always-on-front-door` as the host-visible bootstrap skill that should run before other work-bearing skills or plugins.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - `brainstorming-harness` for early product/project discovery and KH handoff before architecture or implementation.
