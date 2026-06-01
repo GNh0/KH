@@ -112,7 +112,7 @@ Trigger: A new ordinary Codex session, `019e813d-c26b-7d82-82df-d6f052c83dc7`, w
 - Marketplace descriptor checked: `.agents/plugins/marketplace.json`
 - Plugin source ref in marketplace descriptor: `codex-runtime`
 - Active source revision at the time of the audit: `c42892c6824d2aa4aa143665f7d40e49ec6d28f0`
-- Active source plugin version: `2.9.28`
+- Active source plugin version at that audit point: `2.9.28`
 
 Correction: the local Codex marketplace `ref = "main"` is expected for this setup. It fetches the marketplace descriptor from `main`; the descriptor itself already points the `kh-uaf` plugin source at `codex-runtime`. Therefore `ref = "main"` is not evidence that the plugin should reinstall from `main`.
 
@@ -205,3 +205,32 @@ The post-upgrade state is mixed:
 - The installed cache and active session skill list still exposed `2.9.27` during the audit even though the marketplace descriptor points the plugin source at `codex-runtime`, where `2.9.28` was available.
 
 Therefore KH UAF should not claim that blind automatic adoption is solved. The honest claim is that automatic-intake instructions and audit tooling exist, but host/subagent compliance is still not deterministic unless the controller runs front-door intake before delegation or the Codex host provides a hard preflight hook.
+
+## Follow-Up Fix: Install Layer Audit Command
+
+Added after the marketplace-ref correction:
+
+```bash
+python -m src.orchestration.plugin_install_audit --summary
+```
+
+Purpose:
+
+- Distinguish the Codex marketplace descriptor ref from the plugin source ref.
+- Report that `ref = "main"` in `C:\Users\KONEIT\.codex\config.toml` is expected for this repository when `.agents/plugins/marketplace.json` points `kh-uaf` at `codex-runtime`.
+- Compare the source manifest version with installed cache versions.
+- Produce an `attention_required` status when the installed cache is behind source, without blaming the marketplace descriptor ref.
+
+Current verification output after adding the command:
+
+- Marketplace ref: `main`
+- Plugin source ref: `codex-runtime`
+- Source plugin version: `2.9.29`
+- Installed cache version: `2.9.27`
+- Status: `attention_required`
+
+This keeps the failure cause separated:
+
+- Install/cache freshness problem: active cache is behind source.
+- Host/session reload problem: active session skill list can still point at an older cache until a fresh thread or reload.
+- Blind auto-adoption problem: even with the skill present, subagent compliance is mixed unless the controller runs front-door intake or the host provides a hard preflight.

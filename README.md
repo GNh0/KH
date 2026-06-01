@@ -128,6 +128,15 @@ After install or upgrade, start a new thread so Codex reloads the skills.
 
 Upgrade note: Codex installs plugin cache entries by manifest version. When publishing a new plugin build, bump both `.codex-plugin/plugin.json` and the root `plugin.json` version. If the marketplace clone is current but the installed plugin still appears under an older cache path such as `kh-uaf/2.9.27`, install or upgrade again after the version bump.
 
+To separate marketplace descriptor state from installed plugin cache state, run:
+
+```bash
+python -m src.orchestration.plugin_install_audit --summary
+```
+
+`ref = "main"` in the Codex marketplace config is expected for this repository: it reads `.agents/plugins/marketplace.json`. The plugin source ref inside that marketplace descriptor should point at `codex-runtime`. Treat a run as stale only when the installed cache version or active session skill paths still point at an older KH UAF version.
+Use `--strict` when this diagnostic should fail CI or a release script on stale cache state.
+
 Direct Windows clone:
 
 ```powershell

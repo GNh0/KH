@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.28",
+  "version": "2.9.29",
   "description": "KH Universal Agent Framework skills, automatic intake for non-trivial ordinary requests, front-door auto routing, capability-based plugin composition, KH-native replacements for Superpowers-style worktree/TDD/debug/review/finish flows, brainstorming handoff, GoalState ledger, large-work orchestration bundle with application modes, Superpowers-style project-local artifacts, development progress state, automatic workflow usability runtime, runtime token optimization evidence, active memory preflight, explicit cross-scope memory import, bounded prompt memory snapshots, pre-compaction memory flush, runtime memory candidate recording, session skill audits with per-skill acceptance checks, session postmortem gates including user-stop override, interruption checkpoints with scoped resume memory, progress-to-Compound bridge, token provider policy, KH role commands, visible and host-native progress panels, session-start context restore, skill transition policy, Compound learning, lightweight request routing, SIDE-style scenario evaluation, science-style support files, executable smoke checks, practical quality gates, KH-Bench Verified benchmark tasks, DAG role artifact orchestration, deliverable exports, evidence gates, retention cleanup, and local orchestration harnesses for Codex.",
   "author": {
     "name": "KH UAF",
