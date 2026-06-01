@@ -211,12 +211,14 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         prompts = "\n".join(manifest["interface"]["defaultPrompt"])
         root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
 
-        self.assertEqual(manifest["version"], "2.9.30")
+        self.assertEqual(manifest["version"], "2.9.32")
         self.assertIn("Plugin Composition", manifest["interface"]["capabilities"])
         self.assertIn("plugin-composition-policy", root_skill_names)
         self.assertIn("plugin-composition", root_skill_names)
         self.assertIn("front-door auto routing", prompts)
         self.assertIn("Users should not need to name every KH skill or harness", prompts)
+        self.assertIn("kh_active_directive=active", prompts)
+        self.assertIn("do not require the user to repeat skill names", prompts)
         self.assertIn("Before applying any plugin-specific MUST/ALWAYS rule", prompts)
         self.assertIn("controller plus assistant composition", prompts)
 

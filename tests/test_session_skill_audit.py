@@ -552,6 +552,100 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_kh_active_directive_carries_to_later_ordinary_work(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "앞으로 KH 스킬,하네스를 적극적으로 활용해서 작업해줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "간단한 월별 KPI 대시보드를 만들어줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.html",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                and issue["trigger_kind"] == "kh_active_directive"
+                and issue["kh_active_directive"]
+                for issue in audit.issues
+            )
+        )
+
+    def test_kh_active_directive_passes_when_later_front_door_runs_first(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "앞으로 KH 스킬,하네스를 적극적으로 활용해서 작업해줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "간단한 월별 KPI 대시보드를 만들어줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python -m src.orchestration.kh_front_door "
+                            "--prompt \"간단한 월별 KPI 대시보드를 만들어줘.\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.html",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                and issue.get("trigger_kind") == "kh_active_directive"
+                for issue in audit.issues
+            )
+        )
+
     def test_kh_plugin_request_passes_when_front_door_runs_first(self):
         path = self.write_session(
             [
@@ -647,6 +741,66 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
         self.assertIn("runtime_applied_skills", audit.coverage)
+
+    def test_kh_front_door_output_from_plugin_cache_counts_as_runtime_status_split(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "classification": {"complexity": "heavy", "domain": "software"},
+            "plugin_route": {"route": "single", "controller": "kh"},
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["verification-before-completion-harness"],
+            "skill_status_summary": {
+                "always-on-front-door": {"status": "applied", "application_mode": "runtime"},
+                "automatic-intake-harness": {"status": "applied", "application_mode": "runtime"},
+                "plugin-composition-policy": {"status": "applied", "application_mode": "runtime"},
+                "request-complexity-router": {"status": "applied", "application_mode": "runtime"},
+                "skill-catalog": {"status": "applied", "application_mode": "runtime"},
+            },
+            "skill_source": {
+                "skills_dir": r"C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.30\skills"
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": r"C:\work\app 폴더에 정적 대시보드를 만들고 검증해줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertEqual(rows["always-on-front-door"]["acceptance"]["status"], "passed")
+        self.assertEqual(rows["automatic-intake-harness"]["acceptance"]["status"], "passed")
+        self.assertIn("plugin-composition-policy", audit.coverage["runtime_applied_skill_names"])
+        self.assertIn("request-complexity-router", audit.coverage["runtime_applied_skill_names"])
+        self.assertIn("skill-catalog", audit.coverage["runtime_applied_skill_names"])
+        self.assertFalse(
+            any(
+                issue["skill"] in {"always-on-front-door", "automatic-intake-harness"}
+                and issue["status"] == "missing_outputs"
+                for issue in audit.issues
+            )
+        )
 
 
 if __name__ == "__main__":

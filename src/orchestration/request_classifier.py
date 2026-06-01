@@ -211,7 +211,6 @@ DESTRUCTIVE_ACTION_TERMS = {
     "production database",
     "external drive",
     "disable audit logs",
-    "실행",
     "지워",
     "삭제해",
     "제거해",
@@ -1776,6 +1775,8 @@ def _detect_domain(normalized: str, context: dict) -> str:
 
 
 def _domain_override_from_text(normalized: str) -> str:
+    if _contains_any(normalized, {"html", "css", "javascript", "js files", "html/css/js"}):
+        return "software"
     if _contains_any(normalized, {"invoice", "vendor"}) and _contains_any(
         normalized,
         {"approve", "amount", "finance", "ask first"},

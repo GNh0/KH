@@ -29,6 +29,8 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 
 This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `always-on-front-door` `missing_front_door` issue when a KH-capable session begins non-trivial work before the front door runs, unless the request was classified as light/direct or plugin composition did not select KH.
 
+If a user says to actively, always, by default, or continuously use KH/UAF skills or harnesses in a conversation or project, hosts should carry `kh_active_directive=active` into later non-trivial turns until the user explicitly opts out. Later turns do not need to repeat KH names. `session-skill-audit` treats a later work-bearing turn that skips front-door intake as a P1 `kh_active_directive` miss.
+
 ## What It Includes
 
 - 40 packaged skills/harnesses with support files, smoke checks, and runnable demos.

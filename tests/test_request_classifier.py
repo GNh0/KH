@@ -46,6 +46,15 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("tdd_red_green", result.evidence_required)
         self.assertIn("test_evidence", result.evidence_required)
 
+    def test_ui_filter_button_is_not_security_high_risk(self):
+        result = classify_request(
+            r"Create C:\work\dashboard as HTML/CSS/JS files with sample KPI cards, a table, filter button behavior, verification, and residual risk notes."
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "role_dag")
+
     def test_product_design_request_is_heavy_not_ambiguous(self):
         result = classify_request("장비 도면 설계해줘")
 

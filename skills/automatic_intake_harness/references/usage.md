@@ -16,6 +16,8 @@ Apply this skill before acting on requests that involve:
 
 Do not apply heavy workflow machinery for simple direct questions, short explanations, translations, or tiny one-off text transforms. The intake step may still classify these as direct answers.
 
+Persistent directive: if the user previously asked the assistant to actively, always, by default, or continuously use KH/UAF skills or harnesses in this conversation or project, carry `kh_active_directive=active` into later work-bearing turns. The later request does not need to repeat KH, UAF, skill, or harness names.
+
 Execution level: `python-module`.
 
 Implementation targets:
@@ -31,6 +33,7 @@ Implementation targets:
 - Raw user request text.
 - Target project path or current working directory.
 - Host label such as `codex`, `antigravity`, `claude-code`, or `local`.
+- `kh_active_directive` status and source message when a previous user instruction made KH active by default.
 - Optional host-provided skill paths, especially installed plugin cache paths.
 - Optional provider snapshot when other plugins or connectors may assist.
 
@@ -55,6 +58,7 @@ Then use the JSON result:
 A valid use records:
 
 - the exact front-door command or function path used
+- `kh_active_directive` status when a previous user instruction is being carried into the current turn
 - skill source resolution from repo-local `skills/` or installed cache
 - selected skills and status summary
 - stale cache path checks when host paths were supplied

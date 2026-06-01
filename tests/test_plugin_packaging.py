@@ -149,6 +149,19 @@ class PluginPackagingTests(unittest.TestCase):
         for fragment in mojibake_fragments:
             self.assertNotIn(fragment, content)
 
+    def test_all_packaged_skills_share_kh_entry_contract(self):
+        skill_files = sorted(Path("skills").glob("*/SKILL.md"))
+
+        self.assertGreaterEqual(len(skill_files), 40)
+        for path in skill_files:
+            with self.subTest(path=str(path)):
+                content = path.read_text(encoding="utf-8")
+                self.assertIn("## KH Entry Contract", content)
+                self.assertIn("always-on-front-door", content)
+                self.assertIn("kh_active_directive=active", content)
+                self.assertIn("selected_not_executed_skills", content)
+                self.assertIn("is not execution evidence", content)
+
 
 if __name__ == "__main__":
     unittest.main()
