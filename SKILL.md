@@ -11,6 +11,10 @@ This is a local-first, zero-dependency, and hyper-concurrent agentic orchestrati
 
 When a user asks to use KH, KH UAF, the KH plugin, KH skills/harnesses, or a `/kh:*` role command, do not wait for the user to enumerate individual skills. Run the KH front door first:
 
+```bash
+python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
+```
+
 1. Inspect this root guide or the packaged skill catalog.
 2. Apply `plugin-composition-policy` to decide whether KH is controller, assistant, hybrid, or not needed.
 3. Apply `request-complexity-router` to choose direct answer, lightweight skill/module, GoalState, role DAG, evidence gates, or high-risk review.
@@ -18,6 +22,8 @@ When a user asks to use KH, KH UAF, the KH plugin, KH skills/harnesses, or a `/k
 5. Only then start source exploration, edits, role DAG execution, or deliverable generation.
 
 This is a required usability contract. A KH session that starts work after an explicit KH request without front-door evidence should be treated as a `missing_front_door` audit failure.
+
+If a host-provided KH skill file path fails after a plugin upgrade, stop using that stale cache path. Resolve the current repository `skills/` folder or the latest installed `kh-uaf` cache version, then re-run the front door before claiming any skill was used.
 
 ## Requirements
 - Python 3.9+

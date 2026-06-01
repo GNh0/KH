@@ -16,13 +16,17 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 
 Users should not need to name every individual KH skill or harness. When a user asks to use KH, KH UAF, the KH plugin, KH skills, or a `/kh:*` role command, the host should first run the KH front door before source exploration or edits:
 
+```bash
+python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
+```
+
 1. Inspect the KH root guide or packaged skill catalog.
 2. Route through `plugin-composition-policy` and `request-complexity-router`.
 3. Select the minimal skill bundle automatically.
 4. Record each selected, considered, skipped, or blocked skill with evidence.
 5. Start source reads, edits, role DAG execution, or deliverable generation only after that intake step.
 
-This is the contract that prevents KH from becoming a manual checklist. `session-skill-audit` now flags a P1 `missing_front_door` issue when a session explicitly requests KH but begins work before the front door runs.
+This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `missing_front_door` issue when a session explicitly requests KH but begins work before the front door runs.
 
 ## What It Includes
 

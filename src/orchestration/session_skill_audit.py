@@ -48,11 +48,12 @@ RUNTIME_MARKERS = {
         "compound_handoff",
     ],
     "development-lifecycle-harness": [
+        "development_lifecycle",
+        "src.orchestration.development_progress",
+        "validate_development_progress",
         "progress.json",
-        "RED",
-        "GREEN",
-        "workspace_strategy",
-        "task_status",
+        "tdd_red_green",
+        "development lifecycle applied",
     ],
     "worktree-isolation-harness": [
         "worktree-isolation-harness",
@@ -70,17 +71,16 @@ RUNTIME_MARKERS = {
     ],
     "systematic-debugging-harness": [
         "systematic-debugging-harness",
-        "root cause",
-        "hypothesis",
+        "systematic_debugging",
         "debug_status",
-        "unexpected failure",
+        "regression evidence",
     ],
     "goal-state-harness": [
         "GoalState",
         "goal_ledger",
         "create_goal",
         "update_goal",
-        "evidence_required",
+        "goal_state applied",
     ],
     "compound-engineering-harness": [
         "CompoundCapture",
@@ -94,10 +94,10 @@ RUNTIME_MARKERS = {
         "distilled skill",
     ],
     "subagent-review-pipeline": [
-        "subagent",
+        "subagent_strategy",
         "spec-reviewer",
         "code-quality-reviewer",
-        "reviewer",
+        "WorkflowTaskResult",
     ],
     "role-execution-audit-harness": [
         "role_execution_audit",
@@ -105,25 +105,22 @@ RUNTIME_MARKERS = {
         "role execution audited",
     ],
     "parallel-orchestration-harness": [
-        "parallel",
-        "spawn_agent",
-        "create_agent",
         "parallel_wave_count",
-        "worktree",
+        "parallel_strategy_decision",
+        "parallel_strategy",
+        "fan-out",
+        "fan-in",
     ],
     "quality-gates-harness": [
-        "TDD",
-        "RED/GREEN",
-        "failing-first",
-        "test passed",
-        "verification",
+        "tdd_red_green",
+        "quality_gate",
+        "quality_gates",
     ],
     "qa-gate-harness": [
-        "qa gate",
-        "QA",
-        "browser qa",
-        "manual test",
-        "verification",
+        "qa_gate",
+        "qa_evidence",
+        "browser_qa_checks",
+        "manual_test_mapping",
     ],
     "verification-before-completion-harness": [
         "verification-before-completion-harness",
@@ -136,65 +133,59 @@ RUNTIME_MARKERS = {
         "branch-finishing-harness",
         "branch_finish_status",
         "commit_sha",
-        "git push",
         "pr-ready",
     ],
     "review-gate-harness": [
-        "review gate",
+        "review_gate",
         "review_status",
-        "with fixes",
-        "findings",
+        "review_gate applied",
     ],
     "command-output-harness": [
-        "command output",
-        "exit code",
-        "stderr",
-        "stdout",
-        "returncode",
+        "summarize_command_output",
+        "compression_policy",
+        "command_output_harness",
+        "tokens saved",
+        "preserved_fact",
     ],
     "harness-evaluator": [
-        "py_compile",
-        "compileall",
-        "python -m unittest",
-        "pytest",
+        "harness_evaluator",
+        "src.harness.evaluator",
+        "HarnessResult",
     ],
     "guard-policy-harness": [
-        "destructive",
-        "permission",
-        "approval",
-        "secret",
-        "delete",
+        "guard_policy",
+        "guard_evidence",
+        "destructive-command",
+        "permission gate",
+        "edit boundary",
     ],
     "snapshot-state-harness": [
         "SnapshotManager",
-        "snapshot",
+        "snapshot_state",
         "rollback",
-        "worktree",
+        "snapshot manifest",
     ],
     "request-complexity-router": [
         "request_complexity",
         "classify_request",
-        "light",
-        "medium",
-        "heavy",
+        "request classification",
     ],
     "plugin-composition-policy": [
         "plugin_composition",
+        "compose_plugin_route",
         "plugin-composition-policy",
-        "controller",
         "assistant provider",
     ],
     "skill-catalog": [
         "uaf_skill_catalog",
-        "--list",
-        "--check",
+        "src.skills.uaf_skill_catalog",
         "total_skills_found",
+        "catalog_summary",
     ],
     "scenario-evaluation-harness": [
         "scenario_evaluator",
-        "SIDE",
-        "scenario",
-        "regression",
+        "src.orchestration.scenario_evaluator",
+        "meaningful_signal",
     ],
 }
 
@@ -419,6 +410,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             )
 
     issues.extend(_kh_front_door_issues(path))
+    issues.extend(_stale_skill_cache_issues(path))
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
     coverage = _coverage(skill_rows)
     return SessionSkillAudit(
@@ -609,6 +601,58 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     return issues
 
 
+def _stale_skill_cache_issues(path: Path) -> List[Dict[str, Any]]:
+    samples: List[str] = []
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        text = _payload_text(payload)
+        lowered = text.lower()
+        if not _is_stale_kh_skill_cache_failure(lowered):
+            continue
+        samples.append(_short(text))
+        if len(samples) >= 3:
+            break
+    if not samples:
+        return []
+    return [
+        {
+            "skill": "skill-catalog",
+            "status": "stale_skill_cache_path",
+            "severity": "P1",
+            "reason": (
+                "KH skill loading failed because the session referenced an old Codex plugin cache path. "
+                "This can make the host appear to have KH skills while actual SKILL.md reads fail."
+            ),
+            "action": (
+                "Resolve KH skill sources from the current repository `skills/` folder or the latest installed "
+                "kh-uaf cache version before claiming skill application. After a plugin upgrade, start a fresh "
+                "session or re-run KH front-door routing against the current cache."
+            ),
+            "samples": samples,
+        }
+    ]
+
+
+def _is_stale_kh_skill_cache_failure(lowered: str) -> bool:
+    if "kh-uaf-marketplace" not in lowered or "kh-uaf" not in lowered:
+        return False
+    if "\\skills\\" not in lowered and "/skills/" not in lowered:
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "not found",
+            "does not exist",
+            "cannot find path",
+            "pathnotfound",
+            "존재하지",
+            "찾을 수 없습니다",
+        ]
+    )
+
+
 def _session_payload_events(path: Path) -> List[Dict[str, Any]]:
     events: List[Dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -652,6 +696,8 @@ def _is_kh_front_door_evidence(lowered: str) -> bool:
             "kh-uaf",
             "universal-agent-framework",
             "kh front-door",
+            "kh_front_door",
+            "src.orchestration.kh_front_door",
             "front_door_auto_route",
             "plugin_composition",
             "plugin-composition-policy",
@@ -724,6 +770,11 @@ def _session_texts(path: Path) -> List[str]:
         payload = event.get("payload")
         if not isinstance(payload, dict):
             continue
+        if payload.get("type") == "message":
+            role = str(payload.get("role", "")).lower()
+            if role in {"developer", "system"}:
+                previous_call_was_passive = False
+                continue
         text = _payload_text(payload)
         if text:
             payload_type = payload.get("type")
@@ -965,17 +1016,22 @@ def _explicit_application(lowered: str, aliases: Set[str]) -> bool:
         for marker in [
             '"status": "applied"',
             "'status': 'applied'",
+            "status=applied",
             "application_mode",
             '"runtime"',
             "'runtime'",
+            "runtime-applied",
             "runtime evidence",
-            "used",
         ]
     )
 
 
 def _passive_reference(lowered: str) -> bool:
     if lowered.startswith(PASSIVE_REFERENCE_PREFIX):
+        return True
+    if _looks_like_skill_doc_output(lowered):
+        return True
+    if _looks_like_skill_catalog_listing(lowered):
         return True
     if "skill.md" in lowered and (
         "get-content" in lowered
@@ -994,6 +1050,28 @@ def _passive_reference(lowered: str) -> bool:
     if "\\plugins\\cache\\" in lowered and "\\skills\\" in lowered:
         return True
     return False
+
+
+def _looks_like_skill_doc_output(lowered: str) -> bool:
+    if "---" in lowered and "name:" in lowered and "description: use when" in lowered:
+        return True
+    return "usage reference" in lowered and "when to use" in lowered and "uaf" in lowered
+
+
+def _looks_like_skill_catalog_listing(lowered: str) -> bool:
+    marker_hits = sum(
+        1
+        for marker in [
+            "adapter_contract_harness",
+            "command_output_harness",
+            "parallel_orchestration_harness",
+            "request_complexity_router",
+            "subagent_review_pipeline",
+            "workflow_usability_harness",
+        ]
+        if marker in lowered
+    )
+    return marker_hits >= 3
 
 
 def _is_passive_text(text: str) -> bool:
@@ -1104,7 +1182,14 @@ def _mentions_verification(lowered: str) -> bool:
 
 def _coverage(skill_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     required = [row for row in skill_rows if row["required"]]
-    applied = [row for row in required if STATUS_RANK.get(row["status"], 0) >= STATUS_RANK["considered"]]
+    considered_or_better = [row for row in required if STATUS_RANK.get(row["status"], 0) >= STATUS_RANK["considered"]]
+    required_applied = [row for row in required if row["status"] == "applied"]
+    runtime_applied = [row for row in skill_rows if row["status"] == "applied"]
+    runtime_or_considered = [
+        row
+        for row in skill_rows
+        if STATUS_RANK.get(row["status"], 0) >= STATUS_RANK["considered"]
+    ]
     accepted = [
         row
         for row in required
@@ -1120,9 +1205,15 @@ def _coverage(skill_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "total_skills": len(skill_rows),
         "observed_skills": sum(1 for row in skill_rows if row["status"] != "absent"),
+        "runtime_applied_skills": len(runtime_applied),
+        "runtime_applied_skill_names": [row["name"] for row in runtime_applied],
+        "active_or_considered_skills": len(runtime_or_considered),
         "required_skills": len(required),
-        "required_with_evidence": len(applied),
-        "required_missing_evidence": len(required) - len(applied),
+        "required_considered_or_better": len(considered_or_better),
+        "required_with_evidence": len(considered_or_better),
+        "required_applied": len(required_applied),
+        "required_applied_skill_names": [row["name"] for row in required_applied],
+        "required_missing_evidence": len(required) - len(considered_or_better),
         "required_missing_skill_names": [row["name"] for row in required if STATUS_RANK.get(row["status"], 0) < STATUS_RANK["considered"]],
         "required_accepted": len(accepted),
         "required_unaccepted": len(unaccepted),
