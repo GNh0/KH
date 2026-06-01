@@ -57,8 +57,8 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         rows = {row["name"]: row for row in audit.skills}
 
-        self.assertEqual(audit.total_skills, 39)
-        self.assertEqual(audit.coverage["total_skills"], 39)
+        self.assertEqual(audit.total_skills, 40)
+        self.assertEqual(audit.coverage["total_skills"], 40)
         self.assertTrue(rows["token-optimizer"]["required"])
         self.assertTrue(rows["goal-state-harness"]["required"])
         self.assertIn("token-optimizer", audit.coverage["required_missing_skill_names"])
@@ -479,7 +479,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                issue["skill"] == "automatic-intake-harness"
+                issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
                 and issue["severity"] == "P1"
                 for issue in audit.issues
@@ -512,7 +512,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                issue["skill"] == "automatic-intake-harness"
+                issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
                 and issue["severity"] == "P1"
                 for issue in audit.issues
@@ -545,7 +545,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                issue["skill"] == "automatic-intake-harness"
+                issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
                 and issue["severity"] == "P1"
                 for issue in audit.issues
@@ -598,7 +598,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertFalse(
             any(
-                issue["skill"] == "automatic-intake-harness"
+                issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
                 for issue in audit.issues
             )
@@ -641,7 +641,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertFalse(
             any(
-                issue["skill"] == "automatic-intake-harness"
+                issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
                 for issue in audit.issues
             )

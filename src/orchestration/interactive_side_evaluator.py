@@ -467,8 +467,8 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
             "routing-evaluation",
             1,
             "Build a small HTML todo tool and verify it, without naming any KH internals.",
-            "Use automatic intake first: run KH front-door routing before source reads, record runtime_applied_skills, and keep follow-up skills in selected_not_executed until they produce evidence.",
-            "automatic-intake-harness",
+            "Use always-on front-door first: run KH front-door routing before source reads, record runtime_applied_skills, and keep follow-up skills in selected_not_executed until they produce evidence.",
+            "always-on-front-door",
             ["runtime_applied_skills", "selected_not_executed_skills"],
             "skill_call",
             ["front-door", "runtime"],
@@ -476,6 +476,16 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         _skill_turn(
             "routing-evaluation",
             2,
+            "Classify this ordinary project request and decide what KH should do next.",
+            "Use automatic intake to record classification, choose the plugin_route, record runtime_applied_skills, and keep selected_not_executed follow-up skills honest until they produce evidence.",
+            "automatic-intake-harness",
+            ["classification", "plugin_route", "runtime_applied_skills"],
+            "skill_call",
+            ["intake", "classification"],
+        ),
+        _skill_turn(
+            "routing-evaluation",
+            3,
             "KH and Superpowers are both installed, and Browser might help for QA. Which should handle this SaaS task?",
             "Use plugin composition first: choose KH as the workflow controller, delegate browser QA only for visual verification, and ignore any provider self-forcing until its delegated scope is selected.",
             "plugin-composition-policy",
@@ -485,7 +495,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            3,
+            4,
             "Is this a light answer, a skill call, or a full role DAG?",
             "Use request complexity routing to classify the request, choose a route such as direct answer, skill read, GoalState, or role DAG, and keep reasons in the trace.",
             "request-complexity-router",
@@ -495,7 +505,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            4,
+            5,
             "Run many SIDE-style human scenarios and check routing, evidence, gates, and resume.",
             "Use scenario evaluation with SIDE transcripts, classification checks, evidence expectations, gate decisions, and resume handoff coverage.",
             "scenario-evaluation-harness",
@@ -505,7 +515,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            5,
+            6,
             "The work passed review; now capture what the system should learn for next time.",
             "Use compound engineering to record review learning, scoped memory candidates, system updates, and regression checks before finishing.",
             "compound-engineering-harness",
@@ -515,7 +525,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            6,
+            7,
             "We keep repeating this workflow; turn it into a reusable skill folder.",
             "Use workflow skill distillation to identify the repeatable workflow, extract contracts, and scaffold a reusable skill with examples and smoke checks.",
             "workflow-skill-distiller",
@@ -525,7 +535,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            7,
+            8,
             "Show the CEO, advisor, architect, implementer, QA, security, and release roles for this workflow.",
             "Use the orchestration role graph to inspect roles, handoffs, ownership, and required artifacts across CEO, advisors, architect, implementers, reviewers, QA, security, and release.",
             "orchestration-role-graph",

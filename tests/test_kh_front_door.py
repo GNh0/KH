@@ -20,10 +20,15 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["skill_source"]["source_type"], "repo-local")
         self.assertGreaterEqual(payload["skill_source"]["skill_count"], 38)
         self.assertEqual(payload["plugin_route"]["controller"]["provider_id"], "kh")
+        self.assertIn("always-on-front-door", payload["recommended_skills"])
         self.assertIn("automatic-intake-harness", payload["recommended_skills"])
         self.assertIn("plugin-composition-policy", payload["recommended_skills"])
         self.assertIn("request-complexity-router", payload["recommended_skills"])
         self.assertIn("skill-catalog", payload["recommended_skills"])
+        self.assertEqual(
+            payload["skill_statuses"]["always-on-front-door"]["status"],
+            "applied",
+        )
         self.assertEqual(
             payload["skill_statuses"]["automatic-intake-harness"]["status"],
             "applied",
@@ -118,6 +123,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(
             payload["runtime_applied_skills"],
             [
+                "always-on-front-door",
                 "automatic-intake-harness",
                 "plugin-composition-policy",
                 "request-complexity-router",
@@ -145,6 +151,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(
             payload["runtime_applied_skills"],
             [
+                "always-on-front-door",
                 "automatic-intake-harness",
                 "plugin-composition-policy",
                 "request-complexity-router",

@@ -19,6 +19,7 @@ CORE_SKILLS = {
     "adapter-contract-harness",
     "artifact-render-qa-harness",
     "architect-pipeline",
+    "always-on-front-door",
     "automatic-intake-harness",
     "brainstorming-harness",
     "branch-finishing-harness",

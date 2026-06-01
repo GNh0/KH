@@ -20,18 +20,19 @@ Users should not need to name KH, UAF, or any individual skill/harness for non-t
 python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
 ```
 
-1. Apply `automatic-intake-harness` to decide whether ordinary user wording needs KH intake.
+1. Apply `always-on-front-door` and `automatic-intake-harness` to decide whether ordinary user wording needs KH intake.
 2. Inspect the KH root guide or packaged skill catalog.
 3. Route through `plugin-composition-policy` and `request-complexity-router`.
 4. Select the minimal skill bundle automatically.
 5. Record each selected, considered, skipped, or blocked skill with evidence.
 6. Start source reads, edits, role DAG execution, or deliverable generation only after that intake step.
 
-This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `missing_front_door` issue when a KH-capable session begins non-trivial work before the front door runs, unless the request was classified as light/direct or plugin composition did not select KH.
+This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `always-on-front-door` `missing_front_door` issue when a KH-capable session begins non-trivial work before the front door runs, unless the request was classified as light/direct or plugin composition did not select KH.
 
 ## What It Includes
 
-- 39 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 40 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- `always-on-front-door` as the host-visible bootstrap skill that should run before other work-bearing skills or plugins.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - `brainstorming-harness` for early product/project discovery and KH handoff before architecture or implementation.
@@ -208,7 +209,7 @@ For large or long-running work, KH treats `token-optimizer` as a context budget 
 
 For large project, SaaS, app, multi-file implementation, role-DAG, or long-running work, KH now requires `large_work_orchestration_bundle` evidence before implementation. The bundle records `skill_statuses` for routing, host orchestration, GoalState, lifecycle, workspace isolation, plan execution, debugging, token optimization, memory, parallel strategy, subagent review, role execution audit, verification-before-completion, branch finishing, Compound, and workflow distillation. Each status must be `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`, and each entry carries `application_mode`: `runtime`, `procedural`, `considered`, or `blocked`. This keeps KH light for simple requests while making omissions visible during large work without pretending that procedural use produced runtime adapter evidence.
 
-Skill transition validation makes the bundle active instead of decorative. After review and before final completion, `src.orchestration.skill_transitions.validate_skill_transitions(...)` checks that memory candidates route to `memory-state-harness`, subagent review routes to `role-execution-audit-harness`, parallel execution routes to `parallel-orchestration-harness`, and Compound handoffs close with a no-learning rationale or route to `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`. This is the KH-native guard against having useful skills listed but never actually entering the run.
+Skill transition validation makes the bundle active instead of decorative. After review and before final completion, `src.orchestration.skill_transitions.validate_skill_transitions(...)` checks that memory candidates route to `memory-state-harness`, subagent review routes to `role-execution-audit-harness`, parallel execution routes to `parallel-orchestration-harness`, and Compound handoffs close with a no-learning rationale or route to `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`. Acceptance wording: memory candidates trigger memory-state-harness, subagent review triggers role-execution-audit-harness, selected parallel execution triggers parallel-orchestration-harness, and post-review work closes compound-engineering-harness. This is the KH-native guard against having useful skills listed but never actually entering the run.
 
 Subagents are also decision-gated. KH should record `subagent_strategy`: `dispatch`, `single-controller`, `review-only`, or `blocked` before opening subagents. Subagents are justified by independent work, bounded packets, real review value, and isolation; otherwise the controller should keep the work sequential. Token optimization for subagent packets and transcripts is a required decision, not automatic compression: short or exact reviewer output may be `considered_not_needed` or `passthrough`.
 

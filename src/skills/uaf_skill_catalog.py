@@ -31,6 +31,7 @@ DESIGN_REFERENCES_CONSIDERED = {
 
 SKILL_EXECUTION_LEVELS = {
     "adapter-contract-harness": "python-module",
+    "always-on-front-door": "python-module",
     "automatic-intake-harness": "python-module",
     "artifact-render-qa-harness": "python-module",
     "architect-pipeline": "hybrid-harness",
