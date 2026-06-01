@@ -95,3 +95,112 @@ The correct claim is:
 ## Residual Risk
 
 This is still a host-compliance limitation. A Codex skill/plugin can strongly instruct the model, provide a short default prompt, and expose an executable front-door, but it cannot forcibly intercept every future subagent task unless the host runtime itself runs front-door intake before delegation. For reliable delegated workflows, the controller must call `kh_front_door` before `spawn_agent` and include only the bounded selected task packet.
+
+## Follow-Up Audit: Marketplace Ref and Mixed Blind Results
+
+Time: 2026-06-01 12:30-12:45 KST
+
+Trigger: A new ordinary Codex session, `019e813d-c26b-7d82-82df-d6f052c83dc7`, was started with the plain request "make a simple web dashboard". The user reported that KH UAF was still not being picked up automatically.
+
+### Local Marketplace Configuration Finding
+
+The Codex marketplace config did not point at the active development branch:
+
+- Config file: `C:\Users\KONEIT\.codex\config.toml`
+- Marketplace block: `[marketplaces.kh-uaf-marketplace]`
+- Previous local ref: `main`
+- Previous local revision: `078adea27a0f0e2db15fb511b97e69341a785dd6`
+- Installed cache present during the audit: `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.27`
+- Active source branch with the latest fixes: `codex-runtime`
+- Active source revision: `c42892c6824d2aa4aa143665f7d40e49ec6d28f0`
+- Active source plugin version: `2.9.28`
+
+The repository marketplace file already points to `codex-runtime`, but the user's local Codex config still held the older `main` ref from the prior marketplace add. This means pressing upgrade against that local config could keep reinstalling the `main` line instead of the newer `codex-runtime` line.
+
+Local corrective action performed:
+
+- Backed up `C:\Users\KONEIT\.codex\config.toml` to `C:\Users\KONEIT\.codex\config.toml.kh-uaf-ref-backup`.
+- Changed local marketplace ref from `main` to `codex-runtime`.
+
+This does not hot-reload the active Codex session skill list. A fresh marketplace upgrade/reload is still required before new sessions reliably receive plugin version `2.9.28`.
+
+### Session `019e813d-c26b-7d82-82df-d6f052c83dc7`
+
+Plain prompt category: simple web dashboard build.
+
+Audit command:
+
+```bash
+python -B -m src.orchestration.session_skill_audit --summary "C:\Users\KONEIT\.codex\sessions\2026\06\01\rollout-2026-06-01T12-32-48-019e813d-c26b-7d82-82df-d6f052c83dc7.jsonl"
+```
+
+Result:
+
+- `runtime_applied_skills`: 0
+- `observed_skills`: 0
+- Required skills: 20
+- Required applied: 0
+- Required missing evidence: 20
+- Issue count: 22
+- `automatic-intake-harness`: absent
+- `plugin-composition-policy`: absent
+- `request-complexity-router`: absent
+- `skill-catalog`: absent
+
+Manual log parsing showed that the session used the Browser skill and proceeded with static dashboard implementation and browser checks, but no KH front-door runtime evidence appeared. This is a real blind automatic-intake failure.
+
+### Blind Subagent `019e813b-1ab8-7af2-93b9-78f2c7b6c50c`
+
+Plain prompt category: static calculator app, no KH/UAF/skill/harness wording.
+
+Result:
+
+- Created: `C:\Users\KONEIT\Desktop\Jang\SKillsTest\post-upgrade-blind-calc\index.html`
+- `runtime_applied_skills`: 4
+- Runtime applied: `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, `skill-catalog`
+- Required skills: 25
+- Required applied: 4
+- Required missing evidence: 21
+- Issue count: 22
+
+This run proves that a blind subagent can sometimes pick up automatic intake from the installed KH skill. However, it still missed many downstream lifecycle, QA, deliverable, token, and verification harnesses. It also had failed verification attempts that were later reported as blocked/fallback rather than fully hidden.
+
+### Blind Subagent `019e813b-36e2-7223-8b6e-257c9d63d97f`
+
+Plain prompt category: user-facing customer inquiry requirements/checklist documents, no KH/UAF/skill/harness wording.
+
+Result:
+
+- Created two user-facing Markdown documents under `C:\Users\KONEIT\Desktop\Jang\SKillsTest\post-upgrade-blind-docs`.
+- `runtime_applied_skills`: 0
+- Required skills: 14
+- Required applied: 0
+- Required missing evidence: 14
+- Issue count: 17
+- `automatic-intake-harness`: absent
+
+This is another blind automatic-intake failure.
+
+### Controlled Subagent `019e813b-743c-7d23-a70f-9719b7002282`
+
+This was not a blind test. The controller explicitly instructed the agent to run `kh_front_door` before summarizing a pytest log.
+
+Result:
+
+- Runtime applied: `automatic-intake-harness`, `plugin-composition-policy`
+- Selected but not executed / inspected: command output and token-related follow-ups
+- Output preserved failing test name, file/line, assertion values, and exit code.
+
+This only proves that explicit controller-mediated intake works. It does not prove automatic blind adoption.
+
+## Updated Conclusion
+
+The post-upgrade state is mixed:
+
+- Direct `kh_front_door` routing works.
+- Controller-mediated routing works.
+- One blind subagent picked up KH intake.
+- Another blind subagent and the user's separate plain dashboard session did not pick up KH intake.
+- The local Codex marketplace config was stale and still pointed at `main`, so the current installed cache was `2.9.27` even though the active fix branch is `codex-runtime` with plugin version `2.9.28`.
+
+Therefore KH UAF should not claim that blind automatic adoption is solved. The honest claim is that automatic-intake instructions and audit tooling exist, but host/subagent compliance is still not deterministic unless the controller runs front-door intake before delegation or the Codex host provides a hard preflight hook.
