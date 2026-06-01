@@ -74,6 +74,7 @@
     ],
     "defaultPrompt": [
       "CRITICAL: For every non-trivial user request, including subagent tasks, run KH front-door automatic intake before source exploration, file edits, deliverable creation, review, QA, verification, branch finishing, or long-log summarization. Do this even when the user did not name KH, UAF, plugin, skill, harness, front door, router, or catalog.",
+      "The bootstrap skill name is `always-on-front-door`; apply it before any other non-trivial KH skill or external plugin workflow.",
       "Use KH front-door auto routing before ordinary work. Users should not need to name every KH skill or harness. KH-native replacements for Superpowers-style worktree, TDD, debugging, review, verification, and branch finishing should stay available through the KH skill bundle, including verification-before-completion-harness and branch-finishing-harness.",
       "Non-trivial includes project paths or files, code changes, generated documents, long command output or logs, reviews, QA, verification, persistent state, subagents, or high-risk actions. If intake classifies the request as light/direct, answer cheaply.",
       "Preferred command: `python -m src.orchestration.kh_front_door --prompt \"<user request>\" --project \"<cwd or target project>\" --host codex --summary`.",
