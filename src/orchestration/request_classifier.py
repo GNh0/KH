@@ -259,14 +259,11 @@ SOFTWARE_HEAVY_TERMS = {
     "continue",
     "fix",
     "finish",
-    "generate",
     "modify",
     "refactor",
     "architecture",
     "verify",
     "validate",
-    "test",
-    "create",
     "만들",
     "생성",
     "구현",
@@ -895,7 +892,6 @@ LANGUAGE_TERMS = {
 }
 DOCUMENT_TERMS = {
     "document",
-    "report",
     "requirements",
     "requirements definition",
     "specification",
@@ -1069,6 +1065,9 @@ CONTEXT_FREE_AMBIGUOUS_EXTRA_TERMS = {
     "same as earlier",
     "continue from earlier",
     "do it",
+    "do the same thing",
+    "for the other file",
+    "other file",
     "is this safe",
     "open the attached",
     "attached article",
@@ -1076,6 +1075,7 @@ CONTEXT_FREE_AMBIGUOUS_EXTRA_TERMS = {
     "same as last time",
     "what did we decide earlier",
     "can you read this",
+    "can this file be improved",
     "make it more premium",
     "please submit",
     "report it",
@@ -1575,6 +1575,7 @@ def _command_output_classification(
         evidence_required=_dedupe(
             [
                 *evidence_required,
+                "source_summary",
                 "token_optimization",
                 "command_output_filter",
                 "important_failure_facts_preserved",
@@ -1637,11 +1638,15 @@ def _detect_domain(normalized: str, context: dict) -> str:
         return "general"
     if _contains_any(normalized, LANGUAGE_TERMS):
         return "language"
-    if _contains_any(normalized, DOCUMENT_TERMS | DOCUMENT_MISSING_CONTEXT_TERMS):
+    if _contains_any(normalized, DOCUMENT_MISSING_CONTEXT_TERMS):
         return "document"
     if _contains_any(normalized, EDUCATION_TERMS | EDUCATION_MISSING_CONTEXT_TERMS):
         return "education"
-    if _contains_any(normalized, CONTEXT_FREE_AMBIGUOUS_EXTRA_TERMS) and not _has_inline_payload(normalized):
+    if (
+        not _has_active_artifact(context)
+        and _contains_any(normalized, CONTEXT_FREE_AMBIGUOUS_EXTRA_TERMS)
+        and not _has_inline_payload(normalized)
+    ):
         return "general"
     if _contains_any(normalized, PRIVACY_TERMS) and _contains_any(
         normalized,
@@ -2149,7 +2154,7 @@ def _is_scheduling_action(normalized: str) -> bool:
 def _is_heavy_work(normalized: str, domain: str) -> bool:
     if _is_light_direct_task(normalized) or _is_structured_medium_work(normalized, domain):
         return False
-    if _is_conceptual_request(normalized) and not _contains_any(normalized, HEAVY_ACTION_TERMS | REVIEW_HEAVY_TERMS):
+    if _is_conceptual_request(normalized):
         return False
     if domain in {"compliance", "legal"} and _contains_any(
         normalized, {"make", "draft", "compliant", "privacy policy", "agreement"}

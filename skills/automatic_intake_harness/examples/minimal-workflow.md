@@ -20,6 +20,16 @@ The user did not mention KH, UAF, plugins, skills, harnesses, routing, or orches
 - `runtime_applied_skills` includes `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`.
 - `selected_not_executed_skills` includes implementation and verification follow-ups until they produce their own evidence.
 - The final report distinguishes applied, selected, skipped, blocked, and residual-risk states.
+- `execution_level = python-module`
+- `actual_runtime_path = src.orchestration.kh_front_door.build_kh_front_door`
+
+## Implementation targets
+
+- `src.orchestration.kh_front_door.build_kh_front_door`
+- `src.orchestration.request_classifier.classify_request`
+- `src.orchestration.plugin_composition.compose_plugin_route`
+- `src.skills.uaf_skill_catalog.collect_packaged_skills`
+- `skills/automatic_intake_harness/SKILL.md`
 
 ## Failure cases
 
