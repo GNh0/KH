@@ -18,6 +18,7 @@ from src.skills.uaf_skill_catalog import collect_packaged_skills
 
 
 FRONT_DOOR_SKILLS = [
+    "automatic-intake-harness",
     "plugin-composition-policy",
     "request-complexity-router",
     "skill-catalog",
@@ -374,7 +375,14 @@ def _front_door_skill_statuses(
 ) -> Dict[str, Dict[str, Any]]:
     statuses: Dict[str, Dict[str, Any]] = {}
     for skill in recommended_skills:
-        if skill == "plugin-composition-policy":
+        if skill == "automatic-intake-harness":
+            statuses[skill] = _status(
+                "applied",
+                "runtime",
+                "kh_front_door executed the automatic intake contract before source exploration or edits.",
+                ["kh_front_door", "classification", "plugin_route"],
+            )
+        elif skill == "plugin-composition-policy":
             statuses[skill] = _status(
                 "applied",
                 "runtime",

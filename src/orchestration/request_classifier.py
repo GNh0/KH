@@ -228,6 +228,14 @@ SOFTWARE_DOMAIN_TERMS = {
     "backend",
     "frontend",
     "server",
+    "html",
+    "javascript",
+    "css",
+    "web",
+    "app",
+    "tool",
+    "folder",
+    "file",
     "implementation",
     "python",
     "react",
@@ -237,6 +245,11 @@ SOFTWARE_DOMAIN_TERMS = {
     "unit test",
     "test",
     "tests",
+    "웹",
+    "앱",
+    "도구",
+    "폴더",
+    "파일",
 }
 
 SOFTWARE_HEAVY_TERMS = {
@@ -250,6 +263,18 @@ SOFTWARE_HEAVY_TERMS = {
     "modify",
     "refactor",
     "architecture",
+    "verify",
+    "validate",
+    "test",
+    "create",
+    "만들",
+    "생성",
+    "구현",
+    "고쳐",
+    "수정",
+    "개선",
+    "검증",
+    "테스트",
     "구현",
     "만들어",
     "고쳐",
@@ -305,6 +330,17 @@ HEAVY_ACTION_TERMS = {
     "refactor",
     "architecture",
     "update",
+    "verify",
+    "validate",
+    "test",
+    "만들",
+    "생성",
+    "구현",
+    "고쳐",
+    "수정",
+    "개선",
+    "검증",
+    "테스트",
     "구현",
     "만들어",
     "고쳐",
@@ -330,6 +366,70 @@ MEDIUM_TERMS = {
     "분석",
     "최근",
     "검토",
+}
+COMMAND_OUTPUT_SOURCE_TERMS = {
+    "command output",
+    "terminal output",
+    "stdout",
+    "stderr",
+    "exit code",
+    "returncode",
+    "log",
+    "logs",
+    "build log",
+    "test log",
+    "pytest",
+    "msbuild",
+    "stack trace",
+    "traceback",
+    "compiler error",
+    "assertion",
+    "로그",
+    "긴 로그",
+    "출력",
+    "명령 출력",
+    "터미널 출력",
+    "실패 테스트",
+    "테스트명",
+    "파일 라인",
+    "오류 로그",
+    "에러 로그",
+}
+COMMAND_OUTPUT_ACTION_TERMS = {
+    "summarize",
+    "compress",
+    "filter",
+    "truncate",
+    "keep only",
+    "preserve",
+    "extract",
+    "핵심만",
+    "요약",
+    "압축",
+    "필터",
+    "보존",
+    "추출",
+    "안전하게",
+}
+COMMAND_OUTPUT_FACT_TERMS = {
+    "failed",
+    "failure",
+    "error",
+    "failing test",
+    "file line",
+    "line number",
+    "assertion",
+    "actual",
+    "expected",
+    "exit code",
+    "returncode",
+    "traceback",
+    "실패",
+    "오류",
+    "에러",
+    "파일",
+    "라인",
+    "값",
 }
 LIGHT_TERMS = {
     "what is",
@@ -794,6 +894,23 @@ LANGUAGE_TERMS = {
     "learn spanish",
 }
 DOCUMENT_TERMS = {
+    "document",
+    "report",
+    "requirements",
+    "requirements definition",
+    "specification",
+    "checklist",
+    "deliverable",
+    "manual",
+    "문서",
+    "보고서",
+    "요구정의",
+    "요구 정의",
+    "기능정의",
+    "기능 정의",
+    "산출물",
+    "체크리스트",
+    "매뉴얼",
     "essay for grammar",
     "attached worksheet",
     "attached lecture notes",
@@ -846,6 +963,21 @@ EDUCATION_CURRENT_DATA_TERMS = {
     "late fees",
 }
 ARTIFACT_HEAVY_WORK_TERMS = {
+    "create a document",
+    "create a report",
+    "requirements document",
+    "requirements definition",
+    "write requirements",
+    "make checklist",
+    "deliverable",
+    "문서",
+    "보고서",
+    "요구정의",
+    "요구 정의",
+    "기능정의",
+    "기능 정의",
+    "산출물",
+    "체크리스트",
     "extract pdf tables",
     "create a chart",
     "chart from",
@@ -1169,6 +1301,9 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_high_risk(normalized, domain, context):
         return _high_risk_classification(domain, cross_cutting, evidence_required, reasons)
 
+    if _is_command_output_request(normalized):
+        return _command_output_classification(domain, cross_cutting, evidence_required, reasons)
+
     if _is_ambiguous(normalized, context):
         return _classification(
             complexity="ambiguous",
@@ -1418,6 +1553,36 @@ def _medium_classification(
         evidence_required=_dedupe(medium_evidence),
         reasons=[*reasons, "analysis_or_summary_without_direct_action"],
         confidence=0.78,
+    )
+
+
+def _command_output_classification(
+    domain: str,
+    cross_cutting: List[str],
+    evidence_required: List[str],
+    reasons: List[str],
+) -> RequestClassification:
+    return _classification(
+        complexity="medium",
+        domain=domain,
+        recommended_execution="skill_read",
+        cross_cutting=cross_cutting,
+        recommended_skills=[
+            "request-complexity-router",
+            "command-output-harness",
+            "token-optimizer",
+        ],
+        evidence_required=_dedupe(
+            [
+                *evidence_required,
+                "token_optimization",
+                "command_output_filter",
+                "important_failure_facts_preserved",
+                "exit_code_preserved",
+            ]
+        ),
+        reasons=[*reasons, "command_output_summary_or_filtering"],
+        confidence=0.82,
     )
 
 
@@ -1996,6 +2161,11 @@ def _is_heavy_work(normalized: str, domain: str) -> bool:
         return True
     if domain == "marketing" and _contains_any(normalized, MARKETING_HEAVY_TERMS):
         return True
+    if domain == "document" and (
+        _contains_any(normalized, ARTIFACT_HEAVY_WORK_TERMS)
+        or _contains_any(normalized, HEAVY_ACTION_TERMS)
+    ):
+        return True
     if _contains_any(normalized, EXTRA_PRODUCT_DESIGN_HEAVY_TERMS):
         return True
     if _contains_any(normalized, DESIGN_HEAVY_TERMS) and domain == "product-design":
@@ -2027,6 +2197,13 @@ def _is_medium_analysis_request(normalized: str) -> bool:
         return True
     return _contains_any(normalized, DOCUMENT_TRANSFORM_TERMS) and _contains_any(
         normalized, {"readme", "\ubc88\uc5ed", "\uc815\ub9ac"}
+    )
+
+
+def _is_command_output_request(normalized: str) -> bool:
+    return _contains_any(normalized, COMMAND_OUTPUT_SOURCE_TERMS) and (
+        _contains_any(normalized, COMMAND_OUTPUT_ACTION_TERMS)
+        or _contains_any(normalized, COMMAND_OUTPUT_FACT_TERMS)
     )
 
 
@@ -2153,7 +2330,24 @@ def _needs_token_optimization(original: str, normalized: str) -> bool:
     return (
         len(original) > 2000
         or original.count("\n") > 50
-        or _contains_any(normalized, {"긴 로그", "stack trace", "traceback", "토큰", "압축", "핵심만"})
+        or _contains_any(
+            normalized,
+            {
+                "long log",
+                "large log",
+                "command output",
+                "stack trace",
+                "traceback",
+                "token",
+                "compress",
+                "truncate",
+                "핵심만",
+                "긴 로그",
+                "명령 출력",
+                "토큰",
+                "압축",
+            },
+        )
     )
 
 
