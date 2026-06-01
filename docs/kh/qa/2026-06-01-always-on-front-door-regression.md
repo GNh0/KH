@@ -126,3 +126,22 @@ Fixes added in 2.9.33:
 - `always-on-front-door` usage docs now call out target-folder checks and memory lookup as forbidden pre-intake work for non-trivial requests.
 
 Verification target after installing 2.9.33: repeat the carryover subagent scenario and require zero `missing_front_door` issues for the second turn.
+
+## 2.9.34 Order-Evidence Regression
+
+Post-upgrade subagent sessions `019e821c-4557-7f11-abc1-3d964542013f` and `019e821c-4710-7d51-8385-94cc75cebe61` showed a stricter failure:
+
+- Both sessions announced `always-on-front-door`.
+- Both sessions read/inspected KH skill guidance.
+- Both sessions still executed target-folder `Test-Path` / `Get-ChildItem` before the actual `python -m src.orchestration.kh_front_door ... --summary` command.
+
+That means the previous audit accepted SKILL.md reads or front-door mentions too broadly as order evidence. The correct standard is stricter: for non-trivial work, the first standalone work-bearing tool call must be `kh_front_door`, or the session must record an explicit light/direct or blocked rationale. Target-folder checks must not run before that command, even in the same parallel tool batch.
+
+Fixes added in 2.9.34:
+
+- `session_skill_audit` now uses strict order evidence for `missing_front_door`: only the `src.orchestration.kh_front_door` command or real front-door runtime JSON output can satisfy the entry order gate.
+- Skill catalog reads, SKILL.md output, assistant messages that mention `always-on-front-door`, and `kh-uaf` metadata no longer satisfy the order gate.
+- Unit coverage now fails a session that lists the skill catalog or reads `always-on-front-door` docs, then starts `Get-ChildItem`.
+- The plugin prompt and `always-on-front-door` docs now explicitly forbid parallelizing `Test-Path`, `Get-ChildItem`, `rg`, file reads, or MEMORY.md searches in the same pre-intake batch.
+
+Verification target after installing 2.9.34: repeat the blind and carryover subagent scenarios and require the first non-trivial tool call after the user request to be `python -m src.orchestration.kh_front_door ... --summary`, with target-folder checks only after that command.
