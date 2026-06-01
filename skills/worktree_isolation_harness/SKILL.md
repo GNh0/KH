@@ -1,6 +1,6 @@
 ---
 name: worktree-isolation-harness
-description: Use when a Git-backed UAF implementation needs an isolated workspace, host worktree, project-local .worktrees task folder, or explicit in-place exception.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a Git-backed UAF implementation needs an isolated workspace, host worktree, project-local .worktrees task folder, or explicit in-place exception.
 ---
 
 # Worktree Isolation Harness

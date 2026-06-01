@@ -1,6 +1,6 @@
 ---
 name: goal-state-harness
-description: Use when a UAF workflow needs objective tracking, completion criteria, blocked-state reporting, or evidence-based goal closure.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow needs objective tracking, completion criteria, blocked-state reporting, or evidence-based goal closure.
 ---
 
 # Goal State Harness

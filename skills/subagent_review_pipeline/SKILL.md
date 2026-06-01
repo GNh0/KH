@@ -1,6 +1,6 @@
 ---
 name: subagent-review-pipeline
-description: Use when coordinating implementer, spec-reviewer, and code-quality-reviewer roles for independent UAF subtasks.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when coordinating implementer, spec-reviewer, and code-quality-reviewer roles for independent UAF subtasks.
 ---
 
 # Subagent Review Pipeline

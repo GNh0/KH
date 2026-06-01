@@ -1,6 +1,6 @@
 ---
 name: command-output-harness
-description: Use when compressing command output for agents, preserving exit codes, filtering noisy logs, or tracking token savings in UAF workflows.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when compressing command output for agents, preserving exit codes, filtering noisy logs, or tracking token savings in UAF workflows.
 ---
 
 # Command Output Harness

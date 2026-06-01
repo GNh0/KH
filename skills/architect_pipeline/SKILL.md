@@ -1,6 +1,6 @@
 ---
 name: architect-pipeline
-description: Use when a substantial application, system, process, analysis, or cross-domain workflow needs a design blueprint before execution.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a substantial application, system, process, analysis, or cross-domain workflow needs a design blueprint before execution.
 ---
 # Architect Pipeline Skill
 

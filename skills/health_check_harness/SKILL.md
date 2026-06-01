@@ -1,6 +1,6 @@
 ---
 name: health-check-harness
-description: Use when a UAF workflow needs a code quality dashboard, test health summary, static checks, or release readiness score.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow needs a code quality dashboard, test health summary, static checks, or release readiness score.
 ---
 
 # Health Check Harness

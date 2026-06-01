@@ -1,6 +1,6 @@
 ---
 name: parallel-orchestration-harness
-description: Use when a task needs bounded parallel worker execution, fan-out/fan-in orchestration, task aggregation, or multi-file agent dispatch.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a task needs bounded parallel worker execution, fan-out/fan-in orchestration, task aggregation, or multi-file agent dispatch.
 ---
 
 # Parallel Orchestration Harness

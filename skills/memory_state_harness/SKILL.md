@@ -1,6 +1,6 @@
 ---
 name: memory-state-harness
-description: Use when a UAF workflow needs scoped persistent memory, memory candidates, project/conversation namespace isolation, or archive/delete cleanup policy.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow needs scoped persistent memory, memory candidates, project/conversation namespace isolation, or archive/delete cleanup policy.
 ---
 
 # Memory State Harness

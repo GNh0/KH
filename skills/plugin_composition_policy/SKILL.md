@@ -1,6 +1,6 @@
 ---
 name: plugin-composition-policy
-description: Use when multiple plugins, tools, skills, connectors, or future capability providers may apply and the host must choose direct, single-provider, hybrid, or clarification routing without letting any provider self-force selection.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when multiple plugins, tools, skills, connectors, or future capability providers may apply and the host must choose direct, single-provider, hybrid, or clarification routing without letting any provider self-force selection.
 ---
 
 # Plugin Composition Policy

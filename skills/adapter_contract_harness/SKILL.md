@@ -1,6 +1,6 @@
 ---
 name: adapter-contract-harness
-description: Use when adding or normalizing dispatch adapters for Codex, Antigravity-style agents, Claude Code, local workers, or other agent runtimes.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when adding or normalizing dispatch adapters for Codex, Antigravity-style agents, Claude Code, local workers, or other agent runtimes.
 ---
 
 # Adapter Contract Harness

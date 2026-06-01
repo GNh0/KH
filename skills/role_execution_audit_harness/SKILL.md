@@ -1,6 +1,6 @@
 ---
 name: role-execution-audit-harness
-description: Use when UAF role DAG execution must prove roles actually ran, produced artifacts, and included parallel waves.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when UAF role DAG execution must prove roles actually ran, produced artifacts, and included parallel waves.
 ---
 
 # Role Execution Audit Harness

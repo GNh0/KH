@@ -1,6 +1,6 @@
 ---
 name: traceability-matrix-harness
-description: Use when UAF workflows need requirements, deliverables, evidence keys, and review gates mapped without exporting internal harness spreadsheets.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when UAF workflows need requirements, deliverables, evidence keys, and review gates mapped without exporting internal harness spreadsheets.
 ---
 
 # Traceability Matrix Harness

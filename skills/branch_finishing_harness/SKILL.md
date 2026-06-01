@@ -1,6 +1,6 @@
 ---
 name: branch-finishing-harness
-description: Use when a UAF workflow has implementation changes and must decide whether to keep local, commit, push, open a PR, merge, or clean up.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow has implementation changes and must decide whether to keep local, commit, push, open a PR, merge, or clean up.
 ---
 
 # Branch Finishing Harness

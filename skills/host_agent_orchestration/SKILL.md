@@ -1,6 +1,6 @@
 ---
 name: host-agent-orchestration
-description: Use when designing portable UAF host agent loops, subagent delegation, tool permissions, hooks, or observability across Codex, Antigravity-style, Claude Code, or local runtimes.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when designing portable UAF host agent loops, subagent delegation, tool permissions, hooks, or observability across Codex, Antigravity-style, Claude Code, or local runtimes.
 ---
 
 # Host Agent Orchestration

@@ -145,3 +145,22 @@ Fixes added in 2.9.34:
 - The plugin prompt and `always-on-front-door` docs now explicitly forbid parallelizing `Test-Path`, `Get-ChildItem`, `rg`, file reads, or MEMORY.md searches in the same pre-intake batch.
 
 Verification target after installing 2.9.34: repeat the blind and carryover subagent scenarios and require the first non-trivial tool call after the user request to be `python -m src.orchestration.kh_front_door ... --summary`, with target-folder checks only after that command.
+
+## 2.9.35 Bootstrap-Only Regression
+
+After installing 2.9.34, fresh subagent sessions still failed the strict order gate:
+
+- Blind session `019e823a-10f5-74a0-ae89-880055011366` read `always_on_front_door/SKILL.md` and searched `MEMORY.md` before `kh_front_door`.
+- Carryover session `019e823a-25ad-7f03-8ee6-bf7f272cab80` read `always_on_front_door`, `qa_gate_harness`, and `verification_before_completion_harness` SKILL files, then ran `Test-Path`, before `kh_front_door`.
+
+This showed that a broad skill list lets the host select concrete follow-up skills too early. The corrected bootstrap contract is stricter: at task start, only `kh-uaf:always-on-front-door` is eligible. Other KH skills, browser skills, memory handling, QA, verification, and target-folder checks become eligible only after `kh_front_door` returns.
+
+Fixes added in 2.9.35:
+
+- Codex `defaultPrompt` now starts with `KH BOOTSTRAP OVERRIDE`.
+- The bootstrap text explicitly forbids pre-front-door `Get-Content`, `Select-String`, non-bootstrap SKILL.md reads, MEMORY.md searches, and parallel tool batches containing those actions.
+- `always_on_front_door/SKILL.md` now starts with an immediate action section: after reading that one file, run the front-door command immediately.
+- All non-bootstrap skill descriptions now say they are used only after `kh-uaf:always-on-front-door` has already run and selected them.
+- `session_skill_audit` now treats non-bootstrap KH SKILL.md reads before front-door as `missing_front_door`.
+
+Verification target after installing 2.9.35: repeat blind, carryover, and brainstorming-style subagent scenarios. Passing requires no `always-on-front-door` `missing_front_door` issue in the session audit, not merely a later successful dashboard build.

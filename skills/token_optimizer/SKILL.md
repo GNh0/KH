@@ -1,6 +1,6 @@
 ---
 name: token-optimizer
-description: Use when large or long-running development workflows, subagent transcripts, terminal logs, command output, or Python code risk wasting LLM context.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when large or long-running development workflows, subagent transcripts, terminal logs, command output, or Python code risk wasting LLM context.
 ---
 # Token Optimizer Skill
 

@@ -1,6 +1,6 @@
 ---
 name: workflow-usability-harness
-description: Use when KH needs visible progress panels, progress-to-Compound handoff, token provider selection, role command entrypoints, or session-start context restore.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when KH needs visible progress panels, progress-to-Compound handoff, token provider selection, role command entrypoints, or session-start context restore.
 ---
 
 # Workflow Usability Harness

@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging-harness
-description: Use when a UAF workflow encounters a bug, failing test, unexpected behavior, flaky result, or broken environment and must diagnose before patching.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow encounters a bug, failing test, unexpected behavior, flaky result, or broken environment and must diagnose before patching.
 ---
 
 # Systematic Debugging Harness

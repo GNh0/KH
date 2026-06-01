@@ -1,6 +1,6 @@
 ---
 name: plan-execution-harness
-description: Use when a written UAF task plan must be executed task by task with progress state, RED/GREEN checks, reviews, commits, and next-task handoff.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a written UAF task plan must be executed task by task with progress state, RED/GREEN checks, reviews, commits, and next-task handoff.
 ---
 
 # Plan Execution Harness

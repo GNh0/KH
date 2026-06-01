@@ -989,6 +989,8 @@ def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:
     payload_type = str(payload.get("type", ""))
     if payload_type not in {"function_call", "custom_tool_call"}:
         return False
+    if _is_non_bootstrap_kh_skill_read(payload, lowered):
+        return True
     if _is_kh_front_door_evidence(lowered):
         return False
     tool_name = str(payload.get("name", "")).lower()
@@ -1013,6 +1015,17 @@ def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:
             "add-content",
         ]
     )
+
+
+def _is_non_bootstrap_kh_skill_read(payload: Dict[str, Any], lowered: str) -> bool:
+    tool_name = str(payload.get("name", "")).lower()
+    if tool_name not in {"shell_command", "functions.shell_command"}:
+        return False
+    if "kh-uaf-marketplace" not in lowered and "\\kh-uaf\\" not in lowered and "/kh-uaf/" not in lowered:
+        return False
+    if "skill.md" not in lowered or "\\skills\\" not in lowered and "/skills/" not in lowered:
+        return False
+    return "always_on_front_door" not in lowered
 
 
 def summarize_session_skill_audits(paths: Iterable[str | Path]) -> Dict[str, Any]:

@@ -1,6 +1,6 @@
 ---
 name: skill-catalog
-description: Use when listing, reading, or adding packaged UAF skills and harnesses in this repository.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when listing, reading, or adding packaged UAF skills and harnesses in this repository.
 ---
 
 # UAF Skill Catalog

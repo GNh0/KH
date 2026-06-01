@@ -762,6 +762,53 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_non_bootstrap_kh_skill_read_before_front_door_is_a_miss(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Build a small static KPI dashboard and verify it.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "Get-Content -Path 'C:\\Users\\KONEIT\\.codex\\plugins\\cache\\"
+                            "kh-uaf-marketplace\\kh-uaf\\2.9.34\\skills\\qa_gate_harness\\SKILL.md'"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python -m src.orchestration.kh_front_door "
+                            "--prompt \"Build a small static KPI dashboard and verify it.\" --summary"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                and "qa_gate_harness" in issue["first_work"]
+                for issue in audit.issues
+            )
+        )
+
     def test_kh_plugin_request_passes_when_front_door_runs_first(self):
         path = self.write_session(
             [

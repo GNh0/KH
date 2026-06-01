@@ -5,22 +5,26 @@ description: Use when any non-trivial Codex, Antigravity-style, Claude Code, or 
 
 # Always On Front Door
 
+## Immediate Action
+
+After reading this file for a work-bearing request, run the front-door command immediately. Do not open QA, verification, browser, document, image, memory, or other KH skill files first. Do not run target-folder checks, `MEMORY.md` searches, project file reads, or parallel tool batches before the command.
+
+```bash
+python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
+```
+
+Only after this command returns should the selected follow-up skills be read or applied.
+
 ## KH Entry Contract
 
 - Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
+- At bootstrap time, select only this skill first; other skills become eligible after `kh_front_door` returns.
 - If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
 - Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
 This is the host-visible bootstrap skill for KH UAF. Its job is to make automatic intake harder to miss in ordinary sessions where the user asks for real work without naming KH internals.
-
-## Support files
-
-- Read `references/usage.md` before changing host trigger wording.
-- Use `examples/minimal-workflow.md` as the blind-request acceptance scenario.
-- Run `python scripts/smoke_check.py` from this skill folder to verify support files and implementation targets.
-- Run `python scripts/demo.py --output-dir <tmp>` to verify the front-door demo path.
 
 ## Workflow
 
@@ -51,6 +55,7 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 - Do not start with target-folder checks, memory search, image generation, browser testing, document writing, source exploration, or shell commands for a work-bearing request before front-door intake.
 - Do not count "I will use always-on-front-door", a SKILL.md read, or a catalog listing as front-door execution. The runtime command or blocked/direct rationale must come first.
 - Do not bundle `Test-Path`, `Get-ChildItem`, `rg`, file reads, or MEMORY.md search in the same parallel batch as the first front-door command.
+- Do not open `qa_gate_harness`, `verification_before_completion_harness`, browser skills, memory files, or support references before the front-door command.
 - Do not assume plugin `defaultPrompt` was injected into the live session.
 - Do not count a SKILL.md read, plugin listing, or marketplace metadata as runtime application.
 - Do not ask the user to name KH skills before applying this bootstrap.
@@ -65,3 +70,10 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 - `skills/always_on_front_door/SKILL.md`
 - `skills/automatic_intake_harness/SKILL.md`
 - `tests.test_kh_front_door_always_on`
+
+## Support files
+
+- Read `references/usage.md` before changing host trigger wording.
+- Use `examples/minimal-workflow.md` as the blind-request acceptance scenario.
+- Run `python scripts/smoke_check.py` from this skill folder to verify support files and implementation targets.
+- Run `python scripts/demo.py --output-dir <tmp>` to verify the front-door demo path.

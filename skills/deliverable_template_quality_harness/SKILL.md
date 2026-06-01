@@ -1,6 +1,6 @@
 ---
 name: deliverable-template-quality-harness
-description: Use when UAF-generated user deliverables need template completeness, required section coverage, or evidence-backed quality checks.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when UAF-generated user deliverables need template completeness, required section coverage, or evidence-backed quality checks.
 ---
 
 # Deliverable Template Quality Harness

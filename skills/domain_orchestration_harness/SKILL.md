@@ -1,6 +1,6 @@
 ---
 name: domain-orchestration-harness
-description: Use when a UAF workflow must handle a non-code or cross-domain objective, require a design stage, persist design artifacts, or route work through review, QA/QC, risk, policy, and final decision gates.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow must handle a non-code or cross-domain objective, require a design stage, persist design artifacts, or route work through review, QA/QC, risk, policy, and final decision gates.
 ---
 
 # Domain Orchestration Harness

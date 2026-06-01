@@ -1,6 +1,6 @@
 ---
 name: scenario-evaluation-harness
-description: Use when validating KH UAF against repeated SIDE-style human usage scenarios for request routing, evidence collection, gate decisions, and resume handoff behavior.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when validating KH UAF against repeated SIDE-style human usage scenarios for request routing, evidence collection, gate decisions, and resume handoff behavior.
 ---
 # Scenario Evaluation Harness
 
