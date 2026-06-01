@@ -64,7 +64,8 @@ def resolve_target(ref: str, project_root: Path = PROJECT_ROOT) -> Dict[str, Any
 
 def audit_packaged_skills(project_root: Path = PROJECT_ROOT, skill_name: str = "") -> Dict[str, Any]:
     catalog = collect_packaged_skills(str(project_root / "skills"))
-    test_index = _build_test_index(project_root / "tests")
+    test_index = _build_test_index(project_root / "tests", project_root)
+    tests_packaged = bool(test_index)
     skill_audits = []
 
     for skill in catalog["skills"]:
@@ -75,13 +76,25 @@ def audit_packaged_skills(project_root: Path = PROJECT_ROOT, skill_name: str = "
         targets = extract_implementation_targets(content)
         target_results = []
         for ref in targets:
+            if ref.startswith("tests.") and not tests_packaged:
+                target = {
+                    "ref": ref,
+                    "status": "packaged_test_reference",
+                    "path": "",
+                    "test_evidence": [
+                        "repository tests are not packaged in this runtime; run from a full source checkout for direct test files"
+                    ],
+                }
+                target_results.append(target)
+                continue
+
             target = resolve_target(ref, project_root)
             target["test_evidence"] = _test_evidence_for_target(ref, target, test_index)
             target_results.append(target)
 
         unresolved = [
             target for target in target_results
-            if target["status"] not in {"resolved", "template"}
+            if target["status"] not in {"resolved", "template", "packaged_test_reference"}
         ]
         executable = skill["execution_level"] in {"python-module", "hybrid-harness"}
         has_test_evidence = any(target["test_evidence"] for target in target_results)
@@ -98,6 +111,9 @@ def audit_packaged_skills(project_root: Path = PROJECT_ROOT, skill_name: str = "
             "target_count": len(targets),
             "resolved_targets": sum(1 for target in target_results if target["status"] == "resolved"),
             "template_targets": sum(1 for target in target_results if target["status"] == "template"),
+            "packaged_test_references": sum(
+                1 for target in target_results if target["status"] == "packaged_test_reference"
+            ),
             "unresolved_targets": unresolved,
             "has_test_evidence": has_test_evidence,
             "status": status,
@@ -108,6 +124,7 @@ def audit_packaged_skills(project_root: Path = PROJECT_ROOT, skill_name: str = "
         "success": all(skill["status"] == "passed" for skill in skill_audits),
         "total_skills": len(skill_audits),
         "execution_levels": catalog["execution_levels"],
+        "tests_packaged": tests_packaged,
         "skills": skill_audits,
     }
 
@@ -163,18 +180,23 @@ def _import_longest_module(ref: str) -> Tuple[Any, List[str]]:
         try:
             module = importlib.import_module(module_name)
         except ModuleNotFoundError as exc:
-            if exc.name != module_name:
+            missing_name = exc.name or ""
+            missing_is_requested_module = (
+                missing_name == module_name
+                or module_name.startswith(f"{missing_name}.")
+            )
+            if not missing_is_requested_module:
                 raise
             continue
         return module, parts[index:]
     return None, []
 
 
-def _build_test_index(tests_dir: Path) -> Dict[str, str]:
+def _build_test_index(tests_dir: Path, project_root: Path = PROJECT_ROOT) -> Dict[str, str]:
     if not tests_dir.is_dir():
         return {}
     return {
-        str(path.relative_to(PROJECT_ROOT)).replace(os.sep, "/"): path.read_text(encoding="utf-8")
+        str(path.relative_to(project_root)).replace(os.sep, "/"): path.read_text(encoding="utf-8")
         for path in sorted(tests_dir.glob("test_*.py"))
     }
 

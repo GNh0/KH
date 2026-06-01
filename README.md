@@ -126,7 +126,7 @@ The marketplace file lives on `main`, but it installs the plugin from the `codex
 
 After install or upgrade, start a new thread so Codex reloads the skills.
 
-Upgrade note: Codex installs plugin cache entries by manifest version. When publishing a new plugin build, bump both `.codex-plugin/plugin.json` and the root `plugin.json` version. If the marketplace clone is current but the installed plugin still appears under an older cache path such as `kh-uaf/2.8.0`, install or upgrade again after the version bump.
+Upgrade note: Codex installs plugin cache entries by manifest version. When publishing a new plugin build, bump both `.codex-plugin/plugin.json` and the root `plugin.json` version. If the marketplace clone is current but the installed plugin still appears under an older cache path such as `kh-uaf/2.9.27`, install or upgrade again after the version bump.
 
 Direct Windows clone:
 

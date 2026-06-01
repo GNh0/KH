@@ -19,8 +19,9 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 
 4. If the command is unavailable, read `automatic-intake-harness`, `SKILL.md`, `plugin-composition-policy`, `request-complexity-router`, or the packaged skill catalog to classify the request and select the minimal skill bundle automatically. Users should not need to name every harness.
 5. Record selected, considered, skipped, and blocked skills with evidence; then start source reads, edits, role DAG execution, or deliverable generation.
-6. Use `README.md` for install and host integration instructions.
-7. Validate the skill pack before relying on it:
+6. Before delegating non-trivial work to a subagent, the controller should run front-door intake and pass a bounded task packet. After the subagent returns, audit whether the selected skills were actually used, skipped with rationale, or missing. Do not assume subagents will automatically enter KH just because the plugin is installed.
+7. Use `README.md` for install and host integration instructions.
+8. Validate the skill pack before relying on it:
 
 ```bash
 python -m src.skills.uaf_skill_catalog --check
