@@ -435,6 +435,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
 
     issues.extend(_kh_front_door_issues(path))
     issues.extend(_stale_skill_cache_issues(path))
+    issues.extend(_cross_scope_context_issues(path))
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
     coverage = _coverage(skill_rows)
     return SessionSkillAudit(
@@ -679,6 +680,107 @@ def _stale_skill_cache_issues(path: Path) -> List[Dict[str, Any]]:
             "samples": samples,
         }
     ]
+
+
+def _cross_scope_context_issues(path: Path) -> List[Dict[str, Any]]:
+    active_target: Path | None = None
+    trigger_sample = ""
+    samples: List[str] = []
+
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        text = _payload_text(payload)
+
+        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+            targets = _extract_windows_paths(text)
+            active_target = Path(targets[0]) if targets else None
+            trigger_sample = _short(text) if targets else ""
+            samples = []
+            continue
+
+        if active_target is None or payload_type not in {"function_call", "custom_tool_call"}:
+            continue
+
+        sample = _cross_scope_context_sample(active_target, text)
+        if sample:
+            samples.append(sample)
+            if len(samples) >= 3:
+                break
+
+    if not samples:
+        return []
+    return [
+        {
+            "skill": "guard-policy-harness",
+            "status": "cross_scope_context_leak",
+            "severity": "P1",
+            "reason": (
+                "The session read a parent directory or sibling run folder while a specific target folder "
+                "was requested. That can contaminate a blind or independent SIDE scenario with previous outputs."
+            ),
+            "action": (
+                "Treat the run as contaminated unless the user explicitly requested comparison or reuse. "
+                "Restart from the requested target boundary and inspect only that target after front-door routing."
+            ),
+            "trigger": trigger_sample,
+            "samples": samples,
+        }
+    ]
+
+
+def _cross_scope_context_sample(target: Path, text: str) -> str:
+    lowered = text.lower()
+    if not any(marker in lowered for marker in ["get-childitem", "get-content", "select-string", "rg ", "test-path"]):
+        return ""
+    target = _normalize_path(target)
+    parent = _normalize_path(target.parent)
+    for raw_path in _extract_windows_paths(text):
+        candidate = _normalize_path(Path(raw_path))
+        if candidate == target or _path_is_relative_to(candidate, target):
+            continue
+        if candidate == parent:
+            return _short(f"parent folder scan: {raw_path}")
+        if not _path_is_relative_to(candidate, parent):
+            continue
+        try:
+            sibling_name = candidate.relative_to(parent).parts[0]
+        except ValueError:
+            continue
+        if sibling_name != target.name and _shares_run_prefix(sibling_name, target.name):
+            return _short(f"sibling run read: {raw_path}")
+    return ""
+
+
+def _extract_windows_paths(text: str) -> List[str]:
+    paths = []
+    for match in re.finditer(r"[A-Za-z]:\\[^\s\"'`<>|]+", text):
+        value = match.group(0).rstrip(".,;:)]}")
+        if value:
+            paths.append(value)
+    return paths
+
+
+def _normalize_path(path: Path) -> Path:
+    return Path(str(path).rstrip("\\/")).resolve(strict=False)
+
+
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _shares_run_prefix(left: str, right: str) -> bool:
+    left_parts = left.lower().split("_")
+    right_parts = right.lower().split("_")
+    if len(left_parts) < 2 or len(right_parts) < 2:
+        return False
+    return left_parts[:-1] == right_parts[:-1]
 
 
 def _is_stale_kh_skill_cache_failure(lowered: str) -> bool:

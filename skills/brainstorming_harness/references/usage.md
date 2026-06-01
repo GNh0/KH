@@ -37,7 +37,7 @@ Do not use this skill only because it is available. Use it when the current task
 ## Execution pattern
 
 1. Read `SKILL.md` first and confirm the trigger applies.
-2. Inspect project context if a repository already exists.
+2. Inspect only the explicit target project/folder if it exists. If the target folder is new, do not scan its parent or read sibling folders from earlier tests/runs.
 3. Ask one question at a time. Prefer multiple-choice options when that reduces friction.
 4. Offer visual companion only when seeing a layout, diagram, or comparison is better than reading text.
 5. Present 2-3 approaches with tradeoffs and a recommendation.
@@ -66,7 +66,10 @@ Do not use this skill only because it is available. Use it when the current task
 - If the user rejects the proposed direction, update decisions and rerun validation.
 - If the task is too broad for one design, decompose it and brainstorm only the first project slice.
 - If visual artifacts are created, record what decision they supported and avoid leaving orphan mockups.
+- If a sibling or previous run folder was read accidentally, discard that run as contaminated, record the leak, and restart from the requested target boundary.
 
 ## Quality bar
 
 A valid use of `brainstorming-harness` must leave enough evidence for another agent to answer: what idea was explored, what alternatives were considered, what the user approved, what constraints apply, what is unresolved, and which KH skill should receive the handoff next.
+
+It must also preserve scope independence. Prior run folders are not context unless the user asks to compare or reuse them.
