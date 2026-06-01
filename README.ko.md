@@ -60,7 +60,7 @@ Sparse path: .agents/plugins
 
 `main`은 marketplace 설정을 제공하고, 실제 플러그인은 `codex-runtime` 브랜치에서 설치되도록 구성되어 있습니다. 설치 또는 업그레이드 후에는 새 세션을 열어 Codex가 최신 스킬 파일을 다시 로드하게 해야 합니다.
 
-새 플러그인 빌드를 배포할 때는 `.codex-plugin/plugin.json`과 루트 `plugin.json`의 `version`을 함께 올려야 합니다. marketplace가 최신이어도 설치 캐시가 이전 버전이면 Codex에서 업그레이드한 뒤 새 세션으로 다시 검증해야 합니다.
+업그레이드 참고: 새 플러그인 빌드를 배포할 때는 `.codex-plugin/plugin.json`과 루트 `plugin.json`의 `version`을 함께 올려야 합니다. marketplace가 최신이어도 설치 캐시가 이전 버전이면 Codex에서 업그레이드한 뒤 새 세션으로 다시 검증해야 합니다. 이 작업은 버전 bump가 필요합니다.
 
 설치 상태 점검:
 
@@ -68,7 +68,7 @@ Sparse path: .agents/plugins
 python -m src.orchestration.plugin_install_audit --summary
 ```
 
-## Antigravity 설치
+## Antigravity 플러그인 설치
 
 전역 설치 예시:
 
@@ -91,7 +91,7 @@ pip install -r requirements.txt
 python cli.py run --project ./my_app --prompt "Create a small demo app"
 ```
 
-기본 provider는 smoke 확인용 `offline`입니다. 실제 요구사항을 만족하는 생성이 필요하면 `local`, `openai`, `codex`, `claude` provider를 사용합니다.
+기본 provider는 smoke-only 확인용 `offline`입니다. 실제 요구사항을 만족하는 생성이 필요하면 `local`, `openai`, `codex`, `claude` provider를 사용합니다.
 
 ```bash
 python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --provider local --base-url http://localhost:11434/v1
