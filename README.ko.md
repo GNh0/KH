@@ -143,7 +143,7 @@ python -B -m src.benchmarks.practical_quality_gate --summary
 
 Codex에서 플러그인을 업그레이드하기 전의 기존 세션과 서브에이전트는 이전 캐시를 계속 사용할 수 있습니다.
 
-예를 들어 배포가 `2.9.32`이어도 현재 세션이 `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.31`에서 시작했다면 새 스킬은 바로 적용되지 않을 수 있습니다.
+예를 들어 배포가 `2.9.33`이어도 현재 세션이 `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.32`에서 시작했다면 새 스킬은 바로 적용되지 않을 수 있습니다.
 
 이 경우:
 

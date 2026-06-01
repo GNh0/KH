@@ -14,7 +14,7 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 
 ## KH Front-Door Routing
 
-Users should not need to name KH, UAF, or any individual skill/harness for non-trivial work. If KH is installed and the request involves project files, code changes, deliverables, substantial documents, long command output, review, QA, verification, branch finishing, subagents, persistent state, or high-risk actions, the host should first run the KH front door before source exploration or edits:
+Users should not need to name KH, UAF, or any individual skill/harness for non-trivial work. If KH is installed and the request involves project files, code changes, deliverables, substantial documents, long command output, review, QA, verification, branch finishing, subagents, persistent state, or high-risk actions, the host should first run the KH front door before source exploration, memory lookup, target-folder checks, or edits:
 
 ```bash
 python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
@@ -29,7 +29,11 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 
 This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `always-on-front-door` `missing_front_door` issue when a KH-capable session begins non-trivial work before the front door runs, unless the request was classified as light/direct or plugin composition did not select KH.
 
-If a user says to actively, always, by default, or continuously use KH/UAF skills or harnesses in a conversation or project, hosts should carry `kh_active_directive=active` into later non-trivial turns until the user explicitly opts out. Later turns do not need to repeat KH names. `session-skill-audit` treats a later work-bearing turn that skips front-door intake as a P1 `kh_active_directive` miss.
+`Test-Path`, `Get-ChildItem`, `rg`, file reads, MEMORY.md searches, browser/document/image actions, and plugin-specific work are already work exploration. They should happen after front-door intake unless the request is light/direct or the front-door command is unavailable and the blocked rationale is recorded first.
+
+If a user says to actively, aggressively, always, by default, or continuously use KH/UAF skills or harnesses in a conversation or project, hosts should carry `kh_active_directive=active` into later non-trivial turns until the user explicitly opts out. Later turns do not need to repeat KH names. `session-skill-audit` treats a later work-bearing turn that skips front-door intake as a P1 `kh_active_directive` miss.
+
+Internal skill/harness instructions and subagent packets can stay in English. Final user-facing answers and deliverables should use the user's requested or apparent language.
 
 ## What It Includes
 

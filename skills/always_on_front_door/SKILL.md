@@ -27,7 +27,7 @@ This is the host-visible bootstrap skill for KH UAF. Its job is to make automati
 1. Before using any other non-trivial skill or plugin, decide whether the user request is direct/light or work-bearing.
 2. Work-bearing means project files, code changes, generated assets/documents, long logs, review, QA, verification, subagents, persistence, branch work, or risky commands.
 3. If an earlier message in the same conversation or project asked the assistant to actively, always, or by default use KH/UAF skills or harnesses, keep `kh_active_directive=active` for later work-bearing turns until the user explicitly opts out.
-4. If work-bearing, run KH front-door intake before source reads, shell exploration, image generation, document generation, browser QA, or subagent dispatch:
+4. If work-bearing, run KH front-door intake before source reads, target-folder checks, `Test-Path`, `Get-ChildItem`, `rg`, memory lookup, image generation, document generation, browser QA, or subagent dispatch:
 
 ```bash
 python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
@@ -48,7 +48,7 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 
 ## Common mistakes
 
-- Do not start with image generation, browser testing, document writing, source exploration, or shell commands for a work-bearing request before front-door intake.
+- Do not start with target-folder checks, memory search, image generation, browser testing, document writing, source exploration, or shell commands for a work-bearing request before front-door intake.
 - Do not assume plugin `defaultPrompt` was injected into the live session.
 - Do not count a SKILL.md read, plugin listing, or marketplace metadata as runtime application.
 - Do not ask the user to name KH skills before applying this bootstrap.

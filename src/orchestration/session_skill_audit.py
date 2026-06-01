@@ -734,6 +734,33 @@ def _is_kh_front_door_request(lowered: str) -> bool:
 
 def _is_kh_active_directive(text: str) -> bool:
     lowered = text.lower()
+    if (
+        any(marker in lowered for marker in ["kh", "uaf"])
+        and any(marker in lowered for marker in ["\uc2a4\ud0ac", "\ud558\ub124\uc2a4", "skill", "harness"])
+        and any(
+            marker in lowered
+            for marker in ["\uc368", "\uc0ac\uc6a9", "\ud65c\uc6a9", "\uc801\uc6a9", "\ubd88\ub7ec", "use", "apply"]
+        )
+        and any(
+            marker in lowered
+            for marker in [
+                "\uc55e\uc73c\ub85c",
+                "\ud56d\uc0c1",
+                "\uae30\ubcf8",
+                "\uacc4\uc18d",
+                "\uc801\uadf9",
+                "\ud6c4\uc18d",
+                "\ub098\uc911",
+                "\uba85\uc2dc\ud558\uc9c0",
+                "\uc790\ub3d9",
+                "always",
+                "default",
+                "actively",
+                "future",
+            ]
+        )
+    ):
+        return True
     if not any(marker in lowered for marker in ["kh", "uaf"]):
         return False
     if not any(marker in lowered for marker in ["skill", "skills", "harness", "harnesses", "스킬", "하네스"]):
@@ -786,6 +813,28 @@ def _is_kh_active_followup_request(text: str) -> bool:
     lowered = text.lower()
     if _is_kh_front_door_evidence(lowered):
         return False
+    if any(
+        marker in lowered
+        for marker in [
+            "\ud3f4\ub354",
+            "\ud30c\uc77c",
+            "\ud504\ub85c\uc81d\ud2b8",
+            "\ub300\uc2dc\ubcf4\ub4dc",
+            "\ub9cc\ub4e4",
+            "\uc218\uc815",
+            "\uace0\uccd0",
+            "\uc791\uc5c5",
+            "\ucc98\ub9ac",
+            "\uc9c4\ud589",
+            "\ud655\uc778",
+            "\uac80\uc99d",
+            "\ud14c\uc2a4\ud2b8",
+            "\ucee4\ubc0b",
+            "\ud478\uc2dc",
+            "\uc5c5\ub370\uc774\ud2b8",
+        ]
+    ):
+        return True
     if "?" in text and not any(marker in lowered for marker in ["check", "verify", "review", "봐", "확인", "검증"]):
         return False
     return any(
@@ -934,6 +983,7 @@ def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:
         marker in lowered
         for marker in [
             "get-childitem",
+            "test-path",
             "select-string",
             "rg ",
             "git ",
