@@ -56,27 +56,31 @@ RUNTIME_MARKERS = {
     ],
     "development-lifecycle-harness": [
         "development_lifecycle",
+        "src.orchestration.development_progress",
+        "validate_development_progress",
         "progress.json",
         "tdd_red_green",
         "development lifecycle applied",
     ],
     "worktree-isolation-harness": [
+        "worktree-isolation-harness",
         "workspace_strategy",
         "project-local-worktree",
         "host-worktree",
         ".worktrees",
     ],
     "plan-execution-harness": [
+        "plan-execution-harness",
         "progress.json",
         "active task",
         "next_task",
         "task_status",
     ],
     "systematic-debugging-harness": [
-        "root cause",
-        "hypothesis",
+        "systematic-debugging-harness",
+        "systematic_debugging",
         "debug_status",
-        "unexpected failure",
+        "regression evidence",
     ],
     "goal-state-harness": [
         "GoalState",
@@ -92,6 +96,7 @@ RUNTIME_MARKERS = {
         "progress_compound_bridge",
     ],
     "workflow-skill-distiller": [
+        "workflow-skill-distiller",
         "skill_candidates",
         "distilled skill",
     ],
@@ -107,40 +112,39 @@ RUNTIME_MARKERS = {
         "role execution audited",
     ],
     "parallel-orchestration-harness": [
-        "spawn_agent",
-        "create_agent",
         "parallel_wave_count",
+        "parallel_strategy_decision",
+        "parallel_strategy",
         "fan-out",
         "fan-in",
     ],
     "quality-gates-harness": [
-        "TDD",
-        "RED/GREEN",
-        "failing-first",
+        "tdd_red_green",
         "quality_gate",
+        "quality_gates",
     ],
     "qa-gate-harness": [
-        "qa gate",
-        "browser qa",
-        "manual test",
+        "qa_gate",
         "qa_evidence",
+        "browser_qa_checks",
+        "manual_test_mapping",
     ],
     "verification-before-completion-harness": [
+        "verification-before-completion-harness",
         "fresh verification",
         "verification_status",
         "completion_claim",
         "verification_claim_guard",
     ],
     "branch-finishing-harness": [
+        "branch-finishing-harness",
         "branch_finish_status",
         "commit_sha",
-        "git push",
         "pr-ready",
     ],
     "review-gate-harness": [
-        "review gate",
+        "review_gate",
         "review_status",
-        "with fixes",
         "review_gate applied",
     ],
     "command-output-harness": [
@@ -151,10 +155,9 @@ RUNTIME_MARKERS = {
         "preserved_fact",
     ],
     "harness-evaluator": [
-        "py_compile",
-        "compileall",
-        "python -m unittest",
-        "pytest",
+        "harness_evaluator",
+        "src.harness.evaluator",
+        "HarnessResult",
     ],
     "guard-policy-harness": [
         "guard_policy",
@@ -177,18 +180,19 @@ RUNTIME_MARKERS = {
     "plugin-composition-policy": [
         "plugin_composition",
         "compose_plugin_route",
+        "plugin-composition-policy",
         "assistant provider",
     ],
     "skill-catalog": [
         "uaf_skill_catalog",
-        "--list",
-        "--check",
+        "src.skills.uaf_skill_catalog",
         "total_skills_found",
+        "catalog_summary",
     ],
     "scenario-evaluation-harness": [
         "scenario_evaluator",
-        "SIDE",
-        "regression",
+        "src.orchestration.scenario_evaluator",
+        "meaningful_signal",
     ],
 }
 
@@ -1095,16 +1099,37 @@ def _has_resolution_rationale(observations: Dict[str, Any]) -> bool:
 def _explicit_application(lowered: str, aliases: Set[str]) -> bool:
     if not any(alias.lower() in lowered for alias in aliases):
         return False
+    if any(
+        marker in lowered
+        for marker in [
+            "not used",
+            "did not use",
+            "was not used",
+            "not applied",
+            "did not apply",
+            "was not applied",
+            "not executed",
+            "did not execute",
+        ]
+    ):
+        return False
     return any(
         marker in lowered
         for marker in [
             '"status": "applied"',
             "'status': 'applied'",
+            "status=applied",
+            " was used",
+            " used ",
+            " was applied",
+            " applied ",
+            " executed",
+            " ran ",
             "application_mode",
             '"runtime"',
             "'runtime'",
+            "runtime-applied",
             "runtime evidence",
-            "used",
         ]
     )
 
@@ -1310,7 +1335,8 @@ def _mentions_verification(lowered: str) -> bool:
 
 def _coverage(skill_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     required = [row for row in skill_rows if row["required"]]
-    applied = [row for row in required if STATUS_RANK.get(row["status"], 0) >= STATUS_RANK["considered"]]
+    considered_or_better = [row for row in required if STATUS_RANK.get(row["status"], 0) >= STATUS_RANK["considered"]]
+    required_applied = [row for row in required if row["status"] == "applied"]
     runtime_applied = [row for row in skill_rows if row["status"] == "applied"]
     runtime_or_considered = [
         row
@@ -1336,8 +1362,11 @@ def _coverage(skill_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         "runtime_applied_skill_names": [row["name"] for row in runtime_applied],
         "active_or_considered_skills": len(runtime_or_considered),
         "required_skills": len(required),
-        "required_with_evidence": len(applied),
-        "required_missing_evidence": len(required) - len(applied),
+        "required_considered_or_better": len(considered_or_better),
+        "required_with_evidence": len(considered_or_better),
+        "required_applied": len(required_applied),
+        "required_applied_skill_names": [row["name"] for row in required_applied],
+        "required_missing_evidence": len(required) - len(considered_or_better),
         "required_missing_skill_names": [row["name"] for row in required if STATUS_RANK.get(row["status"], 0) < STATUS_RANK["considered"]],
         "required_accepted": len(accepted),
         "required_unaccepted": len(unaccepted),

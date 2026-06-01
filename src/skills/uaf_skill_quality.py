@@ -282,6 +282,7 @@ def audit_skill_packaging_quality(
                 "target_count": deep_skill.get("target_count", 0),
                 "resolved_targets": deep_skill.get("resolved_targets", 0),
                 "template_targets": deep_skill.get("template_targets", 0),
+                "packaged_test_references": deep_skill.get("packaged_test_references", 0),
                 "has_test_evidence": deep_skill.get("has_test_evidence", False),
             },
             "quality_components": quality_components,
@@ -320,6 +321,7 @@ def audit_skill_packaging_quality(
         "core_production_quality_score": CORE_PRODUCTION_QUALITY_SCORE,
         "core_production_skills": sorted(CORE_PRODUCTION_SKILLS),
         "lowest_quality_score": lowest_score,
+        "tests_packaged": deep_audit.get("tests_packaged", False),
         "quality_rubric": QUALITY_RUBRIC,
         "required_support_files": sorted(REQUIRED_SUPPORT_FILES),
         "smoke_scripts_executed": bool(run_smoke_scripts),
@@ -346,8 +348,11 @@ def _score_skill_quality(
     target_count = int(deep_skill.get("target_count") or 0)
     resolved_count = int(deep_skill.get("resolved_targets") or 0)
     template_count = int(deep_skill.get("template_targets") or 0)
+    packaged_test_reference_count = int(deep_skill.get("packaged_test_references") or 0)
     target_resolution_ratio = (
-        (resolved_count + template_count) / target_count if target_count else 0.0
+        (resolved_count + template_count + packaged_test_reference_count) / target_count
+        if target_count
+        else 0.0
     )
     target_evidence_count = sum(
         1

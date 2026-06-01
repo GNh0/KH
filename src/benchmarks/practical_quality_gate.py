@@ -24,7 +24,11 @@ def run_practical_quality_gate(output_root: Optional[Path] = None) -> Dict[str, 
     output_root = Path(output_root or tempfile.gettempdir()).resolve()
     static_report = audit_skill_packaging_quality(run_smoke_scripts=True)
     bench_report = run_kh_bench_verified(output_root=output_root)
-    report = build_practical_quality_report(static_report, bench_report)
+    report = build_practical_quality_report(
+        static_report,
+        bench_report,
+        source_tests_available=_source_tests_available(),
+    )
     report["duration_seconds"] = round(time.perf_counter() - started, 6)
     report["output_root"] = str(output_root)
     return report
@@ -33,10 +37,14 @@ def run_practical_quality_gate(output_root: Optional[Path] = None) -> Dict[str, 
 def build_practical_quality_report(
     static_quality_report: Dict[str, Any],
     kh_bench_report: Dict[str, Any],
+    *,
+    source_tests_available: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Build a fail-closed release decision from static and practical evidence."""
     bench_summary = dict(kh_bench_report.get("summary", {}) or {})
     static_success = bool(static_quality_report.get("success"))
+    if source_tests_available is None:
+        source_tests_available = _source_tests_available()
     bench_total = int(bench_summary.get("total") or 0)
     bench_passed = int(bench_summary.get("passed") or 0)
     bench_pass_rate = float(bench_summary.get("pass_rate") or 0.0)
@@ -51,6 +59,18 @@ def build_practical_quality_report(
             "message": "packaged skill structure is valid"
             if static_success
             else "static skill structure gate failed",
+        },
+        {
+            "name": "source test evidence availability",
+            "role": STATIC_QUALITY_ROLE,
+            "required": True,
+            "passed": source_tests_available,
+            "message": "repository test files are available"
+            if source_tests_available
+            else (
+                "repository tests are not packaged in this runtime; run release quality from a full source "
+                "checkout, not from an installed plugin cache"
+            ),
         },
         {
             "name": "KH-Bench Verified pass rate",
@@ -90,6 +110,7 @@ def build_practical_quality_report(
         "release_ready": release_ready,
         "primary_signal": PRIMARY_SIGNAL,
         "static_quality_role": STATIC_QUALITY_ROLE,
+        "source_tests_available": source_tests_available,
         "practical_confidence_score": practical_confidence_score,
         "minimum_bench_pass_rate": MINIMUM_BENCH_PASS_RATE,
         "minimum_bench_task_count": MINIMUM_BENCH_TASK_COUNT,
@@ -100,6 +121,7 @@ def build_practical_quality_report(
             "total_skills": static_quality_report.get("total_skills"),
             "lowest_quality_score": static_quality_report.get("lowest_quality_score"),
             "low_quality_skills": static_quality_report.get("low_quality_skills", []),
+            "tests_packaged": static_quality_report.get("tests_packaged"),
         },
         "kh_bench_verified": {
             "benchmark": kh_bench_report.get("benchmark", "KH-Bench Verified"),
@@ -133,6 +155,11 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _source_tests_available() -> bool:
+    tests_dir = Path(__file__).resolve().parents[2] / "tests"
+    return tests_dir.is_dir() and any(tests_dir.glob("test_*.py"))
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run the KH UAF practical release quality gate.")
     parser.add_argument("--output-dir", default="", help="Directory for gate and benchmark outputs.")
@@ -144,6 +171,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "release_ready": report["release_ready"],
         "primary_signal": report["primary_signal"],
         "static_quality_role": report["static_quality_role"],
+        "source_tests_available": report["source_tests_available"],
         "practical_confidence_score": report["practical_confidence_score"],
         "kh_bench_summary": report["kh_bench_verified"]["summary"],
         "blocking_findings": report["blocking_findings"],
