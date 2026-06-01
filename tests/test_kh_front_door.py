@@ -20,9 +20,14 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["skill_source"]["source_type"], "repo-local")
         self.assertGreaterEqual(payload["skill_source"]["skill_count"], 38)
         self.assertEqual(payload["plugin_route"]["controller"]["provider_id"], "kh")
+        self.assertIn("automatic-intake-harness", payload["recommended_skills"])
         self.assertIn("plugin-composition-policy", payload["recommended_skills"])
         self.assertIn("request-complexity-router", payload["recommended_skills"])
         self.assertIn("skill-catalog", payload["recommended_skills"])
+        self.assertEqual(
+            payload["skill_statuses"]["automatic-intake-harness"]["status"],
+            "applied",
+        )
         self.assertEqual(
             payload["skill_statuses"]["plugin-composition-policy"]["status"],
             "applied",
@@ -113,6 +118,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(
             payload["runtime_applied_skills"],
             [
+                "automatic-intake-harness",
                 "plugin-composition-policy",
                 "request-complexity-router",
                 "skill-catalog",
@@ -123,6 +129,47 @@ class KhFrontDoorTests(unittest.TestCase):
             "applied",
         )
         self.assertIn("token-optimizer", payload["selected_not_executed_skills"])
+
+    def test_ordinary_non_trivial_request_runs_automatic_intake_without_kh_terms(self):
+        result = build_kh_front_door(
+            "Build a small HTML todo tool and verify it.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["classification"]["complexity"], "heavy")
+        self.assertEqual(payload["classification"]["domain"], "software")
+        self.assertEqual(payload["plugin_route"]["controller"], "kh")
+        self.assertEqual(
+            payload["runtime_applied_skills"],
+            [
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+        )
+        self.assertIn("verification-before-completion-harness", payload["selected_not_executed_skills"])
+
+    def test_command_output_request_selects_log_harness_before_ambiguity(self):
+        result = build_kh_front_door(
+            "Summarize this long pytest log and preserve the failing test name, file line, assertion values, and exit code.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("command-output-harness", payload["recommended_skills"])
+        self.assertIn("token-optimizer", payload["recommended_skills"])
+        self.assertIn("command-output-harness", payload["selected_not_executed_skills"])
+        self.assertEqual(
+            payload["skill_status_summary"]["command-output-harness"]["status"],
+            "skipped_with_rationale",
+        )
 
 
 if __name__ == "__main__":

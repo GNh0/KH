@@ -57,8 +57,8 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         rows = {row["name"]: row for row in audit.skills}
 
-        self.assertEqual(audit.total_skills, 38)
-        self.assertEqual(audit.coverage["total_skills"], 38)
+        self.assertEqual(audit.total_skills, 39)
+        self.assertEqual(audit.coverage["total_skills"], 39)
         self.assertTrue(rows["token-optimizer"]["required"])
         self.assertTrue(rows["goal-state-harness"]["required"])
         self.assertIn("token-optimizer", audit.coverage["required_missing_skill_names"])
@@ -479,7 +479,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                issue["skill"] == "plugin-composition-policy"
+                issue["skill"] == "automatic-intake-harness"
                 and issue["status"] == "missing_front_door"
                 and issue["severity"] == "P1"
                 for issue in audit.issues
@@ -512,7 +512,40 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                issue["skill"] == "plugin-composition-policy"
+                issue["skill"] == "automatic-intake-harness"
+                and issue["status"] == "missing_front_door"
+                and issue["severity"] == "P1"
+                for issue in audit.issues
+            )
+        )
+
+    def test_ordinary_non_trivial_request_requires_automatic_intake_before_source_work(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Build a small HTML todo tool in this folder and verify it.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.html",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "automatic-intake-harness"
                 and issue["status"] == "missing_front_door"
                 and issue["severity"] == "P1"
                 for issue in audit.issues
@@ -565,7 +598,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertFalse(
             any(
-                issue["skill"] == "plugin-composition-policy"
+                issue["skill"] == "automatic-intake-harness"
                 and issue["status"] == "missing_front_door"
                 for issue in audit.issues
             )
@@ -608,7 +641,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertFalse(
             any(
-                issue["skill"] == "plugin-composition-policy"
+                issue["skill"] == "automatic-intake-harness"
                 and issue["status"] == "missing_front_door"
                 for issue in audit.issues
             )

@@ -9,19 +9,22 @@ This is a local-first, zero-dependency, and hyper-concurrent agentic orchestrati
 
 ## Front-Door Auto Routing
 
-When a user asks to use KH, KH UAF, the KH plugin, KH skills/harnesses, or a `/kh:*` role command, do not wait for the user to enumerate individual skills. Run the KH front door first:
+When a request is non-trivial, do not wait for the user to enumerate individual skills. Run the KH front door first even when the user did not say KH, UAF, skill, harness, plugin, front door, router, or catalog.
+
+Non-trivial means the request involves project files, code changes, deliverables, substantial documents, long command output, review, QA, verification, branch finishing, subagents, persistent state, or high-risk actions. Simple definitions, one-line explanations, translations, and tiny direct answers can remain direct after intake classifies them as light.
 
 ```bash
 python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
 ```
 
-1. Inspect this root guide or the packaged skill catalog.
-2. Apply `plugin-composition-policy` to decide whether KH is controller, assistant, hybrid, or not needed.
-3. Apply `request-complexity-router` to choose direct answer, lightweight skill/module, GoalState, role DAG, evidence gates, or high-risk review.
-4. Select and record the minimal skill bundle automatically, with every relevant skill marked `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.
-5. Only then start source exploration, edits, role DAG execution, or deliverable generation.
+1. Apply `automatic-intake-harness` so ordinary user wording still reaches KH intake.
+2. Inspect this root guide or the packaged skill catalog.
+3. Apply `plugin-composition-policy` to decide whether KH is controller, assistant, hybrid, or not needed.
+4. Apply `request-complexity-router` to choose direct answer, lightweight skill/module, GoalState, role DAG, evidence gates, or high-risk review.
+5. Select and record the minimal skill bundle automatically, with every relevant skill marked `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.
+6. Only then start source exploration, edits, role DAG execution, or deliverable generation.
 
-This is a required usability contract. A KH session that starts work after an explicit KH request without front-door evidence should be treated as a `missing_front_door` audit failure.
+This is a required usability contract. A KH-capable session that starts non-trivial work without front-door evidence should be treated as a `missing_front_door` audit failure unless the work was explicitly classified as light/direct or KH was not selected by plugin composition.
 
 If a host-provided KH skill file path fails after a plugin upgrade, stop using that stale cache path. Resolve the current repository `skills/` folder or the latest installed `kh-uaf` cache version, then re-run the front door before claiming any skill was used.
 

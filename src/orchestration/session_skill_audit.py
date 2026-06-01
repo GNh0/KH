@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Set
 
+from src.orchestration.request_classifier import classify_request
 from src.orchestration.session_postmortem import analyze_codex_session_jsonl
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 
@@ -23,6 +24,12 @@ STATUS_RANK = {
 PASSIVE_REFERENCE_PREFIX = "__kh_passive_reference__ "
 
 RUNTIME_MARKERS = {
+    "automatic-intake-harness": [
+        "automatic-intake-harness",
+        "kh_front_door",
+        "src.orchestration.kh_front_door",
+        "front_door_status",
+    ],
     "token-optimizer": [
         "src.skills.token_optimizer",
         "src.orchestration.runtime_token_optimizer",
@@ -186,6 +193,10 @@ RUNTIME_MARKERS = {
 }
 
 ACCEPTANCE_OUTPUT_MARKERS = {
+    "automatic-intake-harness": {
+        "intake_evidence": ["kh_front_door", "front_door_status", "classification", "plugin_route"],
+        "status_split": ["runtime_applied_skills", "selected_not_executed_skills", "skill_status_summary"],
+    },
     "adapter-contract-harness": {
         "adapter_contract": ["adapterrequest", "adapterresult", "workflowdispatchresult", "adapter contract"],
         "host_boundary": ["codex", "antigravity", "claude code", "dispatcher", "platform"],
@@ -317,6 +328,7 @@ ACCEPTANCE_OUTPUT_MARKERS = {
 }
 
 ACCEPTANCE_SEVERITY = {
+    "automatic-intake-harness": "P1",
     "goal-state-harness": "P1",
     "token-optimizer": "P1",
     "review-gate-harness": "P1",
@@ -551,6 +563,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     waiting_for_front_door = False
     front_door_seen = False
     trigger_sample = ""
+    trigger_kind = ""
 
     for event in _session_payload_events(path):
         payload = event.get("payload", {})
@@ -561,10 +574,11 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         lowered = text.lower()
 
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
-            if _is_kh_front_door_request(lowered):
+            if _is_kh_front_door_request(lowered) or _is_automatic_intake_request(text):
                 waiting_for_front_door = True
                 front_door_seen = False
                 trigger_sample = _short(text)
+                trigger_kind = "explicit_kh" if _is_kh_front_door_request(lowered) else "automatic_intake"
             continue
 
         if not waiting_for_front_door:
@@ -577,18 +591,19 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         if _is_non_kh_work_start(payload, lowered) and not front_door_seen:
             issues.append(
                 {
-                    "skill": "plugin-composition-policy",
+                    "skill": "automatic-intake-harness",
                     "status": "missing_front_door",
                     "severity": "P1",
                     "reason": (
-                        "KH was explicitly requested, but source/work commands started before "
-                        "KH front-door intake, skill catalog, request classification, or skill bundle evidence."
+                        "A KH-capable session started non-trivial source/work commands before "
+                        "automatic front-door intake, skill catalog, request classification, or skill bundle evidence."
                     ),
                     "action": (
-                        "When KH is requested, first run KH front-door routing: inspect the KH skill/root guide "
+                        "For non-trivial work, first run KH front-door routing: inspect the KH skill/root guide "
                         "or skill catalog, classify the request, select a skill bundle automatically, and only then "
-                        "start source exploration or edits. Users should not need to name every harness."
+                        "start source exploration or edits. Users should not need to name KH, skills, or harnesses."
                     ),
+                    "trigger_kind": trigger_kind,
                     "trigger": trigger_sample,
                     "first_work": _short(text),
                 }
@@ -683,6 +698,77 @@ def _is_kh_front_door_request(lowered: str) -> bool:
     )
 
 
+def _is_automatic_intake_request(text: str) -> bool:
+    lowered = text.lower()
+    if _is_kh_front_door_evidence(lowered):
+        return False
+    try:
+        classification = classify_request(text, {"kh_session_audit": True})
+    except Exception:
+        return _fallback_nontrivial_user_request(lowered)
+    if classification.complexity in {"heavy", "high_risk"}:
+        return True
+    if classification.complexity == "medium":
+        return any(
+            marker in lowered
+            for marker in [
+                "file",
+                "folder",
+                "repo",
+                "project",
+                "code",
+                "html",
+                "test",
+                "log",
+                "document",
+                "report",
+                "deliverable",
+                "verify",
+                "review",
+                "파일",
+                "폴더",
+                "코드",
+                "로그",
+                "문서",
+                "보고서",
+                "산출물",
+                "검증",
+                "리뷰",
+            ]
+        )
+    return False
+
+
+def _fallback_nontrivial_user_request(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in [
+            "implement",
+            "build",
+            "fix",
+            "create",
+            "modify",
+            "refactor",
+            "verify",
+            "review",
+            "test",
+            "log",
+            "docx",
+            "xlsx",
+            "html",
+            "만들",
+            "구현",
+            "고쳐",
+            "수정",
+            "검증",
+            "테스트",
+            "로그",
+            "문서",
+            "산출물",
+        ]
+    )
+
+
 def _is_kh_front_door_evidence(lowered: str) -> bool:
     return any(
         marker in lowered
@@ -694,7 +780,9 @@ def _is_kh_front_door_evidence(lowered: str) -> bool:
             "kh front-door",
             "kh_front_door",
             "src.orchestration.kh_front_door",
+            "automatic-intake-harness",
             "front_door_auto_route",
+            "front_door_status",
             "plugin_composition",
             "plugin-composition-policy",
             "request_complexity",
@@ -1086,6 +1174,11 @@ def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
     subagents = postmortem.get("subagent_summary", {}) or {}
     verification_commands = postmortem.get("verification_commands", []) or []
 
+    if _has_nontrivial_work_signals(postmortem, lowered):
+        _add(required, "automatic-intake-harness", "non-trivial KH-capable session should start with automatic intake")
+        _add(required, "plugin-composition-policy", "automatic intake should choose direct, single-provider, hybrid, or clarify route")
+        _add(required, "request-complexity-router", "automatic intake should classify request complexity before work")
+        _add(required, "skill-catalog", "automatic intake should resolve the packaged skill source before claiming skill use")
     if token_gate.get("required") or _large_session(postmortem):
         _require_core_large_work(required, "large or token-heavy session")
     if subagents.get("spawned", 0) or "spawn_agent" in lowered or "subagent" in lowered:
@@ -1154,6 +1247,46 @@ def _require_core_large_work(required: Dict[str, str], reason: str) -> None:
 
 def _add(required: Dict[str, str], skill: str, reason: str) -> None:
     required.setdefault(skill, reason)
+
+
+def _has_nontrivial_work_signals(postmortem: Dict[str, Any], lowered: str) -> bool:
+    token_gate = postmortem.get("token_gate", {}) or {}
+    subagents = postmortem.get("subagent_summary", {}) or {}
+    if token_gate.get("required"):
+        return True
+    if int(subagents.get("spawned", 0) or 0):
+        return True
+    if postmortem.get("verification_commands"):
+        return True
+    if postmortem.get("review_status") not in {"", "pending", None}:
+        return True
+    return any(
+        marker in lowered
+        for marker in [
+            "apply_patch",
+            "shell_command",
+            "custom_tool_call",
+            "git commit",
+            "git push",
+            "python -b",
+            "python -m",
+            "pytest",
+            "unittest",
+            "docx",
+            "xlsx",
+            "svg",
+            "dxf",
+            "index.html",
+            "requirements",
+            "architecture",
+            "deliverable",
+            "verification_status",
+            "검증",
+            "문서",
+            "산출물",
+            "요구정의",
+        ]
+    )
 
 
 def _large_session(postmortem: Dict[str, Any]) -> bool:

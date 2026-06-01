@@ -14,23 +14,24 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 
 ## KH Front-Door Routing
 
-Users should not need to name every individual KH skill or harness. When a user asks to use KH, KH UAF, the KH plugin, KH skills, or a `/kh:*` role command, the host should first run the KH front door before source exploration or edits:
+Users should not need to name KH, UAF, or any individual skill/harness for non-trivial work. If KH is installed and the request involves project files, code changes, deliverables, substantial documents, long command output, review, QA, verification, branch finishing, subagents, persistent state, or high-risk actions, the host should first run the KH front door before source exploration or edits:
 
 ```bash
 python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
 ```
 
-1. Inspect the KH root guide or packaged skill catalog.
-2. Route through `plugin-composition-policy` and `request-complexity-router`.
-3. Select the minimal skill bundle automatically.
-4. Record each selected, considered, skipped, or blocked skill with evidence.
-5. Start source reads, edits, role DAG execution, or deliverable generation only after that intake step.
+1. Apply `automatic-intake-harness` to decide whether ordinary user wording needs KH intake.
+2. Inspect the KH root guide or packaged skill catalog.
+3. Route through `plugin-composition-policy` and `request-complexity-router`.
+4. Select the minimal skill bundle automatically.
+5. Record each selected, considered, skipped, or blocked skill with evidence.
+6. Start source reads, edits, role DAG execution, or deliverable generation only after that intake step.
 
-This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `missing_front_door` issue when a session explicitly requests KH but begins work before the front door runs.
+This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `missing_front_door` issue when a KH-capable session begins non-trivial work before the front door runs, unless the request was classified as light/direct or plugin composition did not select KH.
 
 ## What It Includes
 
-- 38 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 39 packaged skills/harnesses with support files, smoke checks, and runnable demos.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - `brainstorming-harness` for early product/project discovery and KH handoff before architecture or implementation.
@@ -292,6 +293,8 @@ Current task categories cover coding workflow dispatch, product/domain deliverab
 The CLI uses the built-in `KHBaselineCandidateRunner` to score KH UAF itself. Python callers can pass a different candidate runner to `run_kh_bench_verified(...)`. External candidate runners receive only a sealed public task view; validators, expected artifacts, and baseline profile metadata stay inside the grader. Validators read concrete files, runtime artifacts, and report JSON rather than trusting runner-owned custom flags.
 
 For publishing, prefer `python -m src.benchmarks.practical_quality_gate --summary` over reading `lowest_quality_score` alone. The static 10-point skill score is an advisory structure gate; release readiness is blocked by failed KH-Bench or SIDE regression tasks.
+
+Run the full practical quality gate from the development checkout on `main`, where tests and audit fixtures are present. The `codex-runtime` branch is the slim install target for Codex marketplace cache and may not include development test files; use it to verify catalog, smoke/demo scripts, front-door routing, stale-cache detection, and runtime importability.
 
 ## Verification
 

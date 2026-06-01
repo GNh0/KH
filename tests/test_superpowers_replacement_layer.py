@@ -97,7 +97,7 @@ class SuperpowersReplacementLayerTests(unittest.TestCase):
         prompts = "\n".join(manifest["interface"]["defaultPrompt"])
         capabilities = set(manifest["interface"]["capabilities"])
 
-        self.assertEqual(manifest["version"], "2.9.26")
+        self.assertEqual(manifest["version"], "2.9.27")
         self.assertIn("Superpowers Replacement Layer", capabilities)
         self.assertIn("KH-native replacements for Superpowers-style", prompts)
         self.assertIn("verification-before-completion-harness", prompts)

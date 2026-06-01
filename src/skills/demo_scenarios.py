@@ -37,6 +37,7 @@ from src.orchestration.gate_evaluators import (
 from src.orchestration.quality_harnesses import audit_role_execution
 from src.orchestration.request_classifier import classify_request
 from src.orchestration.plugin_composition import compose_plugin_route
+from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.brainstorming import (
     BrainstormDecision,
     BrainstormOption,
@@ -125,6 +126,7 @@ SKILL_OPS_SKILLS = {
 }
 
 ROUTING_SKILLS = {
+    "automatic-intake-harness",
     "plugin-composition-policy",
     "request-complexity-router",
     "scenario-evaluation-harness",
@@ -224,6 +226,8 @@ def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]
     if skill_name in SKILL_OPS_SKILLS:
         return _skill_ops_scenario
     if skill_name in ROUTING_SKILLS:
+        if skill_name == "automatic-intake-harness":
+            return _automatic_intake_scenario
         if skill_name == "plugin-composition-policy":
             return _plugin_composition_scenario
         if skill_name == "scenario-evaluation-harness":
@@ -827,6 +831,69 @@ def _routing_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dic
         missing_inputs=["domain or artifact context"],
         contracts=contracts,
         artifacts=[],
+    )
+
+
+def _automatic_intake_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    project_dir = output_dir / "ordinary-project"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    success = build_kh_front_door(
+        "Create a small static task tracker in this folder and verify it.",
+        project=project_dir,
+        host="codex",
+    )
+    blocked = build_kh_front_door(
+        "Summarize this long pytest log and preserve failing test facts.",
+        project=project_dir,
+        host="codex",
+        host_skill_paths=[
+            r"C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\0.0.0\skills\skill_catalog\SKILL.md"
+        ],
+    )
+    success_summary = success.to_summary_dict()
+    blocked_summary = blocked.to_summary_dict()
+    summary_path = output_dir / "automatic_intake_front_door.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "success": success_summary,
+                "blocked": blocked_summary,
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    contracts = [
+        _mapping_contract("KhFrontDoorResult", "src.orchestration.kh_front_door", success_summary, "policy-result"),
+        _mapping_contract("RequestClassification", "src.orchestration.request_classifier", success_summary["classification"], "policy-result"),
+        _mapping_contract("PluginRoute", "src.orchestration.plugin_composition", success_summary["plugin_route"], "policy-result"),
+    ]
+    return _scenario_result(
+        success_contract="KhFrontDoorResult",
+        success_payload=success_summary,
+        success_evidence=[
+            "automatic intake ran before source exploration",
+            "runtime_applied_skills contains front-door runtime skills only",
+            "selected_not_executed_skills keeps follow-up skills honest",
+        ],
+        success_behavior="Route ordinary non-trivial user wording through KH front-door intake without requiring KH vocabulary.",
+        success_side_effects=["writes automatic_intake_front_door.json under the demo output directory"],
+        blocked_contract="KhFrontDoorResult",
+        blocked_payload=blocked_summary,
+        blocked_reason="stale KH plugin cache path must be resolved before claiming skill use",
+        missing_inputs=["current installed KH skill path"],
+        contracts=contracts,
+        artifacts=[
+            _artifact_record_from_file(
+                summary_path,
+                "automatic-intake-front-door-json",
+                output_dir,
+                ["json readable", "front-door success and stale-cache cases captured"],
+                created_by_case="success",
+            )
+        ],
     )
 
 
