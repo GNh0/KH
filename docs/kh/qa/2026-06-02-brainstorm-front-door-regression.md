@@ -71,10 +71,48 @@ Expected result: same front-door summary without import failure.
 
 ## Remaining Verification Target
 
-After installing or upgrading to `2.9.37`, run a fresh blind subagent test with a plain prompt that does not mention KH or brainstorming:
+After installing or upgrading to `2.9.38`, run a fresh blind subagent test with a plain prompt that does not mention KH or brainstorming:
 
 ```text
 C:\Users\KONEIT\Desktop\Jang\SKillsTest\BrainstormEntryOnly_20260602_A folder needs an operations support product built.
 ```
 
 Passing requires front-door before target-folder inspection, `brainstorming-harness` selection, and a visible brainstorming question/options/handoff path before implementation.
+
+## 2026-06-02 Blind Subagent Result
+
+Session:
+
+```text
+C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T09-21-36-019e85b5-0fa5-7793-a9e2-47d1b761050d.jsonl
+```
+
+Prompt:
+
+```text
+C:\Users\KONEIT\Desktop\Jang\SKillsTest\BrainstormEntryOnly_20260602_C 폴더에 운영지원 제품 개발해줘.
+```
+
+Positive evidence:
+
+- The session eventually ran `kh_front_door`.
+- Front-door classified the request as `medium/product`.
+- The agent read `brainstorming-harness`.
+- The run wrote `.kh/brainstorm/20260602_C/state/session.json`.
+- The run wrote `docs/kh/handoffs/brainstorm_handoff.md`.
+
+Failures:
+
+- The agent read `always_on_front_door/SKILL.md` and ran `Get-ChildItem` on the target folder before front-door runtime. Reading SKILL.md is not runtime evidence.
+- `session_skill_audit` previously accepted `always_on_front_door` too broadly as order evidence after the wrapper change. That made the early folder read look cleaner than it was.
+- The agent treated the vague product request as approval to implement and created an app in the same turn. That bypassed the intended brainstorming approval checkpoint.
+- The agent read prior memory about `SKillsTest` after front-door and used it to shape the run. For independent target folders, prior/sibling context should not seed the new brainstorm unless the user asks for reuse.
+
+Fixes after this result:
+
+- `session_skill_audit` now counts `front_door.py` and `src.orchestration.kh_front_door` as front-door order evidence, but does not count `always_on_front_door/SKILL.md` reads.
+- `kh_front_door.required_next_actions` now says `brainstorming-harness` must stop before implementation/scaffolding/product code until the user approves the direction in a later message.
+- `brainstorming-harness` SKILL, usage reference, and minimal workflow now explicitly mark immediate implementation after vague product discovery as a failure.
+- Plugin default prompt now states that vague product/app/service requests are not implementation approval.
+
+Next install target: `2.9.38`.

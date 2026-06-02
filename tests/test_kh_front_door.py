@@ -213,6 +213,12 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertTrue(
             any("Apply `brainstorming-harness`" in action for action in payload["required_next_actions"])
         )
+        self.assertTrue(
+            any("do not implement" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
+            any("user approves the direction" in action for action in payload["required_next_actions"])
+        )
 
     def test_command_output_request_selects_log_harness_before_ambiguity(self):
         result = build_kh_front_door(

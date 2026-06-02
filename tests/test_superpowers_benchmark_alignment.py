@@ -55,6 +55,9 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("architect-pipeline", skill)
         self.assertIn("Do not copy Superpowers paths", skill)
         self.assertIn("KH handoff targets are UAF skills", skill)
+        self.assertIn("stop before implementation", skill.lower())
+        self.assertIn("approval before implementation", skill.lower())
+        self.assertIn("user approves the direction", skill)
 
     def test_parallel_and_subagent_harnesses_require_isolation_evidence(self):
         parallel = read_text("skills/parallel_orchestration_harness/SKILL.md")

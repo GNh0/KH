@@ -1084,7 +1084,6 @@ def _is_front_door_order_evidence(payload: Dict[str, Any], lowered: str) -> bool
                 or " -m src.orchestration.kh_front_door" in lowered
                 or "python -m src.orchestration.kh_front_door" in lowered
                 or "front_door.py" in lowered
-                or "always_on_front_door" in lowered
             )
         return False
     if payload_type == "function_call_output":

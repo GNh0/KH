@@ -951,6 +951,59 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_always_on_skill_read_does_not_count_as_front_door_runtime(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Build an operations support product in this folder.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "Get-Content C:\\kh\\skills\\always_on_front_door\\SKILL.md"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Path C:\\work\\new-product",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python C:\\kh\\skills\\always_on_front_door\\scripts\\front_door.py "
+                            "--prompt \"Build an operations support product in this folder.\" --summary"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
     def test_sibling_run_read_is_cross_scope_context_leak(self):
         path = self.write_session(
             [

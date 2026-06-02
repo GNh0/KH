@@ -42,7 +42,7 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 3. Ask one question at a time. Prefer 2-3 clear choices with a recommendation.
 4. Capture decisions as structured records: `objective`, `target_user`, `problem`, `options`, `recommendation`, `constraints`, `decisions`, and `open_questions`.
 5. Present 2-3 approaches with tradeoffs and a recommended direction.
-6. Present the chosen design direction and ask for approval before implementation or scaffolding.
+6. Present the chosen design direction and ask for approval before implementation or scaffolding. For vague product, app, service, SaaS, or project requests, stop here unless the user approves the direction in a later message.
 7. Build a `BrainstormSession`, validate it, and create a `brainstorm_handoff`.
 8. Write KH project artifacts when useful: `.kh/brainstorm/<run-id>/content/*.md` for local working notes, `.kh/brainstorm/<run-id>/state/*.json` for run-local state, and `docs/kh/handoffs/*.md` for shareable summaries.
 9. Pass the handoff to the next KH skill:
@@ -109,10 +109,12 @@ Pressure scenario: a user says "I want to build a SaaS." The agent should not sc
 - `BrainstormSession` validation result.
 - Handoff payload for the next KH skill.
 - Markdown handoff and state paths when visible project artifacts are created.
+- User approval evidence before any implementation, scaffolding, source writes, or deliverable generation beyond brainstorm notes.
 
 ## Common mistakes
 
 - Treating brainstorming as implementation permission.
+- Implementing or scaffolding immediately after a vague product idea without a separate user approval of the recommended direction.
 - Creating visual files without linking them to a decision.
 - Asking five questions at once.
 - Presenting only one approach before recommending it.

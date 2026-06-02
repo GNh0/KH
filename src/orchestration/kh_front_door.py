@@ -503,7 +503,7 @@ def _required_next_actions(
         actions.append("Ask a short clarification before source exploration or implementation.")
     if "brainstorming-harness" in recommended_skills:
         actions.append(
-            "Apply `brainstorming-harness` before implementation: ask one scoped question if needed, present options/tradeoffs, and preserve `brainstorm_handoff` or blocked rationale."
+            "Apply `brainstorming-harness` before implementation: ask one scoped question or present 2-3 options/tradeoffs, preserve `brainstorm_handoff` or blocked rationale, and do not implement, scaffold, or write product code until the user approves the direction in a later message."
         )
     if classification.get("complexity") in {"heavy", "high_risk"}:
         actions.extend(

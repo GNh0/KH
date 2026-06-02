@@ -16,7 +16,7 @@ The agent must use `brainstorming-harness`, keep the conversation lightweight, a
 6. Capture approved decisions in a `BrainstormSession`.
 7. Validate the session with `validate_brainstorm_session`.
 8. Build the handoff with `build_architect_handoff`.
-9. Pass the handoff to `architect-pipeline` only after the user approves the direction.
+9. Stop and ask for approval. Pass the handoff to `architect-pipeline` only after the user approves the direction in a later message.
 10. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
@@ -38,6 +38,7 @@ The agent must use `brainstorming-harness`, keep the conversation lightweight, a
 ## Failure cases
 
 - The agent scaffolds code before the user approves the design direction.
+- The agent treats "build a product" as approval to skip the brainstorming approval checkpoint.
 - The agent asks a batch of unrelated questions in one message.
 - The agent writes Superpowers artifacts such as `.superpowers/brainstorm/...` instead of KH handoff evidence.
 - The agent claims brainstorming is complete without a target user, problem, recommended option, or decision log.
@@ -51,3 +52,4 @@ The agent must use `brainstorming-harness`, keep the conversation lightweight, a
 - `BrainstormSession` validates or reports missing fields.
 - The next KH skill is named.
 - Missing or blocked work is represented as structured evidence, not hidden in prose.
+- No implementation, scaffolding, or product code is written before user approval.
