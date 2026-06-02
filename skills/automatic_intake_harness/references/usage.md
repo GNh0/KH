@@ -42,7 +42,7 @@ Implementation targets:
 Run:
 
 ```bash
-python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
+python "<always_on_front_door skill folder>/scripts/front_door.py" --prompt "<user request>" --project "<target project>" --host codex --summary
 ```
 
 Then use the JSON result:
@@ -80,4 +80,4 @@ Another agent should be able to audit a finished session and answer:
 - Which skills were only selected, and which produced runtime evidence?
 - Were logs, tests, documents, and high-risk actions routed to the appropriate follow-up checks?
 
-The actual_runtime_path is `src.orchestration.kh_front_door.build_kh_front_door` or the CLI wrapper `python -m src.orchestration.kh_front_door`.
+The actual_runtime_path is `src.orchestration.kh_front_door.build_kh_front_door`, the repo-root CLI `python -m src.orchestration.kh_front_door`, or the skill-local wrapper `always_on_front_door/scripts/front_door.py`.

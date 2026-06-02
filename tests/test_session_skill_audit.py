@@ -908,6 +908,49 @@ class SessionSkillAuditTests(unittest.TestCase):
         )
         self.assertIn("runtime_applied_skills", audit.coverage)
 
+    def test_skill_local_front_door_wrapper_counts_as_front_door_evidence(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Build an operations support product in this folder.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python C:\\kh\\skills\\always_on_front_door\\scripts\\front_door.py "
+                            "--prompt \"Build an operations support product in this folder.\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Path .",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
     def test_sibling_run_read_is_cross_scope_context_leak(self):
         path = self.write_session(
             [

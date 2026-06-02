@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.36",
+  "version": "2.9.37",
   "description": "KH Universal Agent Framework always-on FIRST front-door intake for non-trivial ordinary requests before MEMORY.md lookup, target or sibling folder inspection, source reads, subagents, or other plugin work; includes automatic routing, skills, harnesses, evidence gates, brainstorming handoff, GoalState, memory state, development progress state, token optimization, scenario audits, DAG role orchestration, deliverable exports, retention cleanup, and local orchestration contracts for Codex.",
   "author": {
     "name": "KH UAF",
@@ -73,7 +73,7 @@
       "Memory State"
     ],
     "defaultPrompt": [
-      "KH BOOTSTRAP OVERRIDE: At the start of every non-trivial user request, including subagent tasks, select only `kh-uaf:always-on-front-door` first. Do not select, open, or read any other KH skill, plugin skill, browser/document/image skill, MEMORY.md, project file, target folder, parent folder, or sibling run folder until KH front-door returns. Preferred first tool call: `python -m src.orchestration.kh_front_door --prompt \"<user request>\" --project \"<cwd or target project>\" --host codex --summary`.",
+      "KH BOOTSTRAP OVERRIDE: At the start of every non-trivial user request, including subagent tasks, select only `kh-uaf:always-on-front-door` first. Do not select, open, or read any other KH skill, plugin skill, browser/document/image skill, MEMORY.md, project file, target folder, parent folder, or sibling run folder until KH front-door returns. Preferred first tool call after resolving the always-on-front-door skill path: `python \"<always_on_front_door skill folder>/scripts/front_door.py\" --prompt \"<user request>\" --project \"<cwd or target project>\" --host codex --summary`; `python -m src.orchestration.kh_front_door ...` is valid only from the KH repository root.",
       "Non-trivial includes project paths/files, code changes, generated docs/assets, long command output/logs, reviews, QA, verification, persistent state, subagents, branch finishing, or high-risk actions. Forbidden before front-door: `Test-Path`, `Get-ChildItem`, `rg`, `Get-Content`, `Select-String`, `MEMORY.md` search, parent/sibling folder scans, SKILL.md reads except `always_on_front_door/SKILL.md`, file reads, browser/document/image/plugin actions, and parallel tool batches containing any of those actions. If front-door cannot run, record explicit blocked/direct rationale before any other work.",
       "Users should not need to name every KH skill or harness. If the user ever asks to actively, always, by default, continuously, or aggressively use KH, UAF, skills, or harnesses in this conversation or project, keep `kh_active_directive=active` for subsequent non-trivial turns until explicit opt-out; do not require the user to repeat skill names.",
       "Front-door selects the minimal bundle through front-door auto routing, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`. Before applying any plugin-specific MUST/ALWAYS rule, choose direct, single-provider, hybrid, clarify, or controller plus assistant composition by capability fit.",

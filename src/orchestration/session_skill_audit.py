@@ -633,6 +633,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                     ),
                     "action": (
                         "For non-trivial work, the first standalone work-bearing tool call must run "
+                        "KH front-door via `always_on_front_door/scripts/front_door.py` or "
                         "`python -m src.orchestration.kh_front_door ... --summary`, or record an explicit blocked/direct rationale. "
                         "Reading SKILL.md, listing the catalog, mentioning always-on-front-door, or running target-folder checks in the "
                         "same pre-intake batch does not satisfy the entry contract. Users should not need to name KH, skills, or harnesses. "
@@ -1055,6 +1056,8 @@ def _is_kh_front_door_evidence(lowered: str) -> bool:
             "kh front-door",
             "kh_front_door",
             "src.orchestration.kh_front_door",
+            "front_door.py",
+            "always_on_front_door",
             "automatic-intake-harness",
             "always-on-front-door",
             "front_door_auto_route",
@@ -1080,6 +1083,8 @@ def _is_front_door_order_evidence(payload: Dict[str, Any], lowered: str) -> bool
                 "src.orchestration.kh_front_door" in lowered
                 or " -m src.orchestration.kh_front_door" in lowered
                 or "python -m src.orchestration.kh_front_door" in lowered
+                or "front_door.py" in lowered
+                or "always_on_front_door" in lowered
             )
         return False
     if payload_type == "function_call_output":

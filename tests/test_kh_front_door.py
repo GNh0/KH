@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -136,6 +137,35 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         self.assertIn("token-optimizer", payload["selected_not_executed_skills"])
 
+    def test_skill_local_front_door_wrapper_runs_outside_repo_root(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        wrapper = repo_root / "skills" / "always_on_front_door" / "scripts" / "front_door.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(wrapper),
+                    "--prompt",
+                    "Build a small HTML todo tool and verify it.",
+                    "--project",
+                    tmp,
+                    "--host",
+                    "codex",
+                    "--summary",
+                ],
+                cwd=tmp,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+        payload = json.loads(completed.stdout)
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["plugin_route"]["controller"], "kh")
+        self.assertIn("always-on-front-door", payload["runtime_applied_skills"])
+
     def test_ordinary_non_trivial_request_runs_automatic_intake_without_kh_terms(self):
         result = build_kh_front_door(
             "Build a small HTML todo tool and verify it.",
@@ -159,6 +189,30 @@ class KhFrontDoorTests(unittest.TestCase):
             ],
         )
         self.assertIn("verification-before-completion-harness", payload["selected_not_executed_skills"])
+
+    def test_vague_product_development_selects_brainstorming_without_kh_terms(self):
+        result = build_kh_front_door(
+            "C:\\work\\BrainstormEntryOnly "
+            "\ud3f4\ub354\uc5d0 \uc6b4\uc601\uc9c0\uc6d0 \uc81c\ud488 \uac1c\ubc1c\ud574\uc918.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["domain"], "product")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertEqual(payload["plugin_route"]["controller"], "kh")
+        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertIn("brainstorming-harness", payload["selected_not_executed_skills"])
+        self.assertEqual(
+            payload["skill_status_summary"]["brainstorming-harness"]["status"],
+            "skipped_with_rationale",
+        )
+        self.assertTrue(
+            any("Apply `brainstorming-harness`" in action for action in payload["required_next_actions"])
+        )
 
     def test_command_output_request_selects_log_harness_before_ambiguity(self):
         result = build_kh_front_door(

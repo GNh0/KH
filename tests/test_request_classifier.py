@@ -77,6 +77,27 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertEqual(result.required_harnesses, [])
         self.assertGreaterEqual(result.confidence, 0.4)
 
+    def test_vague_product_development_routes_to_brainstorming(self):
+        result = classify_request(
+            "C:\\work\\BrainstormEntryOnly "
+            "\ud3f4\ub354\uc5d0 \uc6b4\uc601\uc9c0\uc6d0 \uc81c\ud488 \uac1c\ubc1c\ud574\uc918."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "product")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", result.recommended_skills)
+        self.assertIn("brainstorming-harness", result.required_harnesses)
+        self.assertIn("brainstorm_handoff", result.evidence_required)
+        self.assertIn("early_product_discovery_needs_brainstorming", result.reasons)
+
+    def test_specific_verified_html_tool_does_not_route_to_brainstorming(self):
+        result = classify_request("Build a small HTML todo tool and verify it.")
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.domain, "software")
+        self.assertNotIn("brainstorming-harness", result.recommended_skills)
+
     def test_long_log_prompt_keeps_token_optimizer_cross_cutting(self):
         text = "이 긴 테스트 로그 핵심만 줄여줘\n" + "\n".join(
             f"ERROR line {index}: stack trace" for index in range(80)

@@ -9,6 +9,7 @@ SKILL_NAME = "always-on-front-door"
 REQUIRED_SUPPORT_FILES = [
     "references/usage.md",
     "examples/minimal-workflow.md",
+    "scripts/front_door.py",
     "scripts/smoke_check.py",
     "scripts/demo.py",
 ]

@@ -37,7 +37,7 @@ KH UAF는 Codex, Antigravity 계열 에이전트, Claude Code, 로컬 워커에�
 권장 실행:
 
 ```bash
-python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
+python skills/always_on_front_door/scripts/front_door.py --prompt "<user request>" --project "<target project>" --host codex --summary
 ```
 
 front-door 결과는 다음을 구분해야 합니다.

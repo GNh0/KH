@@ -34,7 +34,7 @@ Implementation targets:
 - `skills/automatic_intake_harness/SKILL.md`
 - `tests.test_kh_front_door_always_on`
 
-actual_runtime_path: `src.orchestration.kh_front_door.build_kh_front_door` or `python -m src.orchestration.kh_front_door`.
+actual_runtime_path: `src.orchestration.kh_front_door.build_kh_front_door`, `python -m src.orchestration.kh_front_door` from the KH repository root, or `scripts/front_door.py` from this skill folder when the host starts elsewhere.
 
 ## Inputs to collect
 
@@ -49,7 +49,7 @@ actual_runtime_path: `src.orchestration.kh_front_door.build_kh_front_door` or `p
 Run:
 
 ```bash
-python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
+python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
 ```
 
 Then:
@@ -73,6 +73,7 @@ Minimum evidence for a non-trivial request:
 - skill source path and stale-cache warnings, if any
 - implementation_targets traceability for the front-door runtime path
 - execution_level and host metadata when the result is used by a session audit
+- wrapper path used when the command runs outside the KH repository root
 
 ## Failure handling
 

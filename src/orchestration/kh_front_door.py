@@ -501,6 +501,10 @@ def _required_next_actions(
     ]
     if plugin_route.get("ask_user"):
         actions.append("Ask a short clarification before source exploration or implementation.")
+    if "brainstorming-harness" in recommended_skills:
+        actions.append(
+            "Apply `brainstorming-harness` before implementation: ask one scoped question if needed, present options/tradeoffs, and preserve `brainstorm_handoff` or blocked rationale."
+        )
     if classification.get("complexity") in {"heavy", "high_risk"}:
         actions.extend(
             [

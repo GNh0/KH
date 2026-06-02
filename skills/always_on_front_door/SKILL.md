@@ -10,8 +10,10 @@ description: Use when any non-trivial Codex, Antigravity-style, Claude Code, or 
 After reading this file for a work-bearing request, run the front-door command immediately. Do not open QA, verification, browser, document, image, memory, or other KH skill files first. Do not run target-folder checks, parent/sibling directory scans, `MEMORY.md` searches, project file reads, or parallel tool batches before the command.
 
 ```bash
-python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
+python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
 ```
+
+If you are already running from the KH repository root, `python -m src.orchestration.kh_front_door ...` is also valid. Prefer the skill-local wrapper when the host starts in a target project, temp folder, or subagent workspace.
 
 Only after this command returns should the selected follow-up skills be read or applied.
 
@@ -34,7 +36,7 @@ This is the host-visible bootstrap skill for KH UAF. Its job is to make automati
 4. If work-bearing, make the first standalone work-bearing tool call the KH front-door intake. Do not run source reads, target-folder checks, parent/sibling folder scans, `Test-Path`, `Get-ChildItem`, `rg`, memory lookup, image generation, document generation, browser QA, or subagent dispatch before it. Do not parallelize those actions in the same pre-intake batch.
 
 ```bash
-python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
+python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
 ```
 
 5. Treat only the intake command's `runtime_applied_skills` as executed.
@@ -78,3 +80,4 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 - Use `examples/minimal-workflow.md` as the blind-request acceptance scenario.
 - Run `python scripts/smoke_check.py` from this skill folder to verify support files and implementation targets.
 - Run `python scripts/demo.py --output-dir <tmp>` to verify the front-door demo path.
+- Use `python scripts/front_door.py --prompt "<user request>" --project "<target>" --host codex --summary` when the current working directory is not the KH repository root.
