@@ -709,6 +709,7 @@ PRODUCT_DISCOVERY_OBJECT_TERMS = {
     "service",
     "saas",
     "app",
+    "dashboard",
     "tool",
     "platform",
     "startup",
@@ -720,6 +721,7 @@ PRODUCT_DISCOVERY_OBJECT_TERMS = {
     "\uc81c\ud488",
     "\uc11c\ube44\uc2a4",
     "\uc571",
+    "\ub300\uc2dc\ubcf4\ub4dc",
     "\ub3c4\uad6c",
     "\ud234",
     "\ud50c\ub7ab\ud3fc",
@@ -864,6 +866,10 @@ PRODUCT_DISCOVERY_SPECIFICITY_TERMS = {
     "\ub3c4\uba74",
     "\uac80\uc99d",
     "\ud14c\uc2a4\ud2b8",
+}
+VAGUE_DISCOVERY_SPECIFICITY_TERMS = {
+    "dashboard",
+    "\ub300\uc2dc\ubcf4\ub4dc",
 }
 VENDOR_OPS_TERMS = {
     "rfp",
@@ -2558,7 +2564,7 @@ def _is_unapproved_product_discovery_request(normalized: str, context: dict, dom
         "education",
     }:
         return False
-    if _contains_any(normalized, PRODUCT_DISCOVERY_SPECIFICITY_TERMS):
+    if _has_blocking_discovery_specificity(normalized):
         return False
     has_product_object = _contains_any(normalized, PRODUCT_DISCOVERY_OBJECT_TERMS)
     if not _contains_any(normalized, DOMAIN_DISCOVERY_OBJECT_TERMS):
@@ -2571,6 +2577,13 @@ def _is_unapproved_product_discovery_request(normalized: str, context: dict, dom
         return False
     token_count = len(normalized.split())
     return token_count <= 18 or not _has_inline_payload(normalized)
+
+
+def _has_blocking_discovery_specificity(normalized: str) -> bool:
+    if not _contains_any(normalized, PRODUCT_DISCOVERY_SPECIFICITY_TERMS):
+        return False
+    specificity_terms = PRODUCT_DISCOVERY_SPECIFICITY_TERMS - VAGUE_DISCOVERY_SPECIFICITY_TERMS
+    return _contains_any(normalized, specificity_terms)
 
 
 def _product_discovery_domain(domain: str, normalized: str) -> str:

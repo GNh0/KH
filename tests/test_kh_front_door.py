@@ -220,6 +220,25 @@ class KhFrontDoorTests(unittest.TestCase):
             any("user approves the direction" in action for action in payload["required_next_actions"])
         )
 
+    def test_vague_inventory_dashboard_development_selects_brainstorming(self):
+        result = build_kh_front_door(
+            "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260602_J "
+            "\ud3f4\ub354\uc5d0\uc11c \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac \ub300\uc2dc\ubcf4\ub4dc \uac1c\ubc1c\ud574\uc918.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["domain"], "operations")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertIn("brainstorming-harness", payload["selected_not_executed_skills"])
+        self.assertTrue(
+            any("do not implement" in action for action in payload["required_next_actions"])
+        )
+
     def test_non_software_discovery_selects_brainstorming_without_kh_terms(self):
         result = build_kh_front_door(
             "C:\\work\\ResearchPlan folder needs a customer churn analysis approach planned.",

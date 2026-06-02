@@ -66,6 +66,7 @@ python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --p
 - Do not bundle `Test-Path`, `Get-ChildItem`, `rg`, file reads, or MEMORY.md search in the same parallel batch as the first front-door command.
 - Do not open `qa_gate_harness`, `verification_before_completion_harness`, browser skills, memory files, or support references before the front-door command.
 - Do not inspect previous run folders or sibling test outputs to bootstrap a new requested target. Treat that as cross-scope context leakage unless the user explicitly requested comparison or reuse.
+- Do not create a substitute folder in the current workspace when the user named a different target path. If the exact target path is unavailable, outside the sandbox, or needs approval, stop and report the permission/path blocker before generating artifacts.
 - Do not assume plugin `defaultPrompt` was injected into the live session.
 - Do not count a SKILL.md read, plugin listing, or marketplace metadata as runtime application.
 - Do not ask the user to name KH skills before applying this bootstrap.

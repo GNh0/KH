@@ -133,6 +133,11 @@ class RequestClassifierTests(unittest.TestCase):
         cases = [
             ("C:\\work\\OpsPlan \ud3f4\ub354\uc5d0 \uc5c5\ubb34 \ud504\ub85c\uc138\uc2a4 \ubc29\ud5a5 \uc7a1\uc544\uc918", "operations"),
             ("C:\\work\\DocPlan \ud3f4\ub354\uc5d0 \uc548\uc804 \uc808\ucc28 \ubb38\uc11c \uad6c\uc870 \uc7a1\uc544\uc918", "document"),
+            (
+                "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260602_J "
+                "\ud3f4\ub354\uc5d0\uc11c \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac \ub300\uc2dc\ubcf4\ub4dc \uac1c\ubc1c\ud574\uc918.",
+                "operations",
+            ),
         ]
 
         for prompt, domain in cases:
