@@ -312,7 +312,7 @@ class SessionPostmortemGuardTests(unittest.TestCase):
                         "type": "token_count",
                         "info": {
                             "total_token_usage": {"total_tokens": 60_000},
-                            "last_token_usage": {"input_tokens": 40_000},
+                            "last_token_usage": {"input_tokens": 120_000},
                             "model_context_window": 200_000,
                         },
                     },
@@ -344,6 +344,36 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         self.assertTrue(
             any("inspection, not usage" in action for action in postmortem.recommended_actions)
         )
+
+    def test_cumulative_tokens_alone_do_not_force_token_gate(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 450_000},
+                            "last_token_usage": {"input_tokens": 56_000},
+                            "model_context_window": 258_400,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "Short direction-setting answer with no long command output.",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertFalse(postmortem.token_gate["required"])
+        self.assertEqual(postmortem.token_optimizer_status, "considered_not_needed")
 
     def test_token_optimizer_runtime_call_counts_as_usage(self):
         path = self.write_session(
@@ -426,7 +456,7 @@ class SessionPostmortemGuardTests(unittest.TestCase):
                         "type": "token_count",
                         "info": {
                             "total_token_usage": {"total_tokens": 80_000},
-                            "last_token_usage": {"input_tokens": 30_000},
+                            "last_token_usage": {"input_tokens": 120_000},
                             "model_context_window": 200_000,
                         },
                     },

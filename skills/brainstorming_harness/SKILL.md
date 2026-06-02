@@ -38,6 +38,8 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 ## Core Flow
 
 1. After front-door routing, inspect only the explicit target project/folder when it exists. If the target folder does not exist yet, create or plan inside that exact target; do not list the parent directory or read sibling folders from earlier tests/runs.
+   - Fresh/empty target fast path: if the exact target folder exists and has no files, do not read `MEMORY.md`, memory summaries, parent folders, sibling folders, previous test outputs, or older project artifacts unless the user explicitly asks for reuse, comparison, migration, or prior context.
+   - For this fast path, return a compact direction proposal with 2-3 options, one recommendation, and an approval question. Do not escalate to GoalState, role DAG, document exports, QA, or review gates before approval.
 2. If the next choices are visual, offer a visual companion in its own message.
 3. Ask one question at a time. Prefer 2-3 clear choices with a recommendation.
 4. Capture decisions as structured records: `objective`, `target_user`, `problem`, `options`, `recommendation`, `constraints`, `decisions`, and `open_questions`.
@@ -62,6 +64,14 @@ Do not collapse brainstorming into a single option picker unless the user has al
 5. `handoff_frame`: `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, `brainstorm_handoff`, and next KH skill.
 
 If the user only says "handle this topic/project/work" and then chooses one proposed option, that approval is permission to continue the KH flow, not permission to skip the handoff. Build and validate the handoff before architecture, domain orchestration, analysis, deliverable generation, or implementation. If time, host tools, or missing context prevents this, record `brainstorming_status=blocked` with the missing checkpoint instead of claiming the skill ran.
+
+## User-Facing Reporting
+
+- The final answer should read like a normal brainstorming or direction-setting response in the user's language.
+- Do not expose internal validation text such as `KH brainstorming validation`, `valid=true`, `missing=[]`, `BrainstormSession`, or raw handoff keys unless the user asks for a skill/harness audit.
+- If the direction is not approved yet, end with the approval decision or next question, not with internal framework status.
+- Keep `BrainstormSession` validation, handoff payloads, and artifact paths as internal evidence or audit material.
+- For fresh/empty target fast path, avoid mentioning KH, UAF, skill names, validation status, or internal routing unless the user explicitly asks how the tool was used.
 
 ## Evidence Contract
 

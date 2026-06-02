@@ -806,7 +806,14 @@ def _subagent_strategy_issues(path: Path, postmortem: Dict[str, Any]) -> List[Di
         return []
     active_text = "\n".join(_strip_passive_prefix(text) for text in _session_texts(path) if not _is_passive_text(text))
     lowered = active_text.lower()
-    if not (_implementation_tool_samples(path) or _has_nontrivial_work_signals(postmortem, lowered)):
+    subagents = postmortem.get("subagent_summary", {}) or {}
+    token_gate = postmortem.get("token_gate", {}) or {}
+    if not (
+        _implementation_tool_samples(path)
+        or int(subagents.get("spawned", 0) or 0)
+        or bool(token_gate.get("required"))
+        or bool(postmortem.get("verification_commands"))
+    ):
         return []
     if _has_subagent_strategy_rationale(lowered):
         return []
@@ -1725,6 +1732,8 @@ def _passive_reference(lowered: str) -> bool:
         return True
     if _looks_like_front_door_runtime_output(lowered):
         return False
+    if _looks_like_read_only_command(lowered):
+        return True
     if _looks_like_skill_doc_output(lowered):
         return True
     if _looks_like_skill_catalog_listing(lowered):
@@ -1746,6 +1755,35 @@ def _passive_reference(lowered: str) -> bool:
     if "\\plugins\\cache\\" in lowered and "\\skills\\" in lowered:
         return True
     return False
+
+
+def _looks_like_read_only_command(lowered: str) -> bool:
+    read_markers = [
+        "get-content",
+        "select-string",
+        "get-childitem",
+        "test-path",
+        "rg --files",
+        "rg -n",
+    ]
+    if not any(marker in lowered for marker in read_markers):
+        return False
+    write_or_runtime_markers = [
+        "kh_front_door",
+        "front_door.py",
+        "apply_patch",
+        "python -m src.",
+        "python scripts/",
+        "new-item",
+        "set-content",
+        "add-content",
+        "remove-item",
+        "move-item",
+        "copy-item",
+        "git commit",
+        "git push",
+    ]
+    return not any(marker in lowered for marker in write_or_runtime_markers)
 
 
 def _looks_like_front_door_runtime_output(lowered: str) -> bool:
@@ -1804,7 +1842,7 @@ def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
         _add(required, "skill-catalog", "automatic intake should resolve the packaged skill source before claiming skill use")
     if token_gate.get("required") or _large_session(postmortem):
         _require_core_large_work(required, "large or token-heavy session")
-    if subagents.get("spawned", 0) or "spawn_agent" in lowered or "subagent" in lowered:
+    if subagents.get("spawned", 0) or "spawn_agent" in lowered:
         _add(required, "host-agent-orchestration", "subagents or host delegation appeared in the session")
         _add(required, "subagent-review-pipeline", "subagent work requires packet/review policy")
         _add(required, "role-execution-audit-harness", "claimed subagent/reviewer work needs role execution audit evidence")
@@ -1836,21 +1874,44 @@ def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
         _add(required, "memory-state-harness", "memory candidates or persistent memory appeared")
     if any(marker in lowered for marker in ["browser", "playwright", "screenshot", "localhost"]):
         _add(required, "qa-gate-harness", "browser or local app QA appeared")
-    if any(marker in lowered for marker in ["docx", "xlsx", "svg", "dxf", "deliverable", "artifact"]):
+    if _renderable_artifact_required(lowered):
         _add(required, "artifact-render-qa-harness", "renderable deliverables or artifacts appeared")
         _add(required, "deliverable-template-quality-harness", "deliverables need template quality evidence")
         _add(required, "traceability-matrix-harness", "deliverables should map requirements to evidence")
-    if any(marker in lowered for marker in ["adapter", "codex", "antigravity", "claude code", "plugin", "marketplace"]):
+    if any(marker in lowered for marker in ["adapter-contract", "adapterrequest", "host adapter", "antigravity bridge", "claude code adapter"]):
         _add(required, "adapter-contract-harness", "host/plugin/adapter behavior appeared")
         _add(required, "plugin-composition-policy", "multiple plugins or providers may apply")
-    if any(marker in lowered for marker in ["delete", "drop table", "secret", "api_key", "token=", "permission", "approval"]):
+    if any(marker in lowered for marker in ["delete ", "remove-item", "drop table", "secret", "api_key", "token=", "permission denied", "destructive", "requires approval"]):
         _add(required, "guard-policy-harness", "permission, secret, or destructive-action risk appeared")
     if _early_domain_discovery_text(lowered):
         _add(required, "brainstorming-harness", "early domain discovery appeared")
-    if any(marker in lowered for marker in ["architecture", "design doc", "spec", "requirements", "설계"]):
+    if any(marker in lowered for marker in ["architecture", "design doc", "system design", "development design", "architect-pipeline"]):
         _add(required, "architect-pipeline", "design or architecture planning appeared")
+    if any(marker in lowered for marker in ["domain-orchestration-harness", "work_design", "role_decomposition", "qa/qc", "risk_policy"]):
         _add(required, "domain-orchestration-harness", "domain design/decomposition appeared")
     return required
+
+
+def _renderable_artifact_required(lowered: str) -> bool:
+    if any(
+        marker in lowered
+        for marker in [
+            "render_docx",
+            "artifact_render",
+            "artifact-render-qa",
+            "deliverable_template_quality",
+            "export_user_facing_deliverables",
+        ]
+    ):
+        return True
+    return bool(
+        re.search(
+            r"\b(create|created|export|exported|render|rendered|write|wrote|generated|saved)\b"
+            r".{0,160}\.(docx|xlsx|svg|dxf|pdf|png)\b",
+            lowered,
+            re.IGNORECASE | re.DOTALL,
+        )
+    )
 
 
 def _require_core_large_work(required: Dict[str, str], reason: str) -> None:
@@ -1891,6 +1952,15 @@ def _has_nontrivial_work_signals(postmortem: Dict[str, Any], lowered: str) -> bo
             "custom_tool_call",
             "git commit",
             "git push",
+            "build",
+            "create",
+            "make",
+            "implement",
+            "fix",
+            "modify",
+            "refactor",
+            "dashboard",
+            "verify",
             "python -b",
             "python -m",
             "pytest",

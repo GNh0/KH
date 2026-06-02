@@ -503,6 +503,7 @@ def _empty_token_gate(token_threshold: int, context_ratio_threshold: float) -> D
         "required": False,
         "threshold_tokens": token_threshold,
         "context_ratio_threshold": context_ratio_threshold,
+        "cumulative_threshold_tokens": max(token_threshold * 4, token_threshold),
         "max_total_tokens": 0,
         "max_last_input_tokens": 0,
         "model_context_window": 0,
@@ -528,9 +529,10 @@ def _merge_token_gate(
     token_gate["max_last_input_tokens"] = max(int(token_gate["max_last_input_tokens"]), last_input_tokens)
     token_gate["model_context_window"] = max(int(token_gate["model_context_window"]), context_window)
     token_gate["max_context_ratio"] = max(float(token_gate["max_context_ratio"]), ratio)
-    if total_tokens >= token_threshold:
+    cumulative_threshold = int(token_gate.get("cumulative_threshold_tokens", token_threshold * 4) or token_threshold * 4)
+    if total_tokens >= cumulative_threshold and ratio >= (context_ratio_threshold / 2):
         token_gate["required"] = True
-        _append_unique(token_gate["reasons"], "total_tokens_above_threshold")
+        _append_unique(token_gate["reasons"], "cumulative_tokens_above_threshold")
     if ratio >= context_ratio_threshold:
         token_gate["required"] = True
         _append_unique(token_gate["reasons"], "context_ratio_above_threshold")
