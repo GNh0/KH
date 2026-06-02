@@ -765,9 +765,10 @@ def _stress_only_scenarios() -> List[ScenarioCase]:
             "work-productivity",
             "Plan a study schedule for learning Python basics.",
             "medium",
-            "software",
+            "analysis",
             "skill_read",
-            signals=["classification"],
+            evidence=["brainstorm_handoff"],
+            signals=["classification", "evidence"],
         ),
     ]
 

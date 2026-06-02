@@ -1,6 +1,6 @@
 ---
 name: brainstorming-harness
-description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a user is starting a feature, product, project, SaaS, or design idea and the direction is not approved yet.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a user is starting an underspecified product, project, workflow, analysis, research, policy, process, document, specification, investment, operations, or design direction and the direction is not approved yet.
 ---
 
 # Brainstorming Harness
@@ -13,7 +13,7 @@ description: Use when kh-uaf:always-on-front-door has already run and selected t
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
-This harness adapts the Superpowers brainstorming pattern into KH UAF. It is the lightweight front door before `architect-pipeline`, `domain-orchestration-harness`, or `development-lifecycle-harness`: clarify the user's intent, explore alternatives, capture decisions, and hand off only after the design direction is approved.
+This harness adapts the Superpowers brainstorming pattern into KH UAF. It is the lightweight front door before `architect-pipeline`, `domain-orchestration-harness`, or `development-lifecycle-harness`: clarify the user's intent, explore alternatives, capture decisions, and hand off only after the product, process, analysis, document, specification, operational, investment, or design direction is approved.
 
 Source label: Superpowers brainstorming adapted for KH UAF.
 
@@ -28,7 +28,7 @@ Source label: Superpowers brainstorming adapted for KH UAF.
 
 Use this harness when:
 
-- The user wants to start a new product, SaaS, app, workflow, analysis, design, or major feature.
+- The user wants to start a new product, SaaS, app, workflow, analysis, research, policy, process, document, specification, investment, operations, design, or major feature.
 - The request is creative or underspecified enough that immediate implementation would hide assumptions.
 - The user needs options, tradeoffs, naming, MVP scope, target users, workflow shape, or architecture direction before planning.
 - A visual companion or mockup may help choose among directions, but the final decision still needs text evidence.
@@ -42,7 +42,7 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 3. Ask one question at a time. Prefer 2-3 clear choices with a recommendation.
 4. Capture decisions as structured records: `objective`, `target_user`, `problem`, `options`, `recommendation`, `constraints`, `decisions`, and `open_questions`.
 5. Present 2-3 approaches with tradeoffs and a recommended direction.
-6. Present the chosen design direction and ask for approval before implementation or scaffolding. For vague product, app, service, SaaS, or project requests, stop here unless the user approves the direction in a later message.
+6. Present the chosen direction and ask for approval before implementation, scaffolding, analysis output, domain artifact generation, or user-facing deliverable creation. For vague product, app, service, SaaS, project, analysis, design, process, document, specification, operations, investment, or other domain-work requests, stop here unless the user approves the direction in a later message.
 7. Build a `BrainstormSession`, validate it, and create a `brainstorm_handoff`.
 8. Write KH project artifacts when useful: `.kh/brainstorm/<run-id>/content/*.md` for local working notes, `.kh/brainstorm/<run-id>/state/*.json` for run-local state, and `docs/kh/handoffs/*.md` for shareable summaries.
 9. Pass the handoff to the next KH skill:
@@ -50,6 +50,18 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
    - `domain-orchestration-harness` for cross-domain role/gate design.
    - `goal-state-harness` when completion criteria and evidence are central.
    - `development-lifecycle-harness` only after the design direction is approved.
+
+## Minimum Discovery Checkpoints
+
+Do not collapse brainstorming into a single option picker unless the user has already supplied enough detail for every checkpoint below. For early product, project, app, SaaS, workflow, analysis, research, policy, process, design, document, manufacturing/specification, investment, operations, or other domain work, progress through these checkpoints and preserve evidence:
+
+1. `intent_frame`: objective, target user/operator/audience, and success criteria.
+2. `problem_frame`: current pain, workflow boundary, constraints, and non-goals.
+3. `option_frame`: 2-3 approaches with tradeoffs and one recommendation.
+4. `approval_frame`: explicit user approval, rejection, or blocked/waiting state.
+5. `handoff_frame`: `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, `brainstorm_handoff`, and next KH skill.
+
+If the user only says "handle this topic/project/work" and then chooses one proposed option, that approval is permission to continue the KH flow, not permission to skip the handoff. Build and validate the handoff before architecture, domain orchestration, analysis, deliverable generation, or implementation. If time, host tools, or missing context prevents this, record `brainstorming_status=blocked` with the missing checkpoint instead of claiming the skill ran.
 
 ## Evidence Contract
 
@@ -76,7 +88,7 @@ Use this harness as the KH equivalent of Superpowers brainstorming:
 5. Convert approval into a `BrainstormSession` and `build_architect_handoff`.
 6. Hand off to KH architecture or domain orchestration rather than Superpowers `writing-plans`.
 
-Pressure scenario: a user says "I want to build a SaaS." The agent should not scaffold immediately. It should clarify target customer, MVP center, product/repo naming, constraints, and preferred stack, then produce a handoff for `architect-pipeline`.
+Pressure scenario: a user says "I want to build a SaaS" or "plan an operations analysis workflow." The agent should not scaffold or generate the final artifact immediately. It should clarify target audience/operator, objective, success criteria, constraints, options, and recommended direction, then produce a handoff for `architect-pipeline` or `domain-orchestration-harness`.
 
 ## UAF implementation targets
 
@@ -110,10 +122,12 @@ Pressure scenario: a user says "I want to build a SaaS." The agent should not sc
 - Handoff payload for the next KH skill.
 - Markdown handoff and state paths when visible project artifacts are created.
 - User approval evidence before any implementation, scaffolding, source writes, or deliverable generation beyond brainstorm notes.
+- Checkpoint evidence for `intent_frame`, `problem_frame`, `option_frame`, `approval_frame`, and `handoff_frame`.
 
 ## Common mistakes
 
 - Treating brainstorming as implementation permission.
+- Asking one direction question, receiving a choice, and implementing without `BrainstormSession` plus `brainstorm_handoff`.
 - Implementing or scaffolding immediately after a vague product idea without a separate user approval of the recommended direction.
 - Creating visual files without linking them to a decision.
 - Asking five questions at once.

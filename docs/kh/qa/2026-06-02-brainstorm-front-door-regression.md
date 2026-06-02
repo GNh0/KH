@@ -241,3 +241,74 @@ Session audit evidence:
 Conclusion:
 
 The requested plugin-only behavior is verified for the blind product-development prompt: KH was not named by the user, no global skill copy was present, the subagent used the installed `2.9.40` plugin cache, front-door ran before memory/target inspection, `brainstorming-harness` was selected and read, and implementation was blocked pending product-direction approval.
+
+## 2026-06-02 Follow-up Failure After Approval
+
+Session:
+
+```text
+C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T11-04-34-019e8613-56f3-7cd3-830d-b977ea716f33.jsonl
+```
+
+Prompt:
+
+```text
+C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_J 폴더에 운영지원 제품 개발해줘.
+```
+
+Follow-up approval:
+
+```text
+1번 지원 티켓 MVP로 진행해. C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_J 폴더에 실제 제품을 구현하고, 실행/검증 결과까지 최종 보고해줘.
+```
+
+What passed:
+
+- The subagent used the installed plugin cache `2.9.40`.
+- The first turn read `always_on_front_door/SKILL.md`, ran the front-door wrapper, selected `brainstorming-harness`, presented three directions, and stopped before code.
+- The follow-up created a static support-ticket MVP with `index.html`, `styles.css`, `app.js`, and `README.md`.
+
+What failed:
+
+- Brainstorming collapsed into one approval checkpoint. After the user picked one option, the subagent implemented without preserving `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, or `brainstorm_handoff`.
+- The run was a Codex subagent session, but it did not record nested-subagent availability or `subagent_strategy`. It made no nested subagent calls and gave no no-subagent rationale.
+- The token gate was required by session size, but the run did not record runtime token optimization, passthrough, or blocked evidence. `session_skill_audit` reported `token_optimizer_status: blocked`.
+- Verification failure evidence existed, but the final report did not clearly preserve all failed verification routes.
+
+2.9.41 correction:
+
+- Strengthen `brainstorming-harness` from a single option-picker into a domain-general checkpoint flow: `intent_frame`, `problem_frame`, `option_frame`, `approval_frame`, and `handoff_frame`.
+- Make the brainstorming contract domain-general: product, process, analysis, design, document, operations, manufacturing/specification, investment, and other domain work.
+- Require `BrainstormSession`, `decision_log`, validation, and `brainstorm_handoff` before implementation, analysis output, user deliverables, or domain artifacts.
+- Require subagent sessions to record `nested_subagents_available` and `subagent_strategy=dispatch|single-controller|review-only|blocked` before non-trivial work.
+- Extend `session_skill_audit` so the failed follow-up is caught as:
+  - `brainstorming-harness: missing_brainstorm_handoff`
+  - `host-agent-orchestration: missing_subagent_strategy`
+  - `subagent-review-pipeline: missing_subagent_strategy`
+  - `token-optimizer: blocked`
+
+Next install target: `2.9.41`.
+
+## 2026-06-02 Domain-General Brainstorming Routing Fix
+
+User correction:
+
+```text
+Orchestration and brainstorming are not development-only.
+```
+
+What changed:
+
+- `brainstorming-harness` now describes early discovery for product, project, workflow, analysis, research, policy, process, document, specification, operations, investment, and design work.
+- `request_classifier` now treats early direction-setting requests such as process approach, analysis approach, and document structure planning as brainstorming candidates even when no KH skill name is mentioned.
+- The classifier distinguishes direction-setting from artifact generation. Example: `Create a budget variance analysis for finance review.` remains a medium finance task and does not force brainstorming.
+- Windows target paths containing `folder` no longer force a domain-specific discovery prompt to stay in software when the prompt clearly asks for analysis, document, or operations discovery.
+- `session_skill_audit` now reports the Meitner follow-up failure as early domain discovery moving into execution without `BrainstormSession` and `brainstorm_handoff`.
+
+Regression evidence:
+
+- `python -B -m unittest tests.test_request_classifier tests.test_kh_front_door tests.test_session_skill_audit` passed.
+- `kh_front_door` routed `C:\work\OpsPlan 폴더에 업무 프로세스 방향 잡아줘` to `domain=operations`, `complexity=medium`, and selected `brainstorming-harness`.
+- `kh_front_door` routed `C:\work\DocPlan 폴더에 안전 절차 문서 구조 잡아줘` to `domain=document`, `complexity=medium`, and selected `brainstorming-harness`.
+- `kh_front_door` routed `Create a budget variance analysis for finance review.` to `domain=finance`, `complexity=medium`, and did not select `brainstorming-harness`.
+- Full release verification passed after this fix: `python -B -m unittest discover -s tests` passed 507 tests, `uaf_skill_catalog --check` passed 40/40 skills, `uaf_skill_quality` passed with lowest score 9.3, `kh_bench_verified --summary` passed 8/8, and `practical_quality_gate --summary` reported `release_ready: true`.

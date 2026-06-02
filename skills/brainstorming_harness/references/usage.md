@@ -4,7 +4,7 @@ This reference expands the portable operating contract for `brainstorming-harnes
 
 ## When to use
 
-Use when a user is starting a feature, product, project, or design idea and the agent must clarify intent, compare approaches, and produce an approved handoff before implementation.
+Use when a user is starting a feature, product, project, analysis, research, policy, process, document, manufacturing/specification, operation, investment, or design idea and the agent must clarify intent, compare approaches, and produce an approved handoff before execution.
 
 Context summary: this is the KH UAF version of Superpowers brainstorming. It keeps the useful interaction pattern but changes the storage, handoff, and next-step contracts to KH. The output is not a Superpowers spec. It is a KH `BrainstormSession` plus handoff evidence for the next UAF skill.
 
@@ -48,6 +48,18 @@ Do not use this skill only because it is available. Use it when the current task
 10. Preserve intermediate decisions in structured evidence rather than relying on chat memory alone.
 11. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 
+## Checkpoint contract
+
+Superpowers-style brainstorming is a sequence of small checkpoints, not a single yes/no question. KH uses the same interaction discipline but stores KH-native evidence for any domain, not only software development. A valid run should preserve:
+
+- `intent_frame`: objective, target user/operator/audience, success criteria.
+- `problem_frame`: pain, current workflow, constraints, non-goals.
+- `option_frame`: 2-3 options, tradeoffs, recommended option.
+- `approval_frame`: explicit user decision, rejection, or waiting/blocked state.
+- `handoff_frame`: `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, `brainstorm_handoff`, and next KH skill.
+
+If a broad domain request receives only one direction question and then jumps into file creation, analysis, deliverable generation, or implementation, mark it as `brainstorming_status=blocked` or `missing_brainstorm_handoff`. If the user supplied all checkpoint content upfront, the agent may keep the conversation short, but it still must create and validate the structured handoff before execution.
+
 ## Evidence to produce
 
 - Skill name and execution level used for the run.
@@ -58,6 +70,7 @@ Do not use this skill only because it is available. Use it when the current task
 - `BrainstormSession` validation result.
 - Handoff target, usually `architect-pipeline`.
 - Markdown handoff paths if project-local KH notes were written.
+- Checkpoint evidence for intent, problem, options, approval, and handoff.
 - Verification command or review evidence when validating the packaged skill itself.
 
 ## Failure handling
@@ -68,7 +81,8 @@ Do not use this skill only because it is available. Use it when the current task
 - If the task is too broad for one design, decompose it and brainstorm only the first project slice.
 - If visual artifacts are created, record what decision they supported and avoid leaving orphan mockups.
 - If a sibling or previous run folder was read accidentally, discard that run as contaminated, record the leak, and restart from the requested target boundary.
-- If the agent created product code before approval, mark the run as a brainstorming bypass and redo discovery from the target boundary.
+- If the agent created product code, analysis output, user deliverables, or domain artifacts before approval, mark the run as a brainstorming bypass and redo discovery from the target boundary.
+- If the agent created product code, analysis output, user deliverables, or domain artifacts after approval but before `BrainstormSession` validation and `brainstorm_handoff`, mark the run as missing handoff evidence and route back to `brainstorming-harness` before architecture, domain orchestration, analysis, deliverable, or implementation claims.
 
 ## Quality bar
 

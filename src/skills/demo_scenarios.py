@@ -283,7 +283,7 @@ def _brainstorming_scenario(skill_name: str, output_dir: Path, repo_root: Path) 
         success_contract="BrainstormHandoff",
         success_payload=handoff,
         success_evidence=handoff["evidence"],
-        success_behavior="Capture early product intent, compare approaches, preserve decisions, and hand off to architect-pipeline.",
+        success_behavior="Capture early domain intent, compare approaches, preserve decisions, and hand off to architect-pipeline or domain-orchestration-harness.",
         success_side_effects=["writes brainstorm_handoff.json under the demo output directory"],
         blocked_contract="BrainstormHandoff",
         blocked_payload=blocked,

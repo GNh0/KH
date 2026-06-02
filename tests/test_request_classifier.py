@@ -89,7 +89,7 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("brainstorming-harness", result.recommended_skills)
         self.assertIn("brainstorming-harness", result.required_harnesses)
         self.assertIn("brainstorm_handoff", result.evidence_required)
-        self.assertIn("early_product_discovery_needs_brainstorming", result.reasons)
+        self.assertIn("early_domain_discovery_needs_brainstorming", result.reasons)
 
     def test_product_built_request_routes_to_brainstorming(self):
         result = classify_request(
@@ -100,7 +100,49 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertEqual(result.domain, "product")
         self.assertEqual(result.recommended_execution, "skill_read")
         self.assertIn("brainstorming-harness", result.recommended_skills)
-        self.assertIn("early_product_discovery_needs_brainstorming", result.reasons)
+        self.assertIn("early_domain_discovery_needs_brainstorming", result.reasons)
+
+    def test_non_software_discovery_routes_to_brainstorming(self):
+        cases = [
+            (
+                "C:\\work\\OpsFlow folder needs an invoice approval process approach planned.",
+                "operations",
+            ),
+            (
+                "C:\\work\\ResearchPlan folder needs a customer churn analysis approach planned.",
+                "analysis",
+            ),
+            (
+                "C:\\work\\DocPlan folder needs a safety procedure document structure outlined.",
+                "document",
+            ),
+        ]
+
+        for prompt, domain in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.domain, domain)
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("brainstorming-harness", result.recommended_skills)
+                self.assertIn("brainstorming-harness", result.required_harnesses)
+                self.assertIn("brainstorm_handoff", result.evidence_required)
+                self.assertIn("early_domain_discovery_needs_brainstorming", result.reasons)
+
+    def test_korean_non_software_discovery_routes_to_brainstorming(self):
+        cases = [
+            ("C:\\work\\OpsPlan \ud3f4\ub354\uc5d0 \uc5c5\ubb34 \ud504\ub85c\uc138\uc2a4 \ubc29\ud5a5 \uc7a1\uc544\uc918", "operations"),
+            ("C:\\work\\DocPlan \ud3f4\ub354\uc5d0 \uc548\uc804 \uc808\ucc28 \ubb38\uc11c \uad6c\uc870 \uc7a1\uc544\uc918", "document"),
+        ]
+
+        for prompt, domain in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.domain, domain)
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("brainstorming-harness", result.recommended_skills)
+                self.assertIn("brainstorm_handoff", result.evidence_required)
 
     def test_specific_verified_html_tool_does_not_route_to_brainstorming(self):
         result = classify_request("Build a small HTML todo tool and verify it.")

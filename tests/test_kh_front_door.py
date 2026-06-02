@@ -220,6 +220,24 @@ class KhFrontDoorTests(unittest.TestCase):
             any("user approves the direction" in action for action in payload["required_next_actions"])
         )
 
+    def test_non_software_discovery_selects_brainstorming_without_kh_terms(self):
+        result = build_kh_front_door(
+            "C:\\work\\ResearchPlan folder needs a customer churn analysis approach planned.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["domain"], "analysis")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertIn("brainstorming-harness", payload["selected_not_executed_skills"])
+        self.assertTrue(
+            any("analysis output" in action for action in payload["required_next_actions"])
+        )
+
     def test_command_output_request_selects_log_harness_before_ambiguity(self):
         result = build_kh_front_door(
             "Summarize this long pytest log and preserve the failing test name, file line, assertion values, and exit code.",

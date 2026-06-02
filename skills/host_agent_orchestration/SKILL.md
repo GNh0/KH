@@ -32,15 +32,18 @@ This is a personal UAF host orchestration harness. It packages reusable agent, s
 1. Model each worker as an agent profile with explicit role, allowed tools, input contract, and output contract.
 2. Route user work through a conversation record that preserves task intent, constraints, artifacts, and structured results.
 3. Delegate only independent subtasks to subagents; keep shared-state edits behind the main controller.
-4. Resolve tool access before dispatch with a deny/ask/allow/default policy.
-5. Attach lifecycle hooks for pre-dispatch validation, post-dispatch normalization, error recovery, and audit logging.
-6. Emit observability metadata for model/runtime choice, token budget, elapsed time, tool calls, and failure category.
+4. If the current host is itself a subagent or worker, record whether nested subagents are available before implementation. If not available or not useful, record `subagent_strategy=single-controller` with a host-limited, sequential, tiny-task, or shared-state rationale.
+5. Resolve tool access before dispatch with a deny/ask/allow/default policy.
+6. Attach lifecycle hooks for pre-dispatch validation, post-dispatch normalization, error recovery, and audit logging.
+7. Emit observability metadata for model/runtime choice, token budget, elapsed time, tool calls, and failure category.
 
 Use the default UAF role graph for orchestration: `ceo`, `advisor`, `product-strategist`, `system-architect`, `implementation-planner`, `controller`, `implementer`, `spec-reviewer`, `code-quality-reviewer`, `qa-verifier`, `security-reviewer`, and `release-manager`.
 
 ## Large Work Bundle Reporting
 
 When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["host-agent-orchestration"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Include the host runtime, adapter path, missing capability, or no-subagent rationale as evidence.
+
+For subagent sessions, no-subagent rationale is mandatory before implementation. Do not leave it implicit. Record `host_runtime`, `nested_subagents_available`, `subagent_strategy`, and `strategy_rationale`.
 
 ## External Benchmark Recipe
 
@@ -58,6 +61,7 @@ Pressure scenario: if Codex, Antigravity-style, Claude Code, or local runner lac
 
 - `AdapterRequest` containing `project_dir`, `files`, `design_doc`, `platform_mode`, and metadata for role graph, goal, memory, evidence, tools, budget, and safety policy.
 - `AdapterResult` containing top-level `status`, `message`, `workflow_id`, and `metadata`; artifact paths, evidence, task results, and blocked/failure reasons belong inside `metadata`.
+- `subagent_strategy` and nested-subagent availability when the current worker is already a host subagent.
 - A controller-level summary that includes every subagent result, including partial failures.
 
 ## Failure handling

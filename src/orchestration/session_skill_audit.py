@@ -227,6 +227,8 @@ ACCEPTANCE_OUTPUT_MARKERS = {
     "brainstorming-harness": {
         "options": ["option", "candidate", "direction", "alternatives"],
         "decision": ["recommendation", "selected", "approved", "decision"],
+        "session_record": ["brainstormsession", "validate_brainstorm_session", "decision_log", "target_user"],
+        "handoff": ["brainstorm_handoff", "build_architect_handoff", ".kh/brainstorm", "docs/kh/handoffs"],
     },
     "branch-finishing-harness": {
         "integration_state": ["branch_finish_status", "commit_sha", "git push", "pr-ready", "merged", "local only"],
@@ -436,6 +438,8 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_kh_front_door_issues(path))
     issues.extend(_stale_skill_cache_issues(path))
     issues.extend(_cross_scope_context_issues(path))
+    issues.extend(_brainstorming_depth_issues(path))
+    issues.extend(_subagent_strategy_issues(path, postmortem.to_dict()))
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
     coverage = _coverage(skill_rows)
     return SessionSkillAudit(
@@ -730,6 +734,236 @@ def _cross_scope_context_issues(path: Path) -> List[Dict[str, Any]]:
             "samples": samples,
         }
     ]
+
+
+def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
+    active_text = "\n".join(_strip_passive_prefix(text) for text in _session_texts(path) if not _is_passive_text(text))
+    lowered = active_text.lower()
+    if not _early_domain_discovery_text(lowered):
+        return []
+
+    request_input_count = _function_call_count(path, {"request_user_input"})
+    implementation_samples = _implementation_tool_samples(path)
+    has_session_record = any(
+        marker in lowered
+        for marker in [
+            "brainstormsession",
+            "validate_brainstorm_session",
+            "decision_log",
+            "target_user",
+        ]
+    )
+    has_handoff = any(
+        marker in lowered
+        for marker in [
+            "brainstorm_handoff",
+            "build_architect_handoff",
+            ".kh/brainstorm",
+            "docs/kh/handoffs",
+        ]
+    )
+    has_options = any(marker in lowered for marker in ["option", "options", "direction", "alternatives", "recommendation"])
+
+    issues: List[Dict[str, Any]] = []
+    if implementation_samples and not (has_session_record and has_handoff):
+        issues.append(
+            {
+                "skill": "brainstorming-harness",
+                "status": "missing_brainstorm_handoff",
+                "severity": "P1",
+                "reason": (
+                    "Early domain discovery moved into execution without BrainstormSession "
+                    "validation and brainstorm_handoff evidence."
+                ),
+                "action": (
+                    "Run the multi-checkpoint brainstorming flow, preserve BrainstormSession/decision_log, "
+                    "validate it, build brainstorm_handoff, then hand off to architect-pipeline before implementation."
+                ),
+                "samples": implementation_samples[:3],
+            }
+        )
+    elif request_input_count <= 1 and has_options and not has_handoff:
+        issues.append(
+            {
+                "skill": "brainstorming-harness",
+                "status": "single_checkpoint_brainstorming",
+                "severity": "P2",
+                "reason": (
+                    "The run looks like a one-question option picker rather than a Superpowers-style "
+                    "multi-checkpoint brainstorm with preserved KH handoff evidence."
+                ),
+                "action": (
+                    "Collect objective, target user, problem, constraints, success criteria, options, recommendation, "
+                    "decision log, open questions, and handoff evidence before treating brainstorming as complete."
+                ),
+            }
+        )
+    return issues
+
+
+def _subagent_strategy_issues(path: Path, postmortem: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if not _is_subagent_session(path):
+        return []
+    active_text = "\n".join(_strip_passive_prefix(text) for text in _session_texts(path) if not _is_passive_text(text))
+    lowered = active_text.lower()
+    if not (_implementation_tool_samples(path) or _has_nontrivial_work_signals(postmortem, lowered)):
+        return []
+    if _has_subagent_strategy_rationale(lowered):
+        return []
+    return [
+        {
+            "skill": "host-agent-orchestration",
+            "status": "missing_subagent_strategy",
+            "severity": "P2",
+            "reason": (
+                "A subagent session performed non-trivial work but did not record whether nested subagents "
+                "were available or why the controller chose single-agent execution."
+            ),
+            "action": (
+                "Record host_runtime, nested-subagent availability, subagent_strategy="
+                "dispatch|single-controller|review-only|blocked, and the no-subagent rationale before implementation."
+            ),
+        },
+        {
+            "skill": "subagent-review-pipeline",
+            "status": "missing_subagent_strategy",
+            "severity": "P2",
+            "reason": (
+                "Subagent review policy was not resolved for a subagent-run implementation; no dispatch, "
+                "review-only, single-controller, or blocked rationale was preserved."
+            ),
+            "action": (
+                "If nested subagents are unavailable or not useful, record subagent_strategy=single-controller "
+                "with host-limited, sequential, tiny, or shared-state-heavy rationale."
+            ),
+        },
+    ]
+
+
+def _early_domain_discovery_text(lowered: str) -> bool:
+    english_markers = [
+        "brainstorm",
+        "saas",
+        "product idea",
+        "build a product",
+        "develop a product",
+        "new product",
+        "new app",
+        "project idea",
+        "new workflow",
+        "process design",
+        "analysis plan",
+        "research plan",
+        "design a process",
+        "create a specification",
+        "make a drawing",
+        "investment plan",
+        "operating model",
+    ]
+    korean_markers = [
+        "\uc81c\ud488",
+        "\uc11c\ube44\uc2a4",
+        "\ud504\ub85c\ub355\ud2b8",
+        "\uc0ac\uc774\ud2b8",
+        "\uc571",
+        "\uc6f9\uc571",
+        "\ub300\uc2dc\ubcf4\ub4dc",
+        "\uae30\ud68d",
+        "\uac1c\ubc1c\ud574\uc918",
+        "\ub9cc\ub4e4\uc5b4\uc918",
+        "\ubd84\uc11d",
+        "\ub9ac\uc11c\uce58",
+        "\uc5f0\uad6c",
+        "\uc815\ucc45",
+        "\ud504\ub85c\uc138\uc2a4",
+        "\uc5c5\ubb34\ud750\ub984",
+        "\uc124\uacc4\ub3c4",
+        "\ub3c4\uba74",
+        "\uaddc\uaca9",
+        "\ud22c\uc790",
+        "\uc6b4\uc601",
+    ]
+    return any(marker in lowered for marker in english_markers) or any(marker in lowered for marker in korean_markers)
+
+
+def _function_call_count(path: Path, names: Set[str]) -> int:
+    count = 0
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("type") in {"function_call", "custom_tool_call"} and str(payload.get("name", "")) in names:
+            count += 1
+    return count
+
+
+def _implementation_tool_samples(path: Path) -> List[str]:
+    samples: List[str] = []
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        if payload_type not in {"function_call", "custom_tool_call"}:
+            continue
+        name = str(payload.get("name", ""))
+        text = _payload_text(payload)
+        lowered = text.lower()
+        if name in {"apply_patch", "imagegen"} or "apply_patch" in lowered:
+            samples.append(_short(text))
+        elif name == "shell_command" and any(
+            marker in lowered
+            for marker in [
+                "new-item",
+                "copy-item",
+                "set-content",
+                "out-file",
+                "start-process",
+                "node --check",
+                "python -m http.server",
+            ]
+        ):
+            samples.append(_short(text))
+        if len(samples) >= 5:
+            break
+    return samples
+
+
+def _is_subagent_session(path: Path) -> bool:
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "session_meta":
+            continue
+        payload = event.get("payload", {}) or {}
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("thread_source", "")).lower() == "subagent":
+            return True
+        source = payload.get("source", {}) or {}
+        return isinstance(source, dict) and isinstance(source.get("subagent"), dict)
+    return False
+
+
+def _has_subagent_strategy_rationale(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in [
+            "subagent_strategy",
+            "single-controller",
+            "review-only",
+            "host-limited",
+            "nested subagent",
+            "nested-subagent",
+            "no-subagent rationale",
+            "subagents unavailable",
+            "subagents are unavailable",
+        ]
+    )
 
 
 def _cross_scope_context_sample(target: Path, text: str) -> str:
@@ -1611,8 +1845,8 @@ def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
         _add(required, "plugin-composition-policy", "multiple plugins or providers may apply")
     if any(marker in lowered for marker in ["delete", "drop table", "secret", "api_key", "token=", "permission", "approval"]):
         _add(required, "guard-policy-harness", "permission, secret, or destructive-action risk appeared")
-    if any(marker in lowered for marker in ["brainstorm", "saas", "product idea"]):
-        _add(required, "brainstorming-harness", "early product/project discovery appeared")
+    if _early_domain_discovery_text(lowered):
+        _add(required, "brainstorming-harness", "early domain discovery appeared")
     if any(marker in lowered for marker in ["architecture", "design doc", "spec", "requirements", "설계"]):
         _add(required, "architect-pipeline", "design or architecture planning appeared")
         _add(required, "domain-orchestration-harness", "domain design/decomposition appeared")

@@ -11,13 +11,14 @@ The agent must use `brainstorming-harness`, keep the conversation lightweight, a
 1. Load `SKILL.md` and confirm the trigger applies.
 2. Read `references/usage.md` before doing the work.
 3. Inspect the project context if a repository exists.
-4. Ask one focused question at a time.
+4. Ask one focused question at a time while filling `intent_frame`, `problem_frame`, `option_frame`, `approval_frame`, and `handoff_frame`.
 5. Present 2-3 approaches with tradeoffs and a recommendation.
-6. Capture approved decisions in a `BrainstormSession`.
-7. Validate the session with `validate_brainstorm_session`.
-8. Build the handoff with `build_architect_handoff`.
-9. Stop and ask for approval. Pass the handoff to `architect-pipeline` only after the user approves the direction in a later message.
-10. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
+6. Stop and ask for approval before implementation.
+7. Capture approved decisions in a `BrainstormSession`.
+8. Validate the session with `validate_brainstorm_session`.
+9. Build the handoff with `build_architect_handoff`.
+10. Pass the handoff to `architect-pipeline` only after the user approves the direction in a later message.
+11. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
 
@@ -34,11 +35,13 @@ The agent must use `brainstorming-harness`, keep the conversation lightweight, a
   - `skills/brainstorming_harness/SKILL.md`
 - `actual_runtime_path`: `src.orchestration.brainstorming`.
 - `verification`: validation result, demo result, or explicit blocked reason.
+- `checkpoints`: `intent_frame`, `problem_frame`, `option_frame`, `approval_frame`, `handoff_frame`.
 
 ## Failure cases
 
 - The agent scaffolds code before the user approves the design direction.
 - The agent treats "build a product" as approval to skip the brainstorming approval checkpoint.
+- The agent asks one direction question and then implements without `BrainstormSession` and `brainstorm_handoff`.
 - The agent asks a batch of unrelated questions in one message.
 - The agent writes Superpowers artifacts such as `.superpowers/brainstorm/...` instead of KH handoff evidence.
 - The agent claims brainstorming is complete without a target user, problem, recommended option, or decision log.

@@ -29,6 +29,27 @@ class SessionSkillAuditTests(unittest.TestCase):
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
+    def write_subagent_session(self, events):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "session.jsonl"
+        lines = [
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-audit-subagent",
+                        "cwd": str(Path(tmp.name)),
+                        "thread_source": "subagent",
+                        "source": {"subagent": {"thread_spawn": {"parent_thread_id": "parent"}}},
+                    },
+                }
+            )
+        ]
+        lines.extend(json.dumps(event) for event in events)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
     def test_audit_covers_full_kh_skill_catalog_and_flags_required_omissions(self):
         path = self.write_session(
             [
@@ -356,6 +377,161 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertIn(("host-agent-orchestration", "blocked"), issues)
         self.assertIn(("role-execution-audit-harness", "blocked"), issues)
         self.assertIn(("subagent-review-pipeline", "blocked"), issues)
+
+    def test_korean_product_request_without_brainstorm_handoff_is_flagged(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": r"C:\work\OpsProduct 폴더에 운영지원 제품 개발해줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python C:\\kh\\skills\\always_on_front_door\\scripts\\front_door.py "
+                            "--prompt \"운영지원 제품 개발해줘\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "request_user_input",
+                        "arguments": "{\"questions\":[{\"question\":\"제품 방향은?\"}]}",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "1번으로 진행해.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: index.html\n+<h1>Ops</h1>\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertTrue(rows["brainstorming-harness"]["required"])
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "missing_brainstorm_handoff"
+                and issue["severity"] == "P1"
+                for issue in audit.issues
+            )
+        )
+
+    def test_subagent_implementation_without_strategy_rationale_is_flagged(self):
+        path = self.write_subagent_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Build an operations support product in this folder.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python C:\\kh\\skills\\always_on_front_door\\scripts\\front_door.py "
+                            "--prompt \"Build an operations support product\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: app.js\n+console.log('ok')\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "host-agent-orchestration"
+                and issue["status"] == "missing_subagent_strategy"
+                for issue in audit.issues
+            )
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "subagent-review-pipeline"
+                and issue["status"] == "missing_subagent_strategy"
+                for issue in audit.issues
+            )
+        )
+
+    def test_subagent_single_controller_rationale_satisfies_strategy_audit(self):
+        path = self.write_subagent_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Build an operations support product in this folder.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "host-agent-orchestration resolved host_runtime=codex-subagent; "
+                            "subagent_strategy=single-controller because nested subagents are unavailable "
+                            "and the write set is shared."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: app.js\n+console.log('ok')\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "missing_subagent_strategy"
+                for issue in audit.issues
+            )
+        )
 
     def test_developer_skill_inventory_does_not_count_as_observed_usage(self):
         path = self.write_session(

@@ -693,6 +693,7 @@ PRODUCT_DISCOVERY_ACTION_TERMS = {
     "make",
     "start",
     "plan",
+    "planned",
     "design",
     "launch",
     "scaffold",
@@ -702,6 +703,82 @@ PRODUCT_DISCOVERY_ACTION_TERMS = {
     "\uae30\ud68d",
     "\uc124\uacc4",
     "\uc2dc\uc791",
+}
+DOMAIN_DISCOVERY_OBJECT_TERMS = PRODUCT_DISCOVERY_OBJECT_TERMS | {
+    "workflow",
+    "process",
+    "operating model",
+    "operational model",
+    "analysis",
+    "research",
+    "study",
+    "policy",
+    "procedure",
+    "document structure",
+    "report structure",
+    "specification",
+    "spec",
+    "drawing direction",
+    "design direction",
+    "investment thesis",
+    "portfolio approach",
+    "decision framework",
+    "\uc5c5\ubb34\ud750\ub984",
+    "\ud504\ub85c\uc138\uc2a4",
+    "\uc6b4\uc601",
+    "\ubd84\uc11d",
+    "\ub9ac\uc11c\uce58",
+    "\uc5f0\uad6c",
+    "\uc815\ucc45",
+    "\uc808\ucc28",
+    "\ubb38\uc11c",
+    "\ubcf4\uace0\uc11c",
+    "\uaddc\uaca9",
+    "\ub3c4\uba74",
+    "\uc124\uacc4\ubc29\ud5a5",
+    "\ud22c\uc790",
+}
+DOMAIN_DISCOVERY_ACTION_TERMS = PRODUCT_DISCOVERY_ACTION_TERMS | {
+    "brainstorm",
+    "ideate",
+    "shape",
+    "scope",
+    "outline",
+    "outlined",
+    "map out",
+    "figure out",
+    "direction",
+    "approach",
+    "framework",
+    "\ubc29\ud5a5",
+    "\uc7a1\uc544",
+    "\uc815\uc758",
+    "\uad6c\uc0c1",
+    "\uc544\uc774\ub514\uc5b4",
+    "\ucd08\uc548",
+    "\ud2c0",
+}
+DOMAIN_DISCOVERY_INTENT_TERMS = {
+    "brainstorm",
+    "ideate",
+    "shape",
+    "scope",
+    "outline",
+    "outlined",
+    "map out",
+    "figure out",
+    "direction",
+    "approach",
+    "framework",
+    "plan",
+    "planned",
+    "\ubc29\ud5a5",
+    "\uc7a1\uc544",
+    "\uc815\uc758",
+    "\uad6c\uc0c1",
+    "\uc544\uc774\ub514\uc5b4",
+    "\ucd08\uc548",
+    "\ud2c0",
 }
 PRODUCT_DISCOVERY_SPECIFICITY_TERMS = {
     "html",
@@ -1699,7 +1776,7 @@ def _brainstorming_classification(
                 "open_questions",
             ]
         ),
-        reasons=[*reasons, "early_product_discovery_needs_brainstorming"],
+        reasons=[*reasons, "early_domain_discovery_needs_brainstorming"],
         confidence=0.72,
     )
 
@@ -2382,24 +2459,29 @@ def _is_unapproved_product_discovery_request(normalized: str, context: dict, dom
     if _is_conceptual_request(normalized):
         return False
     if domain in {
-        "marketing",
         "shopping",
         "scheduling",
         "weather",
         "legal",
         "medical",
-        "investment",
         "compliance",
         "privacy",
         "security",
         "devops",
+        "booking",
+        "local",
+        "travel",
+        "education",
     }:
         return False
     if _contains_any(normalized, PRODUCT_DISCOVERY_SPECIFICITY_TERMS):
         return False
-    if not _contains_any(normalized, PRODUCT_DISCOVERY_OBJECT_TERMS):
+    has_product_object = _contains_any(normalized, PRODUCT_DISCOVERY_OBJECT_TERMS)
+    if not _contains_any(normalized, DOMAIN_DISCOVERY_OBJECT_TERMS):
         return False
-    if not _contains_any(normalized, PRODUCT_DISCOVERY_ACTION_TERMS):
+    if not _contains_any(normalized, DOMAIN_DISCOVERY_ACTION_TERMS):
+        return False
+    if not has_product_object and not _contains_any(normalized, DOMAIN_DISCOVERY_INTENT_TERMS):
         return False
     if _contains_any(normalized, {"prd", "product requirements document", "launch email", "screen design"}):
         return False
@@ -2423,6 +2505,14 @@ def _product_discovery_domain(domain: str, normalized: str) -> str:
         },
     ):
         return "product"
+    if _contains_any(normalized, {"analysis", "research", "study", "\ubd84\uc11d", "\ub9ac\uc11c\uce58", "\uc5f0\uad6c"}):
+        return "analysis"
+    if _contains_any(normalized, {"workflow", "process", "operating model", "\uc5c5\ubb34\ud750\ub984", "\ud504\ub85c\uc138\uc2a4", "\uc6b4\uc601"}):
+        return "operations"
+    if _contains_any(normalized, {"document", "report", "procedure", "\ubb38\uc11c", "\ubcf4\uace0\uc11c", "\uc808\ucc28"}):
+        return "document"
+    if _contains_any(normalized, {"specification", "spec", "drawing direction", "design direction", "\uaddc\uaca9", "\ub3c4\uba74", "\uc124\uacc4\ubc29\ud5a5"}):
+        return "product-design"
     if domain == "general":
         return "product"
     return domain
