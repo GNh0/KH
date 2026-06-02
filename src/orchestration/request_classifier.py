@@ -704,6 +704,173 @@ PRODUCT_STRATEGY_TERMS = {
     "advanced reporting",
     "product",
 }
+PRODUCT_DISCOVERY_OBJECT_TERMS = {
+    "product",
+    "service",
+    "saas",
+    "app",
+    "dashboard",
+    "tool",
+    "platform",
+    "startup",
+    "mvp",
+    "business tool",
+    "internal tool",
+    "support product",
+    "operations product",
+    "\uc81c\ud488",
+    "\uc11c\ube44\uc2a4",
+    "\uc571",
+    "\ub300\uc2dc\ubcf4\ub4dc",
+    "\ub3c4\uad6c",
+    "\ud234",
+    "\ud50c\ub7ab\ud3fc",
+    "\uc0ac\uc5c5",
+    "\uc544\uc774\ub514\uc5b4",
+    "\uc6b4\uc601\uc9c0\uc6d0",
+    "\uc5c5\ubb34\uad00\ub9ac",
+}
+PRODUCT_DISCOVERY_ACTION_TERMS = {
+    "build",
+    "built",
+    "create",
+    "develop",
+    "make",
+    "start",
+    "plan",
+    "planned",
+    "design",
+    "launch",
+    "scaffold",
+    "\uac1c\ubc1c",
+    "\ub9cc\ub4e4",
+    "\uc0dd\uc131",
+    "\uae30\ud68d",
+    "\uc124\uacc4",
+    "\uc2dc\uc791",
+}
+DOMAIN_DISCOVERY_OBJECT_TERMS = PRODUCT_DISCOVERY_OBJECT_TERMS | {
+    "workflow",
+    "process",
+    "operating model",
+    "operational model",
+    "analysis",
+    "research",
+    "study",
+    "policy",
+    "procedure",
+    "document structure",
+    "report structure",
+    "specification",
+    "spec",
+    "drawing direction",
+    "design direction",
+    "investment thesis",
+    "portfolio approach",
+    "decision framework",
+    "\uc5c5\ubb34\ud750\ub984",
+    "\ud504\ub85c\uc138\uc2a4",
+    "\uc6b4\uc601",
+    "\ubd84\uc11d",
+    "\ub9ac\uc11c\uce58",
+    "\uc5f0\uad6c",
+    "\uc815\ucc45",
+    "\uc808\ucc28",
+    "\ubb38\uc11c",
+    "\ubcf4\uace0\uc11c",
+    "\uaddc\uaca9",
+    "\ub3c4\uba74",
+    "\uc124\uacc4\ubc29\ud5a5",
+    "\ud22c\uc790",
+}
+DOMAIN_DISCOVERY_ACTION_TERMS = PRODUCT_DISCOVERY_ACTION_TERMS | {
+    "brainstorm",
+    "ideate",
+    "shape",
+    "scope",
+    "outline",
+    "outlined",
+    "map out",
+    "figure out",
+    "direction",
+    "approach",
+    "framework",
+    "\ubc29\ud5a5",
+    "\uc7a1\uc544",
+    "\uc815\uc758",
+    "\uad6c\uc0c1",
+    "\uc544\uc774\ub514\uc5b4",
+    "\ucd08\uc548",
+    "\ud2c0",
+}
+DOMAIN_DISCOVERY_INTENT_TERMS = {
+    "brainstorm",
+    "ideate",
+    "shape",
+    "scope",
+    "outline",
+    "outlined",
+    "map out",
+    "figure out",
+    "direction",
+    "approach",
+    "framework",
+    "plan",
+    "planned",
+    "\ubc29\ud5a5",
+    "\uc7a1\uc544",
+    "\uc815\uc758",
+    "\uad6c\uc0c1",
+    "\uc544\uc774\ub514\uc5b4",
+    "\ucd08\uc548",
+    "\ud2c0",
+}
+PRODUCT_DISCOVERY_SPECIFICITY_TERMS = {
+    "html",
+    "css",
+    "javascript",
+    "js",
+    "react",
+    "vue",
+    "api",
+    "database",
+    "table",
+    "filter",
+    "kpi",
+    "metrics",
+    "screen",
+    "wireframe",
+    "drawing",
+    "docx",
+    "xlsx",
+    "pdf",
+    "dxf",
+    "svg",
+    "index.html",
+    "verify",
+    "validate",
+    "compliant",
+    "gdpr",
+    "hipaa",
+    "test",
+    "tests",
+    "sample",
+    "with ",
+    "including ",
+    "\ub300\uc2dc\ubcf4\ub4dc",
+    "\ud654\uba74",
+    "\ud14c\uc774\ube14",
+    "\ud544\ud130",
+    "\uc9c0\ud45c",
+    "\uba54\ud2b8\ub9ad",
+    "\ub3c4\uba74",
+    "\uac80\uc99d",
+    "\ud14c\uc2a4\ud2b8",
+}
+VAGUE_DISCOVERY_SPECIFICITY_TERMS = {
+    "dashboard",
+    "\ub300\uc2dc\ubcf4\ub4dc",
+}
 VENDOR_OPS_TERMS = {
     "rfp",
     "vendor",
@@ -1346,6 +1513,9 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_command_output_request(normalized):
         return _command_output_classification(domain, cross_cutting, evidence_required, reasons)
 
+    if _is_unapproved_product_discovery_request(normalized, context, domain):
+        return _brainstorming_classification(domain, cross_cutting, evidence_required, reasons, normalized)
+
     if _is_ambiguous(normalized, context):
         return _classification(
             complexity="ambiguous",
@@ -1635,6 +1805,37 @@ def _command_output_classification(
         ),
         reasons=[*reasons, "command_output_summary_or_filtering"],
         confidence=0.82,
+    )
+
+
+def _brainstorming_classification(
+    domain: str,
+    cross_cutting: List[str],
+    evidence_required: List[str],
+    reasons: List[str],
+    normalized: str,
+) -> RequestClassification:
+    return _classification(
+        complexity="medium",
+        domain=_product_discovery_domain(domain, normalized),
+        recommended_execution="skill_read",
+        cross_cutting=cross_cutting,
+        recommended_skills=[
+            "request-complexity-router",
+            "brainstorming-harness",
+        ],
+        required_harnesses=["brainstorming-harness"],
+        evidence_required=_dedupe(
+            [
+                *evidence_required,
+                "brainstorm_handoff",
+                "decision_log",
+                "recommended_option",
+                "open_questions",
+            ]
+        ),
+        reasons=[*reasons, "early_domain_discovery_needs_brainstorming"],
+        confidence=0.72,
     )
 
 
@@ -2340,6 +2541,78 @@ def _is_defensive_security_work(normalized: str) -> bool:
 
 def _is_privacy_read_only(normalized: str) -> bool:
     return _contains_any(normalized, {"are customer emails in", "is there", "does this contain", "contains ssns"})
+
+
+def _is_unapproved_product_discovery_request(normalized: str, context: dict, domain: str) -> bool:
+    if _has_active_artifact(context):
+        return False
+    if _is_conceptual_request(normalized):
+        return False
+    if domain in {
+        "shopping",
+        "scheduling",
+        "weather",
+        "legal",
+        "medical",
+        "compliance",
+        "privacy",
+        "security",
+        "devops",
+        "booking",
+        "local",
+        "travel",
+        "education",
+    }:
+        return False
+    if _has_blocking_discovery_specificity(normalized):
+        return False
+    has_product_object = _contains_any(normalized, PRODUCT_DISCOVERY_OBJECT_TERMS)
+    if not _contains_any(normalized, DOMAIN_DISCOVERY_OBJECT_TERMS):
+        return False
+    if not _contains_any(normalized, DOMAIN_DISCOVERY_ACTION_TERMS):
+        return False
+    if not has_product_object and not _contains_any(normalized, DOMAIN_DISCOVERY_INTENT_TERMS):
+        return False
+    if _contains_any(normalized, {"prd", "product requirements document", "launch email", "screen design"}):
+        return False
+    token_count = len(normalized.split())
+    return token_count <= 18 or not _has_inline_payload(normalized)
+
+
+def _has_blocking_discovery_specificity(normalized: str) -> bool:
+    if not _contains_any(normalized, PRODUCT_DISCOVERY_SPECIFICITY_TERMS):
+        return False
+    specificity_terms = PRODUCT_DISCOVERY_SPECIFICITY_TERMS - VAGUE_DISCOVERY_SPECIFICITY_TERMS
+    return _contains_any(normalized, specificity_terms)
+
+
+def _product_discovery_domain(domain: str, normalized: str) -> str:
+    if _contains_any(
+        normalized,
+        {
+            "product",
+            "service",
+            "saas",
+            "startup",
+            "mvp",
+            "\uc81c\ud488",
+            "\uc11c\ube44\uc2a4",
+            "\uc0ac\uc5c5",
+            "\uc544\uc774\ub514\uc5b4",
+        },
+    ):
+        return "product"
+    if _contains_any(normalized, {"analysis", "research", "study", "\ubd84\uc11d", "\ub9ac\uc11c\uce58", "\uc5f0\uad6c"}):
+        return "analysis"
+    if _contains_any(normalized, {"workflow", "process", "operating model", "\uc5c5\ubb34\ud750\ub984", "\ud504\ub85c\uc138\uc2a4", "\uc6b4\uc601"}):
+        return "operations"
+    if _contains_any(normalized, {"document", "report", "procedure", "\ubb38\uc11c", "\ubcf4\uace0\uc11c", "\uc808\ucc28"}):
+        return "document"
+    if _contains_any(normalized, {"specification", "spec", "drawing direction", "design direction", "\uaddc\uaca9", "\ub3c4\uba74", "\uc124\uacc4\ubc29\ud5a5"}):
+        return "product-design"
+    if domain == "general":
+        return "product"
+    return domain
 
 
 def _is_ambiguous(normalized: str, context: dict) -> bool:

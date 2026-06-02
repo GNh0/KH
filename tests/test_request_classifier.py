@@ -77,6 +77,85 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertEqual(result.required_harnesses, [])
         self.assertGreaterEqual(result.confidence, 0.4)
 
+    def test_vague_product_development_routes_to_brainstorming(self):
+        result = classify_request(
+            "C:\\work\\BrainstormEntryOnly "
+            "\ud3f4\ub354\uc5d0 \uc6b4\uc601\uc9c0\uc6d0 \uc81c\ud488 \uac1c\ubc1c\ud574\uc918."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "product")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", result.recommended_skills)
+        self.assertIn("brainstorming-harness", result.required_harnesses)
+        self.assertIn("brainstorm_handoff", result.evidence_required)
+        self.assertIn("early_domain_discovery_needs_brainstorming", result.reasons)
+
+    def test_product_built_request_routes_to_brainstorming(self):
+        result = classify_request(
+            "C:\\work\\BlindProductRequest folder needs an operations support product built."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "product")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", result.recommended_skills)
+        self.assertIn("early_domain_discovery_needs_brainstorming", result.reasons)
+
+    def test_non_software_discovery_routes_to_brainstorming(self):
+        cases = [
+            (
+                "C:\\work\\OpsFlow folder needs an invoice approval process approach planned.",
+                "operations",
+            ),
+            (
+                "C:\\work\\ResearchPlan folder needs a customer churn analysis approach planned.",
+                "analysis",
+            ),
+            (
+                "C:\\work\\DocPlan folder needs a safety procedure document structure outlined.",
+                "document",
+            ),
+        ]
+
+        for prompt, domain in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.domain, domain)
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("brainstorming-harness", result.recommended_skills)
+                self.assertIn("brainstorming-harness", result.required_harnesses)
+                self.assertIn("brainstorm_handoff", result.evidence_required)
+                self.assertIn("early_domain_discovery_needs_brainstorming", result.reasons)
+
+    def test_korean_non_software_discovery_routes_to_brainstorming(self):
+        cases = [
+            ("C:\\work\\OpsPlan \ud3f4\ub354\uc5d0 \uc5c5\ubb34 \ud504\ub85c\uc138\uc2a4 \ubc29\ud5a5 \uc7a1\uc544\uc918", "operations"),
+            ("C:\\work\\DocPlan \ud3f4\ub354\uc5d0 \uc548\uc804 \uc808\ucc28 \ubb38\uc11c \uad6c\uc870 \uc7a1\uc544\uc918", "document"),
+            (
+                "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260602_J "
+                "\ud3f4\ub354\uc5d0\uc11c \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac \ub300\uc2dc\ubcf4\ub4dc \uac1c\ubc1c\ud574\uc918.",
+                "operations",
+            ),
+        ]
+
+        for prompt, domain in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.domain, domain)
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("brainstorming-harness", result.recommended_skills)
+                self.assertIn("brainstorm_handoff", result.evidence_required)
+
+    def test_specific_verified_html_tool_does_not_route_to_brainstorming(self):
+        result = classify_request("Build a small HTML todo tool and verify it.")
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.domain, "software")
+        self.assertNotIn("brainstorming-harness", result.recommended_skills)
+
     def test_long_log_prompt_keeps_token_optimizer_cross_cutting(self):
         text = "이 긴 테스트 로그 핵심만 줄여줘\n" + "\n".join(
             f"ERROR line {index}: stack trace" for index in range(80)

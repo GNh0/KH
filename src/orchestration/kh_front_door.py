@@ -501,11 +501,17 @@ def _required_next_actions(
     ]
     if plugin_route.get("ask_user"):
         actions.append("Ask a short clarification before source exploration or implementation.")
+    if "brainstorming-harness" in recommended_skills:
+        actions.append(
+            "Apply `brainstorming-harness` before execution: progress through intent_frame, problem_frame, option_frame, approval_frame, and handoff_frame for product, process, analysis, design, document, operations, manufacturing/specification, investment, or other domain work; preserve `BrainstormSession`, `decision_log`, `validate_brainstorm_session`, and `brainstorm_handoff` or blocked rationale; do not implement, create analysis output, user deliverables, or domain artifacts until the user approves the direction in a later message and the KH handoff exists."
+        )
     if classification.get("complexity") in {"heavy", "high_risk"}:
         actions.extend(
             [
                 "Create or update GoalState before implementation.",
                 "Record workspace_strategy before edits.",
+                "Record token_optimizer_status=used|considered_not_needed|passthrough|blocked before broad reads, implementation tools, subagent packets, or long command-output handling.",
+                "When running inside a host subagent, record nested_subagents_available and subagent_strategy=dispatch|single-controller|review-only|blocked before implementation.",
                 "Run verification-before-completion before any done, commit, push, or handoff claim.",
             ]
         )
