@@ -7,6 +7,14 @@ def _u(value: str) -> str:
     return value
 
 
+def _version_base(value: str) -> str:
+    return value.split("+", 1)[0]
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(map(int, _version_base(value).split(".")))
+
+
 class PluginPackagingTests(unittest.TestCase):
     def test_codex_plugin_manifest_exposes_repo_skills(self):
         manifest_path = Path(".codex-plugin") / "plugin.json"
@@ -17,7 +25,7 @@ class PluginPackagingTests(unittest.TestCase):
 
         self.assertEqual(manifest["name"], "kh-uaf")
         self.assertEqual(manifest["version"], root_manifest["version"])
-        self.assertGreaterEqual(tuple(map(int, manifest["version"].split("."))), (2, 9, 10))
+        self.assertGreaterEqual(_version_tuple(manifest["version"]), (2, 9, 10))
         self.assertEqual(manifest["skills"], "./skills/")
         self.assertTrue(Path("skills").is_dir())
         self.assertNotIn("apps", manifest)
