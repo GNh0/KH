@@ -64,6 +64,7 @@ class KhFrontDoorResult:
     plugin_route: Dict[str, Any]
     recommended_skills: List[str]
     skill_statuses: Dict[str, Dict[str, Any]]
+    execution_gate: Dict[str, Any]
     required_next_actions: List[str]
     catalog_summary: Dict[str, Any] = field(default_factory=dict)
     large_work_orchestration_bundle: Dict[str, Any] | None = None
@@ -83,6 +84,7 @@ class KhFrontDoorResult:
             "plugin_route": dict(self.plugin_route),
             "recommended_skills": list(self.recommended_skills),
             "skill_statuses": {name: dict(status) for name, status in self.skill_statuses.items()},
+            "execution_gate": dict(self.execution_gate),
             "required_next_actions": list(self.required_next_actions),
             "catalog_summary": dict(self.catalog_summary),
             "large_work_orchestration_bundle": self.large_work_orchestration_bundle,
@@ -128,6 +130,7 @@ class KhFrontDoorResult:
                 "ask_user": self.plugin_route.get("ask_user"),
             },
             "recommended_skills": list(self.recommended_skills),
+            "execution_gate": dict(self.execution_gate),
             "runtime_applied_skills": runtime_applied_skills,
             "selected_not_executed_skills": selected_not_executed_skills,
             "skill_status_summary": {
@@ -191,6 +194,7 @@ def build_kh_front_door(
     plugin_route = compose_plugin_route(prompt, providers=provider_snapshot, context=context).to_dict()
     recommended_skills = _recommended_skills(classification, plugin_route)
     skill_statuses = _front_door_skill_statuses(recommended_skills, classification, skill_source)
+    execution_gate = _execution_gate(classification, plugin_route, recommended_skills)
 
     large_work_bundle = None
     large_work_validation = None
@@ -212,7 +216,8 @@ def build_kh_front_door(
         plugin_route=plugin_route,
         recommended_skills=recommended_skills,
         skill_statuses=skill_statuses,
-        required_next_actions=_required_next_actions(classification, plugin_route, recommended_skills),
+        execution_gate=execution_gate,
+        required_next_actions=_required_next_actions(classification, plugin_route, recommended_skills, execution_gate),
         catalog_summary=catalog_summary,
         large_work_orchestration_bundle=large_work_bundle,
         large_work_bundle_validation=large_work_validation,
@@ -494,6 +499,7 @@ def _required_next_actions(
     classification: Dict[str, Any],
     plugin_route: Dict[str, Any],
     recommended_skills: Sequence[str],
+    execution_gate: Dict[str, Any] | None = None,
 ) -> List[str]:
     actions = [
         "Read only the selected skills needed for the next step through `python -m src.skills.uaf_skill_catalog --read <skill>`.",
@@ -501,6 +507,10 @@ def _required_next_actions(
     ]
     if plugin_route.get("ask_user"):
         actions.append("Ask a short clarification before source exploration or implementation.")
+    if execution_gate and not execution_gate.get("can_execute", True):
+        actions.append(
+            "HARD STOP: execution_gate.can_execute=false. Do not read MEMORY.md, use memory-derived implementation shortcuts, inspect parent/sibling run folders, scaffold files, write source, create deliverables, run verification, or start browser QA until the gate's required_before_execution items are satisfied."
+        )
     if "brainstorming-harness" in recommended_skills:
         actions.append(
             "Apply `brainstorming-harness` before execution: progress through intent_frame, problem_frame, option_frame, approval_frame, and handoff_frame for product, process, analysis, design, document, operations, manufacturing/specification, investment, or other domain work; preserve `BrainstormSession`, `decision_log`, `validate_brainstorm_session`, and `brainstorm_handoff` or blocked rationale; do not implement, create analysis output, user deliverables, or domain artifacts until the user approves the direction in a later message and the KH handoff exists."
@@ -520,6 +530,71 @@ def _required_next_actions(
             continue
         actions.append(f"If needed next, apply `{skill}` and record concrete evidence or skipped/blocked rationale.")
     return _dedupe(actions)
+
+
+def _execution_gate(
+    classification: Dict[str, Any],
+    plugin_route: Dict[str, Any],
+    recommended_skills: Sequence[str],
+) -> Dict[str, Any]:
+    if plugin_route.get("ask_user"):
+        return {
+            "status": "blocked_until_clarification",
+            "can_execute": False,
+            "reason": "The plugin route requires a user clarification before source exploration or implementation.",
+            "required_before_execution": ["user_clarification"],
+            "blocked_actions": [
+                "memory_lookup",
+                "global_codex_memory",
+                "cross_chat_or_subagent_memory",
+                "target_or_sibling_folder_scan",
+                "implementation",
+                "deliverable_generation",
+                "verification",
+                "browser_qa",
+            ],
+        }
+    if "brainstorming-harness" in recommended_skills:
+        return {
+            "status": "blocked_until_brainstorming_handoff",
+            "can_execute": False,
+            "reason": (
+                "brainstorming-harness was selected for an early direction-setting request; "
+                "the user's development wording is not approval to skip brainstorming."
+            ),
+            "required_before_execution": [
+                "brainstorming-harness",
+                "intent_frame",
+                "problem_frame",
+                "option_frame",
+                "approval_frame",
+                "BrainstormSession",
+                "decision_log",
+                "validate_brainstorm_session",
+                "brainstorm_handoff",
+                "later_user_approval",
+            ],
+            "blocked_actions": [
+                "MEMORY.md_lookup",
+                "global_codex_MEMORY.md",
+                "cross_chat_or_subagent_memory",
+                "memory_derived_shortcuts",
+                "parent_or_sibling_run_reads",
+                "implementation",
+                "source_or_asset_scaffolding",
+                "analysis_output",
+                "user_deliverable_generation",
+                "verification",
+                "browser_qa",
+            ],
+        }
+    return {
+        "status": "execution_allowed_after_selected_skill_setup",
+        "can_execute": True,
+        "reason": "No clarification or brainstorming stop gate was selected by front-door routing.",
+        "required_before_execution": [],
+        "blocked_actions": [],
+    }
 
 
 def _dedupe(items: Iterable[str]) -> List[str]:

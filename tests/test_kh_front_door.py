@@ -206,6 +206,9 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["plugin_route"]["controller"], "kh")
         self.assertIn("brainstorming-harness", payload["recommended_skills"])
         self.assertIn("brainstorming-harness", payload["selected_not_executed_skills"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_brainstorming_handoff")
+        self.assertIn("implementation", payload["execution_gate"]["blocked_actions"])
         self.assertEqual(
             payload["skill_status_summary"]["brainstorming-harness"]["status"],
             "skipped_with_rationale",
@@ -235,6 +238,8 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
         self.assertIn("brainstorming-harness", payload["recommended_skills"])
         self.assertIn("brainstorming-harness", payload["selected_not_executed_skills"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertIn("MEMORY.md_lookup", payload["execution_gate"]["blocked_actions"])
         self.assertTrue(
             any("do not implement" in action for action in payload["required_next_actions"])
         )

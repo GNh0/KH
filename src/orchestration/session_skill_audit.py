@@ -438,6 +438,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_kh_front_door_issues(path))
     issues.extend(_stale_skill_cache_issues(path))
     issues.extend(_cross_scope_context_issues(path))
+    issues.extend(_global_memory_scope_issues(path))
     issues.extend(_brainstorming_depth_issues(path))
     issues.extend(_subagent_strategy_issues(path, postmortem.to_dict()))
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
@@ -736,10 +737,58 @@ def _cross_scope_context_issues(path: Path) -> List[Dict[str, Any]]:
     ]
 
 
+def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
+    if not (_front_door_selected_skill(path, "brainstorming-harness") or _front_door_blocks_execution(path)):
+        return []
+    samples: List[str] = []
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        if payload_type not in {"function_call", "custom_tool_call"}:
+            continue
+        text = _payload_text(payload)
+        if _global_codex_memory_sample(text):
+            samples.append(_global_codex_memory_sample(text))
+            if len(samples) >= 3:
+                break
+    if not samples:
+        return []
+    return [
+        {
+            "skill": "memory-state-harness",
+            "status": "cross_chat_memory_leak",
+            "severity": "P1",
+            "reason": (
+                "Front-door blocked execution for brainstorming, but the session read global Codex memory "
+                "or memory-skill notes from another chat/subagent scope. That memory is not the current "
+                "project/chat-scoped KH memory and must not override the current execution gate."
+            ),
+            "action": (
+                "Do not read `%CODEX_HOME%/memories/MEMORY.md` or `%CODEX_HOME%/memories/skills/...` "
+                "while `execution_gate.can_execute=false` unless the user explicitly asks for prior-context reuse. "
+                "Use only current project/chat-scoped KH memory after scope resolution, or record memory_provider=blocked."
+            ),
+            "samples": samples,
+        }
+    ]
+
+
 def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
-    active_text = "\n".join(_strip_passive_prefix(text) for text in _session_texts(path) if not _is_passive_text(text))
+    evidence_texts: List[str] = []
+    for text in _session_texts(path):
+        if _is_passive_text(text):
+            continue
+        clean_text = _strip_passive_prefix(text)
+        if _looks_like_front_door_runtime_output(clean_text.lower()):
+            continue
+        evidence_texts.append(clean_text)
+    active_text = "\n".join(evidence_texts)
     lowered = active_text.lower()
-    if not _early_domain_discovery_text(lowered):
+    front_door_selected_brainstorming = _front_door_selected_skill(path, "brainstorming-harness")
+    front_door_blocked_execution = _front_door_blocks_execution(path)
+    if not (_early_domain_discovery_text(lowered) or front_door_selected_brainstorming or front_door_blocked_execution):
         return []
 
     request_input_count = _function_call_count(path, {"request_user_input"})
@@ -766,18 +815,27 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
 
     issues: List[Dict[str, Any]] = []
     if implementation_samples and not (has_session_record and has_handoff):
+        status = (
+            "brainstorming_execution_gate_bypassed"
+            if front_door_selected_brainstorming or front_door_blocked_execution
+            else "missing_brainstorm_handoff"
+        )
         issues.append(
             {
                 "skill": "brainstorming-harness",
-                "status": "missing_brainstorm_handoff",
+                "status": status,
                 "severity": "P1",
                 "reason": (
-                    "Early domain discovery moved into execution without BrainstormSession "
+                    "Front-door selected brainstorming, but the session moved into execution without "
+                    "BrainstormSession validation, explicit later user approval, and brainstorm_handoff evidence."
+                    if status == "brainstorming_execution_gate_bypassed"
+                    else "Early domain discovery moved into execution without BrainstormSession "
                     "validation and brainstorm_handoff evidence."
                 ),
                 "action": (
-                    "Run the multi-checkpoint brainstorming flow, preserve BrainstormSession/decision_log, "
-                    "validate it, build brainstorm_handoff, then hand off to architect-pipeline before implementation."
+                    "Honor execution_gate.can_execute=false: do not use memory-derived shortcuts, scaffold, "
+                    "write files, create deliverables, or verify until the multi-checkpoint brainstorming flow "
+                    "preserves BrainstormSession/decision_log, validates it, gets later user approval, and builds brainstorm_handoff."
                 ),
                 "samples": implementation_samples[:3],
             }
@@ -799,6 +857,33 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
             }
         )
     return issues
+
+
+def _front_door_selected_skill(path: Path, skill_name: str) -> bool:
+    for text in _session_texts(path):
+        data = _front_door_json(_strip_passive_prefix(text))
+        if not data:
+            continue
+        selected = {str(item) for item in data.get("selected_not_executed_skills", []) or []}
+        if skill_name in selected:
+            return True
+        status_summary = data.get("skill_status_summary", {}) or {}
+        if isinstance(status_summary, dict) and skill_name in status_summary:
+            summary = status_summary.get(skill_name, {}) or {}
+            if str(summary.get("status", "")) in {"skipped_with_rationale", "considered_not_needed", "blocked"}:
+                return True
+    return False
+
+
+def _front_door_blocks_execution(path: Path) -> bool:
+    for text in _session_texts(path):
+        data = _front_door_json(_strip_passive_prefix(text))
+        if not data:
+            continue
+        gate = data.get("execution_gate", {}) or {}
+        if isinstance(gate, dict) and gate.get("can_execute") is False:
+            return True
+    return False
 
 
 def _subagent_strategy_issues(path: Path, postmortem: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -993,6 +1078,18 @@ def _cross_scope_context_sample(target: Path, text: str) -> str:
             continue
         if sibling_name != target.name and _shares_run_prefix(sibling_name, target.name):
             return _short(f"sibling run read: {raw_path}")
+    return ""
+
+
+def _global_codex_memory_sample(text: str) -> str:
+    lowered = text.lower()
+    normalized = lowered.replace("\\\\", "\\")
+    if not any(marker in lowered for marker in ["get-content", "select-string", "rg ", "test-path"]):
+        return ""
+    if ".codex\\memories" in normalized or ".codex/memories" in normalized:
+        return _short(f"global Codex memory read: {text}")
+    if "\\memories\\memory.md" in normalized or "/memories/memory.md" in normalized:
+        return _short(f"global memory index read: {text}")
     return ""
 
 

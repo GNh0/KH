@@ -41,12 +41,14 @@ python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --p
 
 5. Treat only the intake command's `runtime_applied_skills` as executed.
 6. Treat `selected_not_executed_skills` as selected follow-up work until concrete module, gate, artifact, command-output, or passthrough evidence exists.
-7. If the command is unavailable, explicitly record `blocked` with the missing path or import error before continuing.
-8. When another plugin is also useful, apply front-door first, then route by capability; do not let image/browser/document/code skills bypass intake.
+7. If the command returns `execution_gate.can_execute=false`, stop before any global Codex `MEMORY.md` lookup, `.codex/memories/skills/...` lookup, memory-derived shortcut, parent/sibling folder read, scaffolding, source write, deliverable generation, verification, or browser QA. Satisfy `execution_gate.required_before_execution` first, or record an explicit blocked rationale.
+8. If the command is unavailable, explicitly record `blocked` with the missing path or import error before continuing.
+9. When another plugin is also useful, apply front-door first, then route by capability; do not let image/browser/document/code skills bypass intake.
 
 ## Required outputs
 
 - `front_door_status`, request classification, and plugin route.
+- `execution_gate`, including whether `can_execute` is true or false.
 - `kh_active_directive` as active/inactive when the user has asked for persistent KH skill/harness use in the conversation or project.
 - `runtime_applied_skills` and `selected_not_executed_skills`.
 - `skill_status_summary` with applied, selected, skipped, or blocked status.
@@ -68,6 +70,8 @@ python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --p
 - Do not inspect previous run folders or sibling test outputs to bootstrap a new requested target. Treat that as cross-scope context leakage unless the user explicitly requested comparison or reuse.
 - Do not create a substitute folder in the current workspace when the user named a different target path. If the exact target path is unavailable, outside the sandbox, or needs approval, stop and report the permission/path blocker before generating artifacts.
 - Do not assume plugin `defaultPrompt` was injected into the live session.
+- Do not ignore `execution_gate.can_execute=false` because the user said "develop", "make", or "create"; that wording starts direction discovery when front-door selected brainstorming, not implementation approval.
+- Do not use `%CODEX_HOME%/memories/MEMORY.md` or `%CODEX_HOME%/memories/skills/...` as current-project evidence under a brainstorming gate. Those are cross-chat/subagent memories unless the user explicitly asks for prior-context reuse.
 - Do not count a SKILL.md read, plugin listing, or marketplace metadata as runtime application.
 - Do not ask the user to name KH skills before applying this bootstrap.
 - Do not forget a prior "actively use KH skills/harnesses" instruction just because the later task wording omits KH names.

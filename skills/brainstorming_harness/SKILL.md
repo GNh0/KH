@@ -37,6 +37,7 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 
 ## Core Flow
 
+0. If front-door returned `execution_gate.can_execute=false` with `status=blocked_until_brainstorming_handoff`, treat that as a hard stop for execution. Do not consult global Codex `MEMORY.md`, `.codex/memories/skills/...`, previous chat/subagent memories, previous dashboard/page patterns, sibling run folders, scaffold source, create user deliverables, run verification, or browser-test until this harness produces approval and handoff evidence.
 1. After front-door routing, inspect only the explicit target project/folder when it exists. If the target folder does not exist yet, create or plan inside that exact target; do not list the parent directory or read sibling folders from earlier tests/runs.
    - Fresh/empty target fast path: if the exact target folder exists and has no files, do not read `MEMORY.md`, memory summaries, parent folders, sibling folders, previous test outputs, or older project artifacts unless the user explicitly asks for reuse, comparison, migration, or prior context.
    - For this fast path, return a compact direction proposal with 2-3 options, one recommendation, and an approval question. Do not escalate to GoalState, role DAG, document exports, QA, or review gates before approval.
@@ -137,6 +138,8 @@ Pressure scenario: a user says "I want to build a SaaS" or "plan an operations a
 ## Common mistakes
 
 - Treating brainstorming as implementation permission.
+- Treating the user's initial "develop/create/make" wording as approval to skip a front-door brainstorming gate.
+- Reading global Codex `MEMORY.md` or `.codex/memories/skills/...` after a fresh/empty target fast path and using old implementation preferences to bypass the current brainstorm gate.
 - Asking one direction question, receiving a choice, and implementing without `BrainstormSession` plus `brainstorm_handoff`.
 - Implementing or scaffolding immediately after a vague product idea without a separate user approval of the recommended direction.
 - Creating visual files without linking them to a decision.

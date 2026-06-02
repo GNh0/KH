@@ -195,6 +195,122 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertFalse(rows["architect-pipeline"]["required"])
         self.assertNotIn("architect-pipeline", audit.coverage["required_missing_skill_names"])
 
+    def test_front_door_selected_brainstorming_blocks_same_turn_implementation(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["brainstorming-harness"],
+            "skill_status_summary": {
+                "brainstorming-harness": {
+                    "status": "skipped_with_rationale",
+                    "evidence_note": "Selected for the workflow after front-door routing.",
+                }
+            },
+            "execution_gate": {
+                "status": "blocked_until_brainstorming_handoff",
+                "can_execute": False,
+                "blocked_actions": ["MEMORY.md_lookup", "implementation"],
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "New-Item -ItemType Directory -Path Dashboard -Force",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "brainstorming_execution_gate_bypassed"
+                and issue["severity"] == "P1"
+                for issue in audit.issues
+            )
+        )
+
+    def test_brainstorm_gate_blocks_global_codex_memory_lookup(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["brainstorming-harness"],
+            "skill_status_summary": {
+                "brainstorming-harness": {
+                    "status": "skipped_with_rationale",
+                    "evidence_note": "Selected for the workflow after front-door routing.",
+                }
+            },
+            "execution_gate": {
+                "status": "blocked_until_brainstorming_handoff",
+                "can_execute": False,
+                "blocked_actions": [
+                    "MEMORY.md_lookup",
+                    "global_codex_MEMORY.md",
+                    "cross_chat_or_subagent_memory",
+                    "implementation",
+                ],
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' "
+                            "-Pattern 'dashboard|static-web-local-verification'"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "memory-state-harness"
+                and issue["status"] == "cross_chat_memory_leak"
+                and issue["severity"] == "P1"
+                for issue in audit.issues
+            )
+        )
+
     def test_actual_architecture_work_requires_architect_pipeline(self):
         path = self.write_session(
             [
