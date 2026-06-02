@@ -646,6 +646,7 @@ class RequestClassifierTests(unittest.TestCase):
             ("is AP registration still open", {}, "medium", "education", "skill_read"),
             ("find current scholarship deadlines", {}, "medium", "education", "skill_read"),
             ("check Google Classroom", {"domain": "education"}, "medium", "education", "skill_read"),
+            ("Plan a study schedule for learning Python basics.", {}, "medium", "education", "skill_read"),
             ("set a reminder to study biology tomorrow", {}, "medium", "scheduling", "skill_read"),
             ("set a study timer for 25 minutes", {}, "medium", "scheduling", "skill_read"),
             ("translate this to Spanish", {}, "ambiguous", "language", "clarify"),

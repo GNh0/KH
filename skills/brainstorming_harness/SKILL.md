@@ -1,6 +1,6 @@
 ---
 name: brainstorming-harness
-description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a user is starting an underspecified product, project, workflow, analysis, research, policy, process, document, specification, investment, operations, or design direction and the direction is not approved yet.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a user is starting an underspecified product, project, workflow, analysis, research, policy, process, document, specification, investment, operations, manufacturing, drawing, or design direction and the direction is not approved yet.
 ---
 
 # Brainstorming Harness
@@ -13,7 +13,7 @@ description: Use when kh-uaf:always-on-front-door has already run and selected t
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
-This harness adapts the Superpowers brainstorming pattern into KH UAF. It is the lightweight front door before `architect-pipeline`, `domain-orchestration-harness`, or `development-lifecycle-harness`: clarify the user's intent, explore alternatives, capture decisions, and hand off only after the product, process, analysis, document, specification, operational, investment, or design direction is approved.
+This harness adapts the Superpowers brainstorming pattern into KH UAF. It is the lightweight front door before `architect-pipeline`, `domain-orchestration-harness`, or `development-lifecycle-harness`: clarify the user's intent, explore alternatives, capture decisions, and hand off only after the product, process, analysis, document, specification, operations, manufacturing, investment, drawing, or design direction is approved.
 
 Source label: Superpowers brainstorming adapted for KH UAF.
 
@@ -28,7 +28,7 @@ Source label: Superpowers brainstorming adapted for KH UAF.
 
 Use this harness when:
 
-- The user wants to start a new product, SaaS, app, workflow, analysis, research, policy, process, document, specification, investment, operations, design, or major feature.
+- The user wants to start a new product, SaaS, app, workflow, analysis, research, policy, process, document, specification, investment, operations, manufacturing, drawing, design, or major feature.
 - The request is creative or underspecified enough that immediate implementation would hide assumptions.
 - The user needs options, tradeoffs, naming, MVP scope, target users, workflow shape, or architecture direction before planning.
 - A visual companion or mockup may help choose among directions, but the final decision still needs text evidence.
