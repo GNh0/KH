@@ -74,6 +74,7 @@ class PluginPackagingTests(unittest.TestCase):
 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "kh-uaf")
+        self.assertEqual(manifest["version"], "2.9.42")
 
         content = skill_path.read_text(encoding="utf-8")
         self.assertIn("name: kh-uaf", content)

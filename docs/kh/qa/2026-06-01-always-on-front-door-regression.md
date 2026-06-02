@@ -165,7 +165,7 @@ Fixes added in 2.9.35:
 
 Verification target after installing 2.9.35: repeat blind, carryover, and brainstorming-style subagent scenarios. Passing requires no `always-on-front-door` `missing_front_door` issue in the session audit, not merely a later successful dashboard build.
 
-## 2.9.36 Memory and Sibling-Scope Regression
+## 2.9.42 Memory and Sibling-Scope Regression
 
 After installing 2.9.35, fresh subagent sessions still showed two real failures:
 
@@ -173,7 +173,7 @@ After installing 2.9.35, fresh subagent sessions still showed two real failures:
 - Carryover session `019e825b-92a0-7110-9a5c-295c3bf0d331` also searched global `MEMORY.md` before `kh_front_door`; the later user request did not mention KH, but the previous active-use instruction should have carried forward.
 - Brainstorming session `019e825f-572f-79e0-a4ed-625b638e9afd` read sibling folder `BrainstormAutoRoute_20260601_E` while the requested target was `BrainstormAutoRoute_20260601_F`. That contaminated the F run and made it invalid as an independent blind brainstorming test.
 
-Fixes added in 2.9.36:
+Fixes added in 2.9.42:
 
 - The host-visible `always-on-front-door` skill description now says to run KH front-door FIRST before `MEMORY.md` lookup, target or sibling folder inspection, source reads, subagents, or other plugin work.
 - Codex plugin and root plugin manifest descriptions now front-load the same first-run rule because plugin `defaultPrompt` is not reliably visible in every subagent prompt.
@@ -181,4 +181,4 @@ Fixes added in 2.9.36:
 - `session_skill_audit` now reports P1 `guard-policy-harness` `cross_scope_context_leak` when a session with an explicit target path reads the parent folder or a sibling run folder with the same run prefix.
 - Regression tests now cover sibling-run contamination and ensure exact-target inspection is not falsely flagged.
 
-Verification target after installing 2.9.36: repeat blind, carryover, and brainstorming-style subagent scenarios. Passing requires no pre-front-door `MEMORY.md`/folder inspection and no `cross_scope_context_leak` issue for independent target folders.
+Verification target after installing 2.9.42: repeat blind, carryover, and brainstorming-style subagent scenarios. Passing requires no pre-front-door `MEMORY.md`/folder inspection and no `cross_scope_context_leak` issue for independent target folders.
