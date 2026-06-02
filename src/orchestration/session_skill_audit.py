@@ -1877,19 +1877,7 @@ def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
         _add(required, "guard-policy-harness", "permission, secret, or destructive-action risk appeared")
     if _early_domain_discovery_text(lowered):
         _add(required, "brainstorming-harness", "early domain discovery appeared")
-    if any(
-        marker in lowered
-        for marker in [
-            "architecture",
-            "design doc",
-            "system design",
-            "development design",
-            "architect-pipeline",
-            "spec",
-            "requirements",
-            "설계",
-        ]
-    ):
+    if _mentions_architecture_workflow(lowered):
         _add(required, "architect-pipeline", "design or architecture planning appeared")
     if any(marker in lowered for marker in ["domain-orchestration-harness", "work_design", "role_decomposition", "qa/qc", "risk_policy"]):
         _add(required, "domain-orchestration-harness", "domain design/decomposition appeared")
@@ -1933,6 +1921,25 @@ def _mentions_worktree_workflow(lowered: str) -> bool:
     ]:
         without_skill_names = without_skill_names.replace(negated, "")
     return bool(re.search(r"\bworktree\b", without_skill_names))
+
+
+def _mentions_architecture_workflow(lowered: str) -> bool:
+    without_skill_names = lowered.replace("architect-pipeline", "")
+    return any(
+        marker in without_skill_names
+        for marker in [
+            "architecture",
+            "design doc",
+            "system design",
+            "development design",
+            "technical spec",
+            "functional spec",
+            "요구정의",
+            "기능정의",
+            "개발설계",
+            "설계서",
+        ]
+    )
 
 
 def _require_core_large_work(required: Dict[str, str], reason: str) -> None:

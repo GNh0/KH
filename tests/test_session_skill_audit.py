@@ -130,6 +130,69 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertTrue(rows["worktree-isolation-harness"]["required"])
         self.assertTrue(rows["snapshot-state-harness"]["required"])
 
+    def test_front_door_architect_skill_name_does_not_force_architecture_requirement(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["architect-pipeline"],
+            "skill_status_summary": {
+                "architect-pipeline": {
+                    "status": "skipped_with_rationale",
+                    "evidence_note": "Selected for later only.",
+                }
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "Created a business definition and process-flow document in an empty folder.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertFalse(rows["architect-pipeline"]["required"])
+        self.assertNotIn("architect-pipeline", audit.coverage["required_missing_skill_names"])
+
+    def test_actual_architecture_work_requires_architect_pipeline(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "I prepared a technical spec and system design for the service architecture.",
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertTrue(rows["architect-pipeline"]["required"])
+
     def test_audit_counts_runtime_token_memory_and_workflow_evidence_as_applied(self):
         path = self.write_session(
             [

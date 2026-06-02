@@ -660,6 +660,13 @@ class RequestClassifierTests(unittest.TestCase):
             ("DLP flagged a CSV export with SSNs.", {}, "high_risk", "privacy", "role_dag"),
             ("Delete duplicates after backup.", {"domain": "software", "transaction_intent": True}, "high_risk", "security", "role_dag"),
             ("Create a support rotation for Q3.", {}, "medium", "operations", "skill_read"),
+            (
+                "A안으로 확정. 이제 그 방향으로 폴더 안에 업무정의서랑 처리흐름도 수준까지 만들어줘. 구현 코드는 아직 만들지마.",
+                {},
+                "medium",
+                "operations",
+                "skill_read",
+            ),
             ("Publish it to PagerDuty.", {"domain": "operations", "has_active_artifact": True, "transaction_intent": True}, "high_risk", "operations", "role_dag"),
             ("Resume the cloud migration from yesterday.", {"domain": "cloud", "has_active_artifact": True, "requires_resume": True}, "heavy", "cloud", "role_dag"),
             ("Review this Terraform diff for risky IAM changes.", {"current_file": "main.tf", "has_active_artifact": True}, "heavy", "security", "role_dag"),
