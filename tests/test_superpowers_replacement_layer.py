@@ -94,10 +94,12 @@ class SuperpowersReplacementLayerTests(unittest.TestCase):
     def test_manifest_exposes_replacement_layer(self):
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        root_manifest = json.loads((root / "plugin.json").read_text(encoding="utf-8"))
         prompts = "\n".join(manifest["interface"]["defaultPrompt"])
         capabilities = set(manifest["interface"]["capabilities"])
 
-        self.assertEqual(manifest["version"], "2.9.43")
+        self.assertEqual(manifest["version"], root_manifest["version"])
+        self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+$")
         self.assertIn("Superpowers Replacement Layer", capabilities)
         self.assertIn("KH-native replacements for Superpowers-style", prompts)
         self.assertIn("verification-before-completion-harness", prompts)
