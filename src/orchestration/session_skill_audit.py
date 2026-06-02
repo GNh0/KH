@@ -1850,7 +1850,7 @@ def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
         _add(required, "quality-gates-harness", "verification needs evidence-before-completion gate")
         _add(required, "command-output-harness", "command output should preserve exit code and actionable failure lines")
         _add(required, "harness-evaluator", "Python/test checks appeared")
-    if "worktree" in lowered or ".worktrees" in lowered or "git commit" in lowered:
+    if _mentions_worktree_workflow(lowered):
         _add(required, "worktree-isolation-harness", "git/worktree implementation workflow appeared")
         _add(required, "branch-finishing-harness", "commit, push, branch, or cleanup evidence appeared")
         _add(required, "development-lifecycle-harness", "git/worktree implementation workflow appeared")
@@ -1916,6 +1916,23 @@ def _renderable_artifact_required(lowered: str) -> bool:
             re.IGNORECASE | re.DOTALL,
         )
     )
+
+
+def _mentions_worktree_workflow(lowered: str) -> bool:
+    if ".worktrees" in lowered:
+        return True
+    if any(marker in lowered for marker in ["git worktree", "git commit", "git push"]):
+        return True
+    without_skill_names = lowered.replace("worktree-isolation-harness", "")
+    for negated in [
+        "no git or worktree command",
+        "no worktree command",
+        "without worktree",
+        "not using worktree",
+        "did not use worktree",
+    ]:
+        without_skill_names = without_skill_names.replace(negated, "")
+    return bool(re.search(r"\bworktree\b", without_skill_names))
 
 
 def _require_core_large_work(required: Dict[str, str], reason: str) -> None:

@@ -65,6 +65,71 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertTrue(any(issue["skill"] == "token-optimizer" for issue in audit.issues))
         self.assertTrue(any(issue["status"] == "blocked" for issue in audit.issues))
 
+    def test_front_door_worktree_skill_name_does_not_force_snapshot_requirement(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["worktree-isolation-harness"],
+            "skill_status_summary": {
+                "worktree-isolation-harness": {
+                    "status": "skipped_with_rationale",
+                    "evidence_note": "Selected for later only; no git or worktree command ran.",
+                }
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "Created two new markdown deliverables in an empty folder. No source files were modified.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertFalse(rows["snapshot-state-harness"]["required"])
+        self.assertFalse(rows["worktree-isolation-harness"]["required"])
+        self.assertNotIn("snapshot-state-harness", audit.coverage["required_missing_skill_names"])
+
+    def test_actual_git_worktree_flow_requires_snapshot_requirement(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "I ran git worktree add for implementation, changed files, and prepared git commit evidence.",
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertTrue(rows["worktree-isolation-harness"]["required"])
+        self.assertTrue(rows["snapshot-state-harness"]["required"])
+
     def test_audit_counts_runtime_token_memory_and_workflow_evidence_as_applied(self):
         path = self.write_session(
             [
