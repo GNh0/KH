@@ -38,6 +38,8 @@ Do not use this skill only because it is available. Use it when the current task
 
 1. Read `SKILL.md` first and confirm the trigger applies.
 2. Inspect only the explicit target project/folder if it exists. If the target folder is new, do not scan its parent or read sibling folders from earlier tests/runs.
+   - If the exact target folder exists and is empty, do not read `MEMORY.md`, memory summaries, parent directories, sibling folders, previous test outputs, or older brainstorm folders unless the user explicitly asks for reuse, comparison, migration, or prior context.
+   - For this empty-target fast path, do not export files, create GoalState, run role DAG, or start QA/review gates before approval.
 3. Ask one question at a time. Prefer multiple-choice options when that reduces friction.
 4. Offer visual companion only when seeing a layout, diagram, or comparison is better than reading text.
 5. Present 2-3 approaches with tradeoffs and a recommendation.
@@ -58,6 +60,12 @@ Do not use this skill only because it is available. Use it when the current task
 - Handoff target, usually `architect-pipeline`.
 - Markdown handoff paths if project-local KH notes were written.
 - Verification command or review evidence when validating the packaged skill itself.
+
+Keep this evidence available for audits, but do not print raw validation fields
+in ordinary final answers. User-facing responses should show the options,
+recommendation, tradeoffs, open questions, and approval request. Raw fields such
+as `valid=true`, `missing=[]`, `BrainstormSession`, and `brainstorm_handoff`
+belong in internal evidence unless the user asks for KH usage details.
 
 ## Failure handling
 

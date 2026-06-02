@@ -50,6 +50,13 @@ python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<
 - `skill_status_summary` with applied, selected, skipped, or blocked status.
 - A short note when a request is intentionally direct/light and no KH runtime work is needed.
 
+## User-Facing Reporting
+
+- Keep KH routing evidence in tool output, runtime metadata, handoff files, or audit reports.
+- For ordinary user requests, do not append raw KH status lines such as `front_door_status`, `runtime_applied_skills`, `valid=true`, or `missing=[]` to the final answer unless the user asks how KH was used.
+- If host policy requires announcing skill use during the turn, keep it to one short progress update, then make the final answer about the user's task.
+- When the user explicitly asks for skill/harness evidence, report applied, selected-not-executed, skipped, and blocked states without counting SKILL.md reads as execution.
+
 ## Common mistakes
 
 - Do not start with target-folder checks, parent/sibling folder scans, memory search, image generation, browser testing, document writing, source exploration, or shell commands for a work-bearing request before front-door intake.

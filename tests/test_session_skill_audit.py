@@ -38,7 +38,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "type": "token_count",
                         "info": {
                             "total_token_usage": {"total_tokens": 80_000},
-                            "last_token_usage": {"input_tokens": 20_000},
+                            "last_token_usage": {"input_tokens": 120_000},
                             "model_context_window": 200_000,
                         },
                     },
@@ -74,7 +74,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "type": "token_count",
                         "info": {
                             "total_token_usage": {"total_tokens": 80_000},
-                            "last_token_usage": {"input_tokens": 20_000},
+                            "last_token_usage": {"input_tokens": 120_000},
                             "model_context_window": 200_000,
                         },
                     },
@@ -117,7 +117,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "type": "token_count",
                         "info": {
                             "total_token_usage": {"total_tokens": 80_000},
-                            "last_token_usage": {"input_tokens": 20_000},
+                            "last_token_usage": {"input_tokens": 120_000},
                             "model_context_window": 200_000,
                         },
                     },
@@ -197,7 +197,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "type": "token_count",
                         "info": {
                             "total_token_usage": {"total_tokens": 80_000},
-                            "last_token_usage": {"input_tokens": 20_000},
+                            "last_token_usage": {"input_tokens": 120_000},
                             "model_context_window": 200_000,
                         },
                     },
@@ -293,7 +293,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "type": "token_count",
                         "info": {
                             "total_token_usage": {"total_tokens": 80_000},
-                            "last_token_usage": {"input_tokens": 30_000},
+                            "last_token_usage": {"input_tokens": 120_000},
                             "model_context_window": 200_000,
                         },
                     },
