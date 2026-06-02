@@ -105,6 +105,9 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn("~/.gemini/config/plugins/kh-uaf", content)
         self.assertIn(".agents/plugins/kh-uaf", content)
         self.assertIn("Upgrade note", content)
+        self.assertIn("Codex subagent note", content)
+        self.assertIn("install_codex_global_bootstrap.py", content)
+        self.assertIn("kh-uaf-front-door", content)
         self.assertIn(".codex-plugin/plugin.json", content)
         self.assertIn("root `plugin.json`", content)
         self.assertIn("Offline output is smoke-only", content)
@@ -118,6 +121,8 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn(_u("## Antigravity \ud50c\ub7ec\uadf8\uc778 \uc124\uce58"), content)
         self.assertIn(_u("\uc5c5\uadf8\ub808\uc774\ub4dc \ucc38\uace0"), content)
         self.assertIn(_u("\ubc84\uc804 bump"), content)
+        self.assertIn("install_codex_global_bootstrap.py", content)
+        self.assertIn("kh-uaf-front-door", content)
         self.assertIn("codex-runtime", content)
         self.assertIn("smoke-only", content)
 

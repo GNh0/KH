@@ -137,6 +137,15 @@ After install or upgrade, start a new thread so Codex reloads the skills.
 
 Upgrade note: Codex installs plugin cache entries by manifest version. When publishing a new plugin build, bump both `.codex-plugin/plugin.json` and the root `plugin.json` version. If the marketplace clone is current but the installed plugin still appears under an older cache path such as `kh-uaf/2.9.27`, install or upgrade again after the version bump.
 
+Codex subagent note: some Codex Desktop subagent sessions can receive personal `$CODEX_HOME/skills` entries while not receiving personal marketplace plugin skills from the parent thread. In that host mode, install the thin global bootstrap skill after the KH plugin cache is installed:
+
+```powershell
+$env:CODEX_HOME="$env:USERPROFILE\.codex"
+python scripts\install_codex_global_bootstrap.py --codex-home "$env:CODEX_HOME"
+```
+
+This writes `$CODEX_HOME/skills/kh-uaf-front-door/SKILL.md`. The global skill does not duplicate KH UAF; it locates the latest installed `kh-uaf@kh-uaf-marketplace` cache and runs `skills/always_on_front_door/scripts/front_door.py` before target-folder checks, `MEMORY.md` lookup, sibling folder reads, implementation, or verification. Use this when blind subagent tests show KH marketplace skills missing from the subagent's available skill list.
+
 To separate marketplace descriptor state from installed plugin cache state, run:
 
 ```bash

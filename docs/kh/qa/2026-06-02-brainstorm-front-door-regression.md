@@ -116,3 +116,111 @@ Fixes after this result:
 - Plugin default prompt now states that vague product/app/service requests are not implementation approval.
 
 Next install target: `2.9.38`.
+
+## 2026-06-02 Blind Subagent Result After 2.9.38 Install
+
+Session:
+
+```text
+C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T09-51-32-019e85d0-79bf-7ba2-bd8c-693a04edaf55.jsonl
+```
+
+Prompt:
+
+```text
+C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_D 폴더에 운영지원 제품 개발해줘.
+```
+
+Install evidence before the run:
+
+- `kh-uaf@kh-uaf-marketplace` installed cache version: `2.9.38`.
+- `skills/always_on_front_door/scripts/front_door.py` existed under the installed cache.
+- `plugin_install_audit` status: `ok`.
+
+Result:
+
+- The subagent still did not run KH front-door.
+- `session_skill_audit` reported `runtime_applied_skills: 0`.
+- The first work actions were target folder inspection and `MEMORY.md` lookup.
+- The subagent read sibling/prior `SKillsTest` outputs and implemented product files immediately.
+- It created `index.html`, `src/app.js`, `src/styles.css`, `README.md`, sample data, and a smoke test before any brainstorming approval checkpoint.
+
+Root-cause evidence:
+
+- The subagent session metadata had no KH text in `base_instructions`.
+- The subagent JSONL did not contain `KH BOOTSTRAP OVERRIDE`.
+- The subagent JSONL did not contain `kh-uaf:always-on-front-door`.
+- The subagent did contain a generated `Available skills` section, but KH marketplace skills were absent.
+
+Conclusion:
+
+This is not only a brainstorming prompt weakness. In this host mode, the subagent receives base/system skills but not KH personal marketplace plugin skills, so the KH plugin cannot self-trigger inside that subagent. KH needs an additional Codex global bootstrap skill under `$CODEX_HOME/skills` for subagent blind routing, or the host must start a fresh parent thread that actually injects the KH marketplace skills.
+
+Follow-up fix for `2.9.39`:
+
+- Add `scripts/install_codex_global_bootstrap.py`.
+- The installer writes `$CODEX_HOME/skills/kh-uaf-front-door/SKILL.md`.
+- The global skill locates the latest installed `kh-uaf@kh-uaf-marketplace` cache and delegates to `skills/always_on_front_door/scripts/front_door.py`.
+- This keeps the full KH logic in the plugin cache while making Codex subagent skill discovery see a trigger-focused bootstrap skill.
+
+## 2026-06-02 Global Bootstrap Subagent Result
+
+Session:
+
+```text
+C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T10-02-35-019e85da-946d-7611-82c2-a1118b4b60f9.jsonl
+```
+
+Prompt:
+
+```text
+C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_E 폴더에 운영지원 제품 개발해줘.
+```
+
+Positive evidence:
+
+- The subagent saw `kh-uaf-front-door` in the available skill list.
+- The subagent also saw packaged `kh-uaf:always-on-front-door` after the latest plugin install.
+- The subagent ran the installed cache wrapper `skills/always_on_front_door/scripts/front_door.py`.
+- Front-door returned `front_door_status: ok`, `complexity: medium`, `domain: product`.
+- The subagent read `brainstorming-harness`, presented options, and stopped for approval.
+- `C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_E` was not created.
+
+Remaining failure:
+
+- The first tool batch still read `MEMORY.md` and checked the target folder before front-door runtime.
+- `session_skill_audit` correctly flagged P1 `always-on-front-door` `missing_front_door`.
+
+Follow-up adjustment:
+
+- Strengthen the global skill frontmatter description and immediate action text so the model sees, before opening SKILL.md, that the skill must be read alone and the next standalone tool call must be front-door before any memory or target-folder work.
+
+## 2026-06-02 Global Bootstrap Retest
+
+Session:
+
+```text
+C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T10-05-29-019e85dd-3d1d-7f13-9662-619b07a4eb0d.jsonl
+```
+
+Prompt:
+
+```text
+C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_F 폴더에 운영지원 제품 개발해줘.
+```
+
+Passing evidence:
+
+- First tool call: read `$CODEX_HOME/skills/kh-uaf-front-door/SKILL.md`.
+- Second standalone tool call: run installed `skills/always_on_front_door/scripts/front_door.py`.
+- No `MEMORY.md` lookup, target folder check, sibling scan, or implementation happened before front-door runtime.
+- Front-door returned `front_door_status: ok`, `complexity: medium`, `domain: product`, and selected `brainstorming-harness`.
+- The subagent read installed `brainstorming_harness/SKILL.md` only after front-door.
+- The subagent presented three product directions and stopped for user approval.
+- `C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_F` was not created.
+- `session_skill_audit` reported runtime-applied front-door skills: `always-on-front-door`, `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`; it did not report P1 `always-on-front-door` `missing_front_door`.
+
+Residual notes:
+
+- The subagent still searched memory after front-door and after reading `brainstorming-harness`. That is no longer an entry-order failure, but independent target folders should avoid sibling/prior context unless explicitly requested. Future tightening can make brainstorming-harness treat prior memory as opt-in for independent target creation.
+- The session audit still reports unrelated missing evidence for large-work/development deliverable harnesses because the subagent intentionally stopped before implementation. Those are not blockers for the blind front-door + brainstorming gate objective.
