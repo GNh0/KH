@@ -73,8 +73,9 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertTrue(skill_path.is_file())
 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        root_manifest = json.loads(Path("plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "kh-uaf")
-        self.assertEqual(manifest["version"], "2.9.42")
+        self.assertEqual(manifest["version"], root_manifest["version"])
 
         content = skill_path.read_text(encoding="utf-8")
         self.assertIn("name: kh-uaf", content)
