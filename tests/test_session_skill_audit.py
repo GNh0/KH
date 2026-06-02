@@ -1004,6 +1004,68 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_memory_quick_pass_batched_with_always_on_read_is_a_front_door_miss(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\BlindProductRequest "
+                            "folder needs an operations support product built."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "Get-Content -Path 'C:\\Users\\KONEIT\\.codex\\plugins\\cache\\"
+                            "kh-uaf-marketplace\\kh-uaf\\2.9.40\\skills\\always_on_front_door\\SKILL.md'"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' "
+                            "-Pattern 'SKillsTest|KH|BlindProductRequest'"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python C:\\Users\\KONEIT\\.codex\\plugins\\cache\\kh-uaf-marketplace\\"
+                            "kh-uaf\\2.9.40\\skills\\always_on_front_door\\scripts\\front_door.py "
+                            "--prompt \"operations support product\" --summary"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                and "memory.md" in issue["first_work"].lower()
+                for issue in audit.issues
+            )
+        )
+
     def test_sibling_run_read_is_cross_scope_context_leak(self):
         path = self.write_session(
             [

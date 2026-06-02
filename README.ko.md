@@ -64,14 +64,7 @@ Sparse path: .agents/plugins
 
 업그레이드 참고: 새 플러그인 빌드를 배포할 때는 `.codex-plugin/plugin.json`과 루트 `plugin.json`의 `version`을 함께 올려야 합니다. marketplace가 최신이어도 설치 캐시가 이전 버전이면 Codex에서 업그레이드한 뒤 새 세션으로 다시 검증해야 합니다. 이 작업은 버전 bump가 필요합니다.
 
-Codex 서브에이전트 참고: 일부 Codex Desktop 서브에이전트 세션은 `$CODEX_HOME/skills`의 개인 스킬은 받지만, 부모 세션의 개인 marketplace 플러그인 스킬은 받지 못할 수 있습니다. 블라인드 서브에이전트 테스트에서 KH 스킬이 목록에 없다면 KH 플러그인 설치 후 얇은 전역 bootstrap 스킬을 설치합니다.
-
-```powershell
-$env:CODEX_HOME="$env:USERPROFILE\.codex"
-python scripts\install_codex_global_bootstrap.py --codex-home "$env:CODEX_HOME"
-```
-
-이 명령은 `$CODEX_HOME/skills/kh-uaf-front-door/SKILL.md`를 만듭니다. 이 전역 스킬은 KH UAF를 복제하지 않고 최신 `kh-uaf@kh-uaf-marketplace` 설치 캐시를 찾아 `skills/always_on_front_door/scripts/front_door.py`를 먼저 실행하게 합니다.
+Codex 서브에이전트 참고: KH는 설치된 marketplace 플러그인 캐시만으로 동작해야 합니다. KH를 위해 별도 `$CODEX_HOME/skills` bootstrap 사본을 만들지 않습니다. 블라인드 서브에이전트가 KH를 놓치면 세션 또는 플러그인 주입이 오래된 상태로 보고, marketplace 플러그인을 업그레이드/재설치한 뒤 새 세션에서 `kh-uaf:always-on-front-door` 또는 설치 캐시의 front-door wrapper 경로가 로그에 나타나는지 감사합니다.
 
 설치 상태 점검:
 

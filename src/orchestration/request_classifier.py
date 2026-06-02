@@ -687,6 +687,7 @@ PRODUCT_DISCOVERY_OBJECT_TERMS = {
 }
 PRODUCT_DISCOVERY_ACTION_TERMS = {
     "build",
+    "built",
     "create",
     "develop",
     "make",

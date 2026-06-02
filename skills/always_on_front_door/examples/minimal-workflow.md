@@ -13,7 +13,7 @@ The user did not name KH, UAF, skills, or harnesses.
 ## Expected steps
 
 1. Recognize this as work-bearing because it edits project files and needs verification.
-2. Run front-door intake before reading source files or writing output:
+2. Run front-door intake before reading source files, doing a memory quick pass, checking the target folder, or writing output:
 
 ```bash
 python "<this skill folder>/scripts/front_door.py" --prompt "Make a small static dashboard in this folder and verify it." --project "<cwd>" --host codex --summary
@@ -36,7 +36,8 @@ python "<this skill folder>/scripts/front_door.py" --prompt "Make a small static
 
 ## Failure cases
 
-- The assistant starts with `ls`, source reads, image generation, browser testing, or file writes before intake.
+- The assistant starts with `ls`, source reads, memory quick pass, image generation, browser testing, or file writes before intake.
+- The assistant reads this `SKILL.md` and searches `MEMORY.md` in the same first parallel batch before the front-door command.
 - The assistant reads `SKILL.md` but never runs front-door intake.
 - The assistant claims all selected skills were used.
 - The assistant suppresses a failed verification command in the final report.

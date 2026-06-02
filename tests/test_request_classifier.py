@@ -91,6 +91,17 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("brainstorm_handoff", result.evidence_required)
         self.assertIn("early_product_discovery_needs_brainstorming", result.reasons)
 
+    def test_product_built_request_routes_to_brainstorming(self):
+        result = classify_request(
+            "C:\\work\\BlindProductRequest folder needs an operations support product built."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "product")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", result.recommended_skills)
+        self.assertIn("early_product_discovery_needs_brainstorming", result.reasons)
+
     def test_specific_verified_html_tool_does_not_route_to_brainstorming(self):
         result = classify_request("Build a small HTML todo tool and verify it.")
 

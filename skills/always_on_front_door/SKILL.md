@@ -1,13 +1,13 @@
 ---
 name: always-on-front-door
-description: Use when any non-trivial Codex, Antigravity-style, Claude Code, or local agent request should run KH front-door FIRST before MEMORY.md lookup, target or sibling folder inspection, project file reads, other skills/plugins, browser, image, document, code, shell, subagent, review, QA, or verification work, even when the user does not name KH, UAF, a skill, or a harness.
+description: Use when any non-trivial Codex, Antigravity-style, Claude Code, or local agent request should run this plugin's KH front-door FIRST and ALONE before MEMORY.md lookup, memory quick pass, target/sibling folder inspection, project file reads, other skills/plugins, browser, image, document, code, shell, subagent, review, QA, or verification work, even when the user does not name KH, UAF, a skill, or a harness.
 ---
 
 # Always On Front Door
 
 ## Immediate Action
 
-After reading this file for a work-bearing request, run the front-door command immediately. Do not open QA, verification, browser, document, image, memory, or other KH skill files first. Do not run target-folder checks, parent/sibling directory scans, `MEMORY.md` searches, project file reads, or parallel tool batches before the command.
+After reading this file for a work-bearing request, run the front-door command immediately as the next standalone tool call. Do not open QA, verification, browser, document, image, memory, or other KH skill files first. Do not run target-folder checks, parent/sibling directory scans, `MEMORY.md` searches, memory quick passes, project file reads, or parallel tool batches before or alongside the command.
 
 ```bash
 python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
@@ -33,7 +33,7 @@ This is the host-visible bootstrap skill for KH UAF. Its job is to make automati
 1. Before using any other non-trivial skill or plugin, decide whether the user request is direct/light or work-bearing.
 2. Work-bearing means project files, code changes, generated assets/documents, long logs, review, QA, verification, subagents, persistence, branch work, or risky commands.
 3. If an earlier message in the same conversation or project asked the assistant to actively, always, or by default use KH/UAF skills or harnesses, keep `kh_active_directive=active` for later work-bearing turns until the user explicitly opts out.
-4. If work-bearing, make the first standalone work-bearing tool call the KH front-door intake. Do not run source reads, target-folder checks, parent/sibling folder scans, `Test-Path`, `Get-ChildItem`, `rg`, memory lookup, image generation, document generation, browser QA, or subagent dispatch before it. Do not parallelize those actions in the same pre-intake batch.
+4. If work-bearing, make the first standalone work-bearing tool call the KH front-door intake. Do not run source reads, target-folder checks, parent/sibling folder scans, `Test-Path`, `Get-ChildItem`, `rg`, memory lookup, memory quick pass, image generation, document generation, browser QA, or subagent dispatch before it. Do not parallelize those actions in the same pre-intake batch.
 
 ```bash
 python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
@@ -54,7 +54,7 @@ python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --p
 
 ## Common mistakes
 
-- Do not start with target-folder checks, parent/sibling folder scans, memory search, image generation, browser testing, document writing, source exploration, or shell commands for a work-bearing request before front-door intake.
+- Do not start with target-folder checks, parent/sibling folder scans, memory search, memory quick pass, image generation, browser testing, document writing, source exploration, or shell commands for a work-bearing request before front-door intake.
 - Do not count "I will use always-on-front-door", a SKILL.md read, or a catalog listing as front-door execution. The runtime command or blocked/direct rationale must come first.
 - Do not bundle `Test-Path`, `Get-ChildItem`, `rg`, file reads, or MEMORY.md search in the same parallel batch as the first front-door command.
 - Do not open `qa_gate_harness`, `verification_before_completion_harness`, browser skills, memory files, or support references before the front-door command.
