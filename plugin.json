@@ -52,7 +52,7 @@
     },
     {
       "name": "brainstorming-harness",
-      "description": "Use KH UAF brainstorming for new product, feature, project, SaaS, or design requests before architecture and implementation.",
+      "description": "Use KH UAF brainstorming for underspecified product, project, workflow, analysis, research, policy, process, document, specification, investment, operations, manufacturing, drawing, or design-direction requests before architecture, execution, deliverables, or implementation.",
       "usage": "python -m src.skills.uaf_skill_catalog --read brainstorming-harness"
     },
     {
