@@ -64,16 +64,27 @@ HasApprovalStop=True
 
 ## Fix From This Audit
 
-The first post-approval session audit produced a false positive for `snapshot-state-harness`.
+The first post-approval session audit exposed two routing/audit problems.
 
-Root cause: `session_skill_audit` treated the selected skill name `worktree-isolation-harness` inside front-door output as evidence of a real git/worktree workflow because it matched the substring `worktree`. That incorrectly caused `snapshot-state-harness` to become required for a run that only created new Markdown files in an empty folder.
+First root cause: `session_skill_audit` treated the selected skill name `worktree-isolation-harness` inside front-door output as evidence of a real git/worktree workflow because it matched the substring `worktree`. That incorrectly caused `snapshot-state-harness` to become required for a run that only created new Markdown files in an empty folder.
 
-Fix:
+Second root cause: the follow-up prompt said not to generate implementation code, but the classifier still matched `code` / `implementation` / `구현` and routed the request as `software/heavy/role_dag`. The correct route for this prompt is `operations/medium/skill_read`.
+
+Fixes:
 
 - `session_skill_audit` now requires actual worktree workflow evidence such as `.worktrees`, `git worktree`, `git commit`, or `git push`.
 - The skill name `worktree-isolation-harness` no longer triggers git/worktree requirements by itself.
 - Negated phrases such as `no git or worktree command` do not trigger worktree requirements.
-- Regression tests now cover both the false-positive case and the real git/worktree case.
+- The skill name `architect-pipeline` no longer triggers architecture requirements by itself.
+- No-code process deliverable requests now route as medium operations/document work instead of software heavy work.
+- Regression tests now cover the false-positive cases, the real git/worktree case, the real architecture case, and the Korean no-code process document prompt.
+
+Post-fix front-door reproduction:
+
+```text
+python -B -m src.orchestration.kh_front_door --prompt "A안으로 확정...업무정의서랑 처리흐름도...구현 코드는 아직 만들지마." --project "<target>" --host codex --summary
+Result: complexity=medium, domain=operations, recommended_execution=skill_read
+```
 
 ## Release Note
 

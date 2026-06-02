@@ -653,6 +653,49 @@ OPERATIONS_TERMS = {
     "goals doc",
     "inbox",
     "work admin",
+    "warehouse",
+    "inventory",
+    "stock movement",
+    "business process",
+    "process flow",
+    "창고",
+    "재고",
+    "입출고",
+    "수불",
+    "업무 프로세스",
+}
+NO_CODE_NEGATION_TERMS = {
+    "do not implement",
+    "don't implement",
+    "no implementation",
+    "do not create code",
+    "don't create code",
+    "no code",
+    "without code",
+    "implementation code",
+    "구현하지",
+    "구현하지마",
+    "구현하지 말",
+    "구현 코드는",
+    "코드는 아직",
+    "코드는 만들지",
+}
+PROCESS_DELIVERABLE_TERMS = {
+    "business definition",
+    "process flow",
+    "process-flow",
+    "flowchart",
+    "workflow document",
+    "process document",
+    "docs",
+    "document",
+    "업무정의서",
+    "업무 정의서",
+    "처리흐름도",
+    "처리 흐름도",
+    "프로세스 문서",
+    "문서",
+    "정의서",
 }
 PRODUCT_STRATEGY_TERMS = {
     "prd",
@@ -1476,6 +1519,15 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             evidence_required=evidence_required,
             reasons=[*reasons, "low_context_ambiguous_request"],
             confidence=0.55,
+        )
+
+    if _is_no_code_process_deliverable_request(normalized):
+        return _medium_classification(
+            _no_code_process_domain(normalized, domain),
+            cross_cutting,
+            evidence_required,
+            reasons,
+            normalized,
         )
 
     if _is_resume_heavy_context(normalized, context, domain):
@@ -2399,6 +2451,38 @@ def _is_medium_analysis_request(normalized: str) -> bool:
     return _contains_any(normalized, DOCUMENT_TRANSFORM_TERMS) and _contains_any(
         normalized, {"readme", "\ubc88\uc5ed", "\uc815\ub9ac"}
     )
+
+
+def _is_no_code_process_deliverable_request(normalized: str) -> bool:
+    return _contains_any(normalized, NO_CODE_NEGATION_TERMS) and _contains_any(
+        normalized, PROCESS_DELIVERABLE_TERMS
+    )
+
+
+def _no_code_process_domain(normalized: str, domain: str) -> str:
+    if _contains_any(
+        normalized,
+        {
+            "business",
+            "business process",
+            "process",
+            "workflow",
+            "warehouse",
+            "inventory",
+            "stock movement",
+            "업무",
+            "프로세스",
+            "창고",
+            "재고",
+            "입출고",
+            "처리흐름도",
+            "업무정의서",
+        },
+    ):
+        return "operations"
+    if domain == "software":
+        return "document"
+    return domain
 
 
 def _is_command_output_request(normalized: str) -> bool:
