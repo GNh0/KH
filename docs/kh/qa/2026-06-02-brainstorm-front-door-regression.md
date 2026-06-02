@@ -195,3 +195,49 @@ Remaining failure:
 Next install target: `2.9.40`.
 
 Passing requires a fresh subagent whose first work-bearing sequence is: installed plugin cache `kh-uaf:always-on-front-door` read, then front-door wrapper command, then any memory lookup, target-folder check, brainstorming skill read, or implementation decision.
+
+## 2026-06-02 Plugin-Only Subagent Pass After 2.9.40 Install
+
+Session:
+
+```text
+C:\Users\KONEIT\.codex\sessions\2026\06\02\rollout-2026-06-02T10-51-37-019e8607-7984-79a0-853a-a9158c1030cb.jsonl
+```
+
+Prompt:
+
+```text
+C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_I 폴더에 운영지원 제품 개발해줘.
+```
+
+Install/cache evidence:
+
+- `plugin_install_audit --summary` status: `ok`.
+- Expected source version: `2.9.40`.
+- Latest installed cache version: `2.9.40`.
+- Installed cache versions: `["2.9.40"]`.
+- No user-level KH bootstrap existed: `C:\Users\KONEIT\.codex\skills\kh-uaf-front-door\SKILL.md` returned `False`.
+
+Passing order evidence:
+
+- First tool call read the installed plugin cache skill:
+  `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.40\skills\always_on_front_door\SKILL.md`.
+- The next work-bearing tool call ran:
+  `C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.40\skills\always_on_front_door\scripts\front_door.py`.
+- No `MEMORY.md` lookup, target-folder check, sibling scan, or implementation happened before front-door runtime.
+- Front-door returned `front_door_status: ok`, `complexity: medium`, `domain: product`, `route: kh single`.
+- `recommended_skills` included `brainstorming-harness`.
+- The subagent then read `brainstorming-harness` from the same `2.9.40` plugin cache.
+- The target folder `C:\Users\KONEIT\Desktop\Jang\SKillsTest\BlindProductRequest_20260602_I` was not created.
+- The final answer offered three product directions and stopped for user approval before scaffolding or product code.
+
+Session audit evidence:
+
+- `session_skill_audit --summary` reported runtime-applied skills:
+  `always-on-front-door`, `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, `skill-catalog`.
+- The audit did not report a P1 `always-on-front-door` `missing_front_door` issue.
+- The remaining audit issues are broad large-session/deliverable skill accounting warnings caused by inherited session size and the fact that the subagent intentionally stopped before implementation. They are not failures of the blind plugin-only front-door plus brainstorming gate objective.
+
+Conclusion:
+
+The requested plugin-only behavior is verified for the blind product-development prompt: KH was not named by the user, no global skill copy was present, the subagent used the installed `2.9.40` plugin cache, front-door ran before memory/target inspection, `brainstorming-harness` was selected and read, and implementation was blocked pending product-direction approval.
