@@ -98,6 +98,14 @@ USER_RESUME_PATTERN = re.compile(
 )
 GOAL_CONTEXT_PATTERN = re.compile(r"<goal_context>|Continue working toward the active thread goal", re.IGNORECASE)
 STOP_ACK_PATTERN = re.compile(r"멈|스탑|중단|stop|pause|cancel|halt", re.IGNORECASE)
+ASSISTANT_SELF_STOP_PATTERN = re.compile(
+    r"\b(?:stopped|stopping|blocked|cannot continue|unable to continue|work stopped|pausing)\b|"
+    r"\uc791\uc5c5\s*\uc911\ub2e8|\uc911\ub2e8\ud569\ub2c8\ub2e4|"
+    r"\uc77c\ub2e8\s*\uc911\ub2e8|\uba48\ucda5\ub2c8\ub2e4|"
+    r"\uc9c4\ud589\ud560\s*\uc218\s*\uc5c6\uc2b5\ub2c8\ub2e4|"
+    r"\ucc28\ub2e8\ub418\uc5b4|\ucc28\ub2e8\ub410",
+    re.IGNORECASE,
+)
 WORK_CONTINUATION_PATTERN = re.compile(
     r"\b(?:continue|resume|proceed|implement|patch|test|verify|run)\b|"
     r"이어서|재개|진행|구현|패치|테스트|검증|작업 범위",
@@ -140,6 +148,7 @@ class SessionPostmortem:
     verification_claim_guard: Dict[str, Any] = field(default_factory=dict)
     scope_completion_delta: Dict[str, Any] = field(default_factory=dict)
     user_stop_guard: Dict[str, Any] = field(default_factory=dict)
+    assistant_stop_guard: Dict[str, Any] = field(default_factory=dict)
     resume_guard: Dict[str, Any] = field(default_factory=dict)
     secret_findings: List[SecretFinding] = field(default_factory=list)
     git_integration: Dict[str, Any] = field(default_factory=dict)
@@ -220,6 +229,9 @@ def analyze_codex_session_jsonl(
         "continued_tool_calls": [],
         "continued_work_messages": [],
     }
+    assistant_stop_state = {
+        "events": [],
+    }
     resume_state = {
         "requests": [],
         "session_start_context_after_resume": 0,
@@ -282,6 +294,14 @@ def analyze_codex_session_jsonl(
             last_message = str(payload.get("last_agent_message", ""))
             if last_message:
                 final_assistant_messages.append(last_message)
+                if _claims_assistant_self_stop(last_message):
+                    assistant_stop_state["events"].append(
+                        {
+                            "line": line_number,
+                            "goal_status_at_stop": str(goal_state.get("latest_status", "")),
+                            "sample": _short(redact_sensitive_text(last_message), 260),
+                        }
+                    )
 
         if text and not instruction_context:
             if payload_type == "message" and message_role == "user":
@@ -410,6 +430,12 @@ def analyze_codex_session_jsonl(
     verification_claim_guard = _build_verification_claim_guard(verification_failures, final_assistant_messages)
     scope_completion_delta = _build_scope_completion_delta(goal_state, final_assistant_messages)
     user_stop_guard = _build_user_stop_guard(stop_state, goal_state)
+    assistant_stop_guard = _build_assistant_stop_guard(
+        goal_state,
+        task_complete_count,
+        final_assistant_messages,
+        assistant_stop_state,
+    )
     resume_guard = _build_resume_guard(resume_state, token_info)
     actions = _recommended_actions(
         token_status=token_status,
@@ -419,6 +445,7 @@ def analyze_codex_session_jsonl(
         verification_claim_guard=verification_claim_guard,
         scope_completion_delta=scope_completion_delta,
         user_stop_guard=user_stop_guard,
+        assistant_stop_guard=assistant_stop_guard,
         resume_guard=resume_guard,
         secret_findings=secret_findings,
         git_state=git_state,
@@ -434,6 +461,7 @@ def analyze_codex_session_jsonl(
         "verification_claim_guard",
         "scope_completion_delta",
         "user_stop_guard",
+        "assistant_stop_guard",
         "resume_guard",
         "secret_redaction_scan",
         "git_integration_status",
@@ -455,6 +483,7 @@ def analyze_codex_session_jsonl(
         verification_claim_guard=verification_claim_guard,
         scope_completion_delta=scope_completion_delta,
         user_stop_guard=user_stop_guard,
+        assistant_stop_guard=assistant_stop_guard,
         resume_guard=resume_guard,
         secret_findings=secret_findings[:max_secret_findings],
         git_integration=git_state,
@@ -474,6 +503,7 @@ def render_session_postmortem(postmortem: SessionPostmortem) -> str:
         f"Completion guard: {postmortem.completion_guard.get('status', 'unknown')}",
         f"Verification guard: {postmortem.verification_claim_guard.get('status', 'unknown')}",
         f"User stop guard: {postmortem.user_stop_guard.get('status', 'unknown')}",
+        f"Assistant stop guard: {postmortem.assistant_stop_guard.get('status', 'unknown')}",
         f"Resume guard: {postmortem.resume_guard.get('status', 'unknown')}",
         (
             "Subagents: "
@@ -705,6 +735,36 @@ def _build_user_stop_guard(
     }
 
 
+def _build_assistant_stop_guard(
+    goal_state: Dict[str, Any],
+    task_complete_count: int,
+    final_messages: List[str],
+    assistant_stop_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    latest_status = str(goal_state.get("latest_status", ""))
+    stop_events = list(assistant_stop_state.get("events", []) or [])
+    stop_messages = [str(event.get("sample", "")) for event in stop_events if event.get("sample")]
+    active_stop_events = [
+        event
+        for event in stop_events
+        if str(event.get("goal_status_at_stop", "")) == "active"
+    ]
+    blocked = bool(task_complete_count > 0 and active_stop_events)
+    reasons: List[str] = []
+    if blocked:
+        reasons.append("assistant_stop_left_goal_active")
+    return {
+        "status": "blocked" if blocked else "passed",
+        "latest_goal_status": latest_status,
+        "task_complete_count": task_complete_count,
+        "assistant_claims_stop": bool(stop_messages),
+        "stop_event_count": len(stop_events),
+        "active_stop_events": active_stop_events[:5],
+        "final_stop_messages": stop_messages[:5],
+        "reasons": reasons,
+    }
+
+
 def _build_resume_guard(resume_state: Dict[str, Any], token_gate: Dict[str, Any]) -> Dict[str, Any]:
     requests = list(resume_state.get("requests", []) or [])
     implementation_tools = list(resume_state.get("implementation_tools_after_resume", []) or [])
@@ -739,6 +799,7 @@ def _recommended_actions(
     verification_claim_guard: Dict[str, Any],
     scope_completion_delta: Dict[str, Any],
     user_stop_guard: Dict[str, Any],
+    assistant_stop_guard: Dict[str, Any],
     resume_guard: Dict[str, Any],
     secret_findings: List[SecretFinding],
     git_state: Dict[str, Any],
@@ -760,6 +821,10 @@ def _recommended_actions(
     if user_stop_guard.get("status") == "blocked":
         actions.append(
             "User stop/cancel requests override goal_context; stop new work, block the active goal only when host policy allows it, otherwise write interruption checkpoint evidence and ignore automated goal_context until a fresh user resume."
+        )
+    if assistant_stop_guard.get("status") == "blocked":
+        actions.append(
+            "Do not emit a stopped/blocked final answer while the host goal remains active; either close the goal when policy permits, or report active_with_blocker and the next required action without declaring stop."
         )
     if resume_guard.get("status") == "blocked":
         actions.append(
@@ -874,6 +939,10 @@ def _short(text: str, max_length: int) -> str:
 
 def _claims_completion(text: str) -> bool:
     return bool(COMPLETION_PATTERN.search(text or ""))
+
+
+def _claims_assistant_self_stop(text: str) -> bool:
+    return bool(ASSISTANT_SELF_STOP_PATTERN.search(text or ""))
 
 
 def _mentions_partial_milestone(text: str) -> bool:

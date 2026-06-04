@@ -549,6 +549,37 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_assistant_stop_guard_failure_is_p0_skill_audit_issue(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"objective": "Build complete app", "status": "active"},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "\uc791\uc5c5 \uc911\ub2e8\ud569\ub2c8\ub2e4. \uc784\uc2dc \ud30c\uc77c\ub9cc \uc788\uc2b5\ub2c8\ub2e4.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "goal-state-harness"
+                and issue["severity"] == "P0"
+                and "assistant reported stopped" in issue["reason"]
+                for issue in audit.issues
+            )
+        )
+
     def test_resume_guard_failure_is_skill_audit_issue(self):
         path = self.write_session(
             [

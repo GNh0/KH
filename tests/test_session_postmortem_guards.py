@@ -231,6 +231,105 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         self.assertEqual(postmortem.user_stop_guard["latest_goal_status_after_stop"], "blocked")
         self.assertEqual(postmortem.user_stop_guard["continued_tool_calls"], [])
 
+    def test_assistant_stop_guard_blocks_active_goal_left_open(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"status": "active", "objective": "Build inventory dashboard."},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            "\uc791\uc5c5 \uc911\ub2e8\ud569\ub2c8\ub2e4. "
+                            "\ub300\uc0c1 Desktop \ud3f4\ub354\uc5d0\ub294 \uc544\uc9c1 \uc4f0\uc9c0 \uc54a\uc558\uace0 "
+                            "\uc784\uc2dc \ud30c\uc77c\ub9cc \uc788\uc2b5\ub2c8\ub2e4."
+                        ),
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.assistant_stop_guard["status"], "blocked")
+        self.assertIn("assistant_stop_left_goal_active", postmortem.assistant_stop_guard["reasons"])
+        self.assertTrue(postmortem.assistant_stop_guard["assistant_claims_stop"])
+        self.assertTrue(
+            any("stopped/blocked final answer" in action for action in postmortem.recommended_actions)
+        )
+        self.assertIn("Assistant stop guard: blocked", render_session_postmortem(postmortem))
+
+    def test_assistant_stop_guard_allows_terminal_goal(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"status": "active", "objective": "Build inventory dashboard."},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"status": "blocked", "objective": "Build inventory dashboard."},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "Blocked because the requested target path needs approval.",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.assistant_stop_guard["status"], "passed")
+        self.assertEqual(postmortem.assistant_stop_guard["latest_goal_status"], "blocked")
+
+    def test_assistant_stop_guard_blocks_even_if_goal_completes_later(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"status": "active", "objective": "Build inventory dashboard."},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "\uc791\uc5c5 \uc911\ub2e8\ud569\ub2c8\ub2e4. \uc784\uc2dc \ud30c\uc77c\ub9cc \uc788\uc2b5\ub2c8\ub2e4.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"status": "complete", "objective": "Build inventory dashboard."},
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.assistant_stop_guard["status"], "blocked")
+        self.assertEqual(postmortem.assistant_stop_guard["latest_goal_status"], "complete")
+        self.assertEqual(postmortem.assistant_stop_guard["active_stop_events"][0]["goal_status_at_stop"], "active")
+
     def test_korean_goal_scope_markers_are_detected(self):
         path = self.write_session(
             [

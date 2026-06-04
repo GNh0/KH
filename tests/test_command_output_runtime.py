@@ -1,3 +1,4 @@
+import json
 import unittest
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from src.skills.token_optimizer import (
     optimize_context_content,
     summarize_command_output,
     summarize_agent_transcript,
+    summarize_session_jsonl,
     truncate_logs,
 )
 
@@ -192,6 +194,101 @@ class CommandOutputRuntimeTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("token optimized", completed.stdout)
         self.assertIn("line-49", completed.stdout)
+
+    def test_session_jsonl_summary_drops_huge_prompt_payloads_but_keeps_goal_and_final(self):
+        lines = [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "session-jsonl-1",
+                    "cwd": "C:/work/project",
+                    "thread_source": "subagent",
+                    "agent_nickname": "Singer",
+                    "base_instructions": {"text": "DO NOT KEEP " * 400},
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "reasoning",
+                    "encrypted_content": "secret" * 1000,
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "thread_goal_updated",
+                    "goal": {"status": "active", "objective": "Build inventory dashboard"},
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "thread_goal_updated",
+                    "goal": {"status": "complete", "objective": "Build inventory dashboard"},
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "last_agent_message": "Completed with HTTP 200 and node --check pass.",
+                },
+            },
+        ]
+        raw = "\n".join(json.dumps(line, ensure_ascii=False) for line in lines)
+
+        result = summarize_session_jsonl(raw, max_lines=8)
+
+        self.assertTrue(result.success)
+        self.assertIn('"kh_token_optimizer": "session-jsonl"', result.stdout)
+        self.assertIn('"status": "active"', result.stdout)
+        self.assertIn('"status": "complete"', result.stdout)
+        self.assertIn("Completed with HTTP 200", result.stdout)
+        self.assertNotIn("DO NOT KEEP", result.stdout)
+        self.assertNotIn("encrypted_content", result.stdout)
+        self.assertGreater(result.metadata["token_savings_ratio"], 0.1)
+
+    def test_module_cli_compacts_session_jsonl_without_utf8_stdout_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.jsonl"
+            lines = [
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "session-jsonl-cli",
+                        "cwd": "C:/work/project",
+                        "base_instructions": {"text": "\ufffd" * 500},
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "\uc791\uc5c5 \uc911\ub2e8\ud569\ub2c8\ub2e4.",
+                    },
+                },
+            ]
+            log_path.write_text("\n".join(json.dumps(line, ensure_ascii=False) for line in lines), encoding="utf-8")
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.skills.token_optimizer",
+                    "--log-file",
+                    str(log_path),
+                    "--max-lines",
+                    "8",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn('"kh_token_optimizer": "session-jsonl"', completed.stdout)
+        self.assertIn("\uc791\uc5c5 \uc911\ub2e8", completed.stdout)
 
     def test_minify_code_preserves_non_python_contract_text(self):
         sql = "-- preserve business rule\nSELECT *\nFROM SA100T\nWHERE CUSTCD = @CUSTCD\n"

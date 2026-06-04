@@ -459,6 +459,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             "verification_claim_guard": postmortem.verification_claim_guard,
             "scope_completion_delta": postmortem.scope_completion_delta,
             "user_stop_guard": postmortem.user_stop_guard,
+            "assistant_stop_guard": postmortem.assistant_stop_guard,
             "resume_guard": postmortem.resume_guard,
             "recommended_actions": postmortem.recommended_actions,
         },
@@ -531,6 +532,17 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
                 "severity": "P0",
                 "reason": "user stop request was followed by continued work or an active goal left open",
                 "action": "Treat user stop/cancel as higher priority than goal_context; stop tools, write interruption evidence, and block the goal only when host policy permits.",
+            }
+        )
+    assistant_stop_guard = postmortem.get("assistant_stop_guard", {}) or {}
+    if assistant_stop_guard.get("status") == "blocked":
+        issues.append(
+            {
+                "skill": "goal-state-harness",
+                "status": "blocked",
+                "severity": "P0",
+                "reason": "assistant reported stopped or blocked while the active goal was left open",
+                "action": "Do not report a stopped/blocked final answer with active GoalState; close the goal when allowed or report active_with_blocker with the next required action.",
             }
         )
     resume_guard = postmortem.get("resume_guard", {}) or {}

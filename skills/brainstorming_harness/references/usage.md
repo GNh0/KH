@@ -16,6 +16,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Target user, buyer, operator, or audience.
 - Problem being solved and current pain.
 - 2-3 possible approaches with tradeoffs.
+- Domain/workflow options before technology choices. For operations, manufacturing, investment, drawing/design, analysis, or business process work, options should describe operating models, process boundaries, data records, controls, and tradeoffs first.
 - Recommended approach and why.
 - Constraints such as budget, stack, timeline, privacy, repo, deployment, or compliance.
 - Decisions already approved by the user.
@@ -43,6 +44,9 @@ Do not use this skill only because it is available. Use it when the current task
 3. Ask one question at a time. Prefer multiple-choice options when that reduces friction.
 4. Offer visual companion only when seeing a layout, diagram, or comparison is better than reading text.
 5. Present 2-3 approaches with tradeoffs and a recommendation.
+   - For domain workflows, the approaches must be domain choices first. Example for inventory inbound/outbound: simple ledger, location-controlled stock, lot/serial/expiry-controlled stock, or approval/ERP-linked stock flow.
+   - Include the minimum required records, such as item, location, quantity, transaction type, owner, timestamp, reason, memo, safety stock, and optional lot, serial, expiry, supplier/customer, or work order.
+   - Keep technology stack choices secondary unless the user already supplied the workflow model and asked for implementation technology.
 6. Confirm the direction before creating architecture, scaffolding, or code. For vague product, app, service, SaaS, or project requests, do not implement or scaffold in the same turn unless the user has already approved the recommended direction in a separate message.
 7. Build a `BrainstormSession` and run `validate_brainstorm_session`.
 8. If valid, call `build_architect_handoff` and pass the payload to the selected KH skill.
@@ -61,6 +65,8 @@ Superpowers-style brainstorming is a sequence of small checkpoints, not a single
 - `handoff_frame`: `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, `brainstorm_handoff`, and next KH skill.
 
 If a broad domain request receives only one direction question and then jumps into file creation, analysis, deliverable generation, or implementation, mark it as `brainstorming_status=blocked` or `missing_brainstorm_handoff`. If the user supplied all checkpoint content upfront, the agent may keep the conversation short, but it still must create and validate the structured handoff before execution.
+
+For "simple" product or workflow requests, do not skip brainstorming. Use a compact domain-first form: objective/operator, workflow boundary, 2-3 operating models, required records, recommendation, and one approval question.
 
 ## Evidence to produce
 
@@ -85,6 +91,7 @@ belong in internal evidence unless the user asks for KH usage details.
 
 - If no target user or problem is known, keep asking clarifying questions instead of claiming a handoff is complete.
 - If no option is recommended, block handoff and record `recommended_option` as missing.
+- If a domain workflow only received technology-stack options, mark the brainstorm as shallow and redo the option frame around operating models and required records.
 - If the user rejects the proposed direction, update decisions and rerun validation.
 - If the task is too broad for one design, decompose it and brainstorm only the first project slice.
 - If visual artifacts are created, record what decision they supported and avoid leaving orphan mockups.
@@ -97,3 +104,5 @@ belong in internal evidence unless the user asks for KH usage details.
 A valid use of `brainstorming-harness` must leave enough evidence for another agent to answer: what idea was explored, what alternatives were considered, what the user approved, what constraints apply, what is unresolved, and which KH skill should receive the handoff next.
 
 It must also preserve scope independence and approval order. Prior run folders are not context unless the user asks to compare or reuse them. A vague product request is not implementation approval; the brainstorm should stop at the approval request unless approval already exists.
+
+For domain work, the quality bar includes domain fit. A response that asks only "HTML, React, or WinForms?" for an inventory process has not satisfied the option frame because it has not decided how stock is managed, what records exist, or which workflow controls matter.

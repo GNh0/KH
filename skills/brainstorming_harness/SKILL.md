@@ -40,7 +40,7 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 0. If front-door returned `execution_gate.can_execute=false` with `status=blocked_until_brainstorming_handoff`, treat that as a hard stop for execution. Do not consult global Codex `MEMORY.md`, `.codex/memories/skills/...`, previous chat/subagent memories, previous dashboard/page patterns, sibling run folders, scaffold source, create user deliverables, run verification, or browser-test until this harness produces approval and handoff evidence.
 1. After front-door routing, inspect only the explicit target project/folder when it exists. If the target folder does not exist yet, create or plan inside that exact target; do not list the parent directory or read sibling folders from earlier tests/runs.
    - Fresh/empty target fast path: if the exact target folder exists and has no files, do not read `MEMORY.md`, memory summaries, parent folders, sibling folders, previous test outputs, or older project artifacts unless the user explicitly asks for reuse, comparison, migration, or prior context.
-   - For this fast path, return a compact direction proposal with 2-3 options, one recommendation, and an approval question. Do not escalate to GoalState, role DAG, document exports, QA, or review gates before approval.
+   - For this fast path, return a compact direction proposal with 2-3 options, one recommendation, and an approval question. The options must be domain/workflow choices first, not only implementation technology choices. Do not escalate to GoalState, role DAG, document exports, QA, or review gates before approval.
 2. If the next choices are visual, offer a visual companion in its own message.
 3. Ask one question at a time. Prefer 2-3 clear choices with a recommendation.
 4. Capture decisions as structured records: `objective`, `target_user`, `problem`, `options`, `recommendation`, `constraints`, `decisions`, and `open_questions`.
@@ -66,9 +66,24 @@ Do not collapse brainstorming into a single option picker unless the user has al
 
 If the user only says "handle this topic/project/work" and then chooses one proposed option, that approval is permission to continue the KH flow, not permission to skip the handoff. Build and validate the handoff before architecture, domain orchestration, analysis, deliverable generation, or implementation. If time, host tools, or missing context prevents this, record `brainstorming_status=blocked` with the missing checkpoint instead of claiming the skill ran.
 
+## Domain-First Compact Brainstorm
+
+For operations, business process, manufacturing, investment, drawing/design, document, analysis, or other cross-domain requests, the first user-facing brainstorming response must start from the domain problem instead of the technology stack.
+
+For an inventory inbound/outbound request, a valid compact brainstorm should include:
+
+1. Assumed objective and target operator, such as warehouse staff, purchasing, production, or management.
+2. Current workflow boundary, such as inbound receiving, outbound issue/shipment, transfer, adjustment, returns, stocktake, and shortage monitoring.
+3. 2-3 operating model choices with tradeoffs, such as simple ledger, location-controlled stock, lot/serial/expiry-controlled stock, or approval/ERP-linked stock flow.
+4. Required data records, such as item code/name, location, quantity, transaction type, date/time, owner, reason, memo, safety stock, and optional lot, serial, expiry, supplier, customer, or work order.
+5. One recommended domain direction and one approval question before any implementation or artifact generation.
+
+Technical choices such as static HTML, React, WinForms, database, or deployment can appear only after the domain choices are framed, unless the user already supplied enough workflow, data, and approval detail. A "simple" request still needs this compact domain-first pass; simplicity changes the length, not the ordering.
+
 ## User-Facing Reporting
 
 - The final answer should read like a normal brainstorming or direction-setting response in the user's language.
+- For domain work, make the visible options about workflow/operating model first; keep technology options secondary unless the user asked specifically for a stack decision.
 - Do not expose internal validation text such as `KH brainstorming validation`, `valid=true`, `missing=[]`, `BrainstormSession`, or raw handoff keys unless the user asks for a skill/harness audit.
 - If the direction is not approved yet, end with the approval decision or next question, not with internal framework status.
 - Keep `BrainstormSession` validation, handoff payloads, and artifact paths as internal evidence or audit material.
@@ -145,5 +160,6 @@ Pressure scenario: a user says "I want to build a SaaS" or "plan an operations a
 - Creating visual files without linking them to a decision.
 - Asking five questions at once.
 - Presenting only one approach before recommending it.
+- Presenting only implementation technology choices for a domain workflow, such as HTML versus React, without first framing operating models, required records, and workflow boundaries.
 - Losing product names, repo decisions, or MVP scope during context compression.
 - Letting sibling test outputs or earlier run folders influence a new brainstorm without explicit user permission.

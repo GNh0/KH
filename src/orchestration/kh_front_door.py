@@ -513,7 +513,7 @@ def _required_next_actions(
         )
     if "brainstorming-harness" in recommended_skills:
         actions.append(
-            "Apply `brainstorming-harness` before execution: progress through intent_frame, problem_frame, option_frame, approval_frame, and handoff_frame for product, process, analysis, design, document, operations, manufacturing/specification, investment, or other domain work; preserve `BrainstormSession`, `decision_log`, `validate_brainstorm_session`, and `brainstorm_handoff` or blocked rationale; do not implement, create analysis output, user deliverables, or domain artifacts until the user approves the direction in a later message and the KH handoff exists."
+            "Apply `brainstorming-harness` before execution: progress through intent_frame, problem_frame, option_frame, approval_frame, and handoff_frame for product, process, analysis, design, document, operations, manufacturing/specification, investment, or other domain work; preserve `BrainstormSession`, `decision_log`, `validate_brainstorm_session`, and `brainstorm_handoff` or blocked rationale; do not implement, create analysis output, user deliverables, or domain artifacts until the user approves the direction in a later message and the KH handoff exists. For domain workflows, make the compact brainstorm domain-first: objective/operator, workflow boundary, 2-3 operating model choices, required records/data, one recommendation, and one approval question; do not offer only technology-stack choices such as HTML/React/WinForms."
         )
     if classification.get("complexity") in {"heavy", "high_risk"}:
         actions.extend(

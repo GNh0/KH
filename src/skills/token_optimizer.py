@@ -1,5 +1,6 @@
 import argparse
 import ast
+import json
 import re
 import sys
 from typing import Any, Dict, Tuple
@@ -120,6 +121,19 @@ def optimize_context_content(
             },
         )
     if detected_kind == "log":
+        if _looks_like_codex_session_jsonl(content):
+            result = summarize_session_jsonl(content, max_lines=max_lines)
+            metadata = dict(result.metadata)
+            metadata["strategy"] = "session-jsonl"
+            metadata["content_kind"] = detected_kind
+            return HarnessResult(
+                success=result.success,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                exit_code=result.exit_code,
+                execution_time=result.execution_time,
+                metadata=metadata,
+            )
         result = summarize_command_output(
             command=command,
             stdout=content,
@@ -307,6 +321,76 @@ def summarize_agent_transcript(
             optimized,
             strategy="agent-transcript",
             label=label,
+        ),
+    }
+    return HarnessResult(success=True, stdout=optimized, stderr="", exit_code=0, metadata=metadata)
+
+
+@agent_skill(
+    name="summarize_session_jsonl",
+    description="Compress Codex session JSONL while preserving audit-relevant events and dropping huge prompt/encrypted payloads.",
+)
+def summarize_session_jsonl(session_jsonl: str, max_lines: int = 80) -> HarnessResult:
+    raw_lines = session_jsonl.splitlines()
+    if not raw_lines:
+        return HarnessResult(success=True, stdout="", stderr="", exit_code=0, metadata={})
+
+    compact_records: list[tuple[int, int, str]] = []
+    for index, line in enumerate(raw_lines):
+        compact = _compact_session_jsonl_event(line, index + 1)
+        if compact is not None:
+            compact_records.append(compact)
+
+    if not compact_records:
+        return summarize_command_output(
+            command="codex-session-jsonl",
+            stdout=session_jsonl,
+            stderr="",
+            exit_code=0,
+            max_lines=max_lines,
+        )
+
+    limit = max(1, max_lines - 1)
+    if len(compact_records) <= limit:
+        selected = compact_records
+    else:
+        selected_indices = set()
+        selected_indices.add(0)
+        tail_count = min(8, max(1, limit // 4))
+        selected_indices.update(range(max(0, len(compact_records) - tail_count), len(compact_records)))
+        budget = max(0, limit - len(selected_indices))
+        prioritized = sorted(
+            ((-priority, order) for order, (priority, _, _) in enumerate(compact_records) if order not in selected_indices)
+        )
+        selected_indices.update(order for _, order in prioritized[:budget])
+        selected = [compact_records[order] for order in sorted(selected_indices)]
+
+    omitted = max(0, len(compact_records) - len(selected))
+    header = {
+        "kh_token_optimizer": "session-jsonl",
+        "raw_lines": len(raw_lines),
+        "compact_records": len(compact_records),
+        "kept_records": len(selected),
+        "omitted_records": omitted,
+    }
+    output_lines = [json.dumps(header, ensure_ascii=False, sort_keys=True)]
+    output_lines.extend(record for _, _, record in selected)
+    optimized = "\n".join(output_lines)
+    raw_bytes = len(session_jsonl.encode("utf-8", errors="replace"))
+    filtered_bytes = len(optimized.encode("utf-8", errors="replace"))
+    metadata = {
+        "strategy": "session-jsonl",
+        "raw_bytes": raw_bytes,
+        "filtered_bytes": filtered_bytes,
+        "raw_lines": len(raw_lines),
+        "filtered_lines": len(output_lines),
+        "omitted_lines": max(0, len(raw_lines) - len(output_lines)),
+        "token_savings_ratio": _savings_ratio(raw_bytes, filtered_bytes),
+        "token_usage": compare_token_usage(
+            session_jsonl,
+            optimized,
+            strategy="session-jsonl",
+            label="codex-session-jsonl",
         ),
     }
     return HarnessResult(success=True, stdout=optimized, stderr="", exit_code=0, metadata=metadata)
@@ -692,6 +776,175 @@ def _missing_agent_transcript_facts(lines: list[str], optimized: str) -> list[st
     return missing
 
 
+def _looks_like_codex_session_jsonl(text: str) -> bool:
+    sample = [line for line in (text or "").splitlines()[:20] if line.strip()]
+    if not sample:
+        return False
+    parsed = 0
+    session_markers = 0
+    for line in sample:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        parsed += 1
+        if payload.get("type") in {"session_meta", "response_item", "event_msg"}:
+            session_markers += 1
+    return parsed >= 1 and session_markers >= 1
+
+
+def _compact_session_jsonl_event(line: str, line_number: int) -> tuple[int, int, str] | None:
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        priority = _line_priority(line)
+        if priority <= 0:
+            return None
+        record = {"line": line_number, "type": "raw", "sample": _short_text(line, 500)}
+        return priority, line_number, json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+    event_type = str(event.get("type", ""))
+    payload = event.get("payload", {}) or {}
+    if not isinstance(payload, dict):
+        return None
+    payload_type = str(payload.get("type", ""))
+
+    if event_type == "session_meta":
+        record = {
+            "line": line_number,
+            "type": "session_meta",
+            "id": payload.get("id", ""),
+            "cwd": payload.get("cwd", ""),
+            "thread_source": payload.get("thread_source", ""),
+            "agent_nickname": payload.get("agent_nickname", ""),
+            "agent_role": payload.get("agent_role", ""),
+            "cli_version": payload.get("cli_version", ""),
+        }
+        return 95, line_number, json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+    if payload_type in {"reasoning"}:
+        return None
+
+    if payload_type == "token_count":
+        info = payload.get("info", {}) or {}
+        total = info.get("total_token_usage", {}) or {}
+        last = info.get("last_token_usage", {}) or {}
+        record = {
+            "line": line_number,
+            "type": "token_count",
+            "total_tokens": total.get("total_tokens", 0),
+            "last_input_tokens": last.get("input_tokens", 0),
+            "context_window": info.get("model_context_window", 0),
+        }
+        return 35, line_number, json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+    if payload_type == "thread_goal_updated":
+        goal = payload.get("goal", {}) or {}
+        record = {
+            "line": line_number,
+            "type": "thread_goal_updated",
+            "status": goal.get("status", ""),
+            "objective": _short_text(str(goal.get("objective", "")), 240),
+            "tokensUsed": goal.get("tokensUsed", 0),
+            "timeUsedSeconds": goal.get("timeUsedSeconds", 0),
+        }
+        return 120, line_number, json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+    if payload_type == "task_complete":
+        record = {
+            "line": line_number,
+            "type": "task_complete",
+            "last_agent_message": _short_text(str(payload.get("last_agent_message", "")), 500),
+        }
+        return 125, line_number, json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+    if payload_type in {"message", "agent_message"}:
+        text = _session_payload_text(payload)
+        if not text.strip():
+            return None
+        priority = 80
+        lowered = text.lower()
+        if any(marker in lowered for marker in ["error", "failed", "blocked", "stopped", "중단", "차단", "실패"]):
+            priority = 115
+        if payload.get("phase") == "final_answer":
+            priority = max(priority, 110)
+        record = {
+            "line": line_number,
+            "type": payload_type,
+            "role": payload.get("role", ""),
+            "phase": payload.get("phase", ""),
+            "text": _short_text(text, 500),
+        }
+        return priority, line_number, json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+    if payload_type in {"function_call", "custom_tool_call"}:
+        raw_arguments = payload.get("arguments") or payload.get("input") or ""
+        record = {
+            "line": line_number,
+            "type": payload_type,
+            "name": payload.get("name", ""),
+            "arguments": _short_text(str(raw_arguments), 500),
+        }
+        return 90, line_number, json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+    if payload_type in {"function_call_output", "custom_tool_call_output"}:
+        output = _session_payload_text(payload)
+        if not output.strip():
+            return None
+        priority = 45
+        lowered = output.lower()
+        if any(marker in lowered for marker in ["error", "failed", "blocked", "traceback", "exception", "exit code", "returncode"]):
+            priority = 115
+        record = {
+            "line": line_number,
+            "type": payload_type,
+            "output": _short_text(output, 500),
+        }
+        return priority, line_number, json.dumps(record, ensure_ascii=False, sort_keys=True)
+
+    return None
+
+
+def _session_payload_text(payload: Dict[str, Any]) -> str:
+    if "message" in payload:
+        return _content_to_text(payload.get("message"))
+    if "content" in payload:
+        return _content_to_text(payload.get("content"))
+    if "output" in payload:
+        return _content_to_text(payload.get("output"))
+    return ""
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("input_text") or item.get("output_text") or ""))
+            else:
+                parts.append(str(item))
+        return "\n".join(part for part in parts if part)
+    if isinstance(content, dict):
+        return json.dumps(content, ensure_ascii=False, sort_keys=True)
+    return str(content or "")
+
+
+def _short_text(text: str, max_length: int) -> str:
+    compact = re.sub(r"\s+", " ", text or "").strip()
+    return compact[:max_length] + ("..." if len(compact) > max_length else "")
+
+
+def _safe_stdout_write(text: str) -> None:
+    output = (text or "") + "\n"
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout.buffer.write(output.encode("utf-8", errors="replace"))
+        sys.stdout.flush()
+        return
+    sys.stdout.write(output)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compress logs, command output, or Python source for UAF workflows.")
     parser.add_argument("--log-file", help="Read terminal output from a file and print a compact version.")
@@ -716,11 +969,11 @@ def main() -> int:
                 exit_code=args.exit_code,
                 max_lines=args.max_lines,
             )
-            print(result.stdout)
+            _safe_stdout_write(result.stdout)
         return 0
     if args.code_file:
         with open(args.code_file, "r", encoding="utf-8") as handle:
-            print(minify_code(handle.read()))
+            _safe_stdout_write(minify_code(handle.read()))
         return 0
     parser.print_help()
     return 0

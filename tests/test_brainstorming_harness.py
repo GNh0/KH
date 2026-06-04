@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from src.orchestration.brainstorming import (
     BrainstormDecision,
@@ -61,6 +62,22 @@ class BrainstormingHarnessTests(unittest.TestCase):
         self.assertIn("problem", validation["missing"])
         self.assertIn("recommended_option", validation["missing"])
         self.assertIn("decisions", validation["missing"])
+
+    def test_skill_docs_require_domain_first_compact_brainstorming(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        skill = (repo_root / "skills" / "brainstorming_harness" / "SKILL.md").read_text(encoding="utf-8")
+        usage = (
+            repo_root / "skills" / "brainstorming_harness" / "references" / "usage.md"
+        ).read_text(encoding="utf-8")
+        combined = skill + "\n" + usage
+
+        self.assertIn("Domain-First Compact Brainstorm", skill)
+        self.assertIn("inventory inbound/outbound", combined)
+        self.assertIn("operating model", combined)
+        self.assertIn("required records", combined)
+        self.assertIn("HTML", combined)
+        self.assertIn("React", combined)
+        self.assertIn("WinForms", combined)
 
 
 if __name__ == "__main__":

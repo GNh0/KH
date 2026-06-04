@@ -220,6 +220,12 @@ class KhFrontDoorTests(unittest.TestCase):
             any("do not implement" in action for action in payload["required_next_actions"])
         )
         self.assertTrue(
+            any("domain-first" in action and "operating model" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
+            any("required records/data" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
             any("user approves the direction" in action for action in payload["required_next_actions"])
         )
 
