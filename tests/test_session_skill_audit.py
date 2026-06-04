@@ -693,6 +693,59 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_unilateral_brainstorm_decision_is_flagged_before_approval(self):
+        target = "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260604_G"
+        front_door_output = {
+            "front_door_status": "ok",
+            "selected_not_executed_skills": ["brainstorming-harness"],
+            "recommended_skills": ["always-on-front-door", "brainstorming-harness"],
+            "execution_gate": {"status": "blocked_until_brainstorming_handoff", "can_execute": False},
+        }
+        path = self.write_subagent_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{target} \ud3f4\ub354\uc5d0\uc11c \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac \ub300\uc2dc\ubcf4\ub4dc \uac1c\ubc1c\ud574\uc918.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            "\ubaa9\uc801/\uc6b4\uc601\uc790: \uc7ac\uace0 \ub2f4\ub2f9\uc790\uc6a9 \ub300\uc2dc\ubcf4\ub4dc.\n"
+                            "\uc5c5\ubb34 \ubc94\uc704: \uc785\uace0, \ucd9c\uace0, \uc870\uc815, \uc548\uc804\uc7ac\uace0.\n"
+                            "1. \ub2e8\uc21c \uc7a5\ubd80\ud615\n2. \uc704\uce58 \uc7ac\uace0\ud615\n3. LOT/\uc2dc\ub9ac\uc5bc\ud615\n"
+                            "\ucd94\ucc9c: 2\ubc88 \uc704\uce58 \uc7ac\uace0\ud615\uc73c\ub85c \uac00\uaca0\uc2b5\ub2c8\ub2e4.\n"
+                            "\ud544\uc694 \ub370\uc774\ud130: \ud488\ubaa9, \uc704\uce58, \uc218\ub7c9.\n"
+                            "HTML + CSS + JavaScript\ub85c \uad6c\ud604\ud574\ub3c4 \ub420\uae4c\uc694?"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "unilateral_brainstorm_decision"
+                and "premature_implementation_stack_choice" in issue.get("matched_markers", [])
+                for issue in audit.issues
+            )
+        )
+
     def test_resume_guard_failure_is_skill_audit_issue(self):
         path = self.write_session(
             [

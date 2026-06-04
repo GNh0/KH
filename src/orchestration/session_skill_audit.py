@@ -895,6 +895,7 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
     has_options = any(marker in lowered for marker in ["option", "options", "direction", "alternatives", "recommendation"])
     first_response = _first_visible_brainstorm_response(path)
     missing_visible_markers = _brainstorm_response_missing_markers(first_response)
+    unilateral_markers = _brainstorm_unilateral_decision_markers(first_response)
 
     issues: List[Dict[str, Any]] = []
     if missing_visible_markers:
@@ -913,6 +914,24 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
                     "open questions, and one next approval question."
                 ),
                 "missing_markers": missing_visible_markers,
+                "sample": _short(first_response, 420),
+            }
+        )
+    if unilateral_markers:
+        issues.append(
+            {
+                "skill": "brainstorming-harness",
+                "status": "unilateral_brainstorm_decision",
+                "severity": "P1",
+                "reason": (
+                    "The visible brainstorming response framed a recommendation as an agent-owned decision "
+                    "before the user approved the operating model or implementation stack."
+                ),
+                "action": (
+                    "Phrase recommendations as tentative advice, preserve open choices, ask the user to choose "
+                    "or approve, and do not lock an implementation stack before the domain direction is approved."
+                ),
+                "matched_markers": unilateral_markers,
                 "sample": _short(first_response, 420),
             }
         )
@@ -1091,6 +1110,45 @@ def _brainstorm_response_missing_markers(text: str) -> List[str]:
     if "required_records_data" in missing or "open_questions" in missing or len(missing) >= 2:
         return missing
     return []
+
+
+def _brainstorm_unilateral_decision_markers(text: str) -> List[str]:
+    if not text:
+        return []
+    lowered = text.lower()
+    markers = [
+        "\ub85c \uac00\uaca0\uc2b5\ub2c8\ub2e4",
+        "\uc73c\ub85c \uac00\uaca0\uc2b5\ub2c8\ub2e4",
+        "\uae30\uc900\uc73c\ub85c \ub9cc\ub4e4\uaca0\uc2b5\ub2c8\ub2e4",
+        "\uae30\uc900\uc73c\ub85c \uac1c\ubc1c\ud558\uaca0\uc2b5\ub2c8\ub2e4",
+        "\ubc29\ud5a5\uc73c\ub85c \uc7a1\uaca0\uc2b5\ub2c8\ub2e4",
+        "\uc0c8\ub85c \ub9cc\ub4e4\uc5b4\uc11c \uc9c4\ud589",
+        "\ub9cc\ub4e4\uace0 \uad6c\ud604\ud574\ub3c4",
+        "\ubc14\ub85c \uad6c\ud604",
+        "i will go with",
+        "i'll go with",
+        "we will go with",
+        "i will use",
+        "we will use",
+        "i will build",
+        "we will build",
+    ]
+    matched = [marker for marker in markers if marker in lowered]
+    tech_stack_markers = [
+        "html + css + javascript",
+        "html/css/js",
+        "react",
+        "winforms",
+        "database",
+        "db ",
+        "\uae30\uc220\uc2a4\ud0dd",
+    ]
+    approval_markers = ["\uad6c\ud604\ud574\ub3c4 \ub420\uae4c\uc694", "approve", "approval", "\uc2b9\uc778"]
+    if any(marker in lowered for marker in tech_stack_markers) and any(
+        marker in lowered for marker in approval_markers
+    ):
+        matched.append("premature_implementation_stack_choice")
+    return matched
 
 
 def _front_door_selected_skill(path: Path, skill_name: str) -> bool:

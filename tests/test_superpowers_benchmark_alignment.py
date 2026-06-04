@@ -121,6 +121,7 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("Success criteria/constraints/non-goals", prompts)
         self.assertIn("Required records/data/artifact shape", prompts)
         self.assertIn("Approved brainstorm continuation gate", prompts)
+        self.assertIn("Brainstorming recommendation discipline", prompts)
         self.assertIn("Exact target path rule", prompts)
         self.assertIn("relative staging followed by `Copy-Item`", prompts)
 

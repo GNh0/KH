@@ -98,6 +98,17 @@ For a vague or new app, dashboard, product, operations, manufacturing, document,
 
 Missing target folders, empty folders, or "simple" wording do not remove this gate. A response that only says the folder is missing and lists 2-3 options is failed brainstorming. Continue discovery until all eight sections are visible, then stop for approval.
 
+## Recommendation Discipline
+
+A recommendation is advisory, not an agent-owned final decision. Before the user approves:
+
+- Do say: "My recommendation is option 2 because..." and ask the user to choose or approve.
+- Do not say or imply: "I will go with option 2", "2번으로 가겠습니다", "기준으로 만들겠습니다", "새로 만들어서 진행하겠습니다", or similar final-decision wording.
+- Do not ask for approval of an implementation stack such as HTML/CSS/JavaScript, React, WinForms, or database storage unless the user asked for stack selection or already approved the domain operating model.
+- Keep open questions visible when they could change the scope.
+
+If the agent has already written final-decision wording before user approval, mark the run as `unilateral_brainstorm_decision` and redo the decision question.
+
 ## Approved Continuation Gate
 
 When the user later approves a recommended option, that approval opens the next KH stage only after current-run handoff evidence exists. Before implementation, file writes, deliverable generation, QA, browser verification, or broad memory lookup:
