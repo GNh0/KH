@@ -117,7 +117,7 @@ Each command resolves to a small set of roles, KH skills, and expected outputs. 
 - Do not assume Codex or Antigravity native panels are Superpowers-owned; KH should expose host-readable progress state and let the host render it.
 - Do not start a resumed session from chat memory alone when `.kh`, `docs/kh`, or memory candidates exist.
 - Do not treat a scaffold, first slice, or pushed branch as final completion while the user goal remains active.
-- Do not let automatic `goal_context` continuation resume work after a user asked to stop, pause, cancel, or `goal 멈춰`; block the active goal with `blocked_reason=user_requested_stop` when host policy allows it, otherwise keep the interruption checkpoint as the controlling stop state and wait for a fresh non-`goal_context` user resume request.
+- Do not let automatic `goal_context` continuation resume work after a user asked to stop, pause, cancel, or equivalent; block the active goal with `blocked_reason=user_requested_stop` when host policy allows it, otherwise keep the interruption checkpoint as the controlling stop state and wait for a fresh non-`goal_context` user resume request.
 - Do not replace failed Browser/Playwright QA with a narrower HTTP check unless the final report explicitly states the failed verification route and residual risk.
 - Do not mark token optimizer as `used` from skill-file reads, default prompts, or status mentions alone.
 

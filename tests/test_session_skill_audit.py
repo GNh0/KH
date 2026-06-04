@@ -873,6 +873,78 @@ class SessionSkillAuditTests(unittest.TestCase):
             audit.issues,
         )
 
+    def test_option_choice_followed_by_implementation_scope_lock_is_flagged(self):
+        target = "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260604_K"
+        front_door_output = {
+            "front_door_status": "ok",
+            "selected_not_executed_skills": ["brainstorming-harness"],
+            "recommended_skills": ["always-on-front-door", "brainstorming-harness"],
+            "execution_gate": {"status": "blocked_until_brainstorming_handoff", "can_execute": False},
+        }
+        path = self.write_subagent_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{target} \ud3f4\ub354\uc5d0\uc11c \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac \ub300\uc2dc\ubcf4\ub4dc \uac1c\ubc1c\ud574\uc918.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            "\uc5b4\ub5a4 \uc6b4\uc601 \ubaa8\ub378\ub85c \uc7a1\uc744\uae4c\uc694? "
+                            "1\ubc88 \ub2e8\uc21c \uc218\ubd88\uc7a5, 2\ubc88 \uc704\uce58 \uad00\ub9ac, 3\ubc88 LOT/\uc2dc\ub9ac\uc5bc."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "1\ubc88\uc73c\ub85c \uc9c4\ud589",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            "1\ubc88 \ub2e8\uc21c \uc218\ubd88\uc7a5 \ubaa8\ub378\ub85c \ud655\uc815\ud588\uc2b5\ub2c8\ub2e4.\n\n"
+                            "\uad6c\ud604 \ubc94\uc704\ub294 \uc774\ub807\uac8c \uc7a1\uaca0\uc2b5\ub2c8\ub2e4.\n\n"
+                            "- \uc0c1\ub2e8 KPI: \ucd1d \ud488\ubaa9\uc218, \ud604\uc7ac\uace0 \ud569\uacc4, \uae08\uc77c \uc785\uace0, \uae08\uc77c \ucd9c\uace0\n"
+                            "- \uc785\ucd9c\uace0 \uc785\ub825: \ud488\ubaa9, \uad6c\ubd84, \uc218\ub7c9, \uc77c\uc790, \ub2f4\ub2f9\uc790\n"
+                            "- \uc800\uc7a5 \ubc29\uc2dd: \ube0c\ub77c\uc6b0\uc800 localStorage\n\n"
+                            f"\uc774 \ubc94\uc704\ub85c {target} \uacbd\ub85c\uc5d0 \uc0c8 \ud3f4\ub354\ub97c \ub9cc\ub4e4\uace0 \ub300\uc2dc\ubcf4\ub4dc \ud30c\uc77c\uc744 \uc0dd\uc131\ud574\ub3c4 \ub420\uae4c\uc694?"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "option_choice_treated_as_scope_approval"
+                and issue["severity"] == "P0"
+                for issue in audit.issues
+            ),
+            audit.issues,
+        )
+
     def test_resume_guard_failure_is_skill_audit_issue(self):
         path = self.write_session(
             [

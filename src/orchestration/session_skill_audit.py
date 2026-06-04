@@ -1002,12 +1002,21 @@ def _brainstorm_option_choice_execution_issues(path: Path) -> List[Dict[str, Any
     if choice_index < 0:
         return []
 
+    issues: List[Dict[str, Any]] = []
+    scope_lock_samples: List[str] = []
     samples: List[str] = []
     for event in events[choice_index + 1 :]:
         payload = event.get("payload", {})
         if not isinstance(payload, dict):
             continue
         payload_type = str(payload.get("type", ""))
+        if payload_type in {"message", "agent_message", "task_complete"}:
+            text = _payload_text(payload)
+            markers = _option_choice_scope_lock_markers(text)
+            if markers:
+                scope_lock_samples.append(_short(f"{', '.join(markers)}: {text}", 420))
+                if len(scope_lock_samples) >= 3:
+                    continue
         if payload_type not in {"function_call", "custom_tool_call"}:
             continue
         name = str(payload.get("name", ""))
@@ -1030,11 +1039,30 @@ def _brainstorm_option_choice_execution_issues(path: Path) -> List[Dict[str, Any
             samples.append(_short(text))
         if len(samples) >= 3:
             break
-    if not samples:
-        return []
 
-    return [
-        {
+    if scope_lock_samples:
+        issues.append(
+            {
+                "skill": "brainstorming-harness",
+                "status": "option_choice_treated_as_scope_approval",
+                "severity": "P0",
+                "reason": (
+                    "The user selected a brainstorm option, but the next agent response locked implementation "
+                    "scope or asked for file-generation approval before a reviewed BrainstormSession/handoff existed."
+                ),
+                "action": (
+                    "After an option choice, record the direction only and ask the next focused design/spec question. "
+                    "Do not announce an implementation scope, storage model, KPI/table/file set, stack, target-folder "
+                    "creation, QA, or deliverable generation until the reviewed handoff/spec and separate execution "
+                    "approval exist."
+                ),
+                "choice": _short(choice_text, 220),
+                "samples": scope_lock_samples,
+            }
+        )
+
+    if samples:
+        issues.append({
             "skill": "brainstorming-harness",
             "status": "option_choice_treated_as_execution_approval",
             "severity": "P0",
@@ -1050,8 +1078,71 @@ def _brainstorm_option_choice_execution_issues(path: Path) -> List[Dict[str, Any
             ),
             "choice": _short(choice_text, 220),
             "samples": samples,
-        }
+        })
+
+    return issues
+
+
+def _option_choice_scope_lock_markers(text: str) -> List[str]:
+    if not text:
+        return []
+    lowered = text.lower()
+    negations = [
+        "not implementation scope",
+        "not final implementation scope",
+        "do not lock implementation scope",
+        "\uad6c\ud604 \ubc94\uc704\ub97c \ud655\uc815\ud558\uc9c0",
+        "\uad6c\ud604 \ubc94\uc704\ub294 \uc544\uc9c1 \ud655\uc815",
+        "\uc544\uc9c1 \uad6c\ud604\ud558\uc9c0",
+        "\uc544\uc9c1 \ud30c\uc77c\uc744 \uc0dd\uc131\ud558\uc9c0",
     ]
+    if any(marker in lowered for marker in negations):
+        return []
+    marker_groups = {
+        "implementation_scope_locked": [
+            "implementation scope is",
+            "scope for implementation",
+            "i will build the following",
+            "we will build the following",
+            "\uad6c\ud604 \ubc94\uc704\ub294 \uc774\ub807\uac8c \uc7a1\uaca0\uc2b5\ub2c8\ub2e4",
+            "\uad6c\ud604 \ubc94\uc704\ub294 \ub2e4\uc74c\uacfc \uac19\uc2b5\ub2c8\ub2e4",
+            "\uad6c\ud604 \ubc94\uc704\ub294",
+        ],
+        "file_generation_approval_after_option": [
+            "create the files",
+            "generate files",
+            "create a new folder",
+            "\ud30c\uc77c\uc744 \uc0dd\uc131\ud574\ub3c4 \ub420\uae4c\uc694",
+            "\ud654\uba74 \ud30c\uc77c\uc744 \uc0dd\uc131",
+            "\uc0c8 \ud3f4\ub354\ub97c \ub9cc\ub4e4\uace0",
+            "\ud574\ub2f9 \uacbd\ub85c\uc5d0 \uc0c8 \ud3f4\ub354",
+        ],
+        "implementation_detail_locked": [
+            "top kpi",
+            "kpi:",
+            "storage method",
+            "localstorage",
+            "\uc0c1\ub2e8 kpi",
+            "\uc800\uc7a5 \ubc29\uc2dd",
+            "\ud604\uc7ac\uace0 \ud14c\uc774\ube14",
+            "\uc785\ucd9c\uace0 \uc785\ub825",
+            "\uc785\ucd9c\uace0 \uc774\ub825",
+        ],
+        "finalized_direction_as_agent_decision": [
+            "\ud655\uc815\ud588\uc2b5\ub2c8\ub2e4",
+            "is confirmed",
+            "has been finalized",
+        ],
+    }
+    matched = [
+        name
+        for name, markers in marker_groups.items()
+        if any(marker in lowered for marker in markers)
+    ]
+    if "implementation_detail_locked" in matched and "finalized_direction_as_agent_decision" not in matched:
+        if not any(marker in lowered for marker in ["\uad6c\ud604", "implementation", "build", "develop"]):
+            matched.remove("implementation_detail_locked")
+    return matched
 
 
 def _is_direction_choice_without_execution_text(lowered: str) -> bool:

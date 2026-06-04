@@ -53,7 +53,7 @@ Use this skill as a Superpowers-style intake rule:
 5. For large work, require the large-work bundle so host, goal, lifecycle, token, memory, parallel, subagent, audit, compound, and distiller decisions are visible.
 6. Record the routing reason so later review can spot over-orchestration or under-escalation.
 
-Pressure scenario: a user asks "삼성 괜찮아?" without context. The host must not guess investment, phone purchase, hiring, or brand reputation and must not start a role DAG. It should ask a short clarification, then reclassify when the domain is known.
+Pressure scenario: a user asks "Is Samsung okay?" without context. The host must not guess investment, phone purchase, hiring, or brand reputation and must not start a role DAG. It should ask a short clarification, then reclassify when the domain is known.
 
 ## Required outputs
 

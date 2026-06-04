@@ -54,7 +54,7 @@ Do not use this skill only because it is available. Use it when the current task
    - Include the minimum required records, such as item, location, quantity, transaction type, owner, timestamp, reason, memo, safety stock, and optional lot, serial, expiry, supplier/customer, or work order.
    - Keep technology stack choices secondary unless the user already supplied the workflow model and asked for implementation technology.
 6. Confirm the direction before creating architecture, scaffolding, or code. For vague product, app, service, SaaS, or project requests, do not implement or scaffold in the same turn.
-7. Treat "1번으로 진행", "go with option 1", or a similar option choice as direction approval only. It does not authorize implementation or file creation.
+7. Treat "go with option 1" or a similar option choice as direction approval only. It does not authorize implementation or file creation.
 8. Continue the design/spec loop after option selection: confirm success criteria, scope, data shape, screens/artifacts, non-goals, risks, and acceptance criteria one question or section at a time.
 9. Build a `BrainstormSession` and run `validate_brainstorm_session`.
 10. If valid, call `build_architect_handoff` and pass the payload to the selected KH planning skill, not implementation.
@@ -80,15 +80,25 @@ For "simple" product or workflow requests, do not skip brainstorming. Use a comp
 
 The first visible response must not be only an option picker. For a vague or new app, dashboard, product, operations, manufacturing, document, drawing/design, analysis, investment, or workflow request, include these user-visible sections, translated to the user's apparent language when helpful: objective/operator, workflow boundary, success criteria/constraints/non-goals, operating model options and tradeoffs, required records/data/artifact shape, open questions, recommendation, and approval question. If the exact target folder is missing or empty, state that briefly, but still provide the full domain-first brainstorm and stop before implementation.
 
-Keep recommendation language advisory. The agent should not decide the user's operating model or stack on its own. Avoid final-decision phrases such as "2번으로 가겠습니다", "기준으로 만들겠습니다", "I will go with option 2", or "we will use React" before approval. If implementation technology is not the user's decision target, keep it secondary and do not include it in the approval question.
+Keep recommendation language advisory. The agent should not decide the user's operating model or stack on its own. Avoid final-decision phrases such as "I will go with option 2", "we will use this as the basis", or "we will use React" before approval. If implementation technology is not the user's decision target, keep it secondary and do not include it in the approval question.
 
-Keep the approval question about direction only. Do not combine the first decision question with immediate implementation wording such as "바로 구현해도 될까요", "승인해주시면 파일을 생성하겠습니다", "바로 개발하겠습니다", or "I can implement now." Do not mention target-path file generation in the first approval question. Ask which operating model the user wants, state the recommendation as advice, then wait for approval before implementation or stack selection.
+Keep the approval question about direction only. Do not combine the first decision question with immediate implementation wording such as "Can I implement this now?", "If you approve, I will create files", "I will start development now", or "I can implement now." Do not mention target-path file generation in the first approval question. Ask which operating model the user wants, state the recommendation as advice, then wait for approval before implementation or stack selection.
 
 The first brainstorm should end with a direction question, not an execution question. Do not say that approval will immediately create files, start development, run QA, or produce deliverables. A valid first question asks the user to choose the operating model or answer one missing domain constraint, then stops.
 
 Approval continuation is a separate gate. When the user approves the recommendation in a later message, create or record `approval_frame`, `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, and `brainstorm_handoff` before any write, QA, browser, verification, or broad memory call. Do not use global Codex memory, memory skill notes, sibling folders, or previous run folders as implementation shortcuts during this continuation unless the user explicitly requested reuse. If the handoff cannot be produced, stop with `brainstorming_status=blocked`.
 
 Direction choice is not execution approval. If the user only chooses an option, keep the request inside `brainstorming-harness` and ask the next focused design question. Execution approval requires a reviewed handoff/spec plus a separate instruction to implement, create files, generate deliverables, or start work.
+
+Direction choice is also not implementation-scope approval. After a user says "option 1", "go with option 2", or similar, do not answer with "I will set the implementation scope as follows", "implementation scope is", KPI/form/table/storage lists, target-folder creation approval, QA/browser promises, or generated-file promises. Those are execution-scope decisions, not brainstorm continuation.
+
+The valid continuation is to record the direction and ask the next design/spec question that could change the eventual artifact. Good continuation examples:
+
+- "Direction 1 is recorded. Before implementation scope is final, should stock be transaction-derived only, editable with audit log, or hybrid with adjustment reasons?"
+- "Direction 2 is recorded. Next, should locations be warehouse-only, warehouse/bin, or warehouse/bin/zone?"
+- "Direction 3 is recorded. Next, which traceability fields are mandatory: lot, serial, expiry, supplier/customer, or work order?"
+
+If the next assistant message after an option choice locks implementation scope, asks to create files, or lists UI/storage scope as final, mark the run as `option_choice_treated_as_scope_approval` and route back to brainstorming.
 
 The compact form is still a multi-checkpoint discovery pass, not a one-question option picker. Before asking for approval, the visible response should cover:
 

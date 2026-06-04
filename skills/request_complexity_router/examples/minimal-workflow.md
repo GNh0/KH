@@ -31,7 +31,7 @@ The agent must classify the request before choosing a UAF runtime depth. The goa
 
 - The agent sends a concept question through role DAG and release gates.
 - The agent treats stock recommendations, legal advice, medical diagnosis, credentials, or destructive commands as ordinary medium summaries.
-- The agent guesses the meaning of "이거 어때?" or "삼성 괜찮아?" without context.
+- The agent guesses the meaning of "What do you think of this?" or "Is Samsung okay?" without context.
 - The agent claims `token-optimizer` ran as a heavy workflow instead of a cross-cutting utility.
 - The agent omits `actual_runtime_path`, making it impossible to audit whether the route was light or heavy.
 

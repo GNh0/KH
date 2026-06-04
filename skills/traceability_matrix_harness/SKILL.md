@@ -27,7 +27,7 @@ This harness builds an internal traceability matrix linking requirements, delive
 1. Build rows from `WorkDesign.deliverables`, exported deliverable records, evidence keys, and review gates; use `as_dict=True` when another harness needs named fields instead of spreadsheet rows.
 2. Require each trace row to have a requirement ID, deliverable, artifact type, evidence key, gate, and status.
 3. Attach rows to `deliverable_exports.quality.traceability_matrix` and runtime metadata.
-4. Do not create `docs/추적성_매트릭스.xlsx` unless a user explicitly asks for that as a deliverable.
+4. Do not create `docs/traceability_matrix.xlsx` unless a user explicitly asks for that as a deliverable.
 5. Emit `traceability matrix passed` or `traceability matrix failed` evidence.
 
 ## External Benchmark Recipe

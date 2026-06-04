@@ -61,7 +61,7 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 4. Capture decisions as structured records: `objective`, `target_user`, `problem`, `options`, `recommendation`, `constraints`, `decisions`, and `open_questions`.
 5. Present 2-3 approaches with tradeoffs and a recommended direction.
 6. Present the chosen direction and ask for approval before design/spec handoff writing. For vague product, app, service, SaaS, project, analysis, design, process, document, specification, operations, investment, or other domain-work requests, stop here unless the user approves the direction in a later message.
-7. Treat a user choice such as "1번으로 진행" as approval of that direction only. It is not approval to implement, scaffold, create files, verify, or produce user deliverables.
+7. Treat a user choice such as "go with option 1" as approval of that direction only. It is not approval to implement, scaffold, create files, verify, or produce user deliverables.
 8. After a direction choice, continue the design/spec loop: confirm success criteria, scope, data shape, screens/artifacts, non-goals, risks, and acceptance criteria one question or section at a time.
 9. Build a `BrainstormSession`, validate it, and create a `brainstorm_handoff`.
 10. Write KH project artifacts when useful: `.kh/brainstorm/<run-id>/content/*.md` for local working notes, `.kh/brainstorm/<run-id>/state/*.json` for run-local state, and `docs/kh/handoffs/*.md` for shareable summaries.
@@ -85,7 +85,7 @@ Do not collapse brainstorming into a single option picker unless the user has al
 
 If the user only says "handle this topic/project/work" and then chooses one proposed option, that approval is permission to continue the KH flow, not permission to skip the handoff. Build and validate the handoff before architecture, domain orchestration, analysis, deliverable generation, or implementation. If time, host tools, or missing context prevents this, record `brainstorming_status=blocked` with the missing checkpoint instead of claiming the skill ran.
 
-If the user says "1번으로 진행", "option 1", "go with option 2", or similar, continue brainstorming/design review. Ask the next scoped question, such as which fields, screens, constraints, non-goals, acceptance criteria, or output format should be included. Do not create files from an option choice alone.
+If the user says "option 1", "go with option 2", or similar, continue brainstorming/design review. Ask the next scoped question, such as which fields, screens, constraints, non-goals, acceptance criteria, or output format should be included. Do not create files from an option choice alone.
 
 ## Superpowers-Level Discovery Ladder
 
@@ -124,16 +124,33 @@ Missing target folders, empty folders, or "simple" wording do not remove this ga
 A recommendation is advisory, not an agent-owned final decision. Before the user approves:
 
 - Do say: "My recommendation is option 2 because..." and ask the user to choose or approve.
-- Do not say or imply: "I will go with option 2", "2번으로 가겠습니다", "기준으로 만들겠습니다", "새로 만들어서 진행하겠습니다", or similar final-decision wording.
+- Do not say or imply: "I will go with option 2", "we will use this as the basis", "I will create it this way", or similar final-decision wording.
 - Do not ask for approval of an implementation stack such as HTML/CSS/JavaScript, React, WinForms, or database storage unless the user asked for stack selection or already approved the domain operating model.
 - Keep open questions visible when they could change the scope.
-- The first approval question should ask the user to choose or approve the operating model, not to approve immediate implementation. Prefer "Which operating model should we use? My recommendation is option 1." Do not ask "바로 구현해도 될까요", "승인해주시면 파일을 생성하겠습니다", or "I can implement now" until the domain direction is approved.
+- The first approval question should ask the user to choose or approve the operating model, not to approve immediate implementation. Prefer "Which operating model should we use? My recommendation is option 1." Do not ask "Can I implement this now?", "If you approve, I will create files", or "I can implement now" until the domain direction is approved.
 - Do not promise target-path file creation, implementation, development, or deliverable generation in the first brainstorm approval question.
 - The first brainstorm should end with a direction question, not an execution question. Good: "Which operating model should we choose: simple stock ledger, location-controlled stock, or lot/serial stock? My recommendation is the simple ledger unless location tracking is required." Bad: "If you approve, I will create the files in the target folder."
 - Do not mention implementation start, generated files, browser verification, QA, or deliverable creation in the same question that asks the user to choose the domain direction.
 - A later option choice is still not implementation approval. It advances to design/spec review and another focused question, not file generation.
 
 If the agent has already written final-decision wording before user approval, mark the run as `unilateral_brainstorm_decision` and redo the decision question.
+
+## Option Choice Continuation Gate
+
+When the user replies with only a direction choice such as "option 1" or "go with the recommendation", do not lock the implementation scope.
+
+Do not respond with a block such as "implementation scope", "I will set the implementation scope as follows", KPI/form/table/storage lists, target-folder creation approval, or "I will create the files". That turns a direction choice into execution approval and fails the brainstorm.
+
+Instead:
+
+1. Record the selected direction as direction evidence only.
+2. State that implementation scope is not final yet.
+3. Ask the next focused design/spec question that could change the output, such as stock calculation rule, required fields, screens/artifacts, non-goals, risks, acceptance criteria, approvals, locations, lots/serials, or export/output shape.
+4. Keep asking one focused question or presenting one review section at a time until the `BrainstormSession`, decision log, self-reviewed handoff/spec, and separate implementation approval exist.
+
+Example continuation after an inventory option choice:
+
+"Option 1, the simple stock-ledger direction, is recorded. Implementation scope is not final yet. Next, how should current stock be calculated: A) transaction-derived only, B) editable current quantity with audit log, or C) hybrid with adjustment reasons?"
 
 ## Approved Continuation Gate
 

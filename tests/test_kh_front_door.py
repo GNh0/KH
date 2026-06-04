@@ -229,6 +229,12 @@ class KhFrontDoorTests(unittest.TestCase):
             any("option choice is direction approval only" in action for action in payload["required_next_actions"])
         )
         self.assertTrue(
+            any("lock implementation scope" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
+            any("I will set the implementation scope as follows" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
             any("separately asks to implement" in action for action in payload["required_next_actions"])
         )
 

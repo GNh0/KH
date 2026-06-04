@@ -123,6 +123,8 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("direction question, not an execution question", prompts)
         self.assertIn("Superpowers/Compound brainstorming gate", prompts)
         self.assertIn("Option choice is not implementation approval", prompts)
+        self.assertIn("Option choice is not implementation-scope approval", prompts)
+        self.assertIn("I will set the implementation scope as follows", prompts)
         self.assertIn("strategy/context -> brainstorm requirements -> plan -> work -> review -> compound learning", prompts)
         self.assertIn("Success criteria/constraints/non-goals", prompts)
         self.assertIn("Required records/data/artifact shape", prompts)

@@ -95,6 +95,10 @@ class BrainstormingHarnessTests(unittest.TestCase):
         self.assertIn("RTK-style output discipline", combined)
         self.assertIn("option choice", combined)
         self.assertIn("not implementation approval", combined)
+        self.assertIn("Option Choice Continuation Gate", skill)
+        self.assertIn("not implementation-scope approval", combined)
+        self.assertIn("option_choice_treated_as_scope_approval", combined)
+        self.assertIn("I will set the implementation scope as follows", combined)
         self.assertIn("Self-review", combined)
 
 
