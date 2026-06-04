@@ -784,6 +784,9 @@ def _target_substitution_issues(path: Path) -> List[Dict[str, Any]]:
             continue
 
         if active_target is None or payload_type not in {
+            "message",
+            "agent_message",
+            "task_complete",
             "function_call",
             "custom_tool_call",
             "function_call_output",
@@ -1642,6 +1645,33 @@ def _target_substitution_sample(target: Path, text: str) -> str:
     normalized_target = str(_normalize_path(target)).lower()
     normalized_text = (text or "").replace("\\", "/")
     lowered = normalized_text.lower()
+    staging_markers = [
+        "staging",
+        "staged",
+        "workspace-local",
+        "workspace local",
+        "current workspace",
+        "created in workspace",
+        "not placed in the final folder",
+        "not copied to the final folder",
+        "\uc2a4\ud14c\uc774\uc9d5",
+        "\uc791\uc5c5\uacf5\uac04",
+        "\ucd5c\uc885 \ud3f4\ub354\uc5d0\ub294 \uc544\uc9c1",
+    ]
+    artifact_markers = [
+        "index.html",
+        "styles.css",
+        "style.css",
+        "app.js",
+        "script.js",
+        "package.json",
+        "readme.md",
+    ]
+    if any(marker in lowered for marker in staging_markers) and any(
+        marker in lowered for marker in artifact_markers
+    ):
+        return _short(f"workspace staging used for absolute target {target}: {text}")
+
     if normalized_target.replace("\\", "/") in lowered:
         return ""
     relative_prefix = f"{target_name}/".lower()
@@ -1663,8 +1693,22 @@ def _target_substitution_sample(target: Path, text: str) -> str:
         f"updated file: {relative_prefix}",
         f"created file: {relative_prefix}",
     ]
+    root_artifact_markers = [
+        "*** add file: index.html",
+        "*** add file: styles.css",
+        "*** add file: style.css",
+        "*** add file: app.js",
+        "*** add file: script.js",
+        "new-item index.html",
+        "set-content index.html",
+        "out-file index.html",
+        "created file: index.html",
+        "updated file: index.html",
+    ]
     if any(marker in lowered for marker in patch_markers + shell_markers + output_markers):
         return _short(f"relative substitute target for {target}: {text}")
+    if any(marker in lowered for marker in root_artifact_markers):
+        return _short(f"workspace-root artifact for absolute target {target}: {text}")
     return ""
 
 

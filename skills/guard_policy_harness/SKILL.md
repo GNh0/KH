@@ -42,6 +42,8 @@ When the user names an absolute target folder, generated user-facing files must 
 
 If the exact path is outside the current writable workspace or requires sandbox approval, ask for exact-path write permission before generating product files, or stop with `permission_needed`. Do not use `apply_patch` to create a relative substitute and then `Copy-Item`, `Move-Item`, or equivalent to backfill the requested path. Relative staging followed by copy-back is a guard failure.
 
+This also forbids creating workspace-root artifacts such as `index.html`, `styles.css`, `app.js`, documents, images, or generated data files before exact-path permission is available. Execution approval is not permission to stage elsewhere. Permission or write-boundary approval must happen before content generation, not before copy-back.
+
 ## External Benchmark Recipe
 
 Use this harness before any risky command or file write:
@@ -69,6 +71,7 @@ Pressure scenario: if a generated path resolves outside the workspace through `.
 - Do not record raw secrets in guard audit metadata.
 - Do not create a relative same-name project folder for an absolute user target, even temporarily.
 - Do not treat copying a staged project into the target as satisfying the exact target path rule.
+- Do not generate root-level workspace artifacts while waiting for exact target path permission.
 
 ## UAF implementation targets
 

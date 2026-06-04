@@ -945,6 +945,68 @@ class SessionSkillAuditTests(unittest.TestCase):
             audit.issues,
         )
 
+    def test_absolute_target_workspace_staging_is_flagged_even_without_relative_target_folder(self):
+        target = "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260604_M"
+        path = self.write_subagent_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{target} folder에서 inventory dashboard develop.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "No files have been created yet. Reply proceed to start implementation.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "proceed",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: index.html\n+<html></html>\n*** End Patch",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            f"Final folder not placed yet: {target}\n"
+                            "Staging copy has 3 files in current workspace: index.html, styles.css, app.js."
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "guard-policy-harness"
+                and issue["status"] == "target_path_substitution"
+                and issue["severity"] == "P0"
+                and any("workspace" in sample.lower() for sample in issue.get("samples", []))
+                for issue in audit.issues
+            ),
+            audit.issues,
+        )
+
     def test_resume_guard_failure_is_skill_audit_issue(self):
         path = self.write_session(
             [

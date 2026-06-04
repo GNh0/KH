@@ -69,6 +69,7 @@ python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --p
 - Do not open `qa_gate_harness`, `verification_before_completion_harness`, browser skills, memory files, or support references before the front-door command.
 - Do not inspect previous run folders or sibling test outputs to bootstrap a new requested target. Treat that as cross-scope context leakage unless the user explicitly requested comparison or reuse.
 - Do not create a substitute folder in the current workspace when the user named a different target path. If the exact target path is unavailable, outside the sandbox, or needs approval, stop and report the permission/path blocker before generating artifacts.
+- Do not create workspace-root product files such as `index.html`, `styles.css`, `app.js`, documents, images, or generated data files while waiting for exact target path permission. Execution approval does not allow staging outside the requested absolute target.
 - Do not assume plugin `defaultPrompt` was injected into the live session.
 - Do not ignore `execution_gate.can_execute=false` because the user said "develop", "make", or "create"; that wording starts direction discovery when front-door selected brainstorming, not implementation approval.
 - Do not use `%CODEX_HOME%/memories/MEMORY.md` or `%CODEX_HOME%/memories/skills/...` as current-project evidence under a brainstorming gate. Those are cross-chat/subagent memories unless the user explicitly asks for prior-context reuse.
