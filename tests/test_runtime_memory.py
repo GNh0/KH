@@ -3,12 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.contracts import MemoryRecord
+from src.contracts import MemoryRecord, MemoryScope
 from src.orchestration.memory_state import MemoryScopeResolver
 from src.orchestration.memory_store import MemoryStore
 from src.orchestration.runtime_memory import (
     build_active_memory_preflight,
     build_explicit_cross_scope_memory_import,
+    build_parent_scope_memory_access,
+    submit_parent_memory_candidates,
     resolve_memory_provider,
     write_pre_compaction_memory_flush,
 )
@@ -83,6 +85,134 @@ class RuntimeMemoryTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "applied")
             self.assertEqual(result["memory_recall"]["records"], [])
+
+    def test_subagent_sibling_memory_is_isolated_by_lineage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            memory_root_a = root / "memory-a"
+            memory_root_b = root / "memory-b"
+            scope_a = MemoryScopeResolver.from_adapter_metadata(
+                str(project),
+                {"thread_id": "thread-1", "agent_lineage": ["agent-a"]},
+            )
+            MemoryStore(str(memory_root_a), scope_a).save_record(
+                MemoryRecord(
+                    record_id="agent-a-decision",
+                    kind="decision",
+                    content="Agent A chose the ledger-first inventory model.",
+                    scope=scope_a.kind,
+                    source="agent-a",
+                )
+            )
+
+            result = build_active_memory_preflight(
+                str(project),
+                {
+                    "memory_root": str(memory_root_b),
+                    "memory_provider": "local",
+                    "thread_id": "thread-1",
+                    "agent_lineage": ["agent-b"],
+                },
+                objective="ledger-first inventory model",
+            )
+
+            self.assertEqual(result["status"], "applied")
+            self.assertEqual(result["memory_scope"]["metadata"]["agent_lineage"], ["agent-b"])
+            self.assertEqual(result["memory_recall"]["records"], [])
+
+    def test_parent_memory_access_requires_approval_then_returns_read_only_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            parent_memory_root = root / "parent-memory"
+            child_memory_root = parent_memory_root / "agents" / "agent-a"
+            parent_scope = MemoryScopeResolver.project_scope(str(project), thread_id="thread-1")
+            MemoryStore(str(parent_memory_root), parent_scope).save_record(
+                MemoryRecord(
+                    record_id="parent-decision",
+                    kind="decision",
+                    content="Parent controller approved simple ledger brainstorming only.",
+                    scope=parent_scope.kind,
+                    source="controller",
+                )
+            )
+
+            blocked = build_parent_scope_memory_access(
+                str(project),
+                {
+                    "memory_root": str(child_memory_root),
+                    "thread_id": "thread-1",
+                    "agent_lineage": ["agent-a"],
+                },
+                query="ledger brainstorming",
+            )
+            approved = build_parent_scope_memory_access(
+                str(project),
+                {
+                    "memory_root": str(child_memory_root),
+                    "thread_id": "thread-1",
+                    "agent_lineage": ["agent-a"],
+                    "parent_memory_access_approved": True,
+                },
+                query="ledger brainstorming",
+            )
+
+            self.assertEqual(blocked["status"], "approval_required")
+            self.assertEqual(blocked["external_context"]["records"], [])
+            self.assertEqual(approved["status"], "approved_read_only")
+            self.assertEqual(approved["application_status"], "read_only_parent_context")
+            self.assertEqual(approved["external_context"]["records"][0]["record_id"], "parent-decision")
+
+    def test_child_candidates_require_parent_acceptance_before_parent_scope_records_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            parent_memory_root = root / "parent-memory"
+            child_memory_root = parent_memory_root / "agents" / "agent-a" / "agent-b"
+            child_candidate = MemoryRecord(
+                record_id="child-learning",
+                kind="learning",
+                content="Nested subagent found that option choice must not start file creation.",
+                scope="project",
+                source="agent-b",
+            )
+
+            blocked = submit_parent_memory_candidates(
+                str(project),
+                {
+                    "memory_root": str(child_memory_root),
+                    "thread_id": "thread-1",
+                    "agent_lineage": ["agent-a", "agent-b"],
+                },
+                [child_candidate],
+            )
+            accepted = submit_parent_memory_candidates(
+                str(project),
+                {
+                    "memory_root": str(child_memory_root),
+                    "thread_id": "thread-1",
+                    "agent_lineage": ["agent-a", "agent-b"],
+                    "parent_memory_candidates_approved": True,
+                },
+                [child_candidate],
+            )
+
+            self.assertEqual(blocked["status"], "approval_required")
+            self.assertEqual(blocked["recorded_count"], 0)
+            self.assertEqual(accepted["status"], "candidates_recorded")
+            self.assertEqual(accepted["recorded_count"], 1)
+            parent_store = MemoryStore(
+                str(parent_memory_root / "agents" / "agent-a"),
+                MemoryScope.from_dict(accepted["parent_scope"]),
+            )
+            parent_candidates = parent_store.read_candidates()
+            self.assertEqual(len(parent_candidates), 1)
+            self.assertEqual(parent_candidates[0]["metadata"]["origin_record_id"], "child-learning")
+            self.assertEqual(parent_candidates[0]["metadata"]["child_scope"]["metadata"]["agent_lineage"], ["agent-a", "agent-b"])
 
     def test_explicit_cross_scope_memory_import_requires_approval_before_applying(self):
         with tempfile.TemporaryDirectory() as tmp:

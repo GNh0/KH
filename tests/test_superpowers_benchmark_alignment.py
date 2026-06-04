@@ -121,6 +121,9 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("Brainstorming approval question discipline", prompts)
         self.assertIn("not to approve immediate implementation", prompts)
         self.assertIn("direction question, not an execution question", prompts)
+        self.assertIn("Superpowers/Compound brainstorming gate", prompts)
+        self.assertIn("Option choice is not implementation approval", prompts)
+        self.assertIn("strategy/context -> brainstorm requirements -> plan -> work -> review -> compound learning", prompts)
         self.assertIn("Success criteria/constraints/non-goals", prompts)
         self.assertIn("Required records/data/artifact shape", prompts)
         self.assertIn("Approved brainstorm continuation gate", prompts)
@@ -137,6 +140,31 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("memory_candidates", skill)
         self.assertIn("memory-state-harness", skill)
         self.assertIn("regression_check_plan", skill)
+
+    def test_memory_harness_adapts_openclaw_hermes_and_rtk_boundaries(self):
+        skill = read_text("skills/memory_state_harness/SKILL.md")
+        usage = read_text("skills/memory_state_harness/references/usage.md")
+        combined = skill + "\n" + usage
+
+        for expected in [
+            "OpenClaw",
+            "Hermes",
+            "project/chat-scoped",
+            "subagent lineage",
+            "parent_memory_access",
+            "parent_memory_candidates",
+            "global_memory_candidate",
+            "durable compact memory",
+            "working daily/session memory",
+            "action-sensitive memory boundaries",
+            "frozen at session start",
+            "session search",
+            "external providers are additive",
+            "source/owner authority",
+            "safe-to-act",
+            "RTK/command-output discipline",
+        ]:
+            self.assertIn(expected, combined)
 
     def test_large_project_control_sample_adds_progress_state_and_task_packets(self):
         audit = read_text("docs/skillbook/audits/2026-05-30-superpowers-large-project-control-sample.md")

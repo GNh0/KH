@@ -226,7 +226,10 @@ class KhFrontDoorTests(unittest.TestCase):
             any("required records/data" in action for action in payload["required_next_actions"])
         )
         self.assertTrue(
-            any("user approves the direction" in action for action in payload["required_next_actions"])
+            any("option choice is direction approval only" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
+            any("separately asks to implement" in action for action in payload["required_next_actions"])
         )
 
     def test_vague_inventory_dashboard_development_selects_brainstorming(self):
@@ -273,6 +276,70 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("development-lifecycle-harness", payload["selected_not_executed_skills"])
         self.assertTrue(
             any("Create or update GoalState" in action for action in payload["required_next_actions"])
+        )
+
+    def test_memory_state_request_requires_project_chat_scope_and_global_candidate_policy(self):
+        result = build_kh_front_door(
+            "영구메모리는 시스템메모리가 아니라 프로젝트/채팅/서브에이전트 스코프로 관리하고 "
+            "중요한 것만 host global Codex memory 후보로 분리해줘.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+        summary = result.to_summary_dict()
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("memory-state-harness", payload["recommended_skills"])
+        self.assertIn("memory-state-harness", summary["selected_not_executed_skills"])
+        self.assertIn("memory_scope_decision", payload["classification"]["evidence_required"])
+        self.assertIn("global_memory_candidate_policy", payload["classification"]["evidence_required"])
+        self.assertTrue(
+            any("project/chat-scoped prompt snapshots" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
+            any("global_memory_candidate" in action for action in payload["required_next_actions"])
+        )
+
+    def test_memory_parallel_orchestration_routes_to_heavy_role_dag(self):
+        result = build_kh_front_door(
+            "프로젝트/채팅/중첩 서브에이전트 메모리와 병렬 오케스트레이션 역할 DAG가 "
+            "실제로 동작하는지 구현하고 검증해줘.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["classification"]["complexity"], "heavy")
+        self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
+        self.assertIn("memory-state-harness", payload["recommended_skills"])
+        self.assertIn("parallel-orchestration-harness", payload["recommended_skills"])
+        self.assertIn("role-execution-audit-harness", payload["recommended_skills"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertTrue(
+            any("Create or update GoalState" in action for action in payload["required_next_actions"])
+        )
+
+    def test_option_choice_without_execution_keeps_brainstorm_gate_closed(self):
+        result = build_kh_front_door(
+            "1\ubc88 \ub2e8\uc21c \uc7ac\uace0 \uc6d0\uc7a5\ud615\uc73c\ub85c \uc9c4\ud589\ud574\uc918.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_brainstorming_handoff")
+        self.assertIn("design_review_approval", payload["execution_gate"]["required_before_execution"])
+        self.assertIn("separate_implementation_approval", payload["execution_gate"]["required_before_execution"])
+        self.assertTrue(
+            any("do not implement" in action for action in payload["required_next_actions"])
         )
 
     def test_non_software_discovery_selects_brainstorming_without_kh_terms(self):

@@ -280,6 +280,7 @@ class RoleOrchestrator:
 
         results = [result for wave in waves for result in wave["results"]]
         shared_context["role_orchestration"] = {
+            "execution_model": "dag-asyncio-role-waves",
             "role_count": len(role_names),
             "wave_count": len(waves),
             "parallel_wave_count": sum(1 for wave in waves if wave.get("parallel")),

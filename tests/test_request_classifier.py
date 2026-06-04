@@ -165,6 +165,44 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("development-lifecycle-harness", result.required_harnesses)
         self.assertIn("approved_brainstorm_continuation", result.reasons)
 
+    def test_option_choice_without_execution_stays_in_brainstorming(self):
+        result = classify_request("1\ubc88 \ub2e8\uc21c \uc7ac\uace0 \uc6d0\uc7a5\ud615\uc73c\ub85c \uc9c4\ud589\ud574\uc918.")
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", result.recommended_skills)
+        self.assertIn("brainstorm_handoff", result.evidence_required)
+        self.assertIn("brainstorm_direction_choice_needs_design_review", result.reasons)
+        self.assertNotIn("approved_brainstorm_continuation", result.reasons)
+
+    def test_memory_state_request_selects_memory_harness_without_global_confusion(self):
+        result = classify_request(
+            "영구메모리는 시스템메모리가 아니라 프로젝트/채팅 메모리로 관리하고 "
+            "중요한 것만 전역 메모리 후보로 분리해줘."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("memory-state-harness", result.recommended_skills)
+        self.assertIn("memory-state-harness", result.required_harnesses)
+        self.assertIn("memory_scope_decision", result.evidence_required)
+        self.assertIn("global_memory_candidate_policy", result.evidence_required)
+        self.assertIn("memory_state_request", result.reasons)
+
+    def test_memory_plus_parallel_orchestration_routes_to_role_dag(self):
+        result = classify_request(
+            "프로젝트/채팅/중첩 서브에이전트 메모리와 병렬 오케스트레이션 역할 DAG가 "
+            "실제로 동작하는지 구현하고 검증해줘."
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertIn("memory-state-harness", result.recommended_skills)
+        self.assertIn("parallel-orchestration-harness", result.recommended_skills)
+        self.assertIn("role-execution-audit-harness", result.recommended_skills)
+        self.assertIn("memory_state_request", result.reasons)
+        self.assertIn("parallel_orchestration_request", result.reasons)
+
     def test_specific_verified_html_tool_does_not_route_to_brainstorming(self):
         result = classify_request("Build a small HTML todo tool and verify it.")
 

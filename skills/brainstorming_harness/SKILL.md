@@ -17,6 +17,21 @@ This harness adapts the Superpowers brainstorming pattern into KH UAF. It is the
 
 Source label: Superpowers brainstorming adapted for KH UAF.
 
+KH should not invent a shorter replacement for this flow. It should adapt the upstream pattern:
+
+1. Explore current project context within the requested boundary.
+2. Ask clarifying questions one at a time.
+3. Propose 2-3 approaches with tradeoffs and a recommendation.
+4. Present design sections and get user approval section by section when needed.
+5. Write or preserve a right-sized KH design/spec handoff.
+6. Self-review the spec for placeholders, contradictions, ambiguity, and scope.
+7. Ask the user to review the written spec or handoff before planning.
+8. Only after that, route to KH planning or implementation.
+
+Compound Engineering adds the loop around this: strategy or context anchor -> brainstorm requirements -> plan -> work -> review -> compound learning. RTK adds command-output discipline: optimize noisy logs only when facts are preserved, and keep raw/failure recovery when compression could hide evidence.
+
+The invariant is approval before implementation: design/spec review approval must exist before planning, and implementation approval must be separate from an option choice.
+
 ## Support files
 
 - Read `references/usage.md` before applying this skill to real project discovery; it expands trigger boundaries, evidence, and handoff rules.
@@ -45,14 +60,18 @@ Do not use it for quick factual questions, small edits with clear acceptance cri
 3. Ask one question at a time. Prefer 2-3 clear choices with a recommendation.
 4. Capture decisions as structured records: `objective`, `target_user`, `problem`, `options`, `recommendation`, `constraints`, `decisions`, and `open_questions`.
 5. Present 2-3 approaches with tradeoffs and a recommended direction.
-6. Present the chosen direction and ask for approval before implementation, scaffolding, analysis output, domain artifact generation, or user-facing deliverable creation. For vague product, app, service, SaaS, project, analysis, design, process, document, specification, operations, investment, or other domain-work requests, stop here unless the user approves the direction in a later message.
-7. Build a `BrainstormSession`, validate it, and create a `brainstorm_handoff`.
-8. Write KH project artifacts when useful: `.kh/brainstorm/<run-id>/content/*.md` for local working notes, `.kh/brainstorm/<run-id>/state/*.json` for run-local state, and `docs/kh/handoffs/*.md` for shareable summaries.
-9. Pass the handoff to the next KH skill:
+6. Present the chosen direction and ask for approval before design/spec handoff writing. For vague product, app, service, SaaS, project, analysis, design, process, document, specification, operations, investment, or other domain-work requests, stop here unless the user approves the direction in a later message.
+7. Treat a user choice such as "1번으로 진행" as approval of that direction only. It is not approval to implement, scaffold, create files, verify, or produce user deliverables.
+8. After a direction choice, continue the design/spec loop: confirm success criteria, scope, data shape, screens/artifacts, non-goals, risks, and acceptance criteria one question or section at a time.
+9. Build a `BrainstormSession`, validate it, and create a `brainstorm_handoff`.
+10. Write KH project artifacts when useful: `.kh/brainstorm/<run-id>/content/*.md` for local working notes, `.kh/brainstorm/<run-id>/state/*.json` for run-local state, and `docs/kh/handoffs/*.md` for shareable summaries.
+11. Self-review the handoff/spec for placeholders, contradictions, ambiguity, and scope before planning.
+12. Ask the user to review or approve the written handoff/spec before planning or implementation.
+13. Pass the handoff to the next KH skill:
    - `architect-pipeline` for product/system design.
    - `domain-orchestration-harness` for cross-domain role/gate design.
    - `goal-state-harness` when completion criteria and evidence are central.
-   - `development-lifecycle-harness` only after the design direction is approved.
+   - `plan-execution-harness` or `development-lifecycle-harness` only after the design/spec review gate is approved.
 
 ## Minimum Discovery Checkpoints
 
@@ -65,6 +84,8 @@ Do not collapse brainstorming into a single option picker unless the user has al
 5. `handoff_frame`: `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, `brainstorm_handoff`, and next KH skill.
 
 If the user only says "handle this topic/project/work" and then chooses one proposed option, that approval is permission to continue the KH flow, not permission to skip the handoff. Build and validate the handoff before architecture, domain orchestration, analysis, deliverable generation, or implementation. If time, host tools, or missing context prevents this, record `brainstorming_status=blocked` with the missing checkpoint instead of claiming the skill ran.
+
+If the user says "1번으로 진행", "option 1", "go with option 2", or similar, continue brainstorming/design review. Ask the next scoped question, such as which fields, screens, constraints, non-goals, acceptance criteria, or output format should be included. Do not create files from an option choice alone.
 
 ## Superpowers-Level Discovery Ladder
 
@@ -110,6 +131,7 @@ A recommendation is advisory, not an agent-owned final decision. Before the user
 - Do not promise target-path file creation, implementation, development, or deliverable generation in the first brainstorm approval question.
 - The first brainstorm should end with a direction question, not an execution question. Good: "Which operating model should we choose: simple stock ledger, location-controlled stock, or lot/serial stock? My recommendation is the simple ledger unless location tracking is required." Bad: "If you approve, I will create the files in the target folder."
 - Do not mention implementation start, generated files, browser verification, QA, or deliverable creation in the same question that asks the user to choose the domain direction.
+- A later option choice is still not implementation approval. It advances to design/spec review and another focused question, not file generation.
 
 If the agent has already written final-decision wording before user approval, mark the run as `unilateral_brainstorm_decision` and redo the decision question.
 

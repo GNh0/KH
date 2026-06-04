@@ -440,6 +440,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_cross_scope_context_issues(path))
     issues.extend(_global_memory_scope_issues(path))
     issues.extend(_target_substitution_issues(path))
+    issues.extend(_brainstorm_option_choice_execution_issues(path))
     issues.extend(_brainstorming_depth_issues(path))
     issues.extend(_subagent_strategy_issues(path, postmortem.to_dict()))
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
@@ -978,6 +979,118 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
             }
         )
     return issues
+
+
+def _brainstorm_option_choice_execution_issues(path: Path) -> List[Dict[str, Any]]:
+    events = list(_session_payload_events(path))
+    choice_index = -1
+    choice_text = ""
+    for index, event in enumerate(events):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("type", "")) != "message":
+            continue
+        if str(payload.get("role", "")).lower() != "user":
+            continue
+        text = _payload_text(payload)
+        lowered = text.lower()
+        if _is_direction_choice_without_execution_text(lowered):
+            choice_index = index
+            choice_text = text
+            break
+    if choice_index < 0:
+        return []
+
+    samples: List[str] = []
+    for event in events[choice_index + 1 :]:
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        if payload_type not in {"function_call", "custom_tool_call"}:
+            continue
+        name = str(payload.get("name", ""))
+        text = _payload_text(payload)
+        lowered = text.lower()
+        if name in {"apply_patch", "imagegen"} or "apply_patch" in lowered:
+            samples.append(_short(text))
+        elif name == "shell_command" and any(
+            marker in lowered
+            for marker in [
+                "new-item",
+                "copy-item",
+                "move-item",
+                "set-content",
+                "out-file",
+                "python -m http.server",
+                "node --check",
+            ]
+        ):
+            samples.append(_short(text))
+        if len(samples) >= 3:
+            break
+    if not samples:
+        return []
+
+    return [
+        {
+            "skill": "brainstorming-harness",
+            "status": "option_choice_treated_as_execution_approval",
+            "severity": "P0",
+            "reason": (
+                "The user selected a brainstorm option, but the session treated that direction choice as "
+                "permission to implement or generate files. Superpowers-style brainstorming requires design/spec "
+                "review before planning or implementation."
+            ),
+            "action": (
+                "After an option choice, ask the next focused design/spec question and preserve a reviewed "
+                "BrainstormSession/handoff. Do not scaffold, write files, verify, or generate deliverables until "
+                "the user separately approves implementation after the design/spec review gate."
+            ),
+            "choice": _short(choice_text, 220),
+            "samples": samples,
+        }
+    ]
+
+
+def _is_direction_choice_without_execution_text(lowered: str) -> bool:
+    if not lowered:
+        return False
+    choice_markers = [
+        "option 1",
+        "option 2",
+        "option 3",
+        "go with option",
+        "proceed with option",
+        "continue with option",
+        "1\ubc88",
+        "2\ubc88",
+        "3\ubc88",
+        "\ub2e8\uc21c \uc7ac\uace0 \uc6d0\uc7a5\ud615",
+        "\ub2e8\uc21c \uc218\ubd88\uc7a5\ud615",
+        "\uc704\uce58 \uad00\ub9ac\ud615",
+        "\ub85c\ud2b8/\uc2dc\ub9ac\uc5bc",
+    ]
+    execution_markers = [
+        "implement",
+        "implementation",
+        "build",
+        "develop",
+        "create files",
+        "generate files",
+        "write files",
+        "write code",
+        "scaffold",
+        "\uad6c\ud604",
+        "\uac1c\ubc1c",
+        "\ud30c\uc77c \uc0dd\uc131",
+        "\ucf54\ub4dc \uc791\uc131",
+        "\uc2a4\uce90\ud3f4\ub4dc",
+    ]
+    return any(marker in lowered for marker in choice_markers) and not any(
+        marker in lowered for marker in execution_markers
+    )
 
 
 def _first_visible_brainstorm_response(path: Path) -> str:

@@ -2,6 +2,12 @@
 
 This reference expands the portable operating contract for `brainstorming-harness`. Read it when KH UAF needs to turn an early idea into a structured design handoff before architecture, domain orchestration, or implementation.
 
+This harness intentionally adapts proven external patterns rather than inventing a shorter flow:
+
+- Superpowers: brainstorm before code, ask one question at a time, propose 2-3 approaches, present design sections, write and review a spec, then hand off to planning.
+- Compound Engineering: brainstorm requirements, plan, work, review, compound learnings, and use strategy/context anchors where available.
+- RTK-style output discipline: compress only noisy command output where essential facts are preserved; keep passthrough or raw/failure recovery when compression would damage quality.
+
 ## When to use
 
 Use when a user is starting a feature, product, project, analysis, research, policy, process, document, manufacturing/specification, operation, investment, or design idea and the agent must clarify intent, compare approaches, and produce an approved handoff before execution.
@@ -47,12 +53,16 @@ Do not use this skill only because it is available. Use it when the current task
    - For domain workflows, the approaches must be domain choices first. Example for inventory inbound/outbound: simple ledger, location-controlled stock, lot/serial/expiry-controlled stock, or approval/ERP-linked stock flow.
    - Include the minimum required records, such as item, location, quantity, transaction type, owner, timestamp, reason, memo, safety stock, and optional lot, serial, expiry, supplier/customer, or work order.
    - Keep technology stack choices secondary unless the user already supplied the workflow model and asked for implementation technology.
-6. Confirm the direction before creating architecture, scaffolding, or code. For vague product, app, service, SaaS, or project requests, do not implement or scaffold in the same turn unless the user has already approved the recommended direction in a separate message.
-7. Build a `BrainstormSession` and run `validate_brainstorm_session`.
-8. If valid, call `build_architect_handoff` and pass the payload to the selected KH skill.
-9. When the user benefits from visible project notes, call `write_brainstorm_markdown_artifacts` so KH creates `.kh/brainstorm/.../content/*.md`, `.kh/brainstorm/.../state/`, and `docs/kh/handoffs/*.md`.
-10. Preserve intermediate decisions in structured evidence rather than relying on chat memory alone.
-11. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+6. Confirm the direction before creating architecture, scaffolding, or code. For vague product, app, service, SaaS, or project requests, do not implement or scaffold in the same turn.
+7. Treat "1번으로 진행", "go with option 1", or a similar option choice as direction approval only. It does not authorize implementation or file creation.
+8. Continue the design/spec loop after option selection: confirm success criteria, scope, data shape, screens/artifacts, non-goals, risks, and acceptance criteria one question or section at a time.
+9. Build a `BrainstormSession` and run `validate_brainstorm_session`.
+10. If valid, call `build_architect_handoff` and pass the payload to the selected KH planning skill, not implementation.
+11. When the user benefits from visible project notes, call `write_brainstorm_markdown_artifacts` so KH creates `.kh/brainstorm/.../content/*.md`, `.kh/brainstorm/.../state/`, and `docs/kh/handoffs/*.md`.
+12. Self-review the written handoff/spec for placeholders, contradictions, ambiguity, and scope.
+13. Ask the user to review or approve the written handoff/spec before planning or implementation.
+14. Preserve intermediate decisions in structured evidence rather than relying on chat memory alone.
+15. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 
 ## Checkpoint contract
 
@@ -77,6 +87,8 @@ Keep the approval question about direction only. Do not combine the first decisi
 The first brainstorm should end with a direction question, not an execution question. Do not say that approval will immediately create files, start development, run QA, or produce deliverables. A valid first question asks the user to choose the operating model or answer one missing domain constraint, then stops.
 
 Approval continuation is a separate gate. When the user approves the recommendation in a later message, create or record `approval_frame`, `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, and `brainstorm_handoff` before any write, QA, browser, verification, or broad memory call. Do not use global Codex memory, memory skill notes, sibling folders, or previous run folders as implementation shortcuts during this continuation unless the user explicitly requested reuse. If the handoff cannot be produced, stop with `brainstorming_status=blocked`.
+
+Direction choice is not execution approval. If the user only chooses an option, keep the request inside `brainstorming-harness` and ask the next focused design question. Execution approval requires a reviewed handoff/spec plus a separate instruction to implement, create files, generate deliverables, or start work.
 
 The compact form is still a multi-checkpoint discovery pass, not a one-question option picker. Before asking for approval, the visible response should cover:
 

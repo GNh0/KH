@@ -90,6 +90,12 @@ class BrainstormingHarnessTests(unittest.TestCase):
         self.assertIn("direction question", combined)
         self.assertIn("not an execution question", combined)
         self.assertIn("target folder", combined)
+        self.assertIn("Superpowers", combined)
+        self.assertIn("Compound Engineering", combined)
+        self.assertIn("RTK-style output discipline", combined)
+        self.assertIn("option choice", combined)
+        self.assertIn("not implementation approval", combined)
+        self.assertIn("Self-review", combined)
 
 
 if __name__ == "__main__":

@@ -52,6 +52,62 @@ LARGE_WORK_BUNDLE_EVIDENCE = [
     "compound_handoff",
 ]
 
+MEMORY_STATE_REQUEST_TERMS = {
+    "persistent memory",
+    "durable memory",
+    "long-term memory",
+    "memory.md",
+    "user.md",
+    "memory harness",
+    "memory-state-harness",
+    "memory candidates",
+    "memory provider",
+    "memory scope",
+    "global codex memory",
+    "host global codex memory",
+    "global memory candidate",
+    "global memory promotion",
+    "prompt snapshot",
+    "session memory",
+    "working memory",
+    "cross-chat memory",
+    "cross chat memory",
+    "openclaw",
+    "hermes",
+    "영구메모리",
+    "영구 메모리",
+    "장기메모리",
+    "장기 메모리",
+    "메모리 하네스",
+    "메모리 스킬",
+    "전역 메모리",
+    "글로벌 메모리",
+    "전역 승격",
+    "전역 메모리 후보",
+    "세션 메모리",
+    "작업 메모리",
+    "프롬프트 스냅샷",
+}
+
+PARALLEL_ORCHESTRATION_REQUEST_TERMS = {
+    "parallel orchestration",
+    "parallel",
+    "role dag",
+    "role-dag",
+    "role orchestration",
+    "fan-out",
+    "fan in",
+    "fan-in",
+    "bounded worker",
+    "worker wave",
+    "parallel wave",
+    "role execution audit",
+    "병렬",
+    "병렬 오케스트레이션",
+    "역할 DAG",
+    "역할 오케스트레이션",
+}
+
 INVESTMENT_TERMS = {
     "stock",
     "portfolio",
@@ -247,18 +303,45 @@ BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS = {
     "implementation",
     "build",
     "develop",
-    "continue",
-    "proceed",
     "start implementation",
     "begin implementation",
     "move to implementation",
     "execute",
+    "create files",
+    "generate files",
+    "write files",
+    "scaffold",
+    "write code",
     "\uad6c\ud604",
     "\uac1c\ubc1c",
-    "\uc9c4\ud589",
-    "\uc791\uc5c5 \uc9c4\ud589",
+    "\ud30c\uc77c \uc0dd\uc131",
+    "\ud654\uba74 \ud30c\uc77c",
+    "\ucf54\ub4dc \uc791\uc131",
+    "\uc2a4\uce90\ud3f4\ub4dc",
     "\uad6c\ud604 \uc9c4\ud589",
     "\uac1c\ubc1c \uc9c4\ud589",
+}
+
+BRAINSTORM_DIRECTION_CHOICE_ONLY_TERMS = {
+    "option 1",
+    "option 2",
+    "option 3",
+    "go with option",
+    "proceed with option",
+    "continue with option",
+    "selected option",
+    "option selected",
+    "choice approved",
+    "1\ubc88",
+    "2\ubc88",
+    "3\ubc88",
+    "1\ubc88\uc73c\ub85c",
+    "2\ubc88\uc73c\ub85c",
+    "3\ubc88\uc73c\ub85c",
+    "\ub2e8\uc21c \uc7ac\uace0 \uc6d0\uc7a5\ud615",
+    "\ub2e8\uc21c \uc218\ubd88\uc7a5\ud615",
+    "\uc704\uce58 \uad00\ub9ac\ud615",
+    "\ub85c\ud2b8/\uc2dc\ub9ac\uc5bc",
 }
 
 SOFTWARE_DOMAIN_TERMS = {
@@ -1552,11 +1635,40 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
         evidence_required.append("resume_handoff")
         reasons.append("resume_context_required")
 
+    memory_requested = _is_memory_state_request(normalized)
+    if memory_requested and "resume_context_required" in reasons:
+        return _heavy_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "memory_state_request"],
+        )
+
+    if memory_requested and _is_parallel_orchestration_request(normalized):
+        return _heavy_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "memory_state_request", "parallel_orchestration_request"],
+        )
+
+    if memory_requested:
+        return _memory_state_classification(domain, cross_cutting, evidence_required, reasons)
+
     if _is_high_risk(normalized, domain, context):
         return _high_risk_classification(domain, cross_cutting, evidence_required, reasons)
 
     if _is_command_output_request(normalized):
         return _command_output_classification(domain, cross_cutting, evidence_required, reasons)
+
+    if _is_brainstorm_direction_choice_without_execution(normalized, context):
+        return _brainstorming_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "brainstorm_direction_choice_needs_design_review"],
+            normalized,
+        )
 
     if _is_approved_brainstorm_continuation(normalized, context):
         return _heavy_classification(
@@ -1858,6 +1970,38 @@ def _command_output_classification(
         ),
         reasons=[*reasons, "command_output_summary_or_filtering"],
         confidence=0.82,
+    )
+
+
+def _memory_state_classification(
+    domain: str,
+    cross_cutting: List[str],
+    evidence_required: List[str],
+    reasons: List[str],
+) -> RequestClassification:
+    return _classification(
+        complexity="medium",
+        domain=domain,
+        recommended_execution="skill_read",
+        cross_cutting=cross_cutting,
+        recommended_skills=[
+            "request-complexity-router",
+            "memory-state-harness",
+        ],
+        required_harnesses=["memory-state-harness"],
+        evidence_required=_dedupe(
+            [
+                *evidence_required,
+                "memory_scope",
+                "memory_scope_decision",
+                "memory_provider_policy",
+                "prompt_snapshot_status",
+                "action_sensitive_memory_boundary",
+                "global_memory_candidate_policy",
+            ]
+        ),
+        reasons=[*reasons, "memory_state_request"],
+        confidence=0.8,
     )
 
 
@@ -2641,6 +2785,45 @@ def _is_approved_brainstorm_continuation(normalized: str, context: dict) -> bool
     if not _contains_any(normalized, BRAINSTORM_APPROVAL_CONTINUATION_TERMS):
         return False
     return _contains_any(normalized, BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS)
+
+
+def _is_memory_state_request(normalized: str) -> bool:
+    if _contains_any(normalized, MEMORY_STATE_REQUEST_TERMS):
+        return True
+    if "메모리" in normalized and _contains_any(
+        normalized,
+        {
+            "프로젝트",
+            "채팅",
+            "서브에이전트",
+            "하위에이전트",
+            "하위 에이전트",
+            "중첩",
+            "스코프",
+            "전역",
+            "글로벌",
+        },
+    ):
+        return True
+    if "memory" in normalized and _contains_any(
+        normalized,
+        {"project", "chat", "thread", "subagent", "agent", "lineage", "scope", "global"},
+    ):
+        return True
+    return False
+
+
+def _is_parallel_orchestration_request(normalized: str) -> bool:
+    return _contains_any(normalized, PARALLEL_ORCHESTRATION_REQUEST_TERMS)
+
+
+def _is_brainstorm_direction_choice_without_execution(normalized: str, context: dict) -> bool:
+    """Detect option selection that should continue design review, not implementation."""
+    if context.get("brainstorm_handoff_approved") or context.get("has_brainstorm_handoff"):
+        return False
+    if not _contains_any(normalized, BRAINSTORM_DIRECTION_CHOICE_ONLY_TERMS):
+        return False
+    return not _contains_any(normalized, BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS)
 
 
 def _has_blocking_discovery_specificity(normalized: str) -> bool:

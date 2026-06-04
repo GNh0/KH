@@ -513,7 +513,11 @@ def _required_next_actions(
         )
     if "brainstorming-harness" in recommended_skills:
         actions.append(
-            "Apply `brainstorming-harness` before execution: progress through intent_frame, problem_frame, option_frame, approval_frame, and handoff_frame for product, process, analysis, design, document, operations, manufacturing/specification, investment, or other domain work; preserve `BrainstormSession`, `decision_log`, `validate_brainstorm_session`, and `brainstorm_handoff` or blocked rationale; do not implement, create analysis output, user deliverables, or domain artifacts until the user approves the direction in a later message and the KH handoff exists. For domain workflows, make the compact brainstorm domain-first: objective/operator, workflow boundary, 2-3 operating model choices, required records/data, one recommendation, and one approval question; do not offer only technology-stack choices such as HTML/React/WinForms."
+            "Apply `brainstorming-harness` before execution: progress through intent_frame, problem_frame, option_frame, design/spec review, approval_frame, and handoff_frame for product, process, analysis, design, document, operations, manufacturing/specification, investment, or other domain work; preserve `BrainstormSession`, `decision_log`, `validate_brainstorm_session`, and `brainstorm_handoff` or blocked rationale. A user option choice is direction approval only; do not implement, create analysis output, user deliverables, or domain artifacts until the reviewed handoff/spec exists and the user separately asks to implement, start work, create files, or generate deliverables. For domain workflows, make the compact brainstorm domain-first: objective/operator, workflow boundary, 2-3 operating model choices, required records/data, one recommendation, and one approval question; do not offer only technology-stack choices such as HTML/React/WinForms."
+        )
+    if "memory-state-harness" in recommended_skills:
+        actions.append(
+            "Apply `memory-state-harness` with scoped evidence: record memory_scope, memory_provider_policy, prompt_snapshot_status, action_sensitive_memory_boundary, and global_memory_candidate_policy; default to project/chat-scoped prompt snapshots, treat host global Codex memory as a separate explicit promotion target, and keep important cross-project lessons as global_memory_candidate records until user-approved promotion evidence exists. Treat MEMORY.md/USER.md snapshots as frozen session-start context, use session search or scoped recall for old chats, and treat OpenClaw/Hermes-style external providers as additive evidence candidates rather than current truth."
         )
     if classification.get("complexity") in {"heavy", "high_risk"}:
         actions.extend(
@@ -572,7 +576,8 @@ def _execution_gate(
                 "decision_log",
                 "validate_brainstorm_session",
                 "brainstorm_handoff",
-                "later_user_approval",
+                "design_review_approval",
+                "separate_implementation_approval",
             ],
             "blocked_actions": [
                 "MEMORY.md_lookup",

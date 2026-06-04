@@ -80,6 +80,61 @@ class MemoryScopeResolverTests(unittest.TestCase):
                 Path(tmp) / "conversations" / "thread-1" / ".uaf" / "memory",
             )
 
+    def test_project_chat_nested_subagent_scope_records_lineage_and_parent_chain(self):
+        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                project_dir = Path(tmp) / "demo"
+                runtime_root = Path(tmp) / "runtime"
+                project_dir.mkdir()
+                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
+
+                child = MemoryScopeResolver.project_scope(
+                    str(project_dir),
+                    thread_id="thread-1",
+                    agent_lineage=["sub-a", "sub-b"],
+                )
+                parent = MemoryScopeResolver.parent_scope(child)
+                chat_parent = MemoryScopeResolver.parent_scope(parent)
+                project_parent = MemoryScopeResolver.parent_scope(chat_parent)
+
+                self.assertEqual(child.metadata["scope_level"], "project_chat_subagent")
+                self.assertEqual(child.metadata["agent_lineage"], ["sub-a", "sub-b"])
+                self.assertIn("agents", MemoryScopeResolver.storage_path(child).parts)
+                self.assertTrue(str(MemoryScopeResolver.storage_path(child)).endswith(str(Path("agents") / "sub-a" / "sub-b")))
+                self.assertIsNotNone(parent)
+                self.assertEqual(parent.metadata["agent_lineage"], ["sub-a"])
+                self.assertIsNotNone(chat_parent)
+                self.assertEqual(chat_parent.metadata["scope_level"], "project_chat")
+                self.assertEqual(chat_parent.metadata["agent_lineage"], [])
+                self.assertIsNotNone(project_parent)
+                self.assertEqual(project_parent.metadata["scope_level"], "project")
+                self.assertIsNone(MemoryScopeResolver.parent_scope(project_parent))
+        finally:
+            if original_runtime_root is None:
+                os.environ.pop("UAF_RUNTIME_ROOT", None)
+            else:
+                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
+
+    def test_from_adapter_metadata_accepts_nested_subagent_lineage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+
+            scope = MemoryScopeResolver.from_adapter_metadata(
+                project_dir=str(project_dir),
+                metadata={
+                    "thread_id": "thread-1",
+                    "agent_lineage": ["parent-agent", "child-agent"],
+                },
+                conversation_memory_root=tmp,
+            )
+
+            self.assertEqual(scope.metadata["scope_level"], "project_chat_subagent")
+            self.assertEqual(scope.metadata["agent_lineage"], ["parent-agent", "child-agent"])
+            self.assertIn("parent-agent", MemoryScopeResolver.storage_path(scope).parts)
+            self.assertIn("child-agent", MemoryScopeResolver.storage_path(scope).parts)
+
 
 if __name__ == "__main__":
     unittest.main()

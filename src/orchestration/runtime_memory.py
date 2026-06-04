@@ -445,6 +445,236 @@ def build_explicit_cross_scope_memory_import(
     }
 
 
+def build_parent_scope_memory_access(
+    project_dir: str,
+    metadata: Dict[str, Any] | None,
+    query: str = "",
+) -> Dict[str, Any]:
+    """Request read-only access from the immediate parent memory scope.
+
+    Same-level scopes never read each other directly. A nested subagent can
+    request its parent scope; access is read-only until the parent/controller
+    approves it through metadata.parent_memory_access_approved=true.
+    """
+    metadata = metadata or {}
+    provider = resolve_memory_provider(metadata)
+    child_scope = _memory_scope(project_dir, metadata)
+    parent_scope = _parent_memory_scope(child_scope, metadata)
+    child_store = MemoryStore(str(MemoryScopeResolver.storage_path(child_scope)), child_scope)
+    if parent_scope is None:
+        return {
+            "status": "skipped_with_rationale",
+            "application_status": "no_parent_scope",
+            "provider": provider,
+            "child_scope": child_scope.to_dict(),
+            "evidence": ["memory-state-harness", "parent_memory_access"],
+        }
+    if provider["status"] == "blocked" or provider["provider"] == "passthrough":
+        return {
+            "status": "blocked" if provider["status"] == "blocked" else "skipped_with_rationale",
+            "application_status": "not_applied",
+            "provider": provider,
+            "child_scope": child_scope.to_dict(),
+            "parent_scope": parent_scope.to_dict(),
+            "evidence": ["memory-state-harness", "parent_memory_access"],
+        }
+
+    search_query = query or _memory_query(metadata, "")
+    if not metadata.get("parent_memory_access_approved"):
+        event = child_store.append_event(
+            "parent_memory_access_requested",
+            {
+                "child_scope": child_scope.to_dict(),
+                "parent_scope": parent_scope.to_dict(),
+                "query": search_query,
+                "approval_status": "approval_required",
+                "sharing_rule": "same-level scopes isolated; parent approval required",
+            },
+        )
+        return {
+            "status": "approval_required",
+            "application_status": "read_blocked_until_parent_approval",
+            "provider": provider,
+            "child_scope": child_scope.to_dict(),
+            "parent_scope": parent_scope.to_dict(),
+            "external_context": {"records": [], "search_strategy": "parent_approval_required"},
+            "approval": {"required": True, "approved": False},
+            "event": event,
+            "evidence": ["memory-state-harness", "parent_memory_access_requested"],
+        }
+
+    parent_store = MemoryStore(str(MemoryScopeResolver.storage_path(parent_scope)), parent_scope)
+    external_context = parent_store.search_records(
+        query=search_query,
+        limit=int(metadata.get("parent_memory_max_items", metadata.get("memory_max_items", 10))),
+    )
+    event = child_store.append_event(
+        "parent_memory_access_granted",
+        {
+            "child_scope": child_scope.to_dict(),
+            "parent_scope": parent_scope.to_dict(),
+            "query": search_query,
+            "record_count": len(external_context.get("records", [])),
+            "application_status": "read_only_parent_context",
+        },
+    )
+    return {
+        "status": "approved_read_only",
+        "application_status": "read_only_parent_context",
+        "provider": provider,
+        "child_scope": child_scope.to_dict(),
+        "parent_scope": parent_scope.to_dict(),
+        "external_context": external_context,
+        "approval": {"required": True, "approved": True},
+        "event": event,
+        "evidence": ["memory-state-harness", "parent_memory_access", "read_only_parent_context"],
+    }
+
+
+def submit_parent_memory_candidates(
+    project_dir: str,
+    metadata: Dict[str, Any] | None,
+    candidates: Iterable[MemoryRecord | Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Submit child-scope memory candidates to the immediate parent scope.
+
+    The default is parent-scope candidates only. Durable parent records require
+    metadata.parent_memory_promote_durable=true after approval.
+    """
+    metadata = metadata or {}
+    provider = resolve_memory_provider(metadata)
+    child_scope = _memory_scope(project_dir, metadata)
+    parent_scope = _parent_memory_scope(child_scope, metadata)
+    child_store = MemoryStore(str(MemoryScopeResolver.storage_path(child_scope)), child_scope)
+    candidate_records = [_as_memory_record(item) for item in candidates or []]
+    if parent_scope is None:
+        return {
+            "status": "skipped_with_rationale",
+            "application_status": "no_parent_scope",
+            "provider": provider,
+            "child_scope": child_scope.to_dict(),
+            "candidate_count": len(candidate_records),
+            "recorded_count": 0,
+            "evidence": ["memory-state-harness", "parent_memory_candidates"],
+        }
+    if not candidate_records:
+        return {
+            "status": "considered_not_needed",
+            "application_status": "no_candidates",
+            "provider": provider,
+            "child_scope": child_scope.to_dict(),
+            "parent_scope": parent_scope.to_dict(),
+            "candidate_count": 0,
+            "recorded_count": 0,
+            "evidence": ["memory-state-harness", "parent_memory_candidates"],
+        }
+    if provider["status"] == "blocked" or provider["provider"] == "passthrough":
+        return {
+            "status": "blocked" if provider["status"] == "blocked" else "skipped_with_rationale",
+            "application_status": "not_applied",
+            "provider": provider,
+            "child_scope": child_scope.to_dict(),
+            "parent_scope": parent_scope.to_dict(),
+            "candidate_count": len(candidate_records),
+            "recorded_count": 0,
+            "evidence": ["memory-state-harness", "parent_memory_candidates"],
+        }
+
+    if not metadata.get("parent_memory_candidates_approved"):
+        event = child_store.append_event(
+            "parent_memory_candidates_requested",
+            {
+                "child_scope": child_scope.to_dict(),
+                "parent_scope": parent_scope.to_dict(),
+                "candidate_count": len(candidate_records),
+                "approval_status": "approval_required",
+                "sharing_rule": "child candidates require parent/controller acceptance",
+            },
+        )
+        return {
+            "status": "approval_required",
+            "application_status": "not_applied",
+            "provider": provider,
+            "child_scope": child_scope.to_dict(),
+            "parent_scope": parent_scope.to_dict(),
+            "candidate_count": len(candidate_records),
+            "recorded_count": 0,
+            "approval": {"required": True, "approved": False},
+            "event": event,
+            "evidence": ["memory-state-harness", "parent_memory_candidates_requested"],
+        }
+
+    parent_store = MemoryStore(str(MemoryScopeResolver.storage_path(parent_scope)), parent_scope)
+    promote_durable = bool(metadata.get("parent_memory_promote_durable"))
+    recorded: List[Dict[str, Any]] = []
+    blocked: List[Dict[str, str]] = []
+    for candidate in candidate_records:
+        parent_record = MemoryRecord(
+            record_id=_stable_memory_id(
+                "parent",
+                parent_scope.namespace,
+                child_scope.namespace,
+                candidate.record_id,
+                candidate.content,
+            ),
+            kind=candidate.kind or "parent-memory-candidate",
+            content=candidate.content,
+            scope=parent_scope.kind,
+            source="parent_memory_candidates",
+            confidence=candidate.confidence,
+            metadata={
+                **dict(candidate.metadata),
+                "child_scope": child_scope.to_dict(),
+                "parent_scope": parent_scope.to_dict(),
+                "origin_record_id": candidate.record_id,
+                "origin_scope": candidate.scope,
+                "promotion": "durable_record" if promote_durable else "candidate",
+            },
+        )
+        try:
+            if promote_durable:
+                recorded.append(parent_store.save_record(parent_record).to_dict())
+            else:
+                recorded.append(parent_store.append_candidate(parent_record))
+        except ValueError as exc:
+            blocked.append(
+                {
+                    "record_id": parent_record.record_id,
+                    "origin_record_id": candidate.record_id,
+                    "error_type": type(exc).__name__,
+                    "message": str(exc),
+                }
+            )
+
+    event = child_store.append_event(
+        "parent_memory_candidates_applied",
+        {
+            "child_scope": child_scope.to_dict(),
+            "parent_scope": parent_scope.to_dict(),
+            "recorded_count": len(recorded),
+            "blocked_count": len(blocked),
+            "promotion": "durable_record" if promote_durable else "candidate",
+        },
+    )
+    status = "records_promoted" if promote_durable and recorded else "candidates_recorded" if recorded else "blocked"
+    return {
+        "status": status,
+        "application_status": "parent_records_promoted" if promote_durable else "parent_candidates_recorded",
+        "provider": provider,
+        "child_scope": child_scope.to_dict(),
+        "parent_scope": parent_scope.to_dict(),
+        "candidate_count": len(candidate_records),
+        "recorded_count": len(recorded),
+        "blocked_count": len(blocked),
+        "recorded": recorded,
+        "blocked": blocked,
+        "promotion": "durable_record" if promote_durable else "candidate",
+        "approval": {"required": True, "approved": True},
+        "event": event,
+        "evidence": ["memory-state-harness", "parent_memory_candidates", "parent_scope_acceptance"],
+    }
+
+
 def record_workflow_memory_candidates(
     project_dir: str,
     metadata: Dict[str, Any] | None,
@@ -528,6 +758,30 @@ def _memory_scope(project_dir: str, metadata: Dict[str, Any]) -> MemoryScope:
     if memory_root:
         return replace(scope, root_path=str(Path(memory_root).resolve()))
     return scope
+
+
+def _parent_memory_scope(scope: MemoryScope, metadata: Dict[str, Any]) -> MemoryScope | None:
+    parent = MemoryScopeResolver.parent_scope(scope)
+    if parent is None:
+        return None
+    parent_root = str(metadata.get("parent_memory_root", "")).strip()
+    if parent_root:
+        return replace(parent, root_path=str(Path(parent_root).resolve()))
+    lineage_depth = int(scope.metadata.get("lineage_depth") or 0)
+    if scope.root_path and lineage_depth > 0:
+        root_path = Path(scope.root_path).resolve()
+        if lineage_depth == 1:
+            return replace(parent, root_path=str(root_path.parents[1]))
+        return replace(parent, root_path=str(root_path.parent))
+    return parent
+
+
+def _as_memory_record(item: MemoryRecord | Dict[str, Any]) -> MemoryRecord:
+    if isinstance(item, MemoryRecord):
+        return item
+    if isinstance(item, dict):
+        return MemoryRecord.from_dict(item)
+    raise TypeError("memory candidate must be MemoryRecord or dict")
 
 
 def _source_memory_scope(
