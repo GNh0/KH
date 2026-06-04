@@ -439,6 +439,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_stale_skill_cache_issues(path))
     issues.extend(_cross_scope_context_issues(path))
     issues.extend(_global_memory_scope_issues(path))
+    issues.extend(_target_substitution_issues(path))
     issues.extend(_brainstorming_depth_issues(path))
     issues.extend(_subagent_strategy_issues(path, postmortem.to_dict()))
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
@@ -761,6 +762,62 @@ def _cross_scope_context_issues(path: Path) -> List[Dict[str, Any]]:
     ]
 
 
+def _target_substitution_issues(path: Path) -> List[Dict[str, Any]]:
+    active_target: Path | None = None
+    trigger_sample = ""
+    samples: List[str] = []
+
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        text = _payload_text(payload)
+
+        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+            targets = _extract_windows_paths(text)
+            if targets:
+                active_target = Path(targets[0])
+                trigger_sample = _short(text)
+                samples = []
+            continue
+
+        if active_target is None or payload_type not in {
+            "function_call",
+            "custom_tool_call",
+            "function_call_output",
+            "custom_tool_call_output",
+        }:
+            continue
+
+        sample = _target_substitution_sample(active_target, text)
+        if sample:
+            samples.append(sample)
+            if len(samples) >= 3:
+                break
+
+    if not samples:
+        return []
+    return [
+        {
+            "skill": "guard-policy-harness",
+            "status": "target_path_substitution",
+            "severity": "P0",
+            "reason": (
+                "The user named an absolute target folder, but generated files were written to a relative "
+                "substitute folder instead of the exact requested path."
+            ),
+            "action": (
+                "Do not create staging or same-name relative folders for an absolute user target. If the "
+                "exact target path is outside the writable workspace or needs permission, stop before "
+                "generation and report blocked/permission-needed status."
+            ),
+            "trigger": trigger_sample,
+            "samples": samples,
+        }
+    ]
+
+
 def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
     if not (_front_door_selected_skill(path, "brainstorming-harness") or _front_door_blocks_execution(path)):
         return []
@@ -836,8 +893,29 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
         ]
     )
     has_options = any(marker in lowered for marker in ["option", "options", "direction", "alternatives", "recommendation"])
+    first_response = _first_visible_brainstorm_response(path)
+    missing_visible_markers = _brainstorm_response_missing_markers(first_response)
 
     issues: List[Dict[str, Any]] = []
+    if missing_visible_markers:
+        issues.append(
+            {
+                "skill": "brainstorming-harness",
+                "status": "shallow_visible_brainstorming",
+                "severity": "P1",
+                "reason": (
+                    "The visible brainstorming response did not meet the Superpowers-style multi-checkpoint "
+                    "quality bar before asking for approval."
+                ),
+                "action": (
+                    "Before approval, cover objective/operator, workflow boundary, success or constraints, "
+                    "2-3 operating-model options with tradeoffs, required records/data, recommendation, "
+                    "open questions, and one next approval question."
+                ),
+                "missing_markers": missing_visible_markers,
+                "sample": _short(first_response, 420),
+            }
+        )
     if implementation_samples and not (has_session_record and has_handoff):
         status = (
             "brainstorming_execution_gate_bypassed"
@@ -883,6 +961,138 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
     return issues
 
 
+def _first_visible_brainstorm_response(path: Path) -> str:
+    user_messages = 0
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+            if _is_synthetic_context_message(_payload_text(payload)):
+                continue
+            user_messages += 1
+            if user_messages > 1:
+                break
+            continue
+        if user_messages < 1:
+            continue
+        if payload_type == "message" and str(payload.get("role", "")).lower() in {"developer", "system"}:
+            continue
+        if payload_type not in {"message", "agent_message", "task_complete"}:
+            continue
+        text = _payload_text(payload)
+        lowered = text.lower()
+        if not text or _is_passive_text(text) or _looks_like_front_door_runtime_output(lowered):
+            continue
+        if "::archive" in lowered:
+            continue
+        has_option_shape = (
+            ("1." in text and "2." in text)
+            or any(marker in lowered for marker in ["option", "options", "alternatives", "\uc120\ud0dd\uc9c0", "\ub300\uc548"])
+        )
+        has_decision_shape = any(marker in lowered for marker in ["recommend", "\ucd94\ucc9c", "approval", "\uc2b9\uc778"])
+        if has_option_shape and has_decision_shape:
+            return text
+    return ""
+
+
+def _is_synthetic_context_message(text: str) -> bool:
+    stripped = (text or "").lstrip().lower()
+    return stripped.startswith("<environment_context>") or stripped.startswith("<goal_context>")
+
+
+def _brainstorm_response_missing_markers(text: str) -> List[str]:
+    if not text:
+        return []
+    lowered = text.lower()
+    marker_groups = {
+        "objective_operator": [
+            "objective",
+            "operator",
+            "target user",
+            "audience",
+            "\ubaa9\ud45c",
+            "\ub2f4\ub2f9\uc790",
+            "\uad00\ub9ac\uc790",
+            "\uc0ac\uc6a9\uc790",
+            "\uc6b4\uc601\uc790",
+        ],
+        "workflow_boundary": [
+            "workflow",
+            "boundary",
+            "process",
+            "inbound",
+            "outbound",
+            "\uc5c5\ubb34",
+            "\ud504\ub85c\uc138\uc2a4",
+            "\uc785\uace0",
+            "\ucd9c\uace0",
+            "\uc870\uc815",
+            "\uc774\ub3d9",
+        ],
+        "success_constraints": [
+            "success criteria",
+            "constraint",
+            "non-goal",
+            "\uc131\uacf5",
+            "\uc81c\uc57d",
+            "\ube44\ubc94\uc704",
+            "\uc131\uacf5 \uae30\uc900",
+            "\uc81c\uc57d\uc0ac\ud56d",
+        ],
+        "operating_options_tradeoffs": [
+            "tradeoff",
+            "alternative",
+            "option",
+            "pros",
+            "cons",
+            "\uc120\ud0dd\uc9c0",
+            "\uc7a5\ub2e8\uc810",
+            "\ube44\uad50",
+            "\ub300\uc548",
+        ],
+        "required_records_data": [
+            "required data",
+            "required records",
+            "record",
+            "data fields",
+            "item code",
+            "quantity",
+            "transaction type",
+            "safety stock",
+            "\ud544\uc218 \ub370\uc774\ud130",
+            "\ud544\uc694 \ub370\uc774\ud130",
+            "\ud544\uc218 \uae30\ub85d",
+            "\uae30\ub85d \ud56d\ubaa9",
+            "\ub370\uc774\ud130 \ud56d\ubaa9",
+            "\uc785\ub825 \ub370\uc774\ud130",
+        ],
+        "recommendation": ["recommend", "recommended", "\ucd94\ucc9c"],
+        "open_questions": [
+            "open question",
+            "unresolved",
+            "need to know",
+            "needs confirmation",
+            "\uc624\ud508 \uc9c8\ubb38",
+            "\ubbf8\ud655\uc815",
+            "\ud655\uc778 \ud544\uc694",
+            "\ud655\uc778\ud574\uc57c",
+            "\uc9c8\ubb38",
+            "\uc815\ud574\uc57c",
+        ],
+        "approval_question": ["approval", "approve", "proceed", "\uc2b9\uc778", "\uc9c4\ud589\ud574\ub3c4"],
+    }
+    missing = [
+        name
+        for name, markers in marker_groups.items()
+        if not any(marker in lowered for marker in markers)
+    ]
+    if "required_records_data" in missing or "open_questions" in missing or len(missing) >= 2:
+        return missing
+    return []
+
+
 def _front_door_selected_skill(path: Path, skill_name: str) -> bool:
     for text in _session_texts(path):
         data = _front_door_json(_strip_passive_prefix(text))
@@ -913,7 +1123,15 @@ def _front_door_blocks_execution(path: Path) -> bool:
 def _subagent_strategy_issues(path: Path, postmortem: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not _is_subagent_session(path):
         return []
-    active_text = "\n".join(_strip_passive_prefix(text) for text in _session_texts(path) if not _is_passive_text(text))
+    evidence_texts = []
+    for text in _session_texts(path):
+        if _is_passive_text(text):
+            continue
+        clean_text = _strip_passive_prefix(text)
+        if _looks_like_front_door_runtime_output(clean_text.lower()):
+            continue
+        evidence_texts.append(clean_text)
+    active_text = "\n".join(evidence_texts)
     lowered = active_text.lower()
     subagents = postmortem.get("subagent_summary", {}) or {}
     token_gate = postmortem.get("token_gate", {}) or {}
@@ -1066,15 +1284,16 @@ def _is_subagent_session(path: Path) -> bool:
 
 
 def _has_subagent_strategy_rationale(lowered: str) -> bool:
+    if "subagent_strategy=dispatch|single-controller" in lowered:
+        return False
+    if re.search(r"\bsubagent_strategy\s*[:=]\s*(dispatch|single-controller|review-only|blocked)\b", lowered):
+        return True
+    if re.search(r"\bnested_subagents_available\s*[:=]\s*(true|false|yes|no)\b", lowered):
+        return True
     return any(
         marker in lowered
         for marker in [
-            "subagent_strategy",
-            "single-controller",
-            "review-only",
-            "host-limited",
-            "nested subagent",
-            "nested-subagent",
+            "host-limited single-controller",
             "no-subagent rationale",
             "subagents unavailable",
             "subagents are unavailable",
@@ -1102,6 +1321,39 @@ def _cross_scope_context_sample(target: Path, text: str) -> str:
             continue
         if sibling_name != target.name and _shares_run_prefix(sibling_name, target.name):
             return _short(f"sibling run read: {raw_path}")
+    return ""
+
+
+def _target_substitution_sample(target: Path, text: str) -> str:
+    target_name = target.name
+    if not target_name:
+        return ""
+    normalized_target = str(_normalize_path(target)).lower()
+    normalized_text = (text or "").replace("\\", "/")
+    lowered = normalized_text.lower()
+    if normalized_target.replace("\\", "/") in lowered:
+        return ""
+    relative_prefix = f"{target_name}/".lower()
+    patch_markers = [
+        f"*** add file: {relative_prefix}",
+        f"*** update file: {relative_prefix}",
+        f"*** delete file: {relative_prefix}",
+        f"*** move to: {relative_prefix}",
+    ]
+    shell_markers = [
+        f"new-item {relative_prefix}",
+        f"set-content {relative_prefix}",
+        f"out-file {relative_prefix}",
+        f"copy-item {relative_prefix}",
+    ]
+    output_markers = [
+        f"a {relative_prefix}",
+        f"m {relative_prefix}",
+        f"updated file: {relative_prefix}",
+        f"created file: {relative_prefix}",
+    ]
+    if any(marker in lowered for marker in patch_markers + shell_markers + output_markers):
+        return _short(f"relative substitute target for {target}: {text}")
     return ""
 
 

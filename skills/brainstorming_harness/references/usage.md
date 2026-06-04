@@ -68,6 +68,17 @@ If a broad domain request receives only one direction question and then jumps in
 
 For "simple" product or workflow requests, do not skip brainstorming. Use a compact domain-first form: objective/operator, workflow boundary, 2-3 operating models, required records, recommendation, and one approval question.
 
+The compact form is still a multi-checkpoint discovery pass, not a one-question option picker. Before asking for approval, the visible response should cover:
+
+- Objective and target operator/audience.
+- Unknowns about current workflow, success criteria, constraints, and non-goals.
+- 2-3 operating-model options with tradeoffs.
+- Required records/data or artifact/output shape.
+- Open questions that could change scope.
+- One recommendation and one next approval or clarification question.
+
+If these are not present, keep brainstorming or record `brainstorming_status=blocked`; do not proceed to code, analysis, deliverables, QA, or verification.
+
 ## Evidence to produce
 
 - Skill name and execution level used for the run.

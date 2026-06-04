@@ -608,6 +608,91 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_subagent_shallow_brainstorm_and_relative_target_substitution_are_flagged(self):
+        target = "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260604_D"
+        front_door_output = {
+            "front_door_status": "ok",
+            "selected_not_executed_skills": ["brainstorming-harness", "host-agent-orchestration"],
+            "recommended_skills": ["always-on-front-door", "brainstorming-harness", "host-agent-orchestration"],
+            "execution_gate": {"status": "blocked_until_brainstorming_handoff", "can_execute": False},
+            "required_next_actions": [
+                "When running inside a host subagent, record nested_subagents_available and subagent_strategy=dispatch|single-controller|review-only|blocked before implementation."
+            ],
+        }
+        path = self.write_subagent_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{target} \ud3f4\ub354\uc5d0\uc11c \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac \ub300\uc2dc\ubcf4\ub4dc \uac1c\ubc1c\ud574\uc918.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            "\uc7ac\uace0 \uc785\ucd9c\uace0 \ub300\uc2dc\ubcf4\ub4dc\ub294 \uc0c1\ud488 \ub2f4\ub2f9\uc790\uc640 "
+                            "\uad00\ub9ac\uc790\uac00 \uc785\uace0/\ucd9c\uace0\ub97c \ubcf4\ub294 \ubc29\ud5a5\uc785\ub2c8\ub2e4.\n"
+                            "1. \ub2e8\uc21c \uc6d0\uc7a5\ud615\n2. \uc704\uce58 \uad00\ub9ac\ud615\n3. LOT \uad00\ub9ac\ud615\n"
+                            "\ucd94\ucc9c\uc740 1\ubc88\uc785\ub2c8\ub2e4. 1\ubc88\uc73c\ub85c \uc9c4\ud589\ud574\ub3c4 \ub420\uae4c\uc694?"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "1\ubc88\uc73c\ub85c \uc9c4\ud589\ud574.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: RetestAutoRoute_20260604_D/index.html\n+<html></html>\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "shallow_visible_brainstorming"
+                and "required_records_data" in issue.get("missing_markers", [])
+                for issue in audit.issues
+            )
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "guard-policy-harness"
+                and issue["status"] == "target_path_substitution"
+                and issue["severity"] == "P0"
+                for issue in audit.issues
+            )
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "host-agent-orchestration"
+                and issue["status"] == "missing_subagent_strategy"
+                for issue in audit.issues
+            )
+        )
+
     def test_resume_guard_failure_is_skill_audit_issue(self):
         path = self.write_session(
             [

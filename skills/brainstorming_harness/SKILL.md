@@ -66,6 +66,19 @@ Do not collapse brainstorming into a single option picker unless the user has al
 
 If the user only says "handle this topic/project/work" and then chooses one proposed option, that approval is permission to continue the KH flow, not permission to skip the handoff. Build and validate the handoff before architecture, domain orchestration, analysis, deliverable generation, or implementation. If time, host tools, or missing context prevents this, record `brainstorming_status=blocked` with the missing checkpoint instead of claiming the skill ran.
 
+## Superpowers-Level Discovery Ladder
+
+For underspecified work, the visible brainstorming response must not be only "here are three options, approve one." Use a compact but complete ladder:
+
+1. Intent: restate the objective and target operator/audience.
+2. Reality check: state what is unknown about the current workflow, data source, constraints, success criteria, and non-goals.
+3. Model choices: present 2-3 operating models with tradeoffs, not only technology stacks.
+4. Data and artifact shape: list the records, fields, documents, files, drawings, or outputs that the chosen model will need.
+5. Recommendation: choose one direction and explain why it fits the likely goal.
+6. Decision point: ask one next approval or clarification question.
+
+If any ladder item is missing, keep brainstorming or mark `brainstorming_status=blocked`. Do not create product files, analysis output, user deliverables, or verification artifacts from an option picker alone.
+
 ## Domain-First Compact Brainstorm
 
 For operations, business process, manufacturing, investment, drawing/design, document, analysis, or other cross-domain requests, the first user-facing brainstorming response must start from the domain problem instead of the technology stack.
@@ -76,7 +89,8 @@ For an inventory inbound/outbound request, a valid compact brainstorm should inc
 2. Current workflow boundary, such as inbound receiving, outbound issue/shipment, transfer, adjustment, returns, stocktake, and shortage monitoring.
 3. 2-3 operating model choices with tradeoffs, such as simple ledger, location-controlled stock, lot/serial/expiry-controlled stock, or approval/ERP-linked stock flow.
 4. Required data records, such as item code/name, location, quantity, transaction type, date/time, owner, reason, memo, safety stock, and optional lot, serial, expiry, supplier, customer, or work order.
-5. One recommended domain direction and one approval question before any implementation or artifact generation.
+5. Open questions, such as whether locations, approvals, ERP import/export, lots/serials, barcode scans, or stocktaking are required.
+6. One recommended domain direction and one approval question before any implementation or artifact generation.
 
 Technical choices such as static HTML, React, WinForms, database, or deployment can appear only after the domain choices are framed, unless the user already supplied enough workflow, data, and approval detail. A "simple" request still needs this compact domain-first pass; simplicity changes the length, not the ordering.
 
