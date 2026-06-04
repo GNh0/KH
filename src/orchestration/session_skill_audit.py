@@ -443,6 +443,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_brainstorm_option_choice_execution_issues(path))
     issues.extend(_brainstorming_depth_issues(path))
     issues.extend(_subagent_strategy_issues(path, postmortem.to_dict()))
+    issues.extend(_orchestration_decision_issues(path, postmortem.to_dict()))
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
     coverage = _coverage(skill_rows)
     return SessionSkillAudit(
@@ -1488,6 +1489,100 @@ def _subagent_strategy_issues(path: Path, postmortem: Dict[str, Any]) -> List[Di
     ]
 
 
+def _orchestration_decision_issues(path: Path, postmortem: Dict[str, Any]) -> List[Dict[str, Any]]:
+    evidence_texts = []
+    for text in _session_texts(path):
+        if _is_passive_text(text):
+            continue
+        clean_text = _strip_passive_prefix(text)
+        if _looks_like_front_door_runtime_output(clean_text.lower()):
+            continue
+        evidence_texts.append(clean_text)
+    active_text = "\n".join(evidence_texts)
+    lowered = active_text.lower()
+
+    if not _session_has_implementation_activity(path, postmortem, lowered):
+        return []
+
+    selected_orchestration = {
+        "host-agent-orchestration": _front_door_selected_skill(path, "host-agent-orchestration"),
+        "subagent-review-pipeline": _front_door_selected_skill(path, "subagent-review-pipeline"),
+        "parallel-orchestration-harness": _front_door_selected_skill(path, "parallel-orchestration-harness"),
+        "role-execution-audit-harness": _front_door_selected_skill(path, "role-execution-audit-harness"),
+    }
+    if not any(selected_orchestration.values()):
+        return []
+
+    issues: List[Dict[str, Any]] = []
+    if (
+        selected_orchestration["host-agent-orchestration"]
+        or selected_orchestration["subagent-review-pipeline"]
+    ) and not _has_subagent_strategy_rationale(lowered):
+        issues.append(
+            {
+                "skill": "host-agent-orchestration",
+                "status": "missing_orchestration_decision",
+                "severity": "P1",
+                "reason": (
+                    "Implementation work ran after KH selected host/subagent orchestration, but the session did "
+                    "not record dispatch, single-controller, review-only, or blocked strategy evidence."
+                ),
+                "action": (
+                    "Before implementation, record host_runtime, nested_subagents_available, "
+                    "subagent_strategy, and a concrete dispatch/no-dispatch rationale."
+                ),
+            }
+        )
+        issues.append(
+            {
+                "skill": "subagent-review-pipeline",
+                "status": "missing_orchestration_decision",
+                "severity": "P1",
+                "reason": (
+                    "The session could silently continue as a single agent because no subagent/reviewer "
+                    "strategy was preserved before implementation."
+                ),
+                "action": (
+                    "Dispatch independent roles when useful, or record subagent_strategy=single-controller, "
+                    "review-only, or blocked with a host-limited, tiny, sequential, or shared-state rationale."
+                ),
+            }
+        )
+    if selected_orchestration["parallel-orchestration-harness"] and not _has_parallel_strategy_rationale(lowered):
+        issues.append(
+            {
+                "skill": "parallel-orchestration-harness",
+                "status": "missing_parallel_strategy",
+                "severity": "P1",
+                "reason": (
+                    "Implementation work ran after KH selected parallel orchestration, but no parallel, "
+                    "sequential-with-rationale, read-only-side-agent, or blocked strategy was recorded."
+                ),
+                "action": (
+                    "Record parallel_strategy_decision=parallel|sequential|read-only-side-agents|blocked "
+                    "with fan-out/fan-in or no-parallel rationale before implementation."
+                ),
+            }
+        )
+    if selected_orchestration["role-execution-audit-harness"] and not _has_role_execution_audit_rationale(lowered):
+        issues.append(
+            {
+                "skill": "role-execution-audit-harness",
+                "status": "missing_role_execution_audit",
+                "severity": "P1",
+                "reason": (
+                    "Implementation work ran after KH selected role execution audit, but no role result, "
+                    "parallel wave, skipped, or blocked role-audit evidence was recorded."
+                ),
+                "action": (
+                    "Record role_execution_audit.status with required roles, role artifacts, parallel wave "
+                    "count, or an explicit skipped/blocked rationale before completion."
+                ),
+            }
+        )
+    return issues
+
+
 def _early_domain_discovery_text(lowered: str) -> bool:
     english_markers = [
         "brainstorm",
@@ -1600,10 +1695,14 @@ def _is_subagent_session(path: Path) -> bool:
 def _has_subagent_strategy_rationale(lowered: str) -> bool:
     if "subagent_strategy=dispatch|single-controller" in lowered:
         return False
-    if re.search(r"\bsubagent_strategy\s*[:=]\s*(dispatch|single-controller|review-only|blocked)\b", lowered):
-        return True
+    match = re.search(r"\bsubagent_strategy\s*[:=]\s*(dispatch|single-controller|review-only|blocked)\b", lowered)
+    if match:
+        strategy = match.group(1)
+        if strategy == "dispatch":
+            return True
+        return _has_no_subagent_rationale(lowered)
     if re.search(r"\bnested_subagents_available\s*[:=]\s*(true|false|yes|no)\b", lowered):
-        return True
+        return _has_no_subagent_rationale(lowered)
     return any(
         marker in lowered
         for marker in [
@@ -1611,6 +1710,111 @@ def _has_subagent_strategy_rationale(lowered: str) -> bool:
             "no-subagent rationale",
             "subagents unavailable",
             "subagents are unavailable",
+        ]
+    )
+
+
+def _has_no_subagent_rationale(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in [
+            "host_limited=true",
+            "host-limited",
+            "host limited",
+            "nested_subagents_unavailable=true",
+            "nested subagents unavailable",
+            "nested subagents are unavailable",
+            "subagents unavailable",
+            "subagents are unavailable",
+            "sequential",
+            "tiny",
+            "single file",
+            "small task",
+            "shared-state",
+            "shared state",
+            "shared write set",
+            "too coupled",
+            "not useful",
+            "blocked",
+            "permission",
+            "review-only",
+        ]
+    )
+
+
+def _has_parallel_strategy_rationale(lowered: str) -> bool:
+    if re.search(
+        r"\bparallel_strategy(?:_decision)?\s*[:=]\s*"
+        r"(parallel|sequential|read-only-side-agents|read_only_side_agents|blocked)\b",
+        lowered,
+    ):
+        return True
+    return any(
+        marker in lowered
+        for marker in [
+            "parallel_strategy_decision=sequential",
+            "parallel_strategy_decision=parallel",
+            "parallel_strategy_decision=blocked",
+            "parallel_strategy_decision=read-only-side-agents",
+            "parallel not useful",
+            "no-parallel rationale",
+            "bounded parallel",
+            "fan-out",
+            "fan-in",
+            "shared-state risk",
+            "shared state risk",
+            "sequential with rationale",
+        ]
+    )
+
+
+def _has_role_execution_audit_rationale(lowered: str) -> bool:
+    if re.search(r"\brole_execution_audit(?:\.status)?\s*[:=]\s*(passed|failed|skipped|blocked)\b", lowered):
+        return True
+    return any(
+        marker in lowered
+        for marker in [
+            "role execution audited",
+            "role_execution_audit.status",
+            "role artifacts",
+            "parallel wave",
+            "role results",
+            "skipped_with_rationale",
+            "considered_not_needed",
+            "blocked",
+        ]
+    )
+
+
+def _session_has_implementation_activity(path: Path, postmortem: Dict[str, Any], lowered: str) -> bool:
+    if _implementation_tool_samples(path):
+        return True
+    if postmortem.get("verification_commands"):
+        return True
+    return _has_implementation_execution_signal(lowered)
+
+
+def _has_implementation_execution_signal(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in [
+            "*** begin patch",
+            "add file:",
+            "update file:",
+            "apply_patch",
+            "new-item",
+            "set-content",
+            "out-file",
+            "copy-item",
+            "move-item",
+            "files changed",
+            "file changed",
+            "created index.html",
+            "created styles.css",
+            "created app.js",
+            "wrote index.html",
+            "wrote styles.css",
+            "wrote app.js",
         ]
     )
 
@@ -2577,6 +2781,11 @@ def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[s
         _add(required, "token-optimizer", "subagent packets/transcripts require a token decision")
         if int(subagents.get("spawned", 0) or 0) > 1 or "parallel" in lowered:
             _add(required, "parallel-orchestration-harness", "multiple subagents or parallel work appeared")
+    if _has_implementation_execution_signal(lowered):
+        _add(required, "host-agent-orchestration", "implementation work should record host/subagent strategy before silently continuing")
+        _add(required, "subagent-review-pipeline", "implementation work should record dispatch, review-only, single-controller, or blocked strategy")
+        _add(required, "parallel-orchestration-harness", "implementation work should record parallel, sequential, read-only side-agent, or blocked strategy")
+        _add(required, "role-execution-audit-harness", "implementation work should record role execution audit or explicit skipped/blocked rationale")
     if postmortem.get("review_status") != "pending" or "reviewer" in lowered or "with fixes" in lowered:
         _add(required, "review-gate-harness", "review findings or reviewer activity appeared")
         _add(required, "quality-gates-harness", "reviewed development work needs quality gates")

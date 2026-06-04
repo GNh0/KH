@@ -48,7 +48,7 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 1. Split the plan into independent, bounded tasks.
 2. Decide `subagent_strategy`: `dispatch`, `single-controller`, `review-only`, or `blocked`.
 3. Use `dispatch` only when the task has independent write sets, bounded context packets, reviewer value, and isolation through `.worktrees/<task>`, isolated branches, or a host workspace.
-4. Use `single-controller` when work is sequential, tiny, shared-state heavy, host-limited, or cheaper to keep in one agent.
+4. Use `single-controller` only with a concrete rationale: sequential dependency, tiny scope, shared-state risk, host-limited tooling, unavailable nested subagents, or another explicit blocker.
 5. In a Codex subagent, Antigravity-style worker, Claude Code worker, or local worker, first record whether nested subagents are available. If the host does not expose nested delegation, record `subagent_strategy=single-controller` with `host_limited=true` or `nested_subagents_unavailable=true`; do not silently omit this harness.
 6. Before dispatch, decide `token_optimizer_status` for task packets, command logs, and subagent transcripts. This is a decision gate, not automatic compression; use `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 7. Build a compact task packet per implementer using `references/standard-task-packets.md`: objective, workspace, base SHA, plan section, owned files, forbidden files, checks, expected artifacts, commit message, and report fields.
@@ -66,7 +66,7 @@ When this skill is part of `large_work_orchestration_bundle`, record `skill_stat
 
 `applied` means the controller chose a real subagent/reviewer path after a dispatch decision, not that every large task must use subagents. If subagents are applied, `token-optimizer` must at least be decided and recorded for packets/transcripts; compression itself remains conditional on size, safety, and quality.
 
-In a nested subagent session, `considered_not_needed` is not enough by itself. The evidence must name nested-subagent availability and the concrete strategy chosen. Acceptable examples are `subagent_strategy=single-controller host_limited=true` or `subagent_strategy=blocked nested_subagents_unavailable=true`.
+In any implementation session where this skill was selected, `considered_not_needed` is not enough by itself. The evidence must name nested-subagent availability when relevant and the concrete strategy chosen. Acceptable examples are `subagent_strategy=dispatch with spec-reviewer`, `subagent_strategy=single-controller host_limited=true`, or `subagent_strategy=blocked nested_subagents_unavailable=true`.
 
 ## External Benchmark Recipe
 
@@ -101,7 +101,7 @@ Pressure scenario: if an implementer says "done" but did not report changed file
 - Do not skip spec review because code quality looks good.
 - Do not flatten reviewer findings into a vague summary.
 - Do not mark blocked tasks as failed implementation without identifying the blocker category.
-- Do not perform implementation inside a subagent without recording whether nested subagents are available and why `dispatch`, `single-controller`, `review-only`, or `blocked` was selected.
+- Do not perform implementation in a main or subagent session without recording why `dispatch`, `single-controller`, `review-only`, or `blocked` was selected.
 
 ## UAF implementation targets
 

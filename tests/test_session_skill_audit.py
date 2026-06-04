@@ -1192,6 +1192,158 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_main_implementation_without_orchestration_decision_is_flagged(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": [
+                "host-agent-orchestration",
+                "subagent-review-pipeline",
+                "parallel-orchestration-harness",
+                "role-execution-audit-harness",
+            ],
+            "skill_status_summary": {
+                "host-agent-orchestration": {"status": "skipped_with_rationale"},
+                "subagent-review-pipeline": {"status": "skipped_with_rationale"},
+                "parallel-orchestration-harness": {"status": "skipped_with_rationale"},
+                "role-execution-audit-harness": {"status": "skipped_with_rationale"},
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Create an inventory dashboard in C:\\work\\InventoryTest.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: index.html\n+<div></div>\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "host-agent-orchestration"
+                and issue["status"] == "missing_orchestration_decision"
+                for issue in audit.issues
+            )
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "subagent-review-pipeline"
+                and issue["status"] == "missing_orchestration_decision"
+                for issue in audit.issues
+            )
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "parallel-orchestration-harness"
+                and issue["status"] == "missing_parallel_strategy"
+                for issue in audit.issues
+            )
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "role-execution-audit-harness"
+                and issue["status"] == "missing_role_execution_audit"
+                for issue in audit.issues
+            )
+        )
+
+    def test_main_single_controller_with_parallel_and_role_rationale_satisfies_orchestration_audit(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": [
+                "host-agent-orchestration",
+                "subagent-review-pipeline",
+                "parallel-orchestration-harness",
+                "role-execution-audit-harness",
+            ],
+            "skill_status_summary": {
+                "host-agent-orchestration": {"status": "skipped_with_rationale"},
+                "subagent-review-pipeline": {"status": "skipped_with_rationale"},
+                "parallel-orchestration-harness": {"status": "skipped_with_rationale"},
+                "role-execution-audit-harness": {"status": "skipped_with_rationale"},
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "host_runtime=codex-main; nested_subagents_available=true; "
+                            "subagent_strategy=single-controller because this is a tiny single file task "
+                            "with a shared-state write set; parallel_strategy_decision=sequential with rationale; "
+                            "role_execution_audit.status=skipped because no independent role artifact is useful."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: index.html\n+<div></div>\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"]
+                in {
+                    "missing_orchestration_decision",
+                    "missing_parallel_strategy",
+                    "missing_role_execution_audit",
+                }
+                for issue in audit.issues
+            )
+        )
+
     def test_subagent_single_controller_rationale_satisfies_strategy_audit(self):
         path = self.write_subagent_session(
             [
@@ -1229,6 +1381,37 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
 
         self.assertFalse(
+            any(
+                issue["status"] == "missing_subagent_strategy"
+                for issue in audit.issues
+            )
+        )
+
+    def test_bare_single_controller_without_rationale_does_not_satisfy_strategy_audit(self):
+        path = self.write_subagent_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "subagent_strategy=single-controller",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: app.js\n+console.log('ok')\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
             any(
                 issue["status"] == "missing_subagent_strategy"
                 for issue in audit.issues

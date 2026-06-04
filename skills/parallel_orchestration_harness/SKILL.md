@@ -49,6 +49,8 @@ This is the portable UAF replacement for host and personal skillbook parallel di
 
 When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["parallel-orchestration-harness"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Always leave `parallel_strategy_decision`: parallel, sequential with rationale, read-only side agents, or blocked by shared-state risk.
 
+When this skill was selected and user-approved implementation is about to start, `parallel_strategy_decision` is mandatory before the first write. It may be `parallel`, `sequential`, `read-only-side-agents`, or `blocked`, but it must name the reason. Silent single-agent implementation is an audit failure, even when the final work succeeds.
+
 ## External Benchmark Recipe
 
 Use this harness only when work is actually independent:
@@ -73,6 +75,7 @@ Pressure scenario: if multiple workers edit the same checkout without an isolati
 ## Common mistakes
 
 - Do not call sequential loops parallel because the code could support parallelism.
+- Do not start implementation after this skill was selected without `parallel_strategy_decision`.
 - Do not let one failed worker disappear from the final aggregate result.
 - Do not spawn unbounded workers from user-provided file counts.
 - Do not run concurrent file edits in one mutable checkout unless the tasks are proven non-overlapping.

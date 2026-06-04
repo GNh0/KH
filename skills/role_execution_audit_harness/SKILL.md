@@ -34,6 +34,8 @@ This harness audits role orchestration evidence after DAG execution. It answers 
 
 When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["role-execution-audit-harness"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Use `considered_not_needed` only when no role DAG or subagent wave was claimed; if role execution is claimed, the audit must inspect runtime role results.
 
+When implementation work starts after this skill was selected, record `role_execution_audit.status` before completion. If no role DAG or subagent wave is useful, the status may be `skipped` or `blocked`, but it must say why. A static role list, SKILL.md read, or front-door selected list is not runtime role execution evidence.
+
 ## External Benchmark Recipe
 
 Use this harness after any claimed role-DAG run:
@@ -48,7 +50,7 @@ Pressure scenario: if a report lists roles but `role_task_results` is empty, rol
 
 ## Required outputs
 
-- `role_execution_audit.status`: `passed` or `failed`.
+- `role_execution_audit.status`: `passed`, `failed`, `skipped`, or `blocked`.
 - `role_execution_audit.findings`: missing role, failed role, or missing artifact findings.
 - Evidence key `role execution audited` when the audit passes.
 
@@ -57,6 +59,7 @@ Pressure scenario: if a report lists roles but `role_task_results` is empty, rol
 - Do not infer role execution from a static role graph; inspect runtime role task results.
 - Do not count a role as complete when it has no role artifact in project-backed runs.
 - Do not call the DAG parallel when no parallel wave was recorded.
+- Do not finish implementation after this skill was selected without role execution audit evidence or an explicit skipped/blocked rationale.
 - Do not create user-facing role audit documents unless the user asks for them.
 
 ## UAF implementation targets

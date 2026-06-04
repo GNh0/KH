@@ -32,10 +32,11 @@ This is a personal UAF host orchestration harness. It packages reusable agent, s
 1. Model each worker as an agent profile with explicit role, allowed tools, input contract, and output contract.
 2. Route user work through a conversation record that preserves task intent, constraints, artifacts, and structured results.
 3. Delegate only independent subtasks to subagents; keep shared-state edits behind the main controller.
-4. If the current host is itself a subagent or worker, record whether nested subagents are available before implementation. If not available or not useful, record `subagent_strategy=single-controller` with a host-limited, sequential, tiny-task, or shared-state rationale.
-5. Resolve tool access before dispatch with a deny/ask/allow/default policy.
-6. Attach lifecycle hooks for pre-dispatch validation, post-dispatch normalization, error recovery, and audit logging.
-7. Emit observability metadata for model/runtime choice, token budget, elapsed time, tool calls, and failure category.
+4. Before user-approved non-trivial implementation, record `host_runtime`, `nested_subagents_available`, `subagent_strategy`, and `strategy_rationale` in both main-controller and subagent sessions.
+5. Use `subagent_strategy=dispatch` when the host can run useful independent subagents or reviewers. If dispatch is not useful or not possible, record `single-controller`, `review-only`, or `blocked` with a host-limited, sequential, tiny-task, or shared-state rationale before the first write.
+6. Resolve tool access before dispatch with a deny/ask/allow/default policy.
+7. Attach lifecycle hooks for pre-dispatch validation, post-dispatch normalization, error recovery, and audit logging.
+8. Emit observability metadata for model/runtime choice, token budget, elapsed time, tool calls, and failure category.
 
 Use the default UAF role graph for orchestration: `ceo`, `advisor`, `product-strategist`, `system-architect`, `implementation-planner`, `controller`, `implementer`, `spec-reviewer`, `code-quality-reviewer`, `qa-verifier`, `security-reviewer`, and `release-manager`.
 
@@ -43,7 +44,7 @@ Use the default UAF role graph for orchestration: `ceo`, `advisor`, `product-str
 
 When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["host-agent-orchestration"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. Include the host runtime, adapter path, missing capability, or no-subagent rationale as evidence.
 
-For subagent sessions, no-subagent rationale is mandatory before implementation. Do not leave it implicit. Record `host_runtime`, `nested_subagents_available`, `subagent_strategy`, and `strategy_rationale`.
+For implementation sessions, no-subagent rationale is mandatory before implementation when this skill was selected. Do not leave it implicit. A bare `subagent_strategy=single-controller` is not enough; name the reason such as host-limited, nested subagents unavailable, sequential dependency, tiny scope, shared-state risk, or explicit blocker.
 
 ## External Benchmark Recipe
 
@@ -61,7 +62,7 @@ Pressure scenario: if Codex, Antigravity-style, Claude Code, or local runner lac
 
 - `AdapterRequest` containing `project_dir`, `files`, `design_doc`, `platform_mode`, and metadata for role graph, goal, memory, evidence, tools, budget, and safety policy.
 - `AdapterResult` containing top-level `status`, `message`, `workflow_id`, and `metadata`; artifact paths, evidence, task results, and blocked/failure reasons belong inside `metadata`.
-- `subagent_strategy` and nested-subagent availability when the current worker is already a host subagent.
+- `subagent_strategy`, nested-subagent availability, and no-dispatch rationale before non-trivial implementation.
 - A controller-level summary that includes every subagent result, including partial failures.
 
 ## Failure handling
@@ -75,6 +76,7 @@ Pressure scenario: if Codex, Antigravity-style, Claude Code, or local runner lac
 - Do not assume Codex, Antigravity-style hosts, Claude Code, and local runners share the same tool APIs.
 - Do not let host-specific permissions bypass UAF guard and evidence policy.
 - Do not claim subagent delegation happened unless adapter metadata or role task results prove it.
+- Do not silently continue as a single controller after this skill was selected; record the dispatch/no-dispatch decision first.
 - Do not store host-only state in the project output surface.
 
 ## UAF implementation targets
