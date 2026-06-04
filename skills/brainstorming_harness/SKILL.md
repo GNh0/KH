@@ -106,6 +106,10 @@ A recommendation is advisory, not an agent-owned final decision. Before the user
 - Do not say or imply: "I will go with option 2", "2번으로 가겠습니다", "기준으로 만들겠습니다", "새로 만들어서 진행하겠습니다", or similar final-decision wording.
 - Do not ask for approval of an implementation stack such as HTML/CSS/JavaScript, React, WinForms, or database storage unless the user asked for stack selection or already approved the domain operating model.
 - Keep open questions visible when they could change the scope.
+- The first approval question should ask the user to choose or approve the operating model, not to approve immediate implementation. Prefer "Which operating model should we use? My recommendation is option 1." Do not ask "바로 구현해도 될까요", "승인해주시면 파일을 생성하겠습니다", or "I can implement now" until the domain direction is approved.
+- Do not promise target-path file creation, implementation, development, or deliverable generation in the first brainstorm approval question.
+- The first brainstorm should end with a direction question, not an execution question. Good: "Which operating model should we choose: simple stock ledger, location-controlled stock, or lot/serial stock? My recommendation is the simple ledger unless location tracking is required." Bad: "If you approve, I will create the files in the target folder."
+- Do not mention implementation start, generated files, browser verification, QA, or deliverable creation in the same question that asks the user to choose the domain direction.
 
 If the agent has already written final-decision wording before user approval, mark the run as `unilateral_brainstorm_decision` and redo the decision question.
 

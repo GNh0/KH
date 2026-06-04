@@ -72,6 +72,10 @@ The first visible response must not be only an option picker. For a vague or new
 
 Keep recommendation language advisory. The agent should not decide the user's operating model or stack on its own. Avoid final-decision phrases such as "2번으로 가겠습니다", "기준으로 만들겠습니다", "I will go with option 2", or "we will use React" before approval. If implementation technology is not the user's decision target, keep it secondary and do not include it in the approval question.
 
+Keep the approval question about direction only. Do not combine the first decision question with immediate implementation wording such as "바로 구현해도 될까요", "승인해주시면 파일을 생성하겠습니다", "바로 개발하겠습니다", or "I can implement now." Do not mention target-path file generation in the first approval question. Ask which operating model the user wants, state the recommendation as advice, then wait for approval before implementation or stack selection.
+
+The first brainstorm should end with a direction question, not an execution question. Do not say that approval will immediately create files, start development, run QA, or produce deliverables. A valid first question asks the user to choose the operating model or answer one missing domain constraint, then stops.
+
 Approval continuation is a separate gate. When the user approves the recommendation in a later message, create or record `approval_frame`, `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, and `brainstorm_handoff` before any write, QA, browser, verification, or broad memory call. Do not use global Codex memory, memory skill notes, sibling folders, or previous run folders as implementation shortcuts during this continuation unless the user explicitly requested reuse. If the handoff cannot be produced, stop with `brainstorming_status=blocked`.
 
 The compact form is still a multi-checkpoint discovery pass, not a one-question option picker. Before asking for approval, the visible response should cover:

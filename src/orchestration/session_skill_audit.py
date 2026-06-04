@@ -1125,6 +1125,15 @@ def _brainstorm_unilateral_decision_markers(text: str) -> List[str]:
         "\uc0c8\ub85c \ub9cc\ub4e4\uc5b4\uc11c \uc9c4\ud589",
         "\ub9cc\ub4e4\uace0 \uad6c\ud604\ud574\ub3c4",
         "\ubc14\ub85c \uad6c\ud604",
+        "\uc2b9\uc778\ud574\uc8fc\uc2dc\uba74",
+        "\ud30c\uc77c\uc744 \uc0dd\uc131",
+        "\ud654\uba74 \ud30c\uc77c\uc744 \uc0dd\uc131",
+        "\uc0dd\uc131\ud574\uc11c \uac1c\ubc1c",
+        "\uc0dd\uc131\ud558\uace0 \uac1c\ubc1c",
+        "\uac1c\ubc1c\ud558\uaca0\uc2b5\ub2c8\ub2e4",
+        "\uad6c\ud604\ud558\uaca0\uc2b5\ub2c8\ub2e4",
+        "\uc791\uc5c5\uc744 \uc2dc\uc791",
+        "\uac1c\ubc1c\uc744 \uc2dc\uc791",
         "i will go with",
         "i'll go with",
         "we will go with",
@@ -1132,8 +1141,48 @@ def _brainstorm_unilateral_decision_markers(text: str) -> List[str]:
         "we will use",
         "i will build",
         "we will build",
+        "if you approve, i will create",
+        "if approved, i will create",
+        "if you approve, i will implement",
+        "if approved, i will implement",
+        "i can implement now",
+        "start implementation",
+        "begin implementation",
+        "create the files",
+        "generate files",
     ]
     matched = [marker for marker in markers if marker in lowered]
+    execution_approval_markers = [
+        "\uc2b9\uc778\ud574\uc8fc\uc2dc\uba74",
+        "\uc2b9\uc778\ud574 \uc8fc\uc2dc\uba74",
+        "\ub3d9\uc758\ud574\uc8fc\uc2dc\uba74",
+        "\ub3d9\uc758\ud574 \uc8fc\uc2dc\uba74",
+        "\ucd94\ucc9c\uc548\uc5d0 \ub3d9\uc758",
+        "if you approve",
+        "if approved",
+        "once approved",
+        "when you approve",
+    ]
+    execution_action_markers = [
+        "\ubc14\ub85c \uad6c\ud604",
+        "\uad6c\ud604\ud574\ub3c4 \ub420\uae4c\uc694",
+        "\uac1c\ubc1c\ud574\ub3c4 \ub420\uae4c\uc694",
+        "\uac1c\ubc1c\ud558\uaca0\uc2b5\ub2c8\ub2e4",
+        "\uad6c\ud604\ud558\uaca0\uc2b5\ub2c8\ub2e4",
+        "\ud30c\uc77c\uc744 \uc0dd\uc131",
+        "\ud654\uba74 \ud30c\uc77c",
+        "\uc791\uc5c5\uc744 \uc2dc\uc791",
+        "\uac1c\ubc1c\uc744 \uc2dc\uc791",
+        "implement now",
+        "start implementation",
+        "begin implementation",
+        "create the files",
+        "generate files",
+    ]
+    if any(marker in lowered for marker in execution_approval_markers) and any(
+        marker in lowered for marker in execution_action_markers
+    ):
+        matched.append("premature_execution_approval_question")
     tech_stack_markers = [
         "html + css + javascript",
         "html/css/js",

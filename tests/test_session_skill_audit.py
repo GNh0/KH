@@ -746,6 +746,64 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_execution_approval_question_is_flagged_before_brainstorm_choice(self):
+        target = "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260604_H"
+        front_door_output = {
+            "front_door_status": "ok",
+            "selected_not_executed_skills": ["brainstorming-harness"],
+            "recommended_skills": ["always-on-front-door", "brainstorming-harness"],
+            "execution_gate": {"status": "blocked_until_brainstorming_handoff", "can_execute": False},
+        }
+        path = self.write_subagent_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{target} \ud3f4\ub354\uc5d0\uc11c \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac \ub300\uc2dc\ubcf4\ub4dc \uac1c\ubc1c\ud574\uc918.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            "\ucd94\ucc9c \ubc29\ud5a5\n"
+                            "1\ucc28 \uac1c\ubc1c\uc740 \ub2e8\uc21c \uc218\ubd88\uc7a5\ud615 + \uc548\uc804\uc7ac\uace0 \uc54c\ub9bc + \ucd5c\uadfc \uc785\ucd9c\uace0 \ub0b4\uc5ed\uc73c\ub85c \uac00\ub294 \uac83\uc744 \ucd94\ucc9c\ud569\ub2c8\ub2e4.\n"
+                            "\uc6b4\uc601 \ubaa8\ub378 \uc120\ud0dd\uc9c0\n"
+                            "1. \ub2e8\uc21c \uc218\ubd88\uc7a5\ud615\n"
+                            "2. \uc704\uce58 \uc7ac\uace0\ud615\n"
+                            "3. LOT/\uc2dc\ub9ac\uc5bc\ud615\n"
+                            "\ud655\uc778 \uc9c8\ubb38\n"
+                            "\ucd94\ucc9c \ubc29\ud5a5\uc778 \ub2e8\uc21c \uc218\ubd88\uc7a5\ud615 \ub300\uc2dc\ubcf4\ub4dc\ub85c \ubc14\ub85c \uad6c\ud604\ud574\ub3c4 \ub420\uae4c\uc694?\n"
+                            "\uc2b9\uc778\ud574\uc8fc\uc2dc\uba74 \uc9c0\uc815\ud558\uc2e0 C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260604_H "
+                            "\ud3f4\ub354\uc5d0 \ud654\uba74 \ud30c\uc77c\uc744 \uc0dd\uc131\ud574\uc11c \uac1c\ubc1c\ud558\uaca0\uc2b5\ub2c8\ub2e4."
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "unilateral_brainstorm_decision"
+                and "premature_execution_approval_question" in issue.get("matched_markers", [])
+                for issue in audit.issues
+            ),
+            audit.issues,
+        )
+
     def test_resume_guard_failure_is_skill_audit_issue(self):
         path = self.write_session(
             [

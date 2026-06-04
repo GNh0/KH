@@ -87,6 +87,9 @@ class BrainstormingHarnessTests(unittest.TestCase):
         self.assertIn("HTML", combined)
         self.assertIn("React", combined)
         self.assertIn("WinForms", combined)
+        self.assertIn("direction question", combined)
+        self.assertIn("not an execution question", combined)
+        self.assertIn("target folder", combined)
 
 
 if __name__ == "__main__":
