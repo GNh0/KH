@@ -98,6 +98,18 @@ For a vague or new app, dashboard, product, operations, manufacturing, document,
 
 Missing target folders, empty folders, or "simple" wording do not remove this gate. A response that only says the folder is missing and lists 2-3 options is failed brainstorming. Continue discovery until all eight sections are visible, then stop for approval.
 
+## Approved Continuation Gate
+
+When the user later approves a recommended option, that approval opens the next KH stage only after current-run handoff evidence exists. Before implementation, file writes, deliverable generation, QA, browser verification, or broad memory lookup:
+
+1. Preserve `approval_frame` from the later user message.
+2. Build or record a `BrainstormSession` for the current request.
+3. Validate the session or record `brainstorming_status=blocked`.
+4. Preserve `decision_log` and `brainstorm_handoff`.
+5. Route to the next KH skill.
+
+Do not read global Codex `%CODEX_HOME%/memories/MEMORY.md`, `%CODEX_HOME%/memories/skills/...`, sibling folders, old static-page preferences, or prior subagent outputs during this continuation unless the user explicitly asked to reuse or compare previous context. If the handoff cannot be produced, stop with the blocked reason instead of scaffolding from memory.
+
 For an inventory inbound/outbound request, a valid compact brainstorm should include:
 
 1. Assumed objective and target operator, such as warehouse staff, purchasing, production, or management.

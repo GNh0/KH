@@ -120,6 +120,9 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("Objective/operator", prompts)
         self.assertIn("Success criteria/constraints/non-goals", prompts)
         self.assertIn("Required records/data/artifact shape", prompts)
+        self.assertIn("Approved brainstorm continuation gate", prompts)
+        self.assertIn("Exact target path rule", prompts)
+        self.assertIn("relative staging followed by `Copy-Item`", prompts)
 
     def test_compound_harness_combines_external_role_stack_and_memory(self):
         skill = read_text("skills/compound_engineering_harness/SKILL.md")
@@ -173,6 +176,24 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
             "short, exact, or contract-sensitive reviewer output",
             "considered_not_needed",
             "passthrough",
+        ]:
+            self.assertIn(expected, combined)
+
+    def test_exact_target_and_memory_guards_are_visible_to_hosts(self):
+        guard = read_text("skills/guard_policy_harness/SKILL.md")
+        memory = read_text("skills/memory_state_harness/SKILL.md")
+        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
+        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+        combined = "\n".join([guard, memory, prompts])
+
+        for expected in [
+            "Exact Target Path Rule",
+            "same-name folder",
+            "Relative staging followed by copy-back is a guard failure.",
+            "The restriction also applies after a brainstorming approval message.",
+            "Do not read host global Codex memory after a user approves a brainstorm option",
+            "Exact target path rule",
+            "Do not create a same-name relative folder",
         ]:
             self.assertIn(expected, combined)
 

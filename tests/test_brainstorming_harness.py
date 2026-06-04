@@ -73,8 +73,12 @@ class BrainstormingHarnessTests(unittest.TestCase):
 
         self.assertIn("Domain-First Compact Brainstorm", skill)
         self.assertIn("Visible First Response Gate", skill)
+        self.assertIn("Approved Continuation Gate", skill)
         self.assertIn("Success criteria/constraints/non-goals", skill)
         self.assertIn("Open questions", skill)
+        self.assertIn("approval_frame", combined)
+        self.assertIn("brainstorm_handoff", combined)
+        self.assertIn("global Codex memory", combined)
         self.assertIn("inventory inbound/outbound", combined)
         self.assertIn("operating model", combined)
         self.assertIn("required records", combined)

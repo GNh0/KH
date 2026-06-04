@@ -70,6 +70,8 @@ For "simple" product or workflow requests, do not skip brainstorming. Use a comp
 
 The first visible response must not be only an option picker. For a vague or new app, dashboard, product, operations, manufacturing, document, drawing/design, analysis, investment, or workflow request, include these user-visible sections, translated to the user's apparent language when helpful: objective/operator, workflow boundary, success criteria/constraints/non-goals, operating model options and tradeoffs, required records/data/artifact shape, open questions, recommendation, and approval question. If the exact target folder is missing or empty, state that briefly, but still provide the full domain-first brainstorm and stop before implementation.
 
+Approval continuation is a separate gate. When the user approves the recommendation in a later message, create or record `approval_frame`, `BrainstormSession`, `validate_brainstorm_session`, `decision_log`, and `brainstorm_handoff` before any write, QA, browser, verification, or broad memory call. Do not use global Codex memory, memory skill notes, sibling folders, or previous run folders as implementation shortcuts during this continuation unless the user explicitly requested reuse. If the handoff cannot be produced, stop with `brainstorming_status=blocked`.
+
 The compact form is still a multi-checkpoint discovery pass, not a one-question option picker. Before asking for approval, the visible response should cover:
 
 - Objective and target operator/audience.

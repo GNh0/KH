@@ -36,6 +36,12 @@ This is a UAF-native safety harness for careful execution, edit boundary, guard,
 5. Record guard decisions in workflow metadata for later review.
 6. Provide an unlock path that removes temporary boundaries with an audit note.
 
+## Exact Target Path Rule
+
+When the user names an absolute target folder, generated user-facing files must be created or updated at that exact resolved path. A workspace-local same-name folder, staging folder, temporary generated project, or relative substitute is not acceptable even if it is copied back later.
+
+If the exact path is outside the current writable workspace or requires sandbox approval, ask for exact-path write permission before generating product files, or stop with `permission_needed`. Do not use `apply_patch` to create a relative substitute and then `Copy-Item`, `Move-Item`, or equivalent to backfill the requested path. Relative staging followed by copy-back is a guard failure.
+
 ## External Benchmark Recipe
 
 Use this harness before any risky command or file write:
@@ -61,6 +67,8 @@ Pressure scenario: if a generated path resolves outside the workspace through `.
 - Do not treat network, credentials, or destructive commands as normal write actions.
 - Do not silently bypass an `ask` or `deny` verdict because a workflow is otherwise ready.
 - Do not record raw secrets in guard audit metadata.
+- Do not create a relative same-name project folder for an absolute user target, even temporarily.
+- Do not treat copying a staged project into the target as satisfying the exact target path rule.
 
 ## UAF implementation targets
 
