@@ -99,6 +99,9 @@ class BrainstormingHarnessTests(unittest.TestCase):
         self.assertIn("not implementation-scope approval", combined)
         self.assertIn("option_choice_treated_as_scope_approval", combined)
         self.assertIn("I will set the implementation scope as follows", combined)
+        self.assertIn("Handoff Transition Gate", skill)
+        self.assertIn("3-4 focused user decisions", combined)
+        self.assertIn("no files have been created yet", combined)
         self.assertIn("Self-review", combined)
 
 

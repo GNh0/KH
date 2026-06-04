@@ -152,6 +152,19 @@ Example continuation after an inventory option choice:
 
 "Option 1, the simple stock-ledger direction, is recorded. Implementation scope is not final yet. Next, how should current stock be calculated: A) transaction-derived only, B) editable current quantity with audit log, or C) hybrid with adjustment reasons?"
 
+## Handoff Transition Gate
+
+Do not keep asking option questions indefinitely. After 3-4 focused user decisions, or once the remaining unknowns are low-risk defaults, stop the option ladder and produce a concise design/spec review handoff instead of continuing to brainstorm.
+
+The handoff transition response should:
+
+1. Summarize recorded decisions.
+2. List unresolved assumptions as defaults or explicit open questions.
+3. State that no files have been created yet.
+4. Ask for separate execution approval in a way that makes the next action explicit.
+
+Do not start implementation in the same response unless the user already gave explicit execution approval after reviewing the handoff/spec. If the host cannot produce a handoff quickly, stop with `brainstorming_status=blocked` rather than stalling or continuing the option ladder.
+
 ## Approved Continuation Gate
 
 When the user later approves a recommended option, that approval opens the next KH stage only after current-run handoff evidence exists. Before implementation, file writes, deliverable generation, QA, browser verification, or broad memory lookup:

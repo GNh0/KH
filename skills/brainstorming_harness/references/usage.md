@@ -100,6 +100,8 @@ The valid continuation is to record the direction and ask the next design/spec q
 
 If the next assistant message after an option choice locks implementation scope, asks to create files, or lists UI/storage scope as final, mark the run as `option_choice_treated_as_scope_approval` and route back to brainstorming.
 
+Do not continue the option ladder indefinitely. After 3-4 focused user decisions, or when the remaining unknowns can be represented as explicit assumptions, produce a concise design/spec review handoff instead of asking another broad option question. The handoff should summarize decisions, state assumptions, note that no files were created yet, and ask for separate execution approval. If a handoff cannot be produced quickly, stop with `brainstorming_status=blocked` instead of stalling.
+
 The compact form is still a multi-checkpoint discovery pass, not a one-question option picker. Before asking for approval, the visible response should cover:
 
 - Objective and target operator/audience.
