@@ -116,6 +116,10 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("Compound step", distiller)
         self.assertIn("KH brainstorming-harness", prompts)
         self.assertIn("KH workflow-skill-distiller", prompts)
+        self.assertIn("Visible brainstorming output gate", prompts)
+        self.assertIn("Objective/operator", prompts)
+        self.assertIn("Success criteria/constraints/non-goals", prompts)
+        self.assertIn("Required records/data/artifact shape", prompts)
 
     def test_compound_harness_combines_external_role_stack_and_memory(self):
         skill = read_text("skills/compound_engineering_harness/SKILL.md")

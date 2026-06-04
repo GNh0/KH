@@ -68,6 +68,8 @@ If a broad domain request receives only one direction question and then jumps in
 
 For "simple" product or workflow requests, do not skip brainstorming. Use a compact domain-first form: objective/operator, workflow boundary, 2-3 operating models, required records, recommendation, and one approval question.
 
+The first visible response must not be only an option picker. For a vague or new app, dashboard, product, operations, manufacturing, document, drawing/design, analysis, investment, or workflow request, include these user-visible sections, translated to the user's apparent language when helpful: objective/operator, workflow boundary, success criteria/constraints/non-goals, operating model options and tradeoffs, required records/data/artifact shape, open questions, recommendation, and approval question. If the exact target folder is missing or empty, state that briefly, but still provide the full domain-first brainstorm and stop before implementation.
+
 The compact form is still a multi-checkpoint discovery pass, not a one-question option picker. Before asking for approval, the visible response should cover:
 
 - Objective and target operator/audience.

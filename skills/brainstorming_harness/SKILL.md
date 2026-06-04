@@ -83,6 +83,21 @@ If any ladder item is missing, keep brainstorming or mark `brainstorming_status=
 
 For operations, business process, manufacturing, investment, drawing/design, document, analysis, or other cross-domain requests, the first user-facing brainstorming response must start from the domain problem instead of the technology stack.
 
+## Visible First Response Gate
+
+For a vague or new app, dashboard, product, operations, manufacturing, document, drawing/design, analysis, investment, or workflow request, the first visible response must include every section below. Translate the section headings to the user's apparent language when helpful, but keep the content complete:
+
+1. Objective/operator: what is being built or decided, and who will operate or use it.
+2. Workflow boundary: which process slice is in scope and what is not yet known.
+3. Success criteria/constraints/non-goals: how a useful first version will be judged, plus obvious limits.
+4. Operating model options and tradeoffs: 2-3 domain models with pros/cons, not just technology stacks.
+5. Required records/data/artifact shape: fields, documents, drawings, files, or outputs the chosen model needs.
+6. Open questions: the few assumptions that still need confirmation.
+7. Recommendation: one direction and why it fits the likely goal.
+8. Approval question: one clear next decision before implementation, deliverable generation, or verification.
+
+Missing target folders, empty folders, or "simple" wording do not remove this gate. A response that only says the folder is missing and lists 2-3 options is failed brainstorming. Continue discovery until all eight sections are visible, then stop for approval.
+
 For an inventory inbound/outbound request, a valid compact brainstorm should include:
 
 1. Assumed objective and target operator, such as warehouse staff, purchasing, production, or management.
