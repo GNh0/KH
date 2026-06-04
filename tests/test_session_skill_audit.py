@@ -1284,6 +1284,94 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_browser_storage_direction_does_not_require_qa_gate(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "C:\\work\\InventoryDirection 폴더에서 재고 입출고 관리 "
+                            "대시보드 개발해줘."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python -B -m src.orchestration.kh_front_door "
+                            "--prompt \"재고 입출고 관리 대시보드 개발해줘.\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "추천 방향은 정적 로컬 대시보드입니다. 데이터는 우선 "
+                            "브라우저 localStorage에 저장하고 CSV 내보내기를 넣는 방식이 "
+                            "가장 빠릅니다. 이 방향으로 진행해도 될까요?"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "qa-gate-harness"
+                and "browser or local app QA appeared" in issue["reason"]
+                for issue in audit.issues
+            )
+        )
+
+    def test_browser_verification_still_requires_qa_gate(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Build a dashboard and verify it in the browser.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python -B -m src.orchestration.kh_front_door "
+                            "--prompt \"Build a dashboard and verify it in the browser.\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "I opened the browser and verified the localhost dashboard screen.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertTrue(rows["qa-gate-harness"]["required"])
+
     def test_kh_front_door_command_counts_as_front_door_evidence(self):
         path = self.write_session(
             [

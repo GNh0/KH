@@ -380,7 +380,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     combined_text = "\n".join(active_texts)
     catalog = collect_packaged_skills()
     skills = catalog.get("skills", [])
-    required = _required_skills(postmortem.to_dict(), combined_text)
+    required = _required_skills(postmortem.to_dict(), combined_text, active_texts)
     skill_rows = []
     issues = []
 
@@ -1924,7 +1924,7 @@ def _strip_passive_prefix(text: str) -> str:
     return text
 
 
-def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
+def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[str] | None = None) -> Dict[str, str]:
     required: Dict[str, str] = {}
     lowered = text.lower()
     token_gate = postmortem.get("token_gate", {}) or {}
@@ -1969,7 +1969,12 @@ def _required_skills(postmortem: Dict[str, Any], text: str) -> Dict[str, str]:
         _add(required, "workflow-skill-distiller", "compound learning should route to reusable skill/scenario/memory follow-up")
     if "memory_candidates" in lowered or "memory-state-harness" in lowered or "persistent memory" in lowered or "영구메모리" in text:
         _add(required, "memory-state-harness", "memory candidates or persistent memory appeared")
-    if any(marker in lowered for marker in ["browser", "playwright", "screenshot", "localhost"]):
+    qa_scan_texts = active_texts or [text]
+    if any(
+        _mentions_browser_or_local_app_qa(chunk.lower())
+        for chunk in qa_scan_texts
+        if not _looks_like_front_door_runtime_output(chunk.lower())
+    ):
         _add(required, "qa-gate-harness", "browser or local app QA appeared")
     if _renderable_artifact_required(lowered):
         _add(required, "artifact-render-qa-harness", "renderable deliverables or artifacts appeared")
@@ -2132,6 +2137,51 @@ def _mentions_verification(lowered: str) -> bool:
             "verified",
         ]
     )
+
+
+def _mentions_browser_or_local_app_qa(lowered: str) -> bool:
+    explicit_qa_markers = [
+        "browser qa",
+        "browser verification",
+        "browser check",
+        "browser smoke",
+        "browser test",
+        "in-app browser",
+        "playwright",
+        "screenshot",
+        "localhost",
+        "127.0.0.1",
+        "file://",
+        "http://localhost",
+        "opened in browser",
+        "rendered in browser",
+        "브라우저 검증",
+        "브라우저 qa",
+        "브라우저 테스트",
+        "브라우저 확인",
+        "스크린샷",
+        "화면 검증",
+        "렌더링 검증",
+    ]
+    if any(marker in lowered for marker in explicit_qa_markers):
+        return True
+    if "browser" not in lowered and "브라우저" not in lowered:
+        return False
+    qa_context = ["verify", "verified", "verification", "qa", "smoke", "checked", "검증", "확인"]
+    browser_actions = [
+        "open browser",
+        "opened",
+        "navigate",
+        "navigated",
+        "rendered",
+        "inspect",
+        "열고",
+        "열어",
+        "렌더",
+        "클릭해",
+        "클릭했",
+    ]
+    return any(marker in lowered for marker in qa_context) and any(marker in lowered for marker in browser_actions)
 
 
 def _coverage(skill_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
