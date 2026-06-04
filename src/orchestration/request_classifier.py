@@ -218,6 +218,49 @@ DESTRUCTIVE_ACTION_TERMS = {
     "rm -rf /",
 }
 
+BRAINSTORM_APPROVAL_CONTINUATION_TERMS = {
+    "approved",
+    "approval received",
+    "direction approved",
+    "user approved",
+    "approved direction",
+    "selected option",
+    "option selected",
+    "go with option",
+    "proceed with option",
+    "continue with option",
+    "choice approved",
+    "\uc2b9\uc778",
+    "\uc2b9\uc778\ud568",
+    "\uc2b9\uc778\ub428",
+    "\uc2b9\uc778\ubc1b",
+    "\uc120\ud0dd",
+    "\uc120\ud0dd\ud568",
+    "\ubc29\ud5a5 \uc2b9\uc778",
+    "\ubc29\ud5a5\uc744 \uc2b9\uc778",
+    "1\ubc88\uc73c\ub85c \uc9c4\ud589",
+    "2\ubc88\uc73c\ub85c \uc9c4\ud589",
+    "3\ubc88\uc73c\ub85c \uc9c4\ud589",
+}
+BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS = {
+    "implement",
+    "implementation",
+    "build",
+    "develop",
+    "continue",
+    "proceed",
+    "start implementation",
+    "begin implementation",
+    "move to implementation",
+    "execute",
+    "\uad6c\ud604",
+    "\uac1c\ubc1c",
+    "\uc9c4\ud589",
+    "\uc791\uc5c5 \uc9c4\ud589",
+    "\uad6c\ud604 \uc9c4\ud589",
+    "\uac1c\ubc1c \uc9c4\ud589",
+}
+
 SOFTWARE_DOMAIN_TERMS = {
     "api",
     "authentication",
@@ -1515,6 +1558,14 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_command_output_request(normalized):
         return _command_output_classification(domain, cross_cutting, evidence_required, reasons)
 
+    if _is_approved_brainstorm_continuation(normalized, context):
+        return _heavy_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "approved_brainstorm_continuation"],
+        )
+
     if _is_unapproved_product_discovery_request(normalized, context, domain):
         return _brainstorming_classification(domain, cross_cutting, evidence_required, reasons, normalized)
 
@@ -2548,6 +2599,8 @@ def _is_privacy_read_only(normalized: str) -> bool:
 def _is_unapproved_product_discovery_request(normalized: str, context: dict, domain: str) -> bool:
     if _has_active_artifact(context):
         return False
+    if _is_approved_brainstorm_continuation(normalized, context):
+        return False
     if _is_conceptual_request(normalized):
         return False
     if domain in {
@@ -2579,6 +2632,15 @@ def _is_unapproved_product_discovery_request(normalized: str, context: dict, dom
         return False
     token_count = len(normalized.split())
     return token_count <= 18 or not _has_inline_payload(normalized)
+
+
+def _is_approved_brainstorm_continuation(normalized: str, context: dict) -> bool:
+    """Detect a second-turn implementation handoff after a brainstorm choice."""
+    if context.get("brainstorm_handoff_approved") or context.get("has_brainstorm_handoff"):
+        return _contains_any(normalized, BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS)
+    if not _contains_any(normalized, BRAINSTORM_APPROVAL_CONTINUATION_TERMS):
+        return False
+    return _contains_any(normalized, BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS)
 
 
 def _has_blocking_discovery_specificity(normalized: str) -> bool:

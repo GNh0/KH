@@ -460,6 +460,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             "scope_completion_delta": postmortem.scope_completion_delta,
             "user_stop_guard": postmortem.user_stop_guard,
             "assistant_stop_guard": postmortem.assistant_stop_guard,
+            "archive_guard": postmortem.archive_guard,
             "resume_guard": postmortem.resume_guard,
             "recommended_actions": postmortem.recommended_actions,
         },
@@ -541,8 +542,19 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
                 "skill": "goal-state-harness",
                 "status": "blocked",
                 "severity": "P0",
-                "reason": "assistant reported stopped or blocked while the active goal was left open",
-                "action": "Do not report a stopped/blocked final answer with active GoalState; close the goal when allowed or report active_with_blocker with the next required action.",
+                "reason": "assistant reported stopped or blocked without terminal GoalState evidence",
+                "action": "Do not report a stopped/blocked final answer without terminal GoalState evidence; close/block the goal when allowed or report active_with_blocker with the next required action.",
+            }
+        )
+    archive_guard = postmortem.get("archive_guard", {}) or {}
+    if archive_guard.get("status") == "blocked":
+        issues.append(
+            {
+                "skill": "workflow-usability-harness",
+                "status": "blocked",
+                "severity": "P0",
+                "reason": "assistant emitted ::archive without an explicit user request to end or archive the conversation",
+                "action": "Remove unsolicited archive directives; report ordinary partial/blocked status and keep the host thread open.",
             }
         )
     resume_guard = postmortem.get("resume_guard", {}) or {}

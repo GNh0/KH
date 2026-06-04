@@ -250,6 +250,31 @@ class KhFrontDoorTests(unittest.TestCase):
             any("do not implement" in action for action in payload["required_next_actions"])
         )
 
+    def test_approved_brainstorm_followup_opens_execution_gate(self):
+        result = build_kh_front_door(
+            "\uc0ac\uc6a9\uc790\uac00 \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
+            "\ub300\uc2dc\ubcf4\ub4dc 1\ubc88 \uae30\ubcf8 \uc7a5\ubd80\ud615 MVP "
+            "\ubc29\ud5a5\uc744 \uc2b9\uc778\ud568. \ub300\uc0c1 \uacbd\ub85c "
+            "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260604_C "
+            "\uc5d0 \uad6c\ud604 \uc9c4\ud589.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["classification"]["complexity"], "heavy")
+        self.assertEqual(payload["classification"]["domain"], "operations")
+        self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
+        self.assertNotIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "execution_allowed_after_selected_skill_setup")
+        self.assertIn("goal-state-harness", payload["selected_not_executed_skills"])
+        self.assertIn("development-lifecycle-harness", payload["selected_not_executed_skills"])
+        self.assertTrue(
+            any("Create or update GoalState" in action for action in payload["required_next_actions"])
+        )
+
     def test_non_software_discovery_selects_brainstorming_without_kh_terms(self):
         result = build_kh_front_door(
             "C:\\work\\ResearchPlan folder needs a customer churn analysis approach planned.",

@@ -101,9 +101,18 @@ STOP_ACK_PATTERN = re.compile(r"멈|스탑|중단|stop|pause|cancel|halt", re.IG
 ASSISTANT_SELF_STOP_PATTERN = re.compile(
     r"\b(?:stopped|stopping|blocked|cannot continue|unable to continue|work stopped|pausing)\b|"
     r"\uc791\uc5c5\s*\uc911\ub2e8|\uc911\ub2e8\ud569\ub2c8\ub2e4|"
+    r"\uc911\ub2e8\ud558\uace0\s*\uc885\ub8cc|\uc911\ub2e8.*\uc885\ub8cc|"
+    r"\uc885\ub8cc\ud569\ub2c8\ub2e4|"
     r"\uc77c\ub2e8\s*\uc911\ub2e8|\uba48\ucda5\ub2c8\ub2e4|"
     r"\uc9c4\ud589\ud560\s*\uc218\s*\uc5c6\uc2b5\ub2c8\ub2e4|"
     r"\ucc28\ub2e8\ub418\uc5b4|\ucc28\ub2e8\ub410",
+    re.IGNORECASE,
+)
+ARCHIVE_DIRECTIVE_PATTERN = re.compile(r"::archive\s*\{", re.IGNORECASE)
+USER_ARCHIVE_REQUEST_PATTERN = re.compile(
+    r"\b(?:archive|close conversation|close this conversation|end conversation|end this thread)\b|"
+    r"\ub300\ud654\s*\uc885\ub8cc|\ucc44\ud305\s*\uc885\ub8cc|\uc2a4\ub808\ub4dc\s*\uc885\ub8cc|"
+    r"\uc774\s*\ub300\ud654\s*\ub05d|\ub300\ud654\ub97c\s*\ub2eb|\ucc44\ud305\uc744\s*\ub2eb",
     re.IGNORECASE,
 )
 WORK_CONTINUATION_PATTERN = re.compile(
@@ -149,6 +158,7 @@ class SessionPostmortem:
     scope_completion_delta: Dict[str, Any] = field(default_factory=dict)
     user_stop_guard: Dict[str, Any] = field(default_factory=dict)
     assistant_stop_guard: Dict[str, Any] = field(default_factory=dict)
+    archive_guard: Dict[str, Any] = field(default_factory=dict)
     resume_guard: Dict[str, Any] = field(default_factory=dict)
     secret_findings: List[SecretFinding] = field(default_factory=list)
     git_integration: Dict[str, Any] = field(default_factory=dict)
@@ -232,6 +242,10 @@ def analyze_codex_session_jsonl(
     assistant_stop_state = {
         "events": [],
     }
+    archive_state = {
+        "directives": [],
+        "user_requests": [],
+    }
     resume_state = {
         "requests": [],
         "session_start_context_after_resume": 0,
@@ -294,6 +308,13 @@ def analyze_codex_session_jsonl(
             last_message = str(payload.get("last_agent_message", ""))
             if last_message:
                 final_assistant_messages.append(last_message)
+                if ARCHIVE_DIRECTIVE_PATTERN.search(last_message):
+                    archive_state["directives"].append(
+                        {
+                            "line": line_number,
+                            "sample": _short(redact_sensitive_text(last_message), 260),
+                        }
+                    )
                 if _claims_assistant_self_stop(last_message):
                     assistant_stop_state["events"].append(
                         {
@@ -308,6 +329,13 @@ def analyze_codex_session_jsonl(
                 if GOAL_CONTEXT_PATTERN.search(text):
                     if active_stop_line:
                         stop_state["goal_context_after_stop"] += 1
+                elif _is_user_archive_request(text):
+                    archive_state["user_requests"].append(
+                        {
+                            "line": line_number,
+                            "sample": _short(redact_sensitive_text(text), 220),
+                        }
+                    )
                 elif _is_user_stop_request(text):
                     active_stop_line = line_number
                     stop_state["requests"].append(
@@ -436,6 +464,7 @@ def analyze_codex_session_jsonl(
         final_assistant_messages,
         assistant_stop_state,
     )
+    archive_guard = _build_archive_guard(archive_state)
     resume_guard = _build_resume_guard(resume_state, token_info)
     actions = _recommended_actions(
         token_status=token_status,
@@ -446,6 +475,7 @@ def analyze_codex_session_jsonl(
         scope_completion_delta=scope_completion_delta,
         user_stop_guard=user_stop_guard,
         assistant_stop_guard=assistant_stop_guard,
+        archive_guard=archive_guard,
         resume_guard=resume_guard,
         secret_findings=secret_findings,
         git_state=git_state,
@@ -462,6 +492,7 @@ def analyze_codex_session_jsonl(
         "scope_completion_delta",
         "user_stop_guard",
         "assistant_stop_guard",
+        "archive_guard",
         "resume_guard",
         "secret_redaction_scan",
         "git_integration_status",
@@ -484,6 +515,7 @@ def analyze_codex_session_jsonl(
         scope_completion_delta=scope_completion_delta,
         user_stop_guard=user_stop_guard,
         assistant_stop_guard=assistant_stop_guard,
+        archive_guard=archive_guard,
         resume_guard=resume_guard,
         secret_findings=secret_findings[:max_secret_findings],
         git_integration=git_state,
@@ -504,6 +536,7 @@ def render_session_postmortem(postmortem: SessionPostmortem) -> str:
         f"Verification guard: {postmortem.verification_claim_guard.get('status', 'unknown')}",
         f"User stop guard: {postmortem.user_stop_guard.get('status', 'unknown')}",
         f"Assistant stop guard: {postmortem.assistant_stop_guard.get('status', 'unknown')}",
+        f"Archive guard: {postmortem.archive_guard.get('status', 'unknown')}",
         f"Resume guard: {postmortem.resume_guard.get('status', 'unknown')}",
         (
             "Subagents: "
@@ -749,10 +782,13 @@ def _build_assistant_stop_guard(
         for event in stop_events
         if str(event.get("goal_status_at_stop", "")) == "active"
     ]
-    blocked = bool(task_complete_count > 0 and active_stop_events)
+    terminal_status = latest_status in {"blocked", "complete"}
+    blocked = bool(task_complete_count > 0 and (active_stop_events or (stop_events and not terminal_status)))
     reasons: List[str] = []
-    if blocked:
+    if active_stop_events:
         reasons.append("assistant_stop_left_goal_active")
+    if stop_events and not terminal_status:
+        reasons.append("assistant_stop_without_terminal_goal")
     return {
         "status": "blocked" if blocked else "passed",
         "latest_goal_status": latest_status,
@@ -761,6 +797,23 @@ def _build_assistant_stop_guard(
         "stop_event_count": len(stop_events),
         "active_stop_events": active_stop_events[:5],
         "final_stop_messages": stop_messages[:5],
+        "reasons": reasons,
+    }
+
+
+def _build_archive_guard(archive_state: Dict[str, Any]) -> Dict[str, Any]:
+    directives = list(archive_state.get("directives", []) or [])
+    user_requests = list(archive_state.get("user_requests", []) or [])
+    reasons: List[str] = []
+    if directives and not user_requests:
+        reasons.append("archive_directive_without_user_request")
+    return {
+        "status": "blocked" if reasons else "passed",
+        "archive_directive_count": len(directives),
+        "user_archive_request_count": len(user_requests),
+        "latest_archive_line": directives[-1]["line"] if directives else 0,
+        "archive_directives": directives[:5],
+        "user_archive_requests": user_requests[:5],
         "reasons": reasons,
     }
 
@@ -800,6 +853,7 @@ def _recommended_actions(
     scope_completion_delta: Dict[str, Any],
     user_stop_guard: Dict[str, Any],
     assistant_stop_guard: Dict[str, Any],
+    archive_guard: Dict[str, Any],
     resume_guard: Dict[str, Any],
     secret_findings: List[SecretFinding],
     git_state: Dict[str, Any],
@@ -824,7 +878,11 @@ def _recommended_actions(
         )
     if assistant_stop_guard.get("status") == "blocked":
         actions.append(
-            "Do not emit a stopped/blocked final answer while the host goal remains active; either close the goal when policy permits, or report active_with_blocker and the next required action without declaring stop."
+            "Do not emit a stopped/blocked final answer without terminal GoalState evidence; either close/block the goal when policy permits, or report active_with_blocker and the next required action without declaring stop."
+        )
+    if archive_guard.get("status") == "blocked":
+        actions.append(
+            "Do not emit ::archive unless the user explicitly asked to end/archive the conversation; report the failed handoff as an ordinary status instead."
         )
     if resume_guard.get("status") == "blocked":
         actions.append(
@@ -957,6 +1015,11 @@ def _is_user_stop_request(text: str) -> bool:
     if "stop loss" in lowered or "stop-loss" in lowered:
         return False
     return bool(USER_STOP_PATTERN.search(normalized))
+
+
+def _is_user_archive_request(text: str) -> bool:
+    normalized = (text or "").strip()
+    return bool(normalized and USER_ARCHIVE_REQUEST_PATTERN.search(normalized))
 
 
 def _is_user_resume_request(text: str) -> bool:

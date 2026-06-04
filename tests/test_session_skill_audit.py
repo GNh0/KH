@@ -575,7 +575,35 @@ class SessionSkillAuditTests(unittest.TestCase):
             any(
                 issue["skill"] == "goal-state-harness"
                 and issue["severity"] == "P0"
-                and "assistant reported stopped" in issue["reason"]
+                and "without terminal GoalState evidence" in issue["reason"]
+                for issue in audit.issues
+            )
+        )
+
+    def test_unsolicited_archive_directive_is_p0_skill_audit_issue(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            "\uc911\ub2e8\ud558\uace0 \uc885\ub8cc\ud569\ub2c8\ub2e4.\n"
+                            "::archive{reason=\"User requested to end conversation\"}"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertEqual(audit.postmortem["archive_guard"]["status"], "blocked")
+        self.assertTrue(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["severity"] == "P0"
+                and "::archive" in issue["reason"]
                 for issue in audit.issues
             )
         )

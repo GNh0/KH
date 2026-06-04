@@ -265,6 +265,58 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         )
         self.assertIn("Assistant stop guard: blocked", render_session_postmortem(postmortem))
 
+    def test_assistant_stop_guard_detects_korean_stop_and_archive_without_goal(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            "\uc911\ub2e8\ud558\uace0 \uc885\ub8cc\ud569\ub2c8\ub2e4.\n\n"
+                            "::archive{reason=\"User requested to end conversation\"}"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.assistant_stop_guard["status"], "blocked")
+        self.assertIn("assistant_stop_without_terminal_goal", postmortem.assistant_stop_guard["reasons"])
+        self.assertTrue(postmortem.assistant_stop_guard["assistant_claims_stop"])
+        self.assertEqual(postmortem.archive_guard["status"], "blocked")
+        self.assertIn("archive_directive_without_user_request", postmortem.archive_guard["reasons"])
+        self.assertIn("Archive guard: blocked", render_session_postmortem(postmortem))
+
+    def test_archive_guard_allows_explicit_user_archive_request(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "\ub300\ud654 \uc885\ub8cc\ud574\uc918.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "::archive{reason=\"User requested to end conversation\"}",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.archive_guard["status"], "passed")
+        self.assertEqual(postmortem.archive_guard["archive_directive_count"], 1)
+        self.assertEqual(postmortem.archive_guard["user_archive_request_count"], 1)
+
     def test_assistant_stop_guard_allows_terminal_goal(self):
         path = self.write_session(
             [

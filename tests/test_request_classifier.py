@@ -149,6 +149,22 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertIn("brainstorming-harness", result.recommended_skills)
                 self.assertIn("brainstorm_handoff", result.evidence_required)
 
+    def test_approved_korean_brainstorm_followup_routes_to_heavy_execution(self):
+        result = classify_request(
+            "\uc0ac\uc6a9\uc790\uac00 \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
+            "\ub300\uc2dc\ubcf4\ub4dc 1\ubc88 \uae30\ubcf8 \uc7a5\ubd80\ud615 MVP "
+            "\ubc29\ud5a5\uc744 \uc2b9\uc778\ud568. \ub300\uc0c1 \uacbd\ub85c C:\\work\\Inventory "
+            "\uc5d0 \uad6c\ud604 \uc9c4\ud589."
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.domain, "operations")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertNotIn("brainstorming-harness", result.recommended_skills)
+        self.assertIn("goal-state-harness", result.required_harnesses)
+        self.assertIn("development-lifecycle-harness", result.required_harnesses)
+        self.assertIn("approved_brainstorm_continuation", result.reasons)
+
     def test_specific_verified_html_tool_does_not_route_to_brainstorming(self):
         result = classify_request("Build a small HTML todo tool and verify it.")
 
