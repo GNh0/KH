@@ -9,9 +9,13 @@ description: Use when any non-trivial Codex, Antigravity-style, Claude Code, or 
 
 After reading this file for a work-bearing request, run the front-door command immediately as the next standalone tool call. Do not open QA, verification, browser, document, image, memory, or other KH skill files first. Do not run target-folder checks, parent/sibling directory scans, `MEMORY.md` searches, memory quick passes, project file reads, or parallel tool batches before or alongside the command.
 
+For non-ASCII prompts on Windows, do not pass the user request through a shell `--prompt "<text>"` argument. Write the exact request to a UTF-8 prompt file as part of the front-door bootstrap and call:
+
 ```bash
-python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
+python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd or target project>" --host codex --summary
 ```
+
+For short ASCII-only prompts, `--prompt "<user request>"` is still accepted.
 
 If you are already running from the KH repository root, `python -m src.orchestration.kh_front_door ...` is also valid. Prefer the skill-local wrapper when the host starts in a target project, temp folder, or subagent workspace.
 
@@ -36,7 +40,7 @@ This is the host-visible bootstrap skill for KH UAF. Its job is to make automati
 4. If work-bearing, make the first standalone work-bearing tool call the KH front-door intake. Do not run source reads, target-folder checks, parent/sibling folder scans, `Test-Path`, `Get-ChildItem`, `rg`, memory lookup, memory quick pass, image generation, document generation, browser QA, or subagent dispatch before it. Do not parallelize those actions in the same pre-intake batch.
 
 ```bash
-python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
+python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd or target project>" --host codex --summary
 ```
 
 5. Treat only the intake command's `runtime_applied_skills` as executed.
@@ -71,6 +75,7 @@ python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --p
 - Do not create a substitute folder in the current workspace when the user named a different target path. If the exact target path is unavailable, outside the sandbox, or needs approval, stop and report the permission/path blocker before generating artifacts.
 - Do not create workspace-root product files such as `index.html`, `styles.css`, `app.js`, documents, images, or generated data files while waiting for exact target path permission. Execution approval does not allow staging outside the requested absolute target.
 - Do not assume plugin `defaultPrompt` was injected into the live session.
+- Do not pass Korean, Japanese, Chinese, or other non-ASCII user requests through a Windows shell `--prompt "<text>"` argument. Use `--prompt-file` or `--prompt-stdin` so the front-door classifier sees the same request the user wrote.
 - Do not ignore `execution_gate.can_execute=false` because the user said "develop", "make", or "create"; that wording starts direction discovery when front-door selected brainstorming, not implementation approval.
 - Do not use `%CODEX_HOME%/memories/MEMORY.md` or `%CODEX_HOME%/memories/skills/...` as current-project evidence under a brainstorming gate. Those are cross-chat/subagent memories unless the user explicitly asks for prior-context reuse.
 - Do not count a SKILL.md read, plugin listing, or marketplace metadata as runtime application.
@@ -93,4 +98,4 @@ python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --p
 - Use `examples/minimal-workflow.md` as the blind-request acceptance scenario.
 - Run `python scripts/smoke_check.py` from this skill folder to verify support files and implementation targets.
 - Run `python scripts/demo.py --output-dir <tmp>` to verify the front-door demo path.
-- Use `python scripts/front_door.py --prompt "<user request>" --project "<target>" --host codex --summary` when the current working directory is not the KH repository root.
+- Use `python scripts/front_door.py --prompt-file "<utf8 prompt file>" --project "<target>" --host codex --summary` when the current working directory is not the KH repository root and the prompt is not ASCII-only.

@@ -16,7 +16,7 @@ The user did not name KH, UAF, skills, or harnesses.
 2. Run front-door intake before reading source files, doing a memory quick pass, checking the target folder, or writing output:
 
 ```bash
-python "<this skill folder>/scripts/front_door.py" --prompt "Make a small static dashboard in this folder and verify it." --project "<cwd>" --host codex --summary
+python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd>" --host codex --summary
 ```
 
 3. Record the returned classification and plugin route.

@@ -46,11 +46,13 @@ actual_runtime_path: `src.orchestration.kh_front_door.build_kh_front_door`, `pyt
 
 ## Execution pattern
 
-Run:
+Run. For non-ASCII prompts on Windows, prefer `--prompt-file` so the classifier receives the exact user text instead of a mojibaked shell argument:
 
 ```bash
-python "<this skill folder>/scripts/front_door.py" --prompt "<user request>" --project "<cwd or target project>" --host codex --summary
+python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd or target project>" --host codex --summary
 ```
+
+`--prompt "<user request>"` remains available for short ASCII-only prompts. `--prompt-stdin` is also available when the host can provide stdin safely.
 
 Then:
 

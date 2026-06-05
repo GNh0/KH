@@ -311,6 +311,90 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_new_project_global_static_memory_shortcut_is_flagged_even_if_front_door_misroutes(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["token-optimizer", "workflow-usability-harness"],
+            "execution_gate": {
+                "status": "execution_allowed_after_selected_skill_setup",
+                "can_execute": True,
+                "blocked_actions": [],
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            r"C:\Users\KONEIT\Desktop\Jang\asdfasdf "
+                            "\uc774 \uacbd\ub85c\uc5d0 \uc77c\uc815,\ud68c\uc758\ub85d\uc744 "
+                            "\uc815\ub9ac\ud558\ub294 \uc6f9 \ud648\ud398\uc774\uc9c0\ub97c "
+                            "\ud558\ub098 \ub9cc\ub4e4\uace0\uc2f6\ub124 pdf\ub97c \uc62c\ub9ac\uba74 "
+                            "pdf\uc758 \ub0b4\uc6a9\uc774 \uadf8\ub300\ub85c \uc800\uc7a5\ub418\uace0 \ud558\ub294"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' "
+                            "-Pattern 'static-web-local-verification|index.html'"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "Get-Content -Path "
+                            "'C:\\Users\\KONEIT\\.codex\\memories\\skills\\static-web-local-verification\\SKILL.md'"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "New-Item -ItemType Directory -Force -Path 'work\\asdfasdf-schedule-site'",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "memory-state-harness"
+                and issue["status"] == "global_memory_shortcut_without_brainstorm_gate"
+                and issue["severity"] == "P0"
+                for issue in audit.issues
+            )
+        )
+
     def test_actual_architecture_work_requires_architect_pipeline(self):
         path = self.write_session(
             [

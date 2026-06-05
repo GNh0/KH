@@ -60,6 +60,67 @@ class AlwaysOnFrontDoorTests(unittest.TestCase):
         )
         self.assertIn("verification-before-completion-harness", summary["selected_not_executed_skills"])
 
+    def test_new_korean_web_product_request_blocks_until_brainstorming(self):
+        request = (
+            r"C:\Users\KONEIT\Desktop\Jang\asdfasdf "
+            "\uc774 \uacbd\ub85c\uc5d0 \uc77c\uc815,\ud68c\uc758\ub85d\uc744 "
+            "\uc815\ub9ac\ud558\ub294 \uc6f9 \ud648\ud398\uc774\uc9c0\ub97c "
+            "\ud558\ub098 \ub9cc\ub4e4\uace0\uc2f6\ub124 pdf\ub97c \uc62c\ub9ac\uba74 "
+            "pdf\uc758 \ub0b4\uc6a9\uc774 \uadf8\ub300\ub85c \uc800\uc7a5\ub418\uace0 \ud558\ub294"
+        )
+
+        classification = classify_request(request, {"host": "codex"})
+        result = build_kh_front_door(
+            request,
+            project=r"C:\Users\KONEIT\Desktop\Jang\asdfasdf",
+            host="codex",
+        )
+        summary = result.to_summary_dict()
+
+        self.assertEqual(classification.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", classification.required_harnesses)
+        self.assertFalse(summary["execution_gate"]["can_execute"])
+        self.assertEqual(summary["execution_gate"]["status"], "blocked_until_brainstorming_handoff")
+        self.assertIn("MEMORY.md_lookup", summary["execution_gate"]["blocked_actions"])
+        self.assertIn("brainstorming-harness", summary["selected_not_executed_skills"])
+
+    def test_new_korean_web_product_request_without_pdf_still_brainstorms(self):
+        request = (
+            r"C:\Users\KONEIT\Desktop\Jang\asdfasdf "
+            "\uacbd\ub85c\uc5d0 \uc77c\uc815,\ud68c\uc758\ub85d\uc744 "
+            "\uc815\ub9ac\ud558\ub294 \uc6f9 \ud648\ud398\uc774\uc9c0\ub97c "
+            "\ud558\ub098 \ub9cc\ub4e4\uace0\uc2f6\ub124"
+        )
+
+        classification = classify_request(request, {"host": "codex"})
+        result = build_kh_front_door(
+            request,
+            project=r"C:\Users\KONEIT\Desktop\Jang\asdfasdf",
+            host="codex",
+        )
+        summary = result.to_summary_dict()
+
+        self.assertIn("brainstorming-harness", classification.required_harnesses)
+        self.assertFalse(summary["execution_gate"]["can_execute"])
+
+    def test_garbled_path_pdf_project_request_does_not_open_execution_gate(self):
+        request = (
+            r"C:\Users\KONEIT\Desktop\Jang\asdfasdf "
+            "?? ??? ??? ??? ??? pdf?? ?? pdf??? ??? ???"
+        )
+
+        classification = classify_request(request, {"host": "codex"})
+        result = build_kh_front_door(
+            request,
+            project=r"C:\Users\KONEIT\Desktop\Jang\asdfasdf",
+            host="codex",
+        )
+        summary = result.to_summary_dict()
+
+        self.assertIn("brainstorming-harness", classification.required_harnesses)
+        self.assertFalse(summary["execution_gate"]["can_execute"])
+        self.assertIn("global_codex_MEMORY.md", summary["execution_gate"]["blocked_actions"])
+
     def test_session_audit_flags_front_door_miss_as_always_on_failure(self):
         path = self.write_session(
             [

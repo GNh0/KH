@@ -137,6 +137,45 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         self.assertIn("token-optimizer", payload["selected_not_executed_skills"])
 
+    def test_cli_prompt_file_preserves_korean_request_for_brainstorming_gate(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_file = Path(tmp) / "prompt.txt"
+            prompt_file.write_text(
+                (
+                    r"C:\Users\KONEIT\Desktop\Jang\asdfasdf "
+                    "\uacbd\ub85c\uc5d0 \uc77c\uc815,\ud68c\uc758\ub85d\uc744 "
+                    "\uc815\ub9ac\ud558\ub294 \uc6f9 \ud648\ud398\uc774\uc9c0\ub97c "
+                    "\ud558\ub098 \ub9cc\ub4e4\uace0\uc2f6\ub124"
+                ),
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "src.orchestration.kh_front_door",
+                    "--prompt-file",
+                    str(prompt_file),
+                    "--project",
+                    r"C:\Users\KONEIT\Desktop\Jang\asdfasdf",
+                    "--host",
+                    "codex",
+                    "--summary",
+                ],
+                cwd=repo_root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+        payload = json.loads(completed.stdout)
+
+        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertIn("MEMORY.md_lookup", payload["execution_gate"]["blocked_actions"])
+
     def test_skill_local_front_door_wrapper_runs_outside_repo_root(self):
         repo_root = Path(__file__).resolve().parents[1]
         wrapper = repo_root / "skills" / "always_on_front_door" / "scripts" / "front_door.py"

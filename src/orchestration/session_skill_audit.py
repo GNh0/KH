@@ -824,7 +824,9 @@ def _target_substitution_issues(path: Path) -> List[Dict[str, Any]]:
 
 
 def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
-    if not (_front_door_selected_skill(path, "brainstorming-harness") or _front_door_blocks_execution(path)):
+    front_door_brainstorm_gate = _front_door_selected_skill(path, "brainstorming-harness") or _front_door_blocks_execution(path)
+    new_project_context = _session_has_new_project_discovery_request(path)
+    if not (front_door_brainstorm_gate or new_project_context):
         return []
     samples: List[str] = []
     for event in _session_payload_events(path):
@@ -841,6 +843,26 @@ def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
                 break
     if not samples:
         return []
+    if not front_door_brainstorm_gate:
+        return [
+            {
+                "skill": "memory-state-harness",
+                "status": "global_memory_shortcut_without_brainstorm_gate",
+                "severity": "P0",
+                "reason": (
+                    "A fresh or underspecified project request read global Codex memory or memory-skill notes "
+                    "before KH established a brainstorming gate. This lets stale cross-chat implementation "
+                    "patterns override current project/chat-scoped direction discovery."
+                ),
+                "action": (
+                    "Treat new app/site/dashboard/project requests as brainstorming-gated before any "
+                    "`%CODEX_HOME%/memories/MEMORY.md` or `%CODEX_HOME%/memories/skills/...` lookup. "
+                    "If front-door fails to select brainstorming, stop and record router_failure instead of "
+                    "using memory-derived implementation shortcuts."
+                ),
+                "samples": samples,
+            }
+        ]
     return [
         {
             "skill": "memory-state-harness",
@@ -859,6 +881,41 @@ def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
             "samples": samples,
         }
     ]
+
+
+def _session_has_new_project_discovery_request(path: Path) -> bool:
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("type", "")) != "message":
+            continue
+        if str(payload.get("role", "")).lower() != "user":
+            continue
+        text = _payload_text(payload)
+        lowered = text.lower()
+        if _early_domain_discovery_text(lowered):
+            return True
+        if _extract_windows_paths(text) and any(
+            marker in lowered
+            for marker in [
+                "pdf",
+                "docx",
+                "xlsx",
+                "html",
+                "css",
+                "javascript",
+                "index.html",
+                "styles.css",
+                "app.js",
+                "website",
+                "webpage",
+                "homepage",
+                "dashboard",
+            ]
+        ):
+            return True
+    return False
 
 
 def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
@@ -1592,6 +1649,12 @@ def _early_domain_discovery_text(lowered: str) -> bool:
         "develop a product",
         "new product",
         "new app",
+        "website",
+        "web site",
+        "webpage",
+        "web page",
+        "homepage",
+        "web app",
         "project idea",
         "new workflow",
         "process design",
@@ -1608,6 +1671,10 @@ def _early_domain_discovery_text(lowered: str) -> bool:
         "\uc11c\ube44\uc2a4",
         "\ud504\ub85c\ub355\ud2b8",
         "\uc0ac\uc774\ud2b8",
+        "\uc6f9",
+        "\uc6f9\uc0ac\uc774\ud2b8",
+        "\uc6f9\ud398\uc774\uc9c0",
+        "\ud648\ud398\uc774\uc9c0",
         "\uc571",
         "\uc6f9\uc571",
         "\ub300\uc2dc\ubcf4\ub4dc",

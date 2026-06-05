@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
@@ -615,7 +616,9 @@ def _dedupe(items: Iterable[str]) -> List[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run KH front-door routing before source work.")
-    parser.add_argument("--prompt", required=True, help="User request text.")
+    parser.add_argument("--prompt", default="", help="User request text. Prefer --prompt-file for non-ASCII prompts on Windows.")
+    parser.add_argument("--prompt-file", default="", help="UTF-8 file containing the user request text.")
+    parser.add_argument("--prompt-stdin", action="store_true", help="Read the user request text from stdin.")
     parser.add_argument("--project", default="", help="Target project path. Defaults to current directory.")
     parser.add_argument("--host", default="codex", help="Host runtime label such as codex, antigravity, or local.")
     parser.add_argument(
@@ -628,10 +631,11 @@ def main() -> int:
     parser.add_argument("--prefer-cache", action="store_true", help="Prefer the latest installed kh-uaf cache over repo-local skills.")
     parser.add_argument("--summary", action="store_true", help="Print a compact front-door summary.")
     args = parser.parse_args()
+    prompt = _resolve_prompt_arg(args.prompt, args.prompt_file, args.prompt_stdin)
 
     providers = json.loads(args.providers_json) if args.providers_json else None
     result = build_kh_front_door(
-        prompt=args.prompt,
+        prompt=prompt,
         project=args.project or None,
         host=args.host,
         providers=providers,
@@ -641,6 +645,17 @@ def main() -> int:
     payload = result.to_summary_dict() if args.summary else result.to_dict()
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if result.front_door_status == "ok" else 2
+
+
+def _resolve_prompt_arg(prompt: str, prompt_file: str, prompt_stdin: bool) -> str:
+    sources = [bool(prompt), bool(prompt_file), bool(prompt_stdin)]
+    if sum(1 for source in sources if source) != 1:
+        raise SystemExit("provide exactly one of --prompt, --prompt-file, or --prompt-stdin")
+    if prompt_file:
+        return Path(prompt_file).read_text(encoding="utf-8")
+    if prompt_stdin:
+        return sys.stdin.read()
+    return prompt
 
 
 if __name__ == "__main__":

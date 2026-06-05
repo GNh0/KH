@@ -835,6 +835,14 @@ PRODUCT_DISCOVERY_OBJECT_TERMS = {
     "service",
     "saas",
     "app",
+    "web app",
+    "website",
+    "web site",
+    "webpage",
+    "web page",
+    "homepage",
+    "portal",
+    "page",
     "dashboard",
     "tool",
     "platform",
@@ -847,6 +855,13 @@ PRODUCT_DISCOVERY_OBJECT_TERMS = {
     "\uc81c\ud488",
     "\uc11c\ube44\uc2a4",
     "\uc571",
+    "\uc6f9",
+    "\uc6f9\uc571",
+    "\uc6f9\uc0ac\uc774\ud2b8",
+    "\uc6f9\ud398\uc774\uc9c0",
+    "\ud648\ud398\uc774\uc9c0",
+    "\ud3ec\ud138",
+    "\ud398\uc774\uc9c0",
     "\ub300\uc2dc\ubcf4\ub4dc",
     "\ub3c4\uad6c",
     "\ud234",
@@ -995,7 +1010,17 @@ PRODUCT_DISCOVERY_SPECIFICITY_TERMS = {
 }
 VAGUE_DISCOVERY_SPECIFICITY_TERMS = {
     "dashboard",
+    "pdf",
+    "docx",
+    "xlsx",
+    "dxf",
+    "svg",
+    "upload",
+    "file upload",
+    "store",
     "\ub300\uc2dc\ubcf4\ub4dc",
+    "\uc5c5\ub85c\ub4dc",
+    "\uc800\uc7a5",
 }
 VENDOR_OPS_TERMS = {
     "rfp",
@@ -1676,6 +1701,15 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             cross_cutting,
             evidence_required,
             [*reasons, "approved_brainstorm_continuation"],
+        )
+
+    if _is_mojibake_new_project_request(text, normalized, context):
+        return _brainstorming_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "mojibake_new_project_needs_brainstorming"],
+            normalized,
         )
 
     if _is_unapproved_product_discovery_request(normalized, context, domain):
@@ -2749,7 +2783,6 @@ def _is_unapproved_product_discovery_request(normalized: str, context: dict, dom
         return False
     if domain in {
         "shopping",
-        "scheduling",
         "weather",
         "legal",
         "medical",
@@ -2785,6 +2818,35 @@ def _is_approved_brainstorm_continuation(normalized: str, context: dict) -> bool
     if not _contains_any(normalized, BRAINSTORM_APPROVAL_CONTINUATION_TERMS):
         return False
     return _contains_any(normalized, BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS)
+
+
+def _is_mojibake_new_project_request(original: str, normalized: str, context: dict) -> bool:
+    # This is not a general "path + PDF/web" rule. It is a safe fallback for
+    # Windows sessions where Korean product-request text arrives mojibaked and
+    # the router would otherwise open execution from unreadable input.
+    if _has_active_artifact(context):
+        return False
+    if not re.search(r"[A-Za-z]:\\", original):
+        return False
+    if original.count("?") < 6:
+        return False
+    return _contains_any(
+        normalized,
+        {
+            "pdf",
+            "docx",
+            "xlsx",
+            "html",
+            "css",
+            "javascript",
+            "web",
+            "app",
+            "dashboard",
+            "homepage",
+            "server",
+            "node",
+        },
+    )
 
 
 def _is_memory_state_request(normalized: str) -> bool:
