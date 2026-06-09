@@ -453,6 +453,43 @@ class KhFrontDoorTests(unittest.TestCase):
             "skipped_with_rationale",
         )
 
+    def test_pbl_sql_image_binding_request_requires_large_work_preflight(self):
+        result = build_kh_front_door(
+            "Use C:\\PblScripter with quality_470 / quality_004.pbl, trace the print button SQL, "
+            "replace actual data in the report image with bound column names, and give me the image.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "heavy")
+        self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
+        self.assertIn("command-output-harness", payload["recommended_skills"])
+        self.assertIn("artifact-render-qa-harness", payload["recommended_skills"])
+        self.assertIn("deliverable-template-quality-harness", payload["recommended_skills"])
+        self.assertIn("traceability-matrix-harness", payload["recommended_skills"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertIn(
+            "command_output_filter_plan",
+            payload["execution_gate"]["required_before_execution"],
+        )
+        self.assertIn(
+            "deliverable_render_quality_plan",
+            payload["execution_gate"]["required_before_execution"],
+        )
+        self.assertIn(
+            "record_command_output_filter_plan",
+            payload["execution_gate"]["allowed_setup_actions"],
+        )
+        self.assertIn(
+            "record_deliverable_render_quality_plan",
+            payload["execution_gate"]["allowed_setup_actions"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

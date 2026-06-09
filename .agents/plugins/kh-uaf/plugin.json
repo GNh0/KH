@@ -1,5 +1,5 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.63",
+  "version": "2.9.64",
   "description": "KH UAF marketplace wrapper for the Codex plugin source declared in .agents/plugins/marketplace.json."
 }

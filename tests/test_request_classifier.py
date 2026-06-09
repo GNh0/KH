@@ -220,6 +220,34 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("token-optimizer", result.cross_cutting)
         self.assertIn("token_optimization", result.evidence_required)
 
+    def test_pbl_sql_image_binding_request_is_heavy_deliverable_work(self):
+        result = classify_request(
+            "Use C:\\PblScripter with quality_470 / quality_004.pbl, trace the print button SQL, "
+            "replace actual data in the report image with bound column names, and give me the image."
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertIn("command-output-harness", result.required_harnesses)
+        self.assertIn("artifact-render-qa-harness", result.required_harnesses)
+        self.assertIn("deliverable-template-quality-harness", result.required_harnesses)
+        self.assertIn("traceability-matrix-harness", result.required_harnesses)
+        self.assertIn("command_output_filter", result.evidence_required)
+        self.assertIn("render_validation", result.evidence_required)
+        self.assertIn("complex_source_extraction_deliverable", result.reasons)
+
+    def test_mojibake_pbl_sql_artifact_request_is_not_downgraded_to_medium(self):
+        result = classify_request(
+            "c:\\pblscripter ? ????? ???? ?? quality_470 / quality_004.pbl "
+            "?? ????? ????? sql?? ?? ?? ???? ??(?????)? ??? ??? ??? ???? ??????? ??? ? ???? ?????"
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertIn("artifact-render-qa-harness", result.required_harnesses)
+        self.assertIn("complex_source_extraction_deliverable", result.reasons)
+
     def test_expected_context_budget_forces_token_optimizer_evidence_without_heavy_route(self):
         result = classify_request(
             "What is PER?",

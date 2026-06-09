@@ -537,6 +537,21 @@ def _required_next_actions(
                 "Run verification-before-completion before any done, commit, push, or handoff claim.",
             ]
         )
+    if "command-output-harness" in recommended_skills:
+        actions.append(
+            "Record command_output_filter_plan before broad command reads: preserve exit code, file paths, line numbers, error codes, SQL/query text, and user-requested facts; if preservation cannot be proven, use passthrough or wider-context fallback."
+        )
+    if any(
+        skill in recommended_skills
+        for skill in [
+            "artifact-render-qa-harness",
+            "deliverable-template-quality-harness",
+            "traceability-matrix-harness",
+        ]
+    ):
+        actions.append(
+            "Record deliverable_render_quality_plan before generating user-facing artifacts: required output files, source-to-deliverable traceability, render/readability validation, and how requested SQL/text will be included in the user-facing response when requested."
+        )
     for skill in recommended_skills:
         if skill in FRONT_DOOR_SKILLS or skill == "token-optimizer":
             continue
@@ -605,6 +620,31 @@ def _execution_gate(
         classification.get("complexity") in {"heavy", "high_risk"}
         or classification.get("recommended_execution") == "role_dag"
     ):
+        required_before_execution = [
+            "goal-state-harness",
+            "large_work_orchestration_bundle",
+            "skill_statuses",
+            "workspace_strategy",
+            "token_optimizer_status",
+            "host_runtime",
+            "nested_subagents_available_or_not_applicable",
+            "subagent_strategy_with_rationale",
+            "parallel_strategy_decision_with_rationale",
+            "role_execution_audit.status_or_pre_role_skip",
+            "guard_policy_or_rollback_strategy",
+            "verification_plan",
+        ]
+        if "command-output-harness" in recommended_skills:
+            required_before_execution.append("command_output_filter_plan")
+        if any(
+            skill in recommended_skills
+            for skill in [
+                "artifact-render-qa-harness",
+                "deliverable-template-quality-harness",
+                "traceability-matrix-harness",
+            ]
+        ):
+            required_before_execution.append("deliverable_render_quality_plan")
         return {
             "status": "blocked_until_large_work_preflight",
             "can_execute": False,
@@ -613,20 +653,7 @@ def _execution_gate(
                 "and verification harnesses; implementation must wait until preflight "
                 "evidence records how each selected harness will run, be skipped, or be blocked."
             ),
-            "required_before_execution": [
-                "goal-state-harness",
-                "large_work_orchestration_bundle",
-                "skill_statuses",
-                "workspace_strategy",
-                "token_optimizer_status",
-                "host_runtime",
-                "nested_subagents_available_or_not_applicable",
-                "subagent_strategy_with_rationale",
-                "parallel_strategy_decision_with_rationale",
-                "role_execution_audit.status_or_pre_role_skip",
-                "guard_policy_or_rollback_strategy",
-                "verification_plan",
-            ],
+            "required_before_execution": required_before_execution,
             "allowed_setup_actions": [
                 "read_selected_skill_docs",
                 "create_or_update_goal_state",
@@ -634,6 +661,8 @@ def _execution_gate(
                 "record_workspace_strategy",
                 "record_token_optimizer_status",
                 "record_host_subagent_parallel_role_strategy",
+                "record_command_output_filter_plan",
+                "record_deliverable_render_quality_plan",
                 "record_guard_or_rollback_policy",
                 "record_verification_plan",
             ],

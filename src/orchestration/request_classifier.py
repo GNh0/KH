@@ -553,6 +553,56 @@ COMMAND_OUTPUT_FACT_TERMS = {
     "라인",
     "값",
 }
+COMPLEX_EXTRACTION_SOURCE_TERMS = {
+    "pbl",
+    "pblscripter",
+    "powerbuilder",
+    "datawindow",
+    "sru",
+    "srd",
+    "pbd",
+    "orca",
+    "binary",
+    "embedded string",
+    "print button",
+    "retrieve sql",
+    "retrieve=",
+    "stored procedure",
+    "sql",
+    "select",
+    "\uc778\uc1c4\ubc84\ud2bc",
+    "\uc870\ud68c",
+    "\uc870\ud68c sql",
+}
+COMPLEX_EXTRACTION_ARTIFACT_TERMS = {
+    "image",
+    "png",
+    "svg",
+    "pdf",
+    "render",
+    "screenshot",
+    "diagram",
+    "drawing",
+    "visual",
+    "binding",
+    "bound column",
+    "column name",
+    "field name",
+    "replace actual data",
+    "actual data",
+    "\uc774\ubbf8\uc9c0",
+    "\uc2a4\ud06c\ub9b0\uc0f7",
+    "\ubc14\uc778\ub529",
+    "\uceec\ub7fc\uba85",
+    "\uc870\ud68c\uceec\ub7fc",
+    "\uc2e4\uc81c\ub370\uc774\ud130",
+}
+COMPLEX_EXTRACTION_REQUIRED_HARNESSES = [
+    "command-output-harness",
+    "artifact-render-qa-harness",
+    "deliverable-template-quality-harness",
+    "traceability-matrix-harness",
+]
 LIGHT_TERMS = {
     "what is",
     "what does",
@@ -1683,6 +1733,14 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_high_risk(normalized, domain, context):
         return _high_risk_classification(domain, cross_cutting, evidence_required, reasons)
 
+    if _is_complex_extraction_deliverable_request(normalized):
+        return _complex_extraction_deliverable_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            reasons,
+        )
+
     if _is_command_output_request(normalized):
         return _command_output_classification(domain, cross_cutting, evidence_required, reasons)
 
@@ -2004,6 +2062,50 @@ def _command_output_classification(
         ),
         reasons=[*reasons, "command_output_summary_or_filtering"],
         confidence=0.82,
+    )
+
+
+def _complex_extraction_deliverable_classification(
+    domain: str,
+    cross_cutting: List[str],
+    evidence_required: List[str],
+    reasons: List[str],
+) -> RequestClassification:
+    routed_domain = "software" if domain == "general" else domain
+    return _classification(
+        complexity="heavy",
+        domain=routed_domain,
+        recommended_execution="role_dag",
+        cross_cutting=cross_cutting,
+        recommended_skills=_dedupe(
+            [
+                *LARGE_WORK_BUNDLE_SKILLS,
+                *COMPLEX_EXTRACTION_REQUIRED_HARNESSES,
+            ]
+        ),
+        required_harnesses=_dedupe(
+            [
+                *LARGE_WORK_REQUIRED_HARNESSES,
+                *COMPLEX_EXTRACTION_REQUIRED_HARNESSES,
+            ]
+        ),
+        evidence_required=_dedupe(
+            [
+                *evidence_required,
+                *LARGE_WORK_BUNDLE_EVIDENCE,
+                "objective",
+                "source_summary",
+                "command_output_filter",
+                "important_facts_preserved",
+                "artifact_manifest",
+                "render_validation",
+                "deliverable_quality",
+                "traceability_matrix",
+                "verification_plan",
+            ]
+        ),
+        reasons=[*reasons, "complex_source_extraction_deliverable"],
+        confidence=0.88,
     )
 
 
@@ -2727,6 +2829,36 @@ def _is_command_output_request(normalized: str) -> bool:
         _contains_any(normalized, COMMAND_OUTPUT_ACTION_TERMS)
         or _contains_any(normalized, COMMAND_OUTPUT_FACT_TERMS)
     )
+
+
+def _is_complex_extraction_deliverable_request(normalized: str) -> bool:
+    if not _contains_any(normalized, COMPLEX_EXTRACTION_SOURCE_TERMS):
+        return False
+    artifact = _contains_any(normalized, COMPLEX_EXTRACTION_ARTIFACT_TERMS)
+    sql_requested = _contains_any(
+        normalized,
+        {"sql", "select", "query", "\uc870\ud68c", "\uc870\ud68c sql"},
+    )
+    mapping_requested = _contains_any(
+        normalized,
+        {
+            "binding",
+            "bound column",
+            "column name",
+            "field name",
+            "replace actual data",
+            "\ubc14\uc778\ub529",
+            "\uceec\ub7fc\uba85",
+            "\uc870\ud68c\uceec\ub7fc",
+            "\uc2e4\uc81c\ub370\uc774\ud130",
+        },
+    )
+    mojibake_artifact_request = (
+        normalized.count("?") >= 6
+        and (re.search(r"\bquality_\d+\b", normalized) is not None or "pblscripter" in normalized)
+        and _contains_any(normalized, {"pbl", "sql"})
+    )
+    return sql_requested and (artifact or mapping_requested or mojibake_artifact_request)
 
 
 def _is_contextual_review_request(normalized: str, context: dict) -> bool:
