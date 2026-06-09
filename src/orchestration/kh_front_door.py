@@ -601,6 +601,19 @@ def _required_next_actions(
         "Read only the selected skills needed for the next step through `python -m src.skills.uaf_skill_catalog --read <skill>`.",
         "Do not claim runtime skill application unless a module, gate, artifact, or explicit passthrough evidence was produced.",
     ]
+    controller = plugin_route.get("controller", {}) or {}
+    controller_id = str(controller.get("provider_id") or "")
+    if controller_id and controller_id not in {"kh", "none"}:
+        actions.append(
+            f"Apply selected provider `{controller_id}` next; if it is a host-local skill, read that skill's SKILL.md and follow only its delegated scope."
+        )
+    for assistant in plugin_route.get("assistants", []):
+        assistant = assistant or {}
+        assistant_id = str(assistant.get("provider_id") or "")
+        if assistant_id and assistant_id not in {"kh", "none", controller_id}:
+            actions.append(
+                f"Apply assistant provider `{assistant_id}` only for delegated capability `{assistant.get('capability', '')}`."
+            )
     if plugin_route.get("ask_user"):
         actions.append("Ask a short clarification before source exploration or implementation.")
     if execution_gate and not execution_gate.get("can_execute", True):

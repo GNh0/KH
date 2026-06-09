@@ -76,6 +76,9 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("kh", provider_ids)
         self.assertIn("sql-formatting", provider_ids)
         self.assertIn("explicit_user_request:sql-formatting", payload["plugin_route"]["reasons"])
+        self.assertTrue(
+            any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
+        )
 
     def test_front_door_routes_light_sql_formatting_intent_to_host_local_skill(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,6 +103,9 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(summary["classification"]["complexity"], "light")
         self.assertEqual(summary["plugin_route"]["route"], "single")
         self.assertEqual(summary["plugin_route"]["controller"], "sql-formatting")
+        self.assertTrue(
+            any("Apply selected provider `sql-formatting`" in action for action in result.to_dict()["required_next_actions"])
+        )
 
     def test_front_door_flags_stale_host_cache_paths(self):
         old_cache_path = (
