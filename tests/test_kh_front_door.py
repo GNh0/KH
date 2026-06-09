@@ -94,6 +94,27 @@ class KhFrontDoorTests(unittest.TestCase):
             "skipped_with_rationale",
         )
         self.assertTrue(payload["large_work_bundle_validation"]["valid"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        for required in [
+            "large_work_orchestration_bundle",
+            "workspace_strategy",
+            "token_optimizer_status",
+            "subagent_strategy_with_rationale",
+            "parallel_strategy_decision_with_rationale",
+            "role_execution_audit.status_or_pre_role_skip",
+            "guard_policy_or_rollback_strategy",
+            "verification_plan",
+        ]:
+            self.assertIn(required, payload["execution_gate"]["required_before_execution"])
+        for blocked in ["implementation", "file_writes", "db_writes", "completion_claim"]:
+            self.assertIn(blocked, payload["execution_gate"]["blocked_actions"])
+        self.assertTrue(
+            any("HARD PRE-FLIGHT STOP" in action for action in payload["required_next_actions"])
+        )
 
     def test_cli_summary_outputs_machine_readable_front_door_json(self):
         completed = subprocess.run(
@@ -217,6 +238,11 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["complexity"], "heavy")
         self.assertEqual(payload["classification"]["domain"], "software")
         self.assertEqual(payload["plugin_route"]["controller"], "kh")
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
         self.assertEqual(
             payload["runtime_applied_skills"],
             [
@@ -315,12 +341,15 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["domain"], "operations")
         self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
         self.assertNotIn("brainstorming-harness", payload["recommended_skills"])
-        self.assertTrue(payload["execution_gate"]["can_execute"])
-        self.assertEqual(payload["execution_gate"]["status"], "execution_allowed_after_selected_skill_setup")
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_large_work_preflight")
         self.assertIn("goal-state-harness", payload["selected_not_executed_skills"])
         self.assertIn("development-lifecycle-harness", payload["selected_not_executed_skills"])
         self.assertTrue(
             any("Create or update GoalState" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
+            any("HARD PRE-FLIGHT STOP" in action for action in payload["required_next_actions"])
         )
 
     def test_memory_state_request_requires_project_chat_scope_and_global_candidate_policy(self):
@@ -362,7 +391,8 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("memory-state-harness", payload["recommended_skills"])
         self.assertIn("parallel-orchestration-harness", payload["recommended_skills"])
         self.assertIn("role-execution-audit-harness", payload["recommended_skills"])
-        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_large_work_preflight")
         self.assertTrue(
             any("Create or update GoalState" in action for action in payload["required_next_actions"])
         )

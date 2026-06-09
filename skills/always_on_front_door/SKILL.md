@@ -46,8 +46,9 @@ python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt f
 5. Treat only the intake command's `runtime_applied_skills` as executed.
 6. Treat `selected_not_executed_skills` as selected follow-up work until concrete module, gate, artifact, command-output, or passthrough evidence exists.
 7. If the command returns `execution_gate.can_execute=false`, stop before any global Codex `MEMORY.md` lookup, `.codex/memories/skills/...` lookup, memory-derived shortcut, parent/sibling folder read, scaffolding, source write, deliverable generation, verification, or browser QA. Satisfy `execution_gate.required_before_execution` first, or record an explicit blocked rationale.
-8. If the command is unavailable, explicitly record `blocked` with the missing path or import error before continuing.
-9. When another plugin is also useful, apply front-door first, then route by capability; do not let image/browser/document/code skills bypass intake.
+8. If the gate status is `blocked_until_large_work_preflight`, do only the gate's `allowed_setup_actions`: read selected skill docs, create/update GoalState, record `large_work_orchestration_bundle`, `workspace_strategy`, `token_optimizer_status`, host/subagent strategy, `parallel_strategy_decision`, role-audit decision, guard/rollback policy, and verification plan. Do not run implementation, DB writes, file writes, broad source exploration, subagent dispatch, verification-as-completion, or completion claims until that preflight evidence exists.
+9. If the command is unavailable, explicitly record `blocked` with the missing path or import error before continuing.
+10. When another plugin is also useful, apply front-door first, then route by capability; do not let image/browser/document/code skills bypass intake.
 
 ## Required outputs
 
@@ -77,6 +78,7 @@ python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt f
 - Do not assume plugin `defaultPrompt` was injected into the live session.
 - Do not pass Korean, Japanese, Chinese, or other non-ASCII user requests through a Windows shell `--prompt "<text>"` argument. Use `--prompt-file` or `--prompt-stdin` so the front-door classifier sees the same request the user wrote.
 - Do not ignore `execution_gate.can_execute=false` because the user said "develop", "make", or "create"; that wording starts direction discovery when front-door selected brainstorming, not implementation approval.
+- Do not ignore `execution_gate.status=blocked_until_large_work_preflight` because the work is urgent or specific. Heavy/role_dag work must record the preflight strategy bundle before broad reads, edits, DB writes, subagent dispatch, verification, or completion claims.
 - Do not use `%CODEX_HOME%/memories/MEMORY.md` or `%CODEX_HOME%/memories/skills/...` as current-project evidence under a brainstorming gate. Those are cross-chat/subagent memories unless the user explicitly asks for prior-context reuse.
 - Do not count a SKILL.md read, plugin listing, or marketplace metadata as runtime application.
 - Do not ask the user to name KH skills before applying this bootstrap.

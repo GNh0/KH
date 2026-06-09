@@ -509,9 +509,14 @@ def _required_next_actions(
     if plugin_route.get("ask_user"):
         actions.append("Ask a short clarification before source exploration or implementation.")
     if execution_gate and not execution_gate.get("can_execute", True):
-        actions.append(
-            "HARD STOP: execution_gate.can_execute=false. Do not read MEMORY.md, use memory-derived implementation shortcuts, inspect parent/sibling run folders, scaffold files, write source, create deliverables, run verification, or start browser QA until the gate's required_before_execution items are satisfied."
-        )
+        if execution_gate.get("status") == "blocked_until_large_work_preflight":
+            actions.append(
+                "HARD PRE-FLIGHT STOP: heavy or role_dag work cannot move into broad source exploration, file writes, DB writes, subagent dispatch, verification, or completion claims until large_work_orchestration_bundle, GoalState, workspace_strategy, token_optimizer_status, host/subagent strategy, parallel strategy, role audit decision, guard/rollback policy, and verification plan evidence are recorded."
+            )
+        else:
+            actions.append(
+                "HARD STOP: execution_gate.can_execute=false. Do not read MEMORY.md, use memory-derived implementation shortcuts, inspect parent/sibling run folders, scaffold files, write source, create deliverables, run verification, or start browser QA until the gate's required_before_execution items are satisfied."
+            )
     if "brainstorming-harness" in recommended_skills:
         actions.append(
             "Apply `brainstorming-harness` before execution: progress through intent_frame, problem_frame, option_frame, design/spec review, approval_frame, and handoff_frame for product, process, analysis, design, document, operations, manufacturing/specification, investment, or other domain work; preserve `BrainstormSession`, `decision_log`, `validate_brainstorm_session`, and `brainstorm_handoff` or blocked rationale. A user option choice is direction approval only; do not implement, lock implementation scope, list final KPI/form/table/storage scope, create analysis output, user deliverables, or domain artifacts until the reviewed handoff/spec exists and the user separately asks to implement, start work, create files, or generate deliverables. After option choice, ask the next focused design/spec question instead of saying `implementation scope is` or `I will set the implementation scope as follows`. For domain workflows, make the compact brainstorm domain-first: objective/operator, workflow boundary, 2-3 operating model choices, required records/data, one recommendation, and one approval question; do not offer only technology-stack choices such as HTML/React/WinForms."
@@ -526,6 +531,8 @@ def _required_next_actions(
                 "Create or update GoalState before implementation.",
                 "Record workspace_strategy before edits.",
                 "Record token_optimizer_status=used|considered_not_needed|passthrough|blocked before broad reads, implementation tools, subagent packets, or long command-output handling.",
+                "Record host_runtime, nested_subagents_available or not_applicable, subagent_strategy with concrete rationale, parallel_strategy_decision with concrete rationale, and role_execution_audit.status before implementation.",
+                "For DB writes, destructive commands, or shared production state, record guard_policy plus rollback/snapshot strategy before the write.",
                 "When running inside a host subagent, record nested_subagents_available and subagent_strategy=dispatch|single-controller|review-only|blocked before implementation.",
                 "Run verification-before-completion before any done, commit, push, or handoff claim.",
             ]
@@ -592,6 +599,54 @@ def _execution_gate(
                 "user_deliverable_generation",
                 "verification",
                 "browser_qa",
+            ],
+        }
+    if (
+        classification.get("complexity") in {"heavy", "high_risk"}
+        or classification.get("recommended_execution") == "role_dag"
+    ):
+        return {
+            "status": "blocked_until_large_work_preflight",
+            "can_execute": False,
+            "reason": (
+                "Heavy or role_dag work selected orchestration, review, guard, token, "
+                "and verification harnesses; implementation must wait until preflight "
+                "evidence records how each selected harness will run, be skipped, or be blocked."
+            ),
+            "required_before_execution": [
+                "goal-state-harness",
+                "large_work_orchestration_bundle",
+                "skill_statuses",
+                "workspace_strategy",
+                "token_optimizer_status",
+                "host_runtime",
+                "nested_subagents_available_or_not_applicable",
+                "subagent_strategy_with_rationale",
+                "parallel_strategy_decision_with_rationale",
+                "role_execution_audit.status_or_pre_role_skip",
+                "guard_policy_or_rollback_strategy",
+                "verification_plan",
+            ],
+            "allowed_setup_actions": [
+                "read_selected_skill_docs",
+                "create_or_update_goal_state",
+                "record_large_work_orchestration_bundle",
+                "record_workspace_strategy",
+                "record_token_optimizer_status",
+                "record_host_subagent_parallel_role_strategy",
+                "record_guard_or_rollback_policy",
+                "record_verification_plan",
+            ],
+            "blocked_actions": [
+                "broad_source_exploration",
+                "implementation",
+                "file_writes",
+                "db_writes",
+                "destructive_commands",
+                "subagent_dispatch_without_strategy",
+                "verification_run_as_completion_proof",
+                "completion_claim",
+                "claiming_selected_not_executed_skills_as_applied",
             ],
         }
     return {
