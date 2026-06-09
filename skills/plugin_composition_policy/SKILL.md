@@ -29,6 +29,7 @@ Use this policy before plugin-specific MUST/ALWAYS rules when:
 - More than one plugin, tool, skill, connector, or host capability could apply.
 - A provider claims it must always run, but user intent and project context have not selected it yet.
 - A task may need hybrid routing such as KH for goal/evidence plus Browser for visual QA or GitHub for PR/CI.
+- A host-local skill such as `sql-formatting` matches the request and should remain available after KH intake.
 - Installed providers may change across machines, sessions, marketplaces, or host apps.
 - The user asks whether KH, Superpowers, Browser, GitHub, Notion, or another provider should be selected.
 
@@ -37,8 +38,8 @@ Do not use this policy to make simple requests heavy. Clear light questions shou
 ## Instructions
 
 1. Discover the current provider snapshot from host tools, plugin manifests, skill descriptions, project markers, and user request text.
-2. Normalize provider names into capabilities such as `workflow_control`, `planning_methodology`, `tdd_review`, `repo_pr_ci`, `browser_qa`, `knowledge_docs`, `memory_goal_resume`, `image_generation`, `host_automation`, and `domain_orchestration`.
-3. Apply selection order: explicit user request, project context, request complexity and risk, then lightest sufficient capability route.
+2. Normalize provider names into capabilities such as `workflow_control`, `planning_methodology`, `tdd_review`, `repo_pr_ci`, `browser_qa`, `knowledge_docs`, `memory_goal_resume`, `image_generation`, `host_automation`, `sql_formatting`, and `domain_orchestration`.
+3. Apply selection order: explicit user request, single-specialist trigger, project context, request complexity and risk, then lightest sufficient capability route.
 4. Treat provider MUST/ALWAYS wording as internal procedure only after the provider is selected as controller or assistant for a delegated scope.
 5. Prefer direct answers for light conceptual requests.
 6. Prefer a single controller when one provider owns the workflow.
@@ -65,6 +66,7 @@ The route decision should include:
 - Do not hardcode only the plugins on the current PC.
 - Do not let a provider select itself solely because its description says MUST or ALWAYS.
 - Do not force KH when an existing non-KH project context is clearly being resumed.
+- Do not let KH intake hide a more specific host-local skill such as `sql-formatting` after the intake step.
 - Do not force one plugin when a controller plus assistant providers gives a cleaner route.
 - Do not ask the user to choose between plugin names when a normal task clarification would solve the ambiguity.
 - Do not apply assistant plugin rules outside their delegated scope.

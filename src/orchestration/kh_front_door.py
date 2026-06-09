@@ -325,7 +325,7 @@ def _project_markers(project_path: Path) -> List[str]:
 
 
 def _default_providers(host: str) -> List[Dict[str, Any]]:
-    return [
+    providers = [
         {
             "provider_id": "kh",
             "display_name": "KH UAF",
@@ -344,6 +344,101 @@ def _default_providers(host: str) -> List[Dict[str, Any]]:
             "metadata": {"host": host, "source": "kh_front_door"},
         }
     ]
+    providers.extend(_host_local_skill_providers(host))
+    return providers
+
+
+def _host_local_skill_providers(host: str) -> List[Dict[str, Any]]:
+    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+    skills_root = codex_home / "skills"
+    if not skills_root.is_dir():
+        return []
+
+    providers: List[Dict[str, Any]] = []
+    for skill_dir in sorted(skills_root.iterdir(), key=lambda item: item.name.lower()):
+        if not skill_dir.is_dir() or skill_dir.name.startswith("."):
+            continue
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.is_file():
+            continue
+        manifest = _read_host_skill_manifest(skill_file)
+        skill_name = str(manifest.get("name") or skill_dir.name).strip()
+        description = str(manifest.get("description") or "").strip()
+        capabilities = _host_skill_capabilities(skill_name, description)
+        if not capabilities:
+            continue
+        display_name = skill_name or skill_dir.name
+        aliases = _host_skill_aliases(skill_name, display_name, capabilities)
+        providers.append(
+            {
+                "provider_id": skill_name.lower().replace("_", "-"),
+                "display_name": display_name,
+                "aliases": aliases,
+                "capabilities": capabilities,
+                "metadata": {
+                    "host": host,
+                    "source": "host-local-skill",
+                    "path": str(skill_file),
+                },
+            }
+        )
+    return providers
+
+
+def _read_host_skill_manifest(skill_file: Path) -> Dict[str, str]:
+    try:
+        text = skill_file.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = skill_file.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return {}
+    if not text.startswith("---"):
+        return {}
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    manifest: Dict[str, str] = {}
+    for line in parts[1].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip().lower()
+        if key in {"name", "description"}:
+            manifest[key] = value.strip().strip("\"'")
+    return manifest
+
+
+def _host_skill_capabilities(name: str, description: str) -> List[str]:
+    lowered = f"{name} {description}".lower()
+    capabilities: List[str] = []
+    if (
+        ("sql" in lowered or "t-sql" in lowered or "tsql" in lowered or "query" in lowered)
+        and any(term in lowered for term in ["format", "clean", "standard", "refactor", "readability"])
+    ):
+        capabilities.append("sql_formatting")
+    return capabilities
+
+
+def _host_skill_aliases(name: str, display_name: str, capabilities: Sequence[str]) -> List[str]:
+    aliases = {
+        name.lower(),
+        display_name.lower(),
+        name.lower().replace("_", "-"),
+        name.lower().replace("_", " "),
+        name.lower().replace("-", " "),
+    }
+    if "sql_formatting" in capabilities:
+        aliases.update(
+            {
+                "sql-formatting",
+                "sql formatting",
+                "sql-formatting skill",
+                "sql formatting skill",
+                "t-sql formatting",
+                "tsql formatting",
+            }
+        )
+    return sorted(alias for alias in aliases if alias)
 
 
 def _recommended_skills(classification: Dict[str, Any], plugin_route: Dict[str, Any]) -> List[str]:

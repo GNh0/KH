@@ -175,6 +175,41 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertEqual(decision.controller.provider_id, "superpowers")
         self.assertIn("explicit_user_request:superpowers", decision.reasons)
 
+    def test_explicit_sql_formatting_provider_request_takes_precedence(self):
+        decision = compose_plugin_route(
+            "Use sql-formatting to clean this query.",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {
+                    "provider_id": "sql-formatting",
+                    "display_name": "sql-formatting",
+                    "aliases": ["sql formatting", "sql-formatting skill"],
+                    "capabilities": ["sql_formatting"],
+                },
+            ],
+        )
+
+        self.assertEqual(decision.route, "single")
+        self.assertEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertEqual(decision.controller.capability, "sql_formatting")
+        self.assertEqual(decision.controller.scope, "SQL/T-SQL formatting and style normalization")
+        self.assertTrue(decision.explicit_user_request)
+        self.assertIn("explicit_user_request:sql-formatting", decision.reasons)
+
+    def test_light_sql_formatting_intent_routes_to_specialist_provider(self):
+        decision = compose_plugin_route(
+            "Format this T-SQL query and preserve logic.",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertEqual(decision.route, "single")
+        self.assertEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertEqual(decision.controller.capability, "sql_formatting")
+        self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
     def test_unavailable_explicit_provider_is_reported_before_fallback(self):
         decision = compose_plugin_route(
             "Use Superpowers to build a SaaS app.",

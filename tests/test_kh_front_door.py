@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.orchestration.kh_front_door import build_kh_front_door
 
@@ -42,6 +43,63 @@ class KhFrontDoorTests(unittest.TestCase):
             payload["skill_statuses"]["request-complexity-router"]["application_mode"],
             "runtime",
         )
+
+    def test_front_door_discovers_explicit_host_local_sql_formatting_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "Use sql-formatting to clean this query.",
+                    project=Path.cwd(),
+                    host="codex",
+                )
+        payload = result.to_dict()
+        summary = result.to_summary_dict()
+
+        self.assertEqual(summary["front_door_status"], "ok")
+        self.assertEqual(summary["plugin_route"]["route"], "single")
+        self.assertEqual(summary["plugin_route"]["controller"], "sql-formatting")
+        self.assertEqual(payload["plugin_route"]["controller"]["capability"], "sql_formatting")
+        provider_ids = {
+            provider["provider_id"]
+            for provider in payload["plugin_route"]["available_providers_snapshot"]
+        }
+        self.assertIn("kh", provider_ids)
+        self.assertIn("sql-formatting", provider_ids)
+        self.assertIn("explicit_user_request:sql-formatting", payload["plugin_route"]["reasons"])
+
+    def test_front_door_routes_light_sql_formatting_intent_to_host_local_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "Format this T-SQL query and preserve logic.",
+                    project=Path.cwd(),
+                    host="codex",
+                )
+        summary = result.to_summary_dict()
+
+        self.assertEqual(summary["classification"]["complexity"], "light")
+        self.assertEqual(summary["plugin_route"]["route"], "single")
+        self.assertEqual(summary["plugin_route"]["controller"], "sql-formatting")
 
     def test_front_door_flags_stale_host_cache_paths(self):
         old_cache_path = (

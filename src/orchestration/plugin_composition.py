@@ -30,6 +30,11 @@ CAPABILITY_ALIASES = {
     "debug": "systematic_debugging",
     "debugging": "systematic_debugging",
     "workflow": "workflow_control",
+    "sql-formatting": "sql_formatting",
+    "sql formatting": "sql_formatting",
+    "sqlformatting": "sql_formatting",
+    "tsql-formatting": "sql_formatting",
+    "t-sql-formatting": "sql_formatting",
 }
 
 CONTROLLER_CAPABILITIES = {
@@ -44,6 +49,7 @@ CONTROLLER_CAPABILITIES = {
     "systematic_debugging",
     "repo_pr_ci",
     "knowledge_docs",
+    "sql_formatting",
 }
 
 SPECIALIST_TRIGGERS = {
@@ -86,6 +92,23 @@ SPECIALIST_TRIGGERS = {
         "automation",
         "monitor",
     },
+    "sql_formatting": {
+        "sql-formatting",
+        "sql formatting",
+        "format sql",
+        "format this sql",
+        "format t-sql",
+        "format this t-sql",
+        "format tsql",
+        "format query",
+        "format this query",
+        "clean sql",
+        "clean up sql",
+        "standardize sql",
+        "refactor sql",
+        "t-sql formatting",
+        "tsql formatting",
+    },
 }
 
 SPECIALIST_FALLBACKS = {
@@ -94,6 +117,7 @@ SPECIALIST_FALLBACKS = {
     "knowledge_docs": "docs_kh_markdown",
     "image_generation": "text_or_svg_artifact",
     "host_automation": "manual_follow_up_note",
+    "sql_formatting": "manual_sql_style_rules",
 }
 
 COMMON_PROVIDER_WORDS = {
@@ -251,6 +275,20 @@ def compose_plugin_route(
             classification=classification,
             reasons=reasons,
             explicit_user_request=True,
+        )
+
+    specialist_controller = _single_specialist_controller(lowered, available)
+    if specialist_controller and classification.complexity in {"light", "medium"}:
+        reasons.append(f"specialist_trigger:{specialist_controller.provider_id}:{specialist_controller.capability}")
+        assistants = _assistant_roles(lowered, available, {specialist_controller.provider_id})
+        return _decision(
+            route="hybrid" if assistants else "single",
+            controller=specialist_controller,
+            assistants=assistants,
+            providers=available,
+            classification=classification,
+            reasons=reasons,
+            unavailable_capabilities=_unavailable_specialists(lowered, available),
         )
 
     project_provider = _project_context_provider(context, available)
@@ -508,6 +546,25 @@ def _assistant_roles(
     return roles
 
 
+def _single_specialist_controller(
+    text: str,
+    providers: List[CapabilityProvider],
+) -> ProviderRole | None:
+    roles = _assistant_roles(text, providers, set())
+    if not roles:
+        return None
+    provider_ids = {role.provider_id for role in roles}
+    if len(provider_ids) != 1:
+        return None
+    role = roles[0]
+    return ProviderRole(
+        provider_id=role.provider_id,
+        capability=role.capability,
+        scope=role.scope,
+        reason="specialist_trigger",
+    )
+
+
 def _unavailable_specialists(
     text: str,
     providers: List[CapabilityProvider],
@@ -536,10 +593,13 @@ def _best_provider_for_capability(
 
 def _controller_role(provider: CapabilityProvider, reason: str) -> ProviderRole:
     capability = _primary_controller_capability(provider)
+    scope = "overall workflow control"
+    if capability not in CONTROLLER_CAPABILITIES or capability == "sql_formatting":
+        scope = _scope_for_capability(capability)
     return ProviderRole(
         provider_id=provider.provider_id,
         capability=capability,
-        scope="overall workflow control",
+        scope=scope,
         reason=reason,
     )
 
@@ -557,6 +617,7 @@ def _primary_controller_capability(provider: CapabilityProvider) -> str:
         "tdd_review",
         "repo_pr_ci",
         "knowledge_docs",
+        "sql_formatting",
     ]:
         if capability in provider.capabilities:
             return capability
@@ -578,6 +639,7 @@ def _scope_for_capability(capability: str) -> str:
         "knowledge_docs": "knowledge capture, wiki, and documentation storage",
         "image_generation": "bitmap image generation or image editing",
         "host_automation": "reminders, monitors, and scheduled follow-up",
+        "sql_formatting": "SQL/T-SQL formatting and style normalization",
     }.get(capability, capability)
 
 

@@ -48,7 +48,7 @@ python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt f
 7. If the command returns `execution_gate.can_execute=false`, stop before any global Codex `MEMORY.md` lookup, `.codex/memories/skills/...` lookup, memory-derived shortcut, parent/sibling folder read, scaffolding, source write, deliverable generation, verification, or browser QA. Satisfy `execution_gate.required_before_execution` first, or record an explicit blocked rationale.
 8. If the gate status is `blocked_until_large_work_preflight`, do only the gate's `allowed_setup_actions`: read selected skill docs, create/update GoalState, record `large_work_orchestration_bundle`, `workspace_strategy`, `token_optimizer_status`, host/subagent strategy, `parallel_strategy_decision`, role-audit decision, command-output filter plan, deliverable/render quality plan, guard/rollback policy, and verification plan. Do not run implementation, DB writes, file writes, broad source exploration, subagent dispatch, verification-as-completion, or completion claims until that preflight evidence exists.
 9. If the command is unavailable, explicitly record `blocked` with the missing path or import error before continuing.
-10. When another plugin is also useful, apply front-door first, then route by capability; do not let image/browser/document/code skills bypass intake.
+10. When another plugin or host-local skill is also useful, apply front-door first, then route by capability; do not let image/browser/document/code/SQL-formatting skills bypass intake, and do not let KH intake hide a better specialist provider after intake.
 
 ## Required outputs
 
@@ -83,6 +83,7 @@ python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt f
 - Do not count a SKILL.md read, plugin listing, or marketplace metadata as runtime application.
 - Do not ask the user to name KH skills before applying this bootstrap.
 - Do not forget a prior "actively use KH skills/harnesses" instruction just because the later task wording omits KH names.
+- Do not treat KH selected skills as exclusive. After front-door intake, host-local skills such as `sql-formatting` must still be used when their trigger or explicit provider name matches the request.
 
 ## UAF implementation targets
 
