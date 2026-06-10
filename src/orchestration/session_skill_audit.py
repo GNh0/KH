@@ -94,6 +94,8 @@ RUNTIME_MARKERS = {
         "goal_ledger",
         "create_goal",
         "update_goal",
+        "thread_goal_updated",
+        "current_goal.json",
         "goal_state applied",
     ],
     "compound-engineering-harness": [
@@ -445,6 +447,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_subagent_strategy_issues(path, postmortem.to_dict()))
     issues.extend(_orchestration_decision_issues(path, postmortem.to_dict()))
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
+    issues.extend(_goal_state_completion_absence_issues(path, skill_rows, postmortem.to_dict()))
     coverage = _coverage(skill_rows)
     return SessionSkillAudit(
         session_id=postmortem.session_id,
@@ -605,6 +608,61 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
             }
         )
     return issues
+
+
+def _goal_state_completion_absence_issues(
+    path: Path,
+    skill_rows: List[Dict[str, Any]],
+    postmortem: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    goal_row = next((row for row in skill_rows if row.get("name") == "goal-state-harness"), {})
+    goal_required = bool(goal_row.get("required")) or _front_door_selected_skill(path, "goal-state-harness")
+    if not goal_required:
+        return []
+
+    completion_guard = postmortem.get("completion_guard", {}) or {}
+    task_complete_count = int(completion_guard.get("task_complete_count", 0) or 0)
+    if task_complete_count <= 0:
+        return []
+
+    latest_status = str(completion_guard.get("latest_goal_status", "") or "")
+    if latest_status == "active":
+        return []
+    if _has_terminal_goal_state_evidence(path, latest_status):
+        return []
+
+    return [
+        {
+            "skill": "goal-state-harness",
+            "status": "missing_terminal_goal_state",
+            "severity": "P0",
+            "reason": (
+                "goal-state-harness was required or selected, but task_complete was emitted without "
+                "terminal GoalState evidence"
+            ),
+            "action": (
+                "Before final task_complete, create or update GoalState and close it as complete/blocked; "
+                "if the host cannot do that, report blocked instead of claiming completion."
+            ),
+        }
+    ]
+
+
+def _has_terminal_goal_state_evidence(path: Path, latest_status: str) -> bool:
+    if latest_status in {"complete", "blocked"}:
+        return True
+    terminal_updates = 0
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("type", "")) != "thread_goal_updated":
+            continue
+        goal = payload.get("goal", {}) or {}
+        status = str(goal.get("status", ""))
+        if status in {"complete", "blocked"}:
+            terminal_updates += 1
+    return terminal_updates > 0
 
 
 def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
@@ -2654,7 +2712,11 @@ def _postmortem_acceptance_status(skill_name: str, postmortem: Dict[str, Any]) -
         if completion_guard.get("status") == "blocked" or user_stop_guard.get("status") == "blocked":
             return "blocked"
         if completion_guard.get("status") == "passed":
-            return "passed"
+            latest_status = str(completion_guard.get("latest_goal_status", "") or "")
+            task_complete_count = int(completion_guard.get("task_complete_count", 0) or 0)
+            if task_complete_count <= 0 or latest_status in {"complete", "blocked"}:
+                return "passed"
+            return ""
     if skill_name in {"host-agent-orchestration", "role-execution-audit-harness", "subagent-review-pipeline"}:
         subagents = postmortem.get("subagent_summary", {}) or {}
         if (

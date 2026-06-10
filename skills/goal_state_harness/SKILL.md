@@ -46,6 +46,8 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 12. For a user stop, mark the active goal `blocked` with `blocked_reason=user_requested_stop` only when the host goal tool allows blocking for stop/pause/cancel. If host policy disallows using `blocked` as pause state, do not call `update_goal`; keep the interruption checkpoint as the controlling state and ignore later automated `goal_context` until a fresh non-`goal_context` user message explicitly asks to resume.
 13. Mark a goal `complete` only when success criteria and required evidence are satisfied.
 14. Mark a goal `blocked` when the workflow cannot make meaningful progress without missing evidence, context, credentials, tools, external state, or an explicit user stop request and the host goal status policy permits it.
+15. Before a final answer or host `task_complete` for goal-required work, verify terminal GoalState evidence: host `thread_goal_updated` status `complete`/`blocked`, successful `create_goal`/`update_goal`, or persisted `current_goal.json` status `complete`/`blocked`.
+16. If terminal GoalState evidence is unavailable, do not claim completion. Report blocked or active-with-blocker according to host policy and preserve the next required action.
 
 ## Required outputs
 
@@ -61,6 +63,7 @@ This is the UAF-native goal contract for workflow completion. It gives agent run
 - `metadata.missing_evidence`: normalized evidence keys that prevented completion.
 - `metadata.evidence_alias_matches`: required evidence keys satisfied by an accepted alias.
 - `goal_ledger`: paths to the project/chat-scoped current goal and event log.
+- `terminal_goal_state_evidence`: the specific host event, tool result, or persisted state file that proves status `complete` or `blocked` before final completion.
 - `resume_handoff`: paths and snapshot for continuing from runtime state without prior chat context.
 - `project_markdown`: visible project-local paths for `.kh/goal/.../content/`, `.kh/goal/.../state/`, and `docs/kh/handoffs/` when written.
 
@@ -83,6 +86,8 @@ Pressure scenario: if task dispatch succeeded but QA evidence is missing, the go
 ## Common mistakes
 
 - Do not mark a goal complete from task success alone; required evidence must be present.
+- Do not treat `selected_not_executed_skills`, SKILL.md reads, marketplace metadata, or successful task dispatch as terminal GoalState evidence.
+- Do not emit a final answer or `task_complete` for goal-required work while GoalState is absent or only selected for later.
 - Do not use `metadata.evidence_key` as passed evidence unless a producer emitted a real evidence record.
 - Do not keep retrying a blocked workflow without updating `blocked_reason` and missing evidence.
 - Do not continue implementation after the user asks to stop or pause, even if the host goal remains active or a later automated `goal_context` appears.

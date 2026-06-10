@@ -593,6 +593,75 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_goal_required_task_complete_without_goal_state_is_p0_issue(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "request-complexity-router",
+            ],
+            "selected_not_executed_skills": ["goal-state-harness", "development-lifecycle-harness"],
+            "skill_status_summary": {
+                "goal-state-harness": {
+                    "status": "selected",
+                    "evidence_note": "Large work requires GoalState before completion.",
+                }
+            },
+            "execution_gate": {"can_execute": True},
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 70_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "I implemented the requested workflow and verified it.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "Completed the implementation and pushed the changes.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertTrue(rows["goal-state-harness"]["required"])
+        self.assertNotEqual(rows["goal-state-harness"]["acceptance"]["status"], "passed")
+        self.assertTrue(
+            any(
+                issue["skill"] == "goal-state-harness"
+                and issue["status"] == "missing_terminal_goal_state"
+                and issue["severity"] == "P0"
+                for issue in audit.issues
+            )
+        )
+
     def test_user_stop_guard_failure_is_p0_skill_audit_issue(self):
         path = self.write_session(
             [
