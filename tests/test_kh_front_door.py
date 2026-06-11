@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.orchestration.kh_front_door import build_kh_front_door
+from src.orchestration.kh_front_door import _source_identity_for_root, build_kh_front_door
 
 
 class KhFrontDoorTests(unittest.TestCase):
@@ -107,7 +107,7 @@ class KhFrontDoorTests(unittest.TestCase):
             any("Apply selected provider `sql-formatting`" in action for action in result.to_dict()["required_next_actions"])
         )
 
-    def test_front_door_flags_stale_host_cache_paths(self):
+    def test_front_door_warns_but_recovers_from_stale_host_cache_paths(self):
         old_cache_path = (
             r"C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf"
             r"\2.9.25\skills\parallel_orchestration_harness\SKILL.md"
@@ -121,7 +121,7 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         payload = result.to_summary_dict()
 
-        self.assertEqual(payload["front_door_status"], "blocked")
+        self.assertEqual(payload["front_door_status"], "ok")
         self.assertEqual(
             payload["stale_or_missing_skill_paths"][0]["status"],
             "stale_kh_cache_path",
@@ -129,6 +129,20 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertTrue(
             any("stale KH cache" in warning for warning in payload["warnings"])
         )
+        self.assertTrue(
+            any("Resolved KH skills from" in warning for warning in payload["warnings"])
+        )
+
+    def test_cache_root_is_reported_as_codex_plugin_cache(self):
+        root = Path(
+            r"C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.68"
+        )
+
+        source_type, version, reason = _source_identity_for_root(root)
+
+        self.assertEqual(source_type, "codex-plugin-cache")
+        self.assertEqual(version, "2.9.68")
+        self.assertEqual(reason, "installed Codex plugin cache")
 
     def test_heavy_route_selects_runtime_skills_without_claiming_they_ran(self):
         result = build_kh_front_door(

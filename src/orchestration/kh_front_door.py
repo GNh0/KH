@@ -204,7 +204,12 @@ def build_kh_front_door(
         large_work_bundle = bundle.to_dict()
         large_work_validation = validate_large_work_orchestration_bundle(bundle)
 
-    status = "ok" if skill_source.exists and not any(check.status.startswith("stale") for check in host_path_checks) else "blocked"
+    if skill_source.exists and any(check.status == "stale_kh_cache_path" for check in host_path_checks):
+        warnings.append(
+            f"Resolved KH skills from {skill_source.source_type} at {skill_source.root} despite stale host skill path."
+        )
+
+    status = _front_door_status(skill_source)
     return KhFrontDoorResult(
         front_door_status=status,
         prompt=prompt,
@@ -237,12 +242,14 @@ def _select_skill_source(
     prefer_cache: bool,
 ) -> SkillSource:
     repo_skills = repo_root / "skills"
+    source_type, version, reason = _source_identity_for_root(repo_root)
     repo_source = SkillSource(
-        source_type="repo-local",
+        source_type=source_type,
         root=str(repo_root),
         skills_dir=str(repo_skills),
         exists=repo_skills.is_dir(),
-        reason="current module repository root",
+        version=version,
+        reason=reason,
     )
     if repo_source.exists and not prefer_cache:
         return repo_source
@@ -250,6 +257,16 @@ def _select_skill_source(
         if candidate.exists:
             return candidate
     return repo_source
+
+
+def _source_identity_for_root(repo_root: Path) -> tuple[str, str, str]:
+    parts = list(repo_root.parts)
+    lowered = [part.lower() for part in parts]
+    for index in range(len(lowered) - 4):
+        if lowered[index : index + 4] == ["plugins", "cache", "kh-uaf-marketplace", "kh-uaf"]:
+            version = parts[index + 4] if index + 4 < len(parts) else repo_root.name
+            return "codex-plugin-cache", version, "installed Codex plugin cache"
+    return "repo-local", "", "current module repository root"
 
 
 def _discover_cache_sources() -> List[SkillSource]:
@@ -314,6 +331,12 @@ def _warnings_from_path_checks(checks: Sequence[HostSkillPathCheck]) -> List[str
         elif check.status == "missing":
             warnings.append(f"Host supplied missing skill path: {check.path}")
     return warnings
+
+
+def _front_door_status(skill_source: SkillSource) -> str:
+    if not skill_source.exists:
+        return "blocked"
+    return "ok"
 
 
 def _project_markers(project_path: Path) -> List[str]:
