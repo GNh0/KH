@@ -7,83 +7,64 @@ description: Use when any non-trivial Codex, Antigravity-style, Claude Code, or 
 
 ## Immediate Action
 
-After reading this file for a work-bearing request, run the front-door command immediately as the next standalone tool call. Do not open QA, verification, browser, document, image, memory, or other KH skill files first. Do not run target-folder checks, parent/sibling directory scans, `MEMORY.md` searches, memory quick passes, project file reads, or parallel tool batches before or alongside the command.
+Run the front-door command as the next standalone tool call. Do not spend a reasoning/planning pass here, do not read other skill files, and do not run target, memory, source, browser, document, QA, verification, or subagent tools before or alongside this command.
 
-For non-ASCII prompts on Windows, do not pass the user request through a shell `--prompt "<text>"` argument. Write the exact request to a UTF-8 prompt file as part of the front-door bootstrap and call:
+Target bootstrap latency: under 10 seconds from reading this file to starting the command. If the command path is missing or stale, resolve the latest installed `kh-uaf` cache path or repo skill folder once, then run the command. If it still cannot run, report blocked with the missing path.
 
-```bash
-python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd or target project>" --host codex --summary
+### Windows UTF-8 Template
+
+Use this exact shape for Korean, Japanese, Chinese, or any non-ASCII prompt:
+
+```powershell
+$promptPath = Join-Path $env:TEMP "kh-front-door-prompt.txt"
+Set-Content -LiteralPath $promptPath -Value @'
+<exact user request>
+'@ -Encoding UTF8
+python "<this skill folder>\scripts\front_door.py" --prompt-file $promptPath --project "<cwd or target project>" --host codex --summary
 ```
 
-For short ASCII-only prompts, `--prompt "<user request>"` is still accepted.
+For short ASCII-only prompts, `--prompt "<user request>"` is accepted. If running from the KH repository root, `python -m src.orchestration.kh_front_door ...` is also valid.
 
-If you are already running from the KH repository root, `python -m src.orchestration.kh_front_door ...` is also valid. Prefer the skill-local wrapper when the host starts in a target project, temp folder, or subagent workspace.
-
-Only after this command returns should the selected follow-up skills be read or applied.
+Only after the command returns should selected follow-up skills be read or applied.
 
 ## KH Entry Contract
 
-- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
-- At bootstrap time, select only this skill first; other skills become eligible after `kh_front_door` returns.
-- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
-- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
-- Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
-- Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
-
-This is the host-visible bootstrap skill for KH UAF. Its job is to make automatic intake harder to miss in ordinary sessions where the user asks for real work without naming KH internals.
+- Use this bootstrap for work-bearing requests: project files, code changes, generated assets/documents, long logs, review, QA, verification, subagents, persistence, branch work, or risky commands.
+- If an earlier message in the same conversation or project asked to actively/default-use KH/UAF skills or harnesses, keep `kh_active_directive=active` for later work-bearing turns until explicit opt-out.
+- Count this skill as `applied` only when the runtime front-door command ran or a concrete blocked/direct rationale was recorded.
+- SKILL.md reads, plugin listings, marketplace metadata, and `selected_not_executed_skills` are not execution evidence.
 
 ## Workflow
 
-1. Before using any other non-trivial skill or plugin, decide whether the user request is direct/light or work-bearing.
-2. Work-bearing means project files, code changes, generated assets/documents, long logs, review, QA, verification, subagents, persistence, branch work, or risky commands.
-3. If an earlier message in the same conversation or project asked the assistant to actively, always, or by default use KH/UAF skills or harnesses, keep `kh_active_directive=active` for later work-bearing turns until the user explicitly opts out.
-4. If work-bearing, make the first standalone work-bearing tool call the KH front-door intake. Do not run source reads, target-folder checks, parent/sibling folder scans, `Test-Path`, `Get-ChildItem`, `rg`, memory lookup, memory quick pass, image generation, document generation, browser QA, or subagent dispatch before it. Do not parallelize those actions in the same pre-intake batch.
-
-```bash
-python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd or target project>" --host codex --summary
-```
-
-5. Treat only the intake command's `runtime_applied_skills` as executed.
-6. Treat `selected_not_executed_skills` as selected follow-up work until concrete module, gate, artifact, command-output, or passthrough evidence exists.
-7. If the command returns `execution_gate.can_execute=false`, stop before any global Codex `MEMORY.md` lookup, `.codex/memories/skills/...` lookup, memory-derived shortcut, parent/sibling folder read, scaffolding, source write, deliverable generation, verification, or browser QA. Satisfy `execution_gate.required_before_execution` first, or record an explicit blocked rationale.
-8. If the gate status is `blocked_until_large_work_preflight`, do only the gate's `allowed_setup_actions`: read selected skill docs, create/update GoalState, record `large_work_orchestration_bundle`, `workspace_strategy`, `token_optimizer_status`, host/subagent strategy, `parallel_strategy_decision`, role-audit decision, command-output filter plan, deliverable/render quality plan, guard/rollback policy, and verification plan. Do not run implementation, DB writes, file writes, broad source exploration, subagent dispatch, verification-as-completion, or completion claims until that preflight evidence exists.
-9. If the command is unavailable, explicitly record `blocked` with the missing path or import error before continuing.
-10. When another plugin or host-local skill is also useful, apply front-door first, then route by capability; do not let image/browser/document/code/SQL-formatting skills bypass intake, and do not let KH intake hide a better specialist provider after intake.
+1. Decide only whether the request is direct/light or work-bearing.
+2. For work-bearing requests, run the front-door command immediately.
+3. Treat `runtime_applied_skills` as executed and `selected_not_executed_skills` as selected follow-up only.
+4. If `execution_gate.can_execute=false`, stop before global memory lookup, source reads, file writes, scaffolding, deliverable generation, browser QA, verification, or subagent dispatch.
+5. If the gate is `blocked_until_large_work_preflight`, do only the allowed setup evidence: GoalState, orchestration bundle, workspace/domain boundary, token decision, host/subagent strategy, parallel strategy, role-audit decision, command-output plan, deliverable/render quality plan, guard/rollback policy, and verification plan.
+6. After intake, route specialist providers by capability. KH intake must not hide host-local skills such as `sql-formatting` when they match the request.
 
 ## Required outputs
 
-- `front_door_status`, request classification, and plugin route.
-- `execution_gate`, including whether `can_execute` is true or false.
-- `kh_active_directive` as active/inactive when the user has asked for persistent KH skill/harness use in the conversation or project.
-- `runtime_applied_skills` and `selected_not_executed_skills`.
-- `skill_status_summary` with applied, selected, skipped, or blocked status.
-- A short note when a request is intentionally direct/light and no KH runtime work is needed.
+- `front_door_status`, request classification, plugin route, and `execution_gate`.
+- `runtime_applied_skills`, `selected_not_executed_skills`, and `skill_status_summary`.
+- `kh_active_directive` when persistent KH use was requested.
+- Blocked/direct rationale when the runtime command cannot run.
 
 ## User-Facing Reporting
 
-- Keep KH routing evidence in tool output, runtime metadata, handoff files, or audit reports.
-- For ordinary user requests, do not append raw KH status lines such as `front_door_status`, `runtime_applied_skills`, `valid=true`, or `missing=[]` to the final answer unless the user asks how KH was used.
-- If host policy requires announcing skill use during the turn, keep it to one short progress update, then make the final answer about the user's task.
-- When the user explicitly asks for skill/harness evidence, report applied, selected-not-executed, skipped, and blocked states without counting SKILL.md reads as execution.
+- Keep raw KH routing evidence in tool output, runtime metadata, handoff files, or audit reports.
+- Do not append raw KH status lines to ordinary final answers unless the user asks how KH was used.
+- If a progress update is needed, keep it short and then return to the user's task.
 
 ## Common mistakes
 
-- Do not start with target-folder checks, parent/sibling folder scans, memory search, memory quick pass, image generation, browser testing, document writing, source exploration, or shell commands for a work-bearing request before front-door intake.
-- Do not count "I will use always-on-front-door", a SKILL.md read, or a catalog listing as front-door execution. The runtime command or blocked/direct rationale must come first.
-- Do not bundle `Test-Path`, `Get-ChildItem`, `rg`, file reads, or MEMORY.md search in the same parallel batch as the first front-door command.
-- Do not open `qa_gate_harness`, `verification_before_completion_harness`, browser skills, memory files, or support references before the front-door command.
-- Do not inspect previous run folders or sibling test outputs to bootstrap a new requested target. Treat that as cross-scope context leakage unless the user explicitly requested comparison or reuse.
-- Do not create a substitute folder in the current workspace when the user named a different target path. If the exact target path is unavailable, outside the sandbox, or needs approval, stop and report the permission/path blocker before generating artifacts.
-- Do not create workspace-root product files such as `index.html`, `styles.css`, `app.js`, documents, images, or generated data files while waiting for exact target path permission. Execution approval does not allow staging outside the requested absolute target.
-- Do not assume plugin `defaultPrompt` was injected into the live session.
-- Do not pass Korean, Japanese, Chinese, or other non-ASCII user requests through a Windows shell `--prompt "<text>"` argument. Use `--prompt-file` or `--prompt-stdin` so the front-door classifier sees the same request the user wrote.
-- Do not ignore `execution_gate.can_execute=false` because the user said "develop", "make", or "create"; that wording starts direction discovery when front-door selected brainstorming, not implementation approval.
-- Do not ignore `execution_gate.status=blocked_until_large_work_preflight` because the work is urgent or specific. Heavy/role_dag work must record the preflight strategy bundle before broad reads, edits, DB writes, subagent dispatch, verification, or completion claims.
-- Do not use `%CODEX_HOME%/memories/MEMORY.md` or `%CODEX_HOME%/memories/skills/...` as current-project evidence under a brainstorming gate. Those are cross-chat/subagent memories unless the user explicitly asks for prior-context reuse.
-- Do not count a SKILL.md read, plugin listing, or marketplace metadata as runtime application.
-- Do not ask the user to name KH skills before applying this bootstrap.
-- Do not forget a prior "actively use KH skills/harnesses" instruction just because the later task wording omits KH names.
-- Do not treat KH selected skills as exclusive. After front-door intake, host-local skills such as `sql-formatting` must still be used when their trigger or explicit provider name matches the request.
+- Do not read MEMORY.md, source files, target folders, parent/sibling folders, other SKILL.md files, or support references before the front-door command.
+- Do not parallelize the front-door command with pre-intake reads.
+- Do not use `--prompt "<non-ASCII text>"` on Windows; use `--prompt-file`.
+- Do not ignore stale cache path failures; resolve the latest cache or repo skills path before claiming KH use.
+- Do not run broad uncapped searches after intake. Narrow `rg`/file reads and use command-output filtering before hundreds of raw lines enter context.
+- Do not treat a user saying "develop/make/create" as implementation approval when front-door selected brainstorming.
+- Do not treat selected follow-up skills as exclusive; specialist plugins may still be routed after intake.
 
 ## UAF implementation targets
 
@@ -97,8 +78,8 @@ python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt f
 
 ## Support files
 
-- Read `references/usage.md` before changing host trigger wording.
-- Use `examples/minimal-workflow.md` as the blind-request acceptance scenario.
-- Run `python scripts/smoke_check.py` from this skill folder to verify support files and implementation targets.
+- Use `scripts/front_door.py` as the skill-local front-door wrapper when the host starts outside the KH repository root.
+- Read `references/usage.md` only before changing host trigger wording.
+- Use `examples/minimal-workflow.md` for blind-request acceptance scenarios.
+- Run `python scripts/smoke_check.py` from this skill folder for support-file and target checks.
 - Run `python scripts/demo.py --output-dir <tmp>` to verify the front-door demo path.
-- Use `python scripts/front_door.py --prompt-file "<utf8 prompt file>" --project "<target>" --host codex --summary` when the current working directory is not the KH repository root and the prompt is not ASCII-only.

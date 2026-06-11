@@ -55,6 +55,14 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertEqual(result.domain, "software")
         self.assertEqual(result.recommended_execution, "role_dag")
 
+    def test_kh_uaf_diagnosis_routes_to_software_not_medical(self):
+        result = classify_request(
+            "Diagnose why KH UAF front-door in session 019eb446 took minutes before running."
+        )
+
+        self.assertEqual(result.domain, "software")
+        self.assertNotEqual(result.domain, "medical")
+
     def test_product_design_request_is_heavy_not_ambiguous(self):
         result = classify_request("장비 도면 설계해줘")
 

@@ -2361,6 +2361,21 @@ def _detect_domain(normalized: str, context: dict) -> str:
 
 
 def _domain_override_from_text(normalized: str) -> str:
+    if _contains_any(
+        normalized,
+        {
+            "kh uaf",
+            "kh-uaf",
+            "front-door",
+            "front_door",
+            "always-on-front-door",
+            "plugin cache",
+            "session_skill_audit",
+            "session postmortem",
+            "codex plugin",
+        },
+    ):
+        return "software"
     if _contains_any(normalized, {"html", "css", "javascript", "js files", "html/css/js"}):
         return "software"
     if _contains_any(normalized, {"invoice", "vendor"}) and _contains_any(

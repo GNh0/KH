@@ -131,6 +131,85 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertFalse(rows["worktree-isolation-harness"]["required"])
         self.assertNotIn("snapshot-state-harness", audit.coverage["required_missing_skill_names"])
 
+    def test_always_on_front_door_skill_read_delay_is_flagged(self):
+        path = self.write_session(
+            [
+                {
+                    "timestamp": "2026-06-11T01:24:31.000Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "Get-Content -Path "
+                            "'C:\\Users\\KONEIT\\.codex\\plugins\\cache\\kh-uaf-marketplace\\"
+                            "kh-uaf\\2.9.67\\skills\\always_on_front_door\\SKILL.md'"
+                        ),
+                    },
+                },
+                {
+                    "timestamp": "2026-06-11T01:26:45.000Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python C:\\Users\\KONEIT\\.codex\\plugins\\cache\\kh-uaf-marketplace\\"
+                            "kh-uaf\\2.9.67\\skills\\always_on_front_door\\scripts\\front_door.py "
+                            "--prompt-file prompt.txt --project C:\\work --host codex --summary"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "front_door_bootstrap_delay"
+                and issue["elapsed_seconds"] == 134.0
+                for issue in audit.issues
+            )
+        )
+
+    def test_large_command_output_reasoning_delay_is_flagged(self):
+        path = self.write_session(
+            [
+                {
+                    "timestamp": "2026-06-11T01:30:25.000Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "Exit code: 124 Wall time: 10.3 seconds Total output lines: 1050 "
+                            "Output: command timed out after 10284 milliseconds ..."
+                        ),
+                    },
+                },
+                {
+                    "timestamp": "2026-06-11T01:32:10.000Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": "The output was too long, now narrowing the search.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "command-output-harness"
+                and issue["status"] == "large_output_reasoning_delay"
+                and issue["elapsed_seconds"] == 105.0
+                for issue in audit.issues
+            )
+        )
+
     def test_actual_git_worktree_flow_requires_snapshot_requirement(self):
         path = self.write_session(
             [

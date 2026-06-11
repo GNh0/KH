@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import re
 from dataclasses import asdict, dataclass, field
@@ -438,6 +439,8 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             )
 
     issues.extend(_kh_front_door_issues(path))
+    issues.extend(_front_door_latency_issues(path))
+    issues.extend(_large_output_latency_issues(path))
     issues.extend(_stale_skill_cache_issues(path))
     issues.extend(_cross_scope_context_issues(path))
     issues.extend(_global_memory_scope_issues(path))
@@ -737,6 +740,141 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
             )
             waiting_for_front_door = False
     return issues
+
+
+def _front_door_latency_issues(path: Path, threshold_seconds: float = 60.0) -> List[Dict[str, Any]]:
+    skill_read_event: Dict[str, Any] | None = None
+    skill_read_at: datetime | None = None
+    front_door_event: Dict[str, Any] | None = None
+    front_door_at: datetime | None = None
+
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        text = _payload_text(payload)
+        lowered = text.lower()
+        ts = _event_timestamp(event)
+        if ts is None:
+            continue
+
+        if (
+            skill_read_at is None
+            and payload_type in {"function_call", "custom_tool_call"}
+            and "always_on_front_door" in lowered
+            and "skill.md" in lowered
+        ):
+            skill_read_at = ts
+            skill_read_event = event
+            continue
+
+        if payload_type in {"function_call", "custom_tool_call"} and _is_front_door_order_evidence(payload, lowered):
+            front_door_at = ts
+            front_door_event = event
+            break
+
+    if skill_read_at is None or front_door_at is None:
+        return []
+    elapsed = (front_door_at - skill_read_at).total_seconds()
+    if elapsed <= threshold_seconds:
+        return []
+    return [
+        {
+            "skill": "always-on-front-door",
+            "status": "front_door_bootstrap_delay",
+            "severity": "P1",
+            "reason": (
+                f"always-on-front-door SKILL.md was read, but runtime front-door command started "
+                f"{elapsed:.1f}s later"
+            ),
+            "action": (
+                "After reading always-on-front-door, run the front-door command as the next standalone "
+                "tool call. Do not spend a long reasoning pass on source strategy before intake."
+            ),
+            "threshold_seconds": threshold_seconds,
+            "elapsed_seconds": round(elapsed, 1),
+            "skill_read": _short(_payload_text(skill_read_event.get("payload", {})) if skill_read_event else ""),
+            "front_door_call": _short(_payload_text(front_door_event.get("payload", {})) if front_door_event else ""),
+        }
+    ]
+
+
+def _event_timestamp(event: Dict[str, Any]) -> datetime | None:
+    raw = str(event.get("timestamp", "") or "")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _large_output_latency_issues(
+    path: Path,
+    output_line_threshold: int = 300,
+    delay_threshold_seconds: float = 60.0,
+) -> List[Dict[str, Any]]:
+    pending_output: Dict[str, Any] | None = None
+    pending_at: datetime | None = None
+    pending_lines = 0
+
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        ts = _event_timestamp(event)
+        if ts is None:
+            continue
+        text = _payload_text(payload)
+
+        if payload_type in {"function_call_output", "custom_tool_call_output"}:
+            line_count = _reported_output_line_count(text)
+            if line_count >= output_line_threshold:
+                pending_output = event
+                pending_at = ts
+                pending_lines = line_count
+            continue
+
+        if pending_output is None or pending_at is None:
+            continue
+        if payload_type not in {"message", "agent_message", "function_call", "custom_tool_call", "task_complete"}:
+            continue
+        elapsed = (ts - pending_at).total_seconds()
+        if elapsed <= delay_threshold_seconds:
+            pending_output = None
+            pending_at = None
+            pending_lines = 0
+            continue
+        return [
+            {
+                "skill": "command-output-harness",
+                "status": "large_output_reasoning_delay",
+                "severity": "P1",
+                "reason": (
+                    f"A command returned about {pending_lines} output lines and the next agent action "
+                    f"started {elapsed:.1f}s later"
+                ),
+                "action": (
+                    "Use command-output-harness/token-optimizer behavior for broad searches: narrow the "
+                    "query, cap output, preserve file/line/error facts, and avoid feeding 300+ raw lines "
+                    "back into model context."
+                ),
+                "output_line_threshold": output_line_threshold,
+                "delay_threshold_seconds": delay_threshold_seconds,
+                "elapsed_seconds": round(elapsed, 1),
+                "sample": _short(_payload_text(pending_output.get("payload", {})), 260),
+            }
+        ]
+    return []
+
+
+def _reported_output_line_count(text: str) -> int:
+    match = re.search(r"total output lines:\s*(\d+)", text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return text.count("\n") + 1 if text else 0
 
 
 def _stale_skill_cache_issues(path: Path) -> List[Dict[str, Any]]:
