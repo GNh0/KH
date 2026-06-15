@@ -39,14 +39,15 @@ Only after the command returns should selected follow-up skills be read or appli
 1. Decide only whether the request is direct/light or work-bearing.
 2. For work-bearing requests, run the front-door command immediately.
 3. Treat `runtime_applied_skills` as executed and `selected_not_executed_skills` as selected follow-up only.
-4. If `execution_gate.can_execute=false`, stop before global memory lookup, source reads, file writes, scaffolding, deliverable generation, browser QA, verification, or subagent dispatch.
-5. If the gate is `blocked_until_large_work_preflight`, do only the allowed setup evidence: GoalState, orchestration bundle, workspace/domain boundary, token decision, host/subagent strategy, parallel strategy, role-audit decision, command-output plan, deliverable/render quality plan, guard/rollback policy, and verification plan.
-6. After intake, route specialist providers by capability. KH intake must not hide host-local skills such as `sql-formatting` when they match the request.
+4. Execute `immediate_next_skills` first, in order. Do not treat the full `recommended_skills` or `selected_not_executed_skills` list as the next execution plan.
+5. If `execution_gate.can_execute=false`, stop before global memory lookup, source reads, file writes, scaffolding, deliverable generation, browser QA, verification, or subagent dispatch. First apply, skip with rationale, or block `immediate_next_skills`.
+6. If the gate is `blocked_until_large_work_preflight`, do only the allowed setup evidence: GoalState, orchestration bundle, workspace/domain boundary, token decision, host/subagent strategy, parallel strategy, role-audit decision, command-output plan, deliverable/render quality plan, guard/rollback policy, and verification plan.
+7. After intake, route specialist providers by capability. KH intake must not hide host-local skills such as `sql-formatting` when they match the request.
 
 ## Required outputs
 
 - `front_door_status`, request classification, plugin route, and `execution_gate`.
-- `runtime_applied_skills`, `selected_not_executed_skills`, and `skill_status_summary`.
+- `runtime_applied_skills`, `selected_not_executed_skills`, `immediate_next_skills`, and `skill_status_summary`.
 - `kh_active_directive` when persistent KH use was requested.
 - Blocked/direct rationale when the runtime command cannot run.
 
@@ -65,6 +66,7 @@ Only after the command returns should selected follow-up skills be read or appli
 - Do not run broad uncapped searches after intake. Narrow `rg`/file reads and use command-output filtering before hundreds of raw lines enter context.
 - Do not treat a user saying "develop/make/create" as implementation approval when front-door selected brainstorming.
 - Do not treat selected follow-up skills as exclusive; specialist plugins may still be routed after intake.
+- Do not skip `immediate_next_skills` and jump directly to source exploration, implementation, verification, or final claims.
 
 ## UAF implementation targets
 

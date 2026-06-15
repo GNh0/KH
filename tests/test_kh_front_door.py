@@ -135,13 +135,13 @@ class KhFrontDoorTests(unittest.TestCase):
 
     def test_cache_root_is_reported_as_codex_plugin_cache(self):
         root = Path(
-            r"C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.68"
+            r"C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf\2.9.69"
         )
 
         source_type, version, reason = _source_identity_for_root(root)
 
         self.assertEqual(source_type, "codex-plugin-cache")
-        self.assertEqual(version, "2.9.68")
+        self.assertEqual(version, "2.9.69")
         self.assertEqual(reason, "installed Codex plugin cache")
 
     def test_heavy_route_selects_runtime_skills_without_claiming_they_ran(self):
@@ -176,6 +176,18 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(
             payload["execution_gate"]["status"],
             "blocked_until_large_work_preflight",
+        )
+        self.assertEqual(
+            payload["immediate_next_skills"],
+            [
+                "goal-state-harness",
+                "workflow-usability-harness",
+                "token-optimizer",
+                "host-agent-orchestration",
+            ],
+        )
+        self.assertTrue(
+            payload["required_next_actions"][0].startswith("NEXT SKILL EXECUTION")
         )
         for required in [
             "large_work_orchestration_bundle",
@@ -220,6 +232,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["front_door_status"], "ok")
         self.assertEqual(payload["plugin_route"]["controller"], "kh")
         self.assertIn("skill-catalog", payload["recommended_skills"])
+        self.assertIn("immediate_next_skills", payload)
         self.assertEqual(
             payload["runtime_applied_skills"],
             [
@@ -348,6 +361,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
         self.assertEqual(payload["plugin_route"]["controller"], "kh")
         self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertEqual(payload["immediate_next_skills"], ["brainstorming-harness"])
         self.assertIn("brainstorming-harness", payload["selected_not_executed_skills"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertEqual(payload["execution_gate"]["status"], "blocked_until_brainstorming_handoff")

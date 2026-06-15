@@ -64,6 +64,7 @@ class KhFrontDoorResult:
     classification: Dict[str, Any]
     plugin_route: Dict[str, Any]
     recommended_skills: List[str]
+    immediate_next_skills: List[str]
     skill_statuses: Dict[str, Dict[str, Any]]
     execution_gate: Dict[str, Any]
     required_next_actions: List[str]
@@ -84,6 +85,7 @@ class KhFrontDoorResult:
             "classification": dict(self.classification),
             "plugin_route": dict(self.plugin_route),
             "recommended_skills": list(self.recommended_skills),
+            "immediate_next_skills": list(self.immediate_next_skills),
             "skill_statuses": {name: dict(status) for name, status in self.skill_statuses.items()},
             "execution_gate": dict(self.execution_gate),
             "required_next_actions": list(self.required_next_actions),
@@ -131,6 +133,7 @@ class KhFrontDoorResult:
                 "ask_user": self.plugin_route.get("ask_user"),
             },
             "recommended_skills": list(self.recommended_skills),
+            "immediate_next_skills": list(self.immediate_next_skills),
             "execution_gate": dict(self.execution_gate),
             "runtime_applied_skills": runtime_applied_skills,
             "selected_not_executed_skills": selected_not_executed_skills,
@@ -196,6 +199,7 @@ def build_kh_front_door(
     recommended_skills = _recommended_skills(classification, plugin_route)
     skill_statuses = _front_door_skill_statuses(recommended_skills, classification, skill_source)
     execution_gate = _execution_gate(classification, plugin_route, recommended_skills)
+    immediate_next_skills = _immediate_next_skills(classification, plugin_route, recommended_skills, execution_gate)
 
     large_work_bundle = None
     large_work_validation = None
@@ -221,9 +225,16 @@ def build_kh_front_door(
         classification=classification,
         plugin_route=plugin_route,
         recommended_skills=recommended_skills,
+        immediate_next_skills=immediate_next_skills,
         skill_statuses=skill_statuses,
         execution_gate=execution_gate,
-        required_next_actions=_required_next_actions(classification, plugin_route, recommended_skills, execution_gate),
+        required_next_actions=_required_next_actions(
+            classification,
+            plugin_route,
+            recommended_skills,
+            execution_gate,
+            immediate_next_skills,
+        ),
         catalog_summary=catalog_summary,
         large_work_orchestration_bundle=large_work_bundle,
         large_work_bundle_validation=large_work_validation,
@@ -565,6 +576,44 @@ def _front_door_skill_statuses(
     return statuses
 
 
+def _immediate_next_skills(
+    classification: Dict[str, Any],
+    plugin_route: Dict[str, Any],
+    recommended_skills: Sequence[str],
+    execution_gate: Dict[str, Any],
+) -> List[str]:
+    recommended = set(recommended_skills)
+    controller = plugin_route.get("controller", {}) or {}
+    controller_id = str(controller.get("provider_id") or "")
+
+    if controller_id and controller_id not in {"kh", "none"}:
+        return []
+
+    status = str(execution_gate.get("status") or "")
+    if status == "blocked_until_brainstorming_handoff":
+        return ["brainstorming-harness"] if "brainstorming-harness" in recommended else []
+
+    if status == "blocked_until_large_work_preflight":
+        ordered = [
+            "goal-state-harness",
+            "workflow-usability-harness",
+            "token-optimizer",
+            "host-agent-orchestration",
+            "parallel-orchestration-harness",
+            "role-execution-audit-harness",
+            "verification-before-completion-harness",
+        ]
+        return [skill for skill in ordered if skill in recommended][:4]
+
+    ordered = [
+        "command-output-harness",
+        "workflow-usability-harness",
+        "memory-state-harness",
+        "verification-before-completion-harness",
+    ]
+    return [skill for skill in ordered if skill in recommended][:2]
+
+
 def _status(
     status: str,
     application_mode: str,
@@ -619,11 +668,19 @@ def _required_next_actions(
     plugin_route: Dict[str, Any],
     recommended_skills: Sequence[str],
     execution_gate: Dict[str, Any] | None = None,
+    immediate_next_skills: Sequence[str] | None = None,
 ) -> List[str]:
     actions = [
-        "Read only the selected skills needed for the next step through `python -m src.skills.uaf_skill_catalog --read <skill>`.",
+        "Do not continue from `recommended_skills` as a loose checklist. Execute `immediate_next_skills` first, in order, and record applied/skipped/blocked evidence for each before source exploration, implementation, verification, or final claims.",
+        "Read only the immediate next skills needed for the next step through `python -m src.skills.uaf_skill_catalog --read <skill>`.",
         "Do not claim runtime skill application unless a module, gate, artifact, or explicit passthrough evidence was produced.",
     ]
+    if immediate_next_skills:
+        immediate = ", ".join(f"`{skill}`" for skill in immediate_next_skills)
+        actions.insert(
+            0,
+            f"NEXT SKILL EXECUTION: apply {immediate} now. Everything else in `selected_not_executed_skills` is deferred until these are applied, skipped with rationale, or blocked.",
+        )
     controller = plugin_route.get("controller", {}) or {}
     controller_id = str(controller.get("provider_id") or "")
     if controller_id and controller_id not in {"kh", "none"}:
@@ -683,10 +740,19 @@ def _required_next_actions(
         actions.append(
             "Record deliverable_render_quality_plan before generating user-facing artifacts: required output files, source-to-deliverable traceability, render/readability validation, and how requested SQL/text will be included in the user-facing response when requested."
         )
-    for skill in recommended_skills:
-        if skill in FRONT_DOOR_SKILLS or skill == "token-optimizer":
-            continue
-        actions.append(f"If needed next, apply `{skill}` and record concrete evidence or skipped/blocked rationale.")
+    deferred = [
+        skill
+        for skill in recommended_skills
+        if skill not in FRONT_DOOR_SKILLS
+        and skill not in set(immediate_next_skills or [])
+    ]
+    if deferred:
+        actions.append(
+            "Deferred selected skills are not applied yet: "
+            + ", ".join(f"`{skill}`" for skill in deferred[:10])
+            + ("." if len(deferred) <= 10 else f", and {len(deferred) - 10} more.")
+            + " Do not report them as used until concrete evidence exists."
+        )
     return _dedupe(actions)
 
 
