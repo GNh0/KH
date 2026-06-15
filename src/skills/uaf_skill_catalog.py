@@ -61,6 +61,7 @@ SKILL_EXECUTION_LEVELS = {
     "request-complexity-router": "python-module",
     "scenario-evaluation-harness": "python-module",
     "skill-catalog": "python-module",
+    "sql-formatting-style-harness": "python-module",
     "snapshot-state-harness": "python-module",
     "subagent-review-pipeline": "hybrid-harness",
     "systematic-debugging-harness": "hybrid-harness",

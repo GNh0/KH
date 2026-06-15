@@ -68,6 +68,7 @@ from src.skills.command_policy import (
     evaluate_write_boundary,
 )
 from src.skills.token_optimizer import optimize_context_content
+from src.skills.sql_formatting_style import verify_sql_formatting_style
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 from src.skills.workflow_distiller import build_skill_scaffold, should_distill_workflow
 from src.core.snapshot_manager import SnapshotManager
@@ -208,6 +209,8 @@ def main(default_skill_name: str | None = None) -> int:
 
 
 def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]]:
+    if skill_name == "sql-formatting-style-harness":
+        return _sql_formatting_style_scenario
     if skill_name == "brainstorming-harness":
         return _brainstorming_scenario
     if skill_name == "compound-engineering-harness":
@@ -487,6 +490,80 @@ def _command_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dic
         missing_inputs=[],
         contracts=contracts,
         artifacts=[],
+    )
+
+
+def _sql_formatting_style_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    original = (
+        "CREATE OR ALTER PROCEDURE [dbo].[sp_DEMO_SELECT] @WORKTYPE VARCHAR(20)=NULL\n"
+        "AS\n"
+        "BEGIN\n"
+        "SELECT a.ordnum, CASE WHEN a.chkyn = 'Y' THEN '확인' END AS chkynm\n"
+        "FROM DE100T a\n"
+        "left outer join DE110T b\n"
+        "on a.ordnum = b.ordnum\n"
+        "and a.ordseq = b.ordseq\n"
+        "WHERE a.status = '진행'\n"
+        "--AND a.status = '보류'\n"
+        "END\n"
+    )
+    formatted = (
+        "CREATE OR ALTER PROCEDURE [DBO].[SP_DEMO_SELECT]\n"
+        "      @WORKTYPE    VARCHAR(20) = NULL\n"
+        "AS\n"
+        "BEGIN\n"
+        "    SELECT A.ORDNUM\n"
+        "         , (CASE WHEN A.CHKYN = 'Y' THEN '확인' END) AS CHKYNM\n"
+        "    FROM DE100T A\n"
+        "        LEFT OUTER JOIN DE110T B\n"
+        "                     ON A.ORDNUM = B.ORDNUM\n"
+        "                     AND A.ORDSEQ = B.ORDSEQ\n"
+        "    WHERE A.STATUS = '진행'\n"
+        "--AND A.STATUS = '보류'\n"
+        "END\n"
+    )
+    changed = formatted.replace("'진행'", "'완료'").replace("'확인'", "'완료'")
+    success_result = verify_sql_formatting_style(original, formatted)
+    blocked_result = verify_sql_formatting_style(original, changed)
+    success_path = output_dir / "sql_formatting_success.json"
+    blocked_path = output_dir / "sql_formatting_blocked.json"
+    success_path.write_text(json.dumps(success_result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    blocked_path.write_text(json.dumps(blocked_result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    contracts = [
+        _mapping_contract("HarnessResult", "src.skills.sql_formatting_style", success_result.to_dict(), "policy-result"),
+        _mapping_contract("HarnessResult", "src.skills.sql_formatting_style", blocked_result.to_dict(), "policy-result"),
+    ]
+    return _scenario_result(
+        success_contract="HarnessResult",
+        success_payload=success_result.to_dict(),
+        success_evidence=[
+            "mechanical preservation checks passed",
+            "style checks passed",
+            "semantic checks explicitly not_proven",
+        ],
+        success_behavior="Verify host-local sql-formatting output without replacing the host-local style skill.",
+        success_side_effects=["writes success and blocked HarnessResult JSON under the demo output directory"],
+        blocked_contract="HarnessResult",
+        blocked_payload=blocked_result.to_dict(),
+        blocked_reason="literal or contract-sensitive SQL text changed",
+        missing_inputs=[],
+        contracts=contracts,
+        artifacts=[
+            _artifact_record_from_file(
+                success_path,
+                "sql-formatting-harness-result-json",
+                output_dir,
+                ["json readable", "success HarnessResult captured"],
+                created_by_case="success",
+            ),
+            _artifact_record_from_file(
+                blocked_path,
+                "sql-formatting-harness-result-json",
+                output_dir,
+                ["json readable", "blocked HarnessResult captured"],
+                created_by_case="blocked",
+            ),
+        ],
     )
 
 

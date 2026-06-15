@@ -485,6 +485,8 @@ def _recommended_skills(classification: Dict[str, Any], plugin_route: Dict[str, 
     controller = plugin_route.get("controller", {}) or {}
     if controller.get("provider_id") == "kh":
         skills.append("workflow-usability-harness")
+    if _needs_sql_formatting_style_harness(classification, plugin_route):
+        skills.append("sql-formatting-style-harness")
     if classification.get("complexity") in {"heavy", "high_risk"}:
         skills.extend(
             [
@@ -504,6 +506,20 @@ def _recommended_skills(classification: Dict[str, Any], plugin_route: Dict[str, 
     if "source_summary" in classification.get("evidence_required", []):
         skills.append("context-state-harness")
     return _dedupe(skills)
+
+
+def _needs_sql_formatting_style_harness(classification: Dict[str, Any], plugin_route: Dict[str, Any]) -> bool:
+    selected_roles = [plugin_route.get("controller", {}) or {}]
+    selected_roles.extend(plugin_route.get("assistants", []) or [])
+    if not any(role.get("capability") == "sql_formatting" for role in selected_roles):
+        return False
+    if plugin_route.get("ask_user"):
+        return False
+    complexity = str(classification.get("complexity") or "")
+    if complexity in {"medium", "heavy", "high_risk"}:
+        return True
+    evidence = {str(item) for item in classification.get("evidence_required", [])}
+    return bool(evidence & {"test_evidence", "verification_plan", "important_facts_preserved", "command_output_filter"})
 
 
 def _front_door_skill_statuses(

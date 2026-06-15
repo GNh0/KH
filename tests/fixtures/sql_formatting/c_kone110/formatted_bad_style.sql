@@ -1,0 +1,23 @@
+CREATE OR ALTER PROCEDURE [DBO].[SP_DEMO_SELECT]
+      @WORKTYPE    VARCHAR(20) = NULL
+    , @ORGDIV      VARCHAR(2)  = NULL
+AS
+BEGIN
+    SET NOCOUNT ON
+
+    SELECT A.ORDNUM
+           ISNULL(C.SUBNM, '') AS STATUSNM
+         , CASE WHEN A.CHKYN = 'Y' THEN '확인' END AS CHKYNM
+         , A.QTY * A.PRICE AS AMT
+    FROM DE100T A
+LEFT OUTER JOIN DE110T B
+ON A.ORDNUM = B.ORDNUM
+                     AND A.ORDSEQ = B.ORDSEQ
+        LEFT OUTER JOIN BA011T C
+                     ON C.MAINCD = 'DE001'
+                     AND A.STATUS = C.SUBCD
+                     AND C.USEYN = 'Y'
+    WHERE A.ORGDIV = @ORGDIV
+      AND A.STATUS = '진행'
+--AND a.status = '보류'
+END

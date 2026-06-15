@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.74",
+  "version": "2.9.75",
   "description": "KH Universal Agent Framework always-on FIRST front-door intake for non-trivial ordinary requests before MEMORY.md lookup, target or sibling folder inspection, source reads, subagents, or other plugin work; includes automatic routing, skills, harnesses, evidence gates, brainstorming handoff, GoalState, memory state, development progress state, token optimization, scenario audits, DAG role orchestration, deliverable exports, retention cleanup, and local orchestration contracts for Codex.",
   "author": {
     "name": "KH UAF",
