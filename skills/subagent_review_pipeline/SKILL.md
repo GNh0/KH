@@ -51,14 +51,15 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 4. Use `single-controller` only with a concrete rationale: sequential dependency, tiny scope, shared-state risk, host-limited tooling, unavailable nested subagents, or another explicit blocker.
 5. In a Codex subagent, Antigravity-style worker, Claude Code worker, or local worker, first record whether nested subagents are available. If the host does not expose nested delegation, record `subagent_strategy=single-controller` with `host_limited=true` or `nested_subagents_unavailable=true`; do not silently omit this harness.
 6. Before dispatch, decide `token_optimizer_status` for task packets, command logs, and subagent transcripts. This is a decision gate, not automatic compression; use `used`, `considered_not_needed`, `passthrough`, or `blocked`.
-7. Build a compact task packet per implementer using `references/standard-task-packets.md`: objective, workspace, base SHA, plan section, owned files, forbidden files, checks, expected artifacts, commit message, and report fields.
-8. Dispatch one implementer per task with only the needed context.
-9. Run spec review first; send any gap back to implementation.
-10. Run quality review only after spec compliance passes.
-11. Preserve every reviewer finding in the aggregated result.
-12. For task-plan development runs, update `.kh/development/<run-id>/state/progress.json` after implementer, spec reviewer, code-quality reviewer, fix, re-review, and commit events.
-13. When implementers can edit files concurrently, isolate them with `.worktrees/<task>`, an isolated branch, or a host-provided equivalent workspace.
-14. Run final review across the combined implementation before finishing.
+7. Build a compact task packet per implementer using `references/standard-task-packets.md`: objective, workspace assignment, target repository or selected workspace, base branch/SHA, plan section, owned files, forbidden files, checks, expected artifacts, commit message, final user-language policy, and report fields.
+8. When the purpose is to test KH harness autonomy, do not preassign a worktree path. Use `workspace_assignment=worker_decides`, pass the exact target repository and constraints, and require the worker to run/apply worktree isolation policy, choose `host-worktree`, `project-local-worktree`, `isolated-branch`, or `current-checkout`, and report evidence before editing.
+9. Dispatch one implementer per task with only the needed context.
+10. Run spec review first; send any gap back to implementation.
+11. Run quality review only after spec compliance passes.
+12. Preserve every reviewer finding in the aggregated result.
+13. For task-plan development runs, update `.kh/development/<run-id>/state/progress.json` after implementer, spec reviewer, code-quality reviewer, fix, re-review, and commit events.
+14. When implementers can edit files concurrently, isolate them with `.worktrees/<task>`, an isolated branch, or a host-provided equivalent workspace.
+15. Run final review across the combined implementation before finishing.
 
 ## Large Work Bundle Reporting
 
@@ -86,6 +87,8 @@ Pressure scenario: if an implementer says "done" but did not report changed file
 - `subagent_strategy` with dispatch, single-controller, review-only, or blocked rationale.
 - Nested-subagent availability when running inside a host subagent/worker.
 - Compact task packet per implementer that is self-contained and excludes unrelated session history.
+- Worker-side workspace isolation decision evidence when `workspace_assignment=worker_decides`.
+- Final user-facing output language policy: match the user's requested or apparent language; internal reports may stay in English unless the user requests otherwise.
 - Standard reviewer packets for `spec-reviewer` and `code-quality-reviewer` when those roles are dispatched.
 - `token_optimizer_status` for large task packets, command outputs, or subagent transcripts.
 - Development progress state update when a task-plan run is active.
@@ -102,6 +105,8 @@ Pressure scenario: if an implementer says "done" but did not report changed file
 - Do not flatten reviewer findings into a vague summary.
 - Do not mark blocked tasks as failed implementation without identifying the blocker category.
 - Do not perform implementation in a main or subagent session without recording why `dispatch`, `single-controller`, `review-only`, or `blocked` was selected.
+- Do not preassign a worktree path when the task packet is intended to test worker autonomy; require and audit the worker's own worktree isolation decision instead.
+- Do not require a fixed language for final user-facing reports; adapt to the user's requested or apparent language while allowing internal harness reports to remain English.
 
 ## UAF implementation targets
 

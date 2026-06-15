@@ -46,7 +46,7 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("tdd_red_green", result.evidence_required)
         self.assertIn("test_evidence", result.evidence_required)
 
-    def test_readonly_source_update_condition_question_is_medium(self):
+    def test_readonly_source_condition_questions_stay_medium(self):
         cases = [
             (
                 "\ud639\uc2dc \uc800\uac70 \uc218\uc815\ud560\ub54c \uccb4\ud06c\ub85c\uc9c1\uc774 "
@@ -59,6 +59,10 @@ class RequestClassifierTests(unittest.TestCase):
                 "\uadf8\ub7f0\uac70 \ubb3c\uc5b4\ubcf4\uc796\uc544"
             ),
             "LIST \ub354\ube14\ud074\ub9ad\ud560\ub54c \uc218\uc815 \ubabb\ud558\ub294 \uc870\uac74\uc774 \uc788\uc5b4?",
+            "\uc218\uc815\ud560\ub54c \uccb4\ud06c\ub85c\uc9c1\uc774 \uc788\uc744\uae4c",
+            "\uc218\uc815\ud574\uc57c \ud558\ub294 \uc870\uac74 \uc54c\ub824\uc918",
+            "when editing, is there validation logic that blocks updates?",
+            "if missing data blocks update, what condition handles it?",
         ]
 
         for prompt in cases:
@@ -70,12 +74,17 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertIn("readonly_source_condition_question", result.reasons)
                 self.assertNotEqual(result.recommended_execution, "role_dag")
 
-    def test_actual_source_mutation_command_remains_heavy(self):
+    def test_source_condition_mutation_commands_route_heavy(self):
         cases = [
             "\uccb4\ud06c\ub85c\uc9c1 \uc218\uc815\ud574\uc918",
             "\uccb4\ud06c\ub85c\uc9c1 \ucd94\uac00\ud574\uc918",
+            "\uccb4\ud06c\ub85c\uc9c1 \ubcc0\uacbd\ud574\uc8fc\uc138\uc694",
+            "\uccb4\ud06c\ub85c\uc9c1 \ubc18\uc601\ud574 \uc8fc\uc138\uc694",
             "\uc218\uc815 \ubabb\ud558\ub294 \uc870\uac74\uc774 \uc788\ub294\uc9c0 \ud655\uc778\ud558\uace0 \uc5c6\uc73c\uba74 \ucd94\uac00\ud574\uc918",
             "\uccb4\ud06c\ub85c\uc9c1\uc774 \uc788\uc744\uae4c \ud655\uc778\ud558\uace0 \uc5c6\uc73c\uba74 \ub123\uc5b4\uc918",
+            "check if validation logic exists and add it if missing",
+            "if absent create it",
+            "implement it when absent",
         ]
 
         for prompt in cases:
@@ -83,7 +92,40 @@ class RequestClassifierTests(unittest.TestCase):
                 result = classify_request(prompt)
                 self.assertEqual(result.complexity, "heavy")
                 self.assertEqual(result.recommended_execution, "role_dag")
+                self.assertIn("source_condition_mutation_command", result.reasons)
                 self.assertIn("goal-state-harness", result.required_harnesses)
+
+    def test_korean_missing_condition_mutation_commands_route_heavy(self):
+        cases = [
+            "\ud655\uc778\ud558\uace0 \uc5c6\uc73c\uba74 \ucd94\uac00\ud574\uc918",
+            "\ud655\uc778\ud558\uace0 \uc5c6\uc73c\uba74 \ub123\uc5b4\uc918",
+            "\ud655\uc778\ud558\uace0 \uc5c6\ub2e4\uba74 \ub9cc\ub4e4\uc5b4\uc8fc\uc138\uc694",
+            "\ud655\uc778\ud558\uace0 \uc5c6\uc744 \uacbd\uc6b0 \uad6c\ud604\ud574\uc918",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "heavy")
+                self.assertEqual(result.recommended_execution, "role_dag")
+                self.assertIn("source_condition_mutation_command", result.reasons)
+
+    def test_conditional_mutation_punctuation_and_filler_commands_route_heavy(self):
+        cases = [
+            "if missing, add it",
+            "if missing: add it",
+            "if missing please add it",
+            "when absent, create it",
+            "if missing, please add it",
+            "when absent: then create it",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "heavy")
+                self.assertEqual(result.recommended_execution, "role_dag")
+                self.assertIn("source_condition_mutation_command", result.reasons)
 
     def test_ui_filter_button_is_not_security_high_risk(self):
         result = classify_request(

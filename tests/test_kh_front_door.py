@@ -695,6 +695,40 @@ class KhFrontDoorTests(unittest.TestCase):
                 )
                 self.assertIn("goal-state-harness", payload["immediate_next_skills"])
 
+    def test_subagent_packets_require_worker_workspace_decision_for_autonomy_tests(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        packets = (repo_root / "skills" / "subagent_review_pipeline" / "references" / "standard-task-packets.md").read_text(
+            encoding="utf-8"
+        )
+        skill = (repo_root / "skills" / "subagent_review_pipeline" / "SKILL.md").read_text(encoding="utf-8")
+        combined = f"{packets}\n{skill}"
+
+        for expected in [
+            "`workspace_assignment`: `preassigned`",
+            "`worker_decides`",
+            "`workspace=not_preassigned`",
+            "`target_repo`",
+            "`worker_workspace_decision_required`",
+            "Do not preassign worktree paths when the packet purpose is to test KH harness autonomy.",
+            "worker-side worktree isolation decision",
+            "`workspace_decision_source`",
+            "`worktree_isolation_evidence`",
+        ]:
+            self.assertIn(expected, combined)
+
+    def test_subagent_packets_use_adaptive_final_user_language_policy(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        packets = (repo_root / "skills" / "subagent_review_pipeline" / "references" / "standard-task-packets.md").read_text(
+            encoding="utf-8"
+        )
+        skill = (repo_root / "skills" / "subagent_review_pipeline" / "SKILL.md").read_text(encoding="utf-8")
+        combined = f"{packets}\n{skill}".lower()
+
+        self.assertIn("requested or apparent language", combined)
+        self.assertIn("internal subagent reports may stay in english", combined)
+        self.assertNotIn("must be korean", combined)
+        self.assertNotIn("final report must be korean", combined)
+
     def test_pbl_sql_image_binding_request_requires_large_work_preflight(self):
         result = build_kh_front_door(
             "Use C:\\PblScripter with quality_470 / quality_004.pbl, trace the print button SQL, "

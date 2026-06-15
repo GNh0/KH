@@ -535,36 +535,56 @@ SOURCE_MUTATION_COMMAND_TERMS = {
     "add it",
     "insert it",
     "create it",
-    "if missing",
-    "if absent",
-    "\uc218\uc815\ud574\uc918",
-    "\uc218\uc815\ud574\uc8fc",
-    "\uc218\uc815\ud574",
-    "\ubcc0\uacbd\ud574\uc918",
-    "\ubcc0\uacbd\ud574\uc8fc",
-    "\ubcc0\uacbd\ud574",
-    "\uc5c5\ub370\uc774\ud2b8\ud574\uc918",
-    "\uc5c5\ub370\uc774\ud2b8\ud574\uc8fc",
-    "\uc5c5\ub370\uc774\ud2b8\ud574",
-    "\uace0\uccd0\uc918",
-    "\uace0\uccd0\uc8fc",
-    "\ucd94\uac00\ud574\uc918",
-    "\ucd94\uac00\ud574\uc8fc",
-    "\ucd94\uac00\ud574",
-    "\ub123\uc5b4\uc918",
-    "\ub123\uc5b4\uc8fc",
-    "\ub123\uc5b4",
-    "\uc0bd\uc785\ud574\uc918",
-    "\uc0bd\uc785\ud574\uc8fc",
-    "\uc0bd\uc785\ud574",
-    "\ubc18\uc601\ud574\uc918",
-    "\ubc18\uc601\ud574\uc8fc",
-    "\ubc18\uc601\ud574",
-    "\uc5c6\uc73c\uba74 \ucd94\uac00",
-    "\uc5c6\uc73c\uba74 \ub123",
-    "\uc5c6\uc73c\uba74 \ub9cc\ub4e4",
-    "\uc5c6\uc73c\uba74 \uad6c\ud604",
 }
+INFLECTED_MUTATION_ACTION_STEMS = (
+    "\uc218\uc815",
+    "\ubcc0\uacbd",
+    "\uc5c5\ub370\uc774\ud2b8",
+    "\ucd94\uac00",
+    "\uc0bd\uc785",
+    "\ubc18\uc601",
+    "\uad6c\ud604",
+)
+DIRECT_MUTATION_ACTION_FORMS = (
+    "\uace0\uccd0",
+    "\ub123\uc5b4",
+    "\ub9cc\ub4e4\uc5b4",
+)
+CONDITIONAL_MUTATION_ACTION_TERMS = (
+    "add",
+    "insert",
+    "create",
+    "implement",
+    "fix",
+    "update",
+    "change",
+)
+CONDITIONAL_MUTATION_FILLER_TERMS = (
+    "please",
+    "then",
+)
+REQUEST_COMMAND_SUFFIX_RE = "(?:\uc8fc\uc138\uc694|\uc918|\uc8fc|\ub2ec\ub77c|\ub77c)"
+CONDITIONAL_MUTATION_ACTION_RE = f"(?:{'|'.join(map(re.escape, CONDITIONAL_MUTATION_ACTION_TERMS))})"
+CONDITIONAL_MUTATION_CONNECTOR_RE = (
+    rf"\s*(?:[,;:.-]\s*)?(?:(?:{'|'.join(map(re.escape, CONDITIONAL_MUTATION_FILLER_TERMS))})\s+)*"
+)
+INFLECTED_MUTATION_COMMAND_RE = re.compile(
+    f"(?:{'|'.join(map(re.escape, INFLECTED_MUTATION_ACTION_STEMS))})\\s*\ud574\\s*(?:{REQUEST_COMMAND_SUFFIX_RE})?(?=$|[\\s.!?])"
+    f"|(?:{'|'.join(map(re.escape, DIRECT_MUTATION_ACTION_FORMS))})\\s*(?:{REQUEST_COMMAND_SUFFIX_RE})?(?=$|[\\s.!?])"
+)
+MISSING_CONDITION_MARKER_RE = re.compile(
+    r"\b(?:if|when)\s+(?:missing|absent)\b"
+    "|(?:\uc5c6\uc73c\uba74|\uc5c6\ub2e4\uba74|\uc5c6\uc744\\s*\uacbd\uc6b0|\uc5c6\uc744\\s*\ub54c)"
+)
+CONDITIONAL_MUTATION_COMMAND_RE = re.compile(
+    rf"(?:\b(?:if|when)\s+(?:missing|absent)\b{CONDITIONAL_MUTATION_CONNECTOR_RE}{CONDITIONAL_MUTATION_ACTION_RE}(?:\s+it)?\b)"
+    rf"|(?:\b{CONDITIONAL_MUTATION_ACTION_RE}\s+(?:it\s+)?(?:if|when)\s+(?:missing|absent)\b)"
+    "|"
+    f"(?:\uc5c6\uc73c\uba74|\uc5c6\ub2e4\uba74|\uc5c6\uc744\\s*\uacbd\uc6b0|\uc5c6\uc744\\s*\ub54c)\\s*"
+    f"(?:(?:{'|'.join(map(re.escape, INFLECTED_MUTATION_ACTION_STEMS))})(?:\\s*\ud574)?|"
+    f"(?:{'|'.join(map(re.escape, DIRECT_MUTATION_ACTION_FORMS))}))"
+    f"\\s*(?:{REQUEST_COMMAND_SUFFIX_RE})?(?=$|[\\s.!?])"
+)
 MEDIUM_TERMS = {
     "summarize",
     "compare",
@@ -1874,6 +1894,18 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             [*reasons, "source_condition_mutation_command"],
         )
 
+    if _is_readonly_source_condition_question(normalized):
+        return _classification(
+            complexity="medium",
+            domain=domain,
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "source_summary"]),
+            reasons=[*reasons, "readonly_source_condition_question"],
+            confidence=0.78,
+        )
+
     if _is_ambiguous(normalized, context):
         return _classification(
             complexity="ambiguous",
@@ -1892,18 +1924,6 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             evidence_required,
             reasons,
             normalized,
-        )
-
-    if _is_readonly_source_condition_question(normalized):
-        return _classification(
-            complexity="medium",
-            domain=domain,
-            recommended_execution="skill_read",
-            cross_cutting=cross_cutting,
-            recommended_skills=["request-complexity-router"],
-            evidence_required=_dedupe([*evidence_required, "source_summary"]),
-            reasons=[*reasons, "readonly_source_condition_question"],
-            confidence=0.78,
         )
 
     if _is_resume_heavy_context(normalized, context, domain):
@@ -2913,18 +2933,38 @@ def _is_heavy_work(normalized: str, domain: str) -> bool:
 
 
 def _is_readonly_source_condition_question(normalized: str) -> bool:
-    if _contains_any(normalized, SOURCE_MUTATION_COMMAND_TERMS):
+    if _has_source_condition_mutation_command(normalized):
         return False
-    return _contains_any(normalized, READONLY_SOURCE_QUESTION_TERMS) and _contains_any(
-        normalized,
-        READONLY_SOURCE_CONDITION_TERMS,
-    )
+    return _has_source_condition_context(normalized) and _contains_any(normalized, READONLY_SOURCE_QUESTION_TERMS)
 
 
 def _is_source_condition_mutation_command(normalized: str) -> bool:
-    return _contains_any(normalized, SOURCE_MUTATION_COMMAND_TERMS) and _contains_any(
-        normalized,
-        READONLY_SOURCE_CONDITION_TERMS,
+    return _has_source_condition_mutation_command(normalized)
+
+
+def _has_source_condition_mutation_command(normalized: str) -> bool:
+    return (
+        (_has_mutation_command(normalized) and _has_source_condition_context(normalized))
+        or _has_conditional_mutation_command(normalized)
+    )
+
+
+def _has_source_condition_context(normalized: str) -> bool:
+    return _contains_any(normalized, READONLY_SOURCE_CONDITION_TERMS)
+
+
+def _has_mutation_command(normalized: str) -> bool:
+    return _contains_any(normalized, SOURCE_MUTATION_COMMAND_TERMS) or _has_inflected_mutation_command(normalized)
+
+
+def _has_inflected_mutation_command(normalized: str) -> bool:
+    return INFLECTED_MUTATION_COMMAND_RE.search(normalized) is not None
+
+
+def _has_conditional_mutation_command(normalized: str) -> bool:
+    return (
+        MISSING_CONDITION_MARKER_RE.search(normalized) is not None
+        and CONDITIONAL_MUTATION_COMMAND_RE.search(normalized) is not None
     )
 
 
