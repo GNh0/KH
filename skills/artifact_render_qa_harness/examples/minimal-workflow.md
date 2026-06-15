@@ -2,7 +2,7 @@
 
 ## Scenario
 
-A host agent receives a task where this trigger is relevant: Use when UAF deliverables must prove generated DOCX, XLSX, SVG, or DXF files are readable and structurally valid.
+A host agent receives a task where this trigger is relevant: Use when UAF deliverables must prove generated documents, spreadsheets, drawings, images, web pages, data exports, or other typed files are readable and structurally valid.
 
 The agent must decide whether `artifact-render-qa-harness` applies, run or apply it according to its execution level, and leave auditable evidence.
 

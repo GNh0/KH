@@ -456,7 +456,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         _skill_turn(
             "verification-ops",
             3,
-            "Validate generated DOCX, XLSX, SVG, and DXF artifacts are readable.",
+            "Validate generated typed artifacts such as documents, spreadsheets, drawings, images, web pages, or data exports are readable.",
             "Use artifact render QA to open or parse generated deliverables, validate structure, and attach artifact manifest evidence.",
             "artifact-render-qa-harness",
             ["render_validation", "artifact_manifest"],
@@ -673,7 +673,7 @@ def _stress_skill_side_extras() -> List[SkillSideTurn]:
     add(_skill_turn(
         "live-domain-equipment", 5,
         "Validate generated drawings and spreadsheets are readable.",
-        "Use artifact render QA to validate document, spreadsheet, SVG, or DXF artifacts and attach manifest evidence.",
+        "Use artifact render QA to validate typed document, spreadsheet, drawing, image, web, or data artifacts and attach manifest evidence.",
         "artifact-render-qa-harness", ["render_validation", "artifact_manifest"], "skill_call", ["artifact", "valid"],
     ))
     add(_skill_turn(

@@ -4,7 +4,7 @@ This reference expands the portable operating contract for `artifact-render-qa-h
 
 ## When to use
 
-Use when UAF deliverables must prove generated DOCX, XLSX, SVG, or DXF files are readable and structurally valid.
+Use when UAF deliverables must prove generated documents, spreadsheets, drawings, images, web pages, data exports, or other typed files are readable and pass format-specific structural or sanity checks.
 
 Context summary: This harness verifies that generated files can be opened or parsed enough for deterministic QA. It is a runtime evidence harness, so its detailed findings stay in UAF metadata unless the user explicitly asks for a user-facing QA report.
 
@@ -46,6 +46,8 @@ Do not use this skill only because it is available. Use it when the current task
 - If the workflow can only be applied procedurally, say so explicitly and record the policy or decision evidence.
 - If parallel, role, gate, or state behavior is claimed, prove the actual runtime path instead of citing only repository support.
 - If generated artifacts are incomplete, withhold completion until the missing artifact or exception is recorded.
+- Do not force every task into DOCX/XLSX/SVG/DXF. Select checks by actual output type, such as PPTX package parts plus parseable presentation XML and slide evidence, PDF header/EOF sanity checks only, HTML document markers, PNG chunk structure with CRC validation, strict CSV parsing plus row width consistency, SVG root, or DXF entity sections.
+- Do not describe the PDF check as full PDF structural validation; it is only a lightweight header and EOF marker sanity check.
 
 ## Quality bar
 

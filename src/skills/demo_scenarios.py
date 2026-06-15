@@ -679,7 +679,7 @@ def _artifact_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Di
         success_contract="WorkflowDispatchResult",
         success_payload=dispatch.to_dict(),
         success_evidence=list(export_result.get("evidence", [])),
-        success_behavior="Generate type-aware DOCX, XLSX, SVG, and DXF deliverables and validate their structure.",
+        success_behavior="Generate type-aware deliverables and validate each artifact with format-specific structure checks.",
         success_side_effects=["writes deliverable files under the requested demo output directory"],
         blocked_contract="DeliverableQualityResult",
         blocked_payload=blocked_quality,

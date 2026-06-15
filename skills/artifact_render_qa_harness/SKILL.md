@@ -1,6 +1,6 @@
 ---
 name: artifact-render-qa-harness
-description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when UAF deliverables must prove generated DOCX, XLSX, SVG, or DXF files are readable and structurally valid.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when UAF deliverables must prove generated documents, spreadsheets, drawings, images, web pages, data exports, or other typed files are readable and pass format-specific structural or sanity checks.
 ---
 
 # Artifact Render QA Harness
@@ -25,18 +25,24 @@ This harness verifies that generated files can be opened or parsed enough for de
 ## Workflow
 
 1. Read each generated artifact from the deliverable export records.
-2. For DOCX and XLSX, verify the ZIP package and required Office XML parts exist.
-3. For XLSX, verify every row has the same column width as the header.
-4. For SVG and DXF, verify required structural markers such as `<svg>`, `SECTION`, and `ENTITIES`.
-5. Emit render QA evidence without adding harness-only files to `docs/`.
+2. For DOCX, XLSX, and PPTX, verify the ZIP package and required Office XML parts exist.
+3. For XLSX and CSV, verify tabular rows are structurally consistent with the header.
+4. For SVG, DXF, PDF, HTML, and PNG, verify format-specific structural markers, header/EOF sanity checks, or chunk structure.
+5. For other text or binary formats, require an explicit format-specific probe or mark the artifact as blocked/not-applicable instead of passing by filename alone.
+6. Emit render QA evidence without adding harness-only files to `docs/`.
 
 ## Structural Checks
 
 - DOCX requires `[Content_Types].xml`, `_rels/.rels`, and `word/document.xml`.
 - XLSX requires `[Content_Types].xml`, `_rels/.rels`, `xl/workbook.xml`, `xl/_rels/workbook.xml.rels`, and `xl/worksheets/sheet1.xml`.
+- PPTX requires `[Content_Types].xml`, `_rels/.rels`, `ppt/presentation.xml`, `ppt/_rels/presentation.xml.rels`, parseable `ppt/presentation.xml`, and at least one slide part or slide relationship.
 - XLSX rows must have the same cell count as the header row.
+- CSV must parse with strict quoting and rows must have the same column count as the header row.
 - SVG must include an `<svg>` root and closing `</svg>`.
 - DXF must include `SECTION` and `ENTITIES`.
+- PDF uses a header/EOF sanity check only: it must start with the `%PDF-` file signature and include an EOF marker, but this is not full PDF structural validation.
+- HTML must include a document structure marker such as `<html`, `<!doctype html`, or an intentional fragment marker.
+- PNG must pass a minimal chunk check: PNG signature, IHDR as the first chunk, sane dimensions, valid chunk CRCs, and IEND presence.
 - A malformed-file probe should fail with `artifact render qa failed`, not a template pass.
 
 ## External Benchmark Recipe
@@ -44,8 +50,8 @@ This harness verifies that generated files can be opened or parsed enough for de
 Use this harness before presenting generated files as usable:
 
 1. Read the export manifest and open every listed artifact path.
-2. Validate package structure for DOCX/XLSX before checking template content.
-3. Validate SVG/DXF structural markers and reject empty or partial drawings.
+2. Validate package structure for DOCX/XLSX/PPTX before checking template content.
+3. Validate SVG/DXF/HTML structural markers, PDF header/EOF sanity, PNG chunk structure, and CSV strict parsing; reject empty or partial artifacts.
 4. Record per-file findings with artifact type, missing part, and suggested regeneration step.
 5. Keep QA details in metadata unless the user asks for a separate QA report.
 

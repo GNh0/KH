@@ -1,6 +1,9 @@
+import csv
+import io
 import os
 import zipfile
 import xml.etree.ElementTree as ET
+import zlib
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -367,6 +370,49 @@ def _read_deliverable_text(path: Path, file_format: str) -> Dict[str, Any]:
             if not widths or any(width != widths[0] for width in widths):
                 return {"status": "failed", "message": f"xlsx row widths do not match header: {widths}", "text": text}
             return {"status": "passed", "message": "xlsx package readable and row widths match", "text": text}
+        if fmt == "pptx":
+            if not zipfile.is_zipfile(path):
+                return {"status": "failed", "message": "pptx is not a zip package", "text": ""}
+            with zipfile.ZipFile(path) as package:
+                missing_parts = _missing_package_parts(package, [
+                    "[Content_Types].xml",
+                    "_rels/.rels",
+                    "ppt/presentation.xml",
+                    "ppt/_rels/presentation.xml.rels",
+                ])
+                if missing_parts:
+                    return {"status": "failed", "message": f"pptx package missing required parts: {', '.join(missing_parts)}", "text": ""}
+                presentation_xml = package.read("ppt/presentation.xml")
+                try:
+                    ET.fromstring(presentation_xml)
+                except ET.ParseError as exc:
+                    return {"status": "failed", "message": f"pptx presentation.xml malformed XML: {exc}", "text": ""}
+                try:
+                    rels_root = ET.fromstring(package.read("ppt/_rels/presentation.xml.rels"))
+                except ET.ParseError as exc:
+                    return {"status": "failed", "message": f"pptx presentation.xml.rels malformed XML: {exc}", "text": ""}
+                names = package.namelist()
+                slide_parts = [name for name in names if name.startswith("ppt/slides/slide") and name.endswith(".xml")]
+                slide_relationships = [
+                    rel
+                    for rel in rels_root.iter()
+                    if _is_pptx_slide_relationship(rel.attrib)
+                ]
+                if not slide_parts and not slide_relationships:
+                    return {"status": "failed", "message": "pptx package missing slide parts or slide relationships", "text": ""}
+                text = presentation_xml.decode("utf-8")
+            return {"status": "passed", "message": "pptx package readable with slide references", "text": text}
+        if fmt == "csv":
+            text = path.read_text(encoding="utf-8-sig")
+            try:
+                widths = _csv_row_widths(text)
+            except csv.Error as exc:
+                return {"status": "failed", "message": f"csv parse error: {exc}", "text": text}
+            if not widths:
+                return {"status": "failed", "message": "csv has no rows", "text": text}
+            if any(width != widths[0] for width in widths):
+                return {"status": "failed", "message": f"csv row widths do not match header: {widths}", "text": text}
+            return {"status": "passed", "message": "csv readable and row widths match", "text": text}
         if fmt == "svg":
             text = path.read_text(encoding="utf-8")
             if "<svg" not in text or "</svg>" not in text:
@@ -377,6 +423,26 @@ def _read_deliverable_text(path: Path, file_format: str) -> Dict[str, Any]:
             if "SECTION" not in text or "ENTITIES" not in text:
                 return {"status": "failed", "message": "dxf SECTION/ENTITIES missing", "text": text}
             return {"status": "passed", "message": "dxf readable", "text": text}
+        if fmt == "pdf":
+            data = path.read_bytes()
+            if not data.startswith(b"%PDF-"):
+                return {"status": "failed", "message": "pdf signature missing", "text": ""}
+            if b"%%EOF" not in data[-2048:]:
+                return {"status": "failed", "message": "pdf EOF marker missing", "text": ""}
+            return {"status": "passed", "message": "pdf header/EOF sanity check passed", "text": data[:4096].decode("latin-1", errors="ignore")}
+        if fmt in {"html", "htm"}:
+            text = path.read_text(encoding="utf-8")
+            lower = text.lower()
+            markers = ("<!doctype html", "<html", "<body", "<main", "<section", "<div")
+            if not any(marker in lower for marker in markers):
+                return {"status": "failed", "message": "html structure marker missing", "text": text}
+            return {"status": "passed", "message": "html readable", "text": text}
+        if fmt == "png":
+            data = path.read_bytes()
+            png_error = _png_validation_error(data)
+            if png_error:
+                return {"status": "failed", "message": png_error, "text": ""}
+            return {"status": "passed", "message": "png chunk structure readable", "text": ""}
         text = path.read_text(encoding="utf-8")
         return {"status": "passed", "message": f"{fmt or 'text'} readable", "text": text}
     except Exception as exc:
@@ -391,6 +457,78 @@ def _xlsx_row_widths(path: Path) -> List[int]:
         if row.tag == "row" or row.tag.endswith("}row"):
             widths.append(sum(1 for cell in row if cell.tag == "c" or cell.tag.endswith("}c")))
     return widths
+
+
+def _csv_row_widths(text: str) -> List[int]:
+    rows = list(csv.reader(io.StringIO(text, newline=""), strict=True))
+    return [len(row) for row in rows]
+
+
+def _is_pptx_slide_relationship(attributes: Dict[str, str]) -> bool:
+    target = attributes.get("Target", "").replace("\\", "/")
+    rel_type = attributes.get("Type", "")
+    return (
+        target.startswith("slides/slide")
+        or target.startswith("/ppt/slides/slide")
+        or rel_type.endswith("/slide")
+    )
+
+
+def _png_validation_error(data: bytes) -> str:
+    signature = b"\x89PNG\r\n\x1a\n"
+    if not data.startswith(signature):
+        return "png signature missing"
+
+    offset = len(signature)
+    chunk_index = 0
+    found_iend = False
+    while offset < len(data):
+        if offset + 8 > len(data):
+            return "png chunk header truncated"
+        length = int.from_bytes(data[offset:offset + 4], "big")
+        chunk_type = data[offset + 4:offset + 8]
+        chunk_name = chunk_type.decode("ascii", errors="replace")
+        data_start = offset + 8
+        data_end = data_start + length
+        crc_end = data_end + 4
+        if crc_end > len(data):
+            return f"png {chunk_name} chunk truncated"
+
+        chunk_data = data[data_start:data_end]
+        expected_crc = int.from_bytes(data[data_end:crc_end], "big")
+        actual_crc = zlib.crc32(chunk_type)
+        actual_crc = zlib.crc32(chunk_data, actual_crc) & 0xFFFFFFFF
+        if actual_crc != expected_crc:
+            return f"png {chunk_name} CRC mismatch"
+
+        if chunk_index == 0:
+            if chunk_type != b"IHDR":
+                return "png IHDR chunk must be first"
+            if length != 13:
+                return "png IHDR chunk has invalid length"
+            width = int.from_bytes(chunk_data[0:4], "big")
+            height = int.from_bytes(chunk_data[4:8], "big")
+            if width <= 0 or height <= 0:
+                return "png IHDR dimensions are invalid"
+            if width > 1_000_000 or height > 1_000_000:
+                return "png IHDR dimensions are too large"
+        elif chunk_type == b"IHDR":
+            return "png IHDR chunk repeated"
+
+        if chunk_type == b"IEND":
+            if length != 0:
+                return "png IEND chunk has invalid length"
+            found_iend = True
+            break
+
+        offset = crc_end
+        chunk_index += 1
+
+    if chunk_index == 0:
+        return "png IHDR chunk missing"
+    if not found_iend:
+        return "png IEND chunk missing"
+    return ""
 
 
 def _missing_package_parts(package: zipfile.ZipFile, required_parts: List[str]) -> List[str]:
