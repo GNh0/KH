@@ -467,11 +467,104 @@ HEAVY_ACTION_TERMS = {
     "만들어",
     "고쳐",
     "수정",
+    "추가",
+    "넣어",
+    "삽입",
+    "반영",
     "리팩터",
     "설계",
     "아키텍처",
 }
 REVIEW_HEAVY_TERMS = {"review", "inspect", "audit", "검토", "리뷰", "점검"}
+READONLY_SOURCE_QUESTION_TERMS = {
+    "is there",
+    "whether",
+    "what",
+    "which",
+    "when",
+    "under what",
+    "explain",
+    "tell me",
+    "check if",
+    "find whether",
+    "\uc788\uc744\uae4c",
+    "\uc788\ub294\uc9c0",
+    "\uc788\uc5b4",
+    "\uc788\ub098",
+    "\ubb34\uc2a8",
+    "\ubb50",
+    "\uc5b4\ub5a4",
+    "\uc54c\ub824",
+    "\uc815\ub9ac",
+    "\ud655\uc778",
+    "\ubb3c\uc5b4\ubcf4",
+}
+READONLY_SOURCE_CONDITION_TERMS = {
+    "check logic",
+    "validation logic",
+    "guard logic",
+    "blocked",
+    "cannot update",
+    "can't update",
+    "not update",
+    "update blocked",
+    "edit blocked",
+    "condition",
+    "conditions",
+    "\uccb4\ud06c\ub85c\uc9c1",
+    "\uac80\uc99d\ub85c\uc9c1",
+    "\uc870\uac74",
+    "\uc5b4\ub5a4\uc0c1\ud669",
+    "\ub9c9",
+    "\ubabb",
+    "\uc548\ub41c",
+    "\uc548\ub418",
+    "\uc5c5\ub370\uc774\ud2b8\uac00 \uc548",
+    "\uc5c5\ub370\uc774\ud2b8\uac00 \ubabb",
+    "\uc218\uc815\uc774 \uc548",
+    "\uc218\uc815\uc744 \ubabb",
+}
+SOURCE_MUTATION_COMMAND_TERMS = {
+    "modify it",
+    "change it",
+    "update it",
+    "fix it",
+    "edit it",
+    "add",
+    "insert",
+    "add it",
+    "insert it",
+    "create it",
+    "if missing",
+    "if absent",
+    "\uc218\uc815\ud574\uc918",
+    "\uc218\uc815\ud574\uc8fc",
+    "\uc218\uc815\ud574",
+    "\ubcc0\uacbd\ud574\uc918",
+    "\ubcc0\uacbd\ud574\uc8fc",
+    "\ubcc0\uacbd\ud574",
+    "\uc5c5\ub370\uc774\ud2b8\ud574\uc918",
+    "\uc5c5\ub370\uc774\ud2b8\ud574\uc8fc",
+    "\uc5c5\ub370\uc774\ud2b8\ud574",
+    "\uace0\uccd0\uc918",
+    "\uace0\uccd0\uc8fc",
+    "\ucd94\uac00\ud574\uc918",
+    "\ucd94\uac00\ud574\uc8fc",
+    "\ucd94\uac00\ud574",
+    "\ub123\uc5b4\uc918",
+    "\ub123\uc5b4\uc8fc",
+    "\ub123\uc5b4",
+    "\uc0bd\uc785\ud574\uc918",
+    "\uc0bd\uc785\ud574\uc8fc",
+    "\uc0bd\uc785\ud574",
+    "\ubc18\uc601\ud574\uc918",
+    "\ubc18\uc601\ud574\uc8fc",
+    "\ubc18\uc601\ud574",
+    "\uc5c6\uc73c\uba74 \ucd94\uac00",
+    "\uc5c6\uc73c\uba74 \ub123",
+    "\uc5c6\uc73c\uba74 \ub9cc\ub4e4",
+    "\uc5c6\uc73c\uba74 \uad6c\ud604",
+}
 MEDIUM_TERMS = {
     "summarize",
     "compare",
@@ -1773,6 +1866,14 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_unapproved_product_discovery_request(normalized, context, domain):
         return _brainstorming_classification(domain, cross_cutting, evidence_required, reasons, normalized)
 
+    if _is_source_condition_mutation_command(normalized):
+        return _heavy_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "source_condition_mutation_command"],
+        )
+
     if _is_ambiguous(normalized, context):
         return _classification(
             complexity="ambiguous",
@@ -1791,6 +1892,18 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             evidence_required,
             reasons,
             normalized,
+        )
+
+    if _is_readonly_source_condition_question(normalized):
+        return _classification(
+            complexity="medium",
+            domain=domain,
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "source_summary"]),
+            reasons=[*reasons, "readonly_source_condition_question"],
+            confidence=0.78,
         )
 
     if _is_resume_heavy_context(normalized, context, domain):
@@ -2797,6 +2910,22 @@ def _is_heavy_work(normalized: str, domain: str) -> bool:
     if domain == "investment" and _contains_any(normalized, {"scenario matrix", "valuation analysis"}):
         return True
     return False
+
+
+def _is_readonly_source_condition_question(normalized: str) -> bool:
+    if _contains_any(normalized, SOURCE_MUTATION_COMMAND_TERMS):
+        return False
+    return _contains_any(normalized, READONLY_SOURCE_QUESTION_TERMS) and _contains_any(
+        normalized,
+        READONLY_SOURCE_CONDITION_TERMS,
+    )
+
+
+def _is_source_condition_mutation_command(normalized: str) -> bool:
+    return _contains_any(normalized, SOURCE_MUTATION_COMMAND_TERMS) and _contains_any(
+        normalized,
+        READONLY_SOURCE_CONDITION_TERMS,
+    )
 
 
 def _is_medium_analysis_request(normalized: str) -> bool:

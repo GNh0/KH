@@ -619,6 +619,82 @@ class KhFrontDoorTests(unittest.TestCase):
             "skipped_with_rationale",
         )
 
+    def test_readonly_update_condition_question_does_not_trigger_large_preflight(self):
+        result = build_kh_front_door(
+            "\ud639\uc2dc \uc800\uac70 \uc218\uc815\ud560\ub54c \uccb4\ud06c\ub85c\uc9c1\uc774 "
+            "\uc788\uc744\uae4c?? \uc5b4\ub5a4\uc0c1\ud669\uc5d0\uc120 \uc218\uc815\uc744 "
+            "\ubabb\ud55c\ub2e4\ub358\uc9c0",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("source_summary", payload["classification"]["evidence_required"])
+        self.assertIn("readonly_source_condition_question", payload["classification"]["reasons"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_list_double_click_update_condition_question_does_not_trigger_large_preflight(self):
+        result = build_kh_front_door(
+            "LIST \ub354\ube14\ud074\ub9ad\ud560\ub54c \uc218\uc815 \ubabb\ud558\ub294 \uc870\uac74\uc774 \uc788\uc5b4?",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("source_summary", payload["classification"]["evidence_required"])
+        self.assertIn("readonly_source_condition_question", payload["classification"]["reasons"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+
+    def test_mixed_read_and_add_condition_command_triggers_large_preflight(self):
+        result = build_kh_front_door(
+            "\uc218\uc815 \ubabb\ud558\ub294 \uc870\uac74\uc774 \uc788\ub294\uc9c0 "
+            "\ud655\uc778\ud558\uace0 \uc5c6\uc73c\uba74 \ucd94\uac00\ud574\uc918",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "heavy")
+        self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_single_condition_mutation_command_triggers_large_preflight(self):
+        cases = [
+            "\uccb4\ud06c\ub85c\uc9c1 \uc218\uc815\ud574\uc918",
+            "\uccb4\ud06c\ub85c\uc9c1 \ucd94\uac00\ud574\uc918",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = build_kh_front_door(prompt, project=Path.cwd(), host="codex")
+                payload = result.to_dict()
+
+                self.assertEqual(payload["classification"]["complexity"], "heavy")
+                self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
+                self.assertIn("source_condition_mutation_command", payload["classification"]["reasons"])
+                self.assertEqual(
+                    payload["execution_gate"]["status"],
+                    "blocked_until_large_work_preflight",
+                )
+                self.assertIn("goal-state-harness", payload["immediate_next_skills"])
+
     def test_pbl_sql_image_binding_request_requires_large_work_preflight(self):
         result = build_kh_front_door(
             "Use C:\\PblScripter with quality_470 / quality_004.pbl, trace the print button SQL, "

@@ -46,6 +46,45 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("tdd_red_green", result.evidence_required)
         self.assertIn("test_evidence", result.evidence_required)
 
+    def test_readonly_source_update_condition_question_is_medium(self):
+        cases = [
+            (
+                "\ud639\uc2dc \uc800\uac70 \uc218\uc815\ud560\ub54c \uccb4\ud06c\ub85c\uc9c1\uc774 "
+                "\uc788\uc744\uae4c?? \uc5b4\ub5a4\uc0c1\ud669\uc5d0\uc120 \uc218\uc815\uc744 "
+                "\ubabb\ud55c\ub2e4\ub358\uc9c0"
+            ),
+            (
+                "\uc544\ub2c8 \ub370\uc774\ud130\uc911\uc5d0 \ubb34\uc2a8 \uac12\uc774\uba74 "
+                "\uc5c5\ub370\uc774\ud2b8\uac00 \uc548\ub41c\ub2e4\uac70\ub098 "
+                "\uadf8\ub7f0\uac70 \ubb3c\uc5b4\ubcf4\uc796\uc544"
+            ),
+            "LIST \ub354\ube14\ud074\ub9ad\ud560\ub54c \uc218\uc815 \ubabb\ud558\ub294 \uc870\uac74\uc774 \uc788\uc5b4?",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("source_summary", result.evidence_required)
+                self.assertIn("readonly_source_condition_question", result.reasons)
+                self.assertNotEqual(result.recommended_execution, "role_dag")
+
+    def test_actual_source_mutation_command_remains_heavy(self):
+        cases = [
+            "\uccb4\ud06c\ub85c\uc9c1 \uc218\uc815\ud574\uc918",
+            "\uccb4\ud06c\ub85c\uc9c1 \ucd94\uac00\ud574\uc918",
+            "\uc218\uc815 \ubabb\ud558\ub294 \uc870\uac74\uc774 \uc788\ub294\uc9c0 \ud655\uc778\ud558\uace0 \uc5c6\uc73c\uba74 \ucd94\uac00\ud574\uc918",
+            "\uccb4\ud06c\ub85c\uc9c1\uc774 \uc788\uc744\uae4c \ud655\uc778\ud558\uace0 \uc5c6\uc73c\uba74 \ub123\uc5b4\uc918",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "heavy")
+                self.assertEqual(result.recommended_execution, "role_dag")
+                self.assertIn("goal-state-harness", result.required_harnesses)
+
     def test_ui_filter_button_is_not_security_high_risk(self):
         result = classify_request(
             r"Create C:\work\dashboard as HTML/CSS/JS files with sample KPI cards, a table, filter button behavior, verification, and residual risk notes."
