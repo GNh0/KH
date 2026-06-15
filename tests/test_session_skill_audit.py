@@ -2606,6 +2606,832 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_immediate_next_skill_requires_followup_runtime_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "classification": {"complexity": "medium", "domain": "software"},
+            "plugin_route": {"route": "single", "controller": "kh"},
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+            "skill_status_summary": {
+                "workflow-usability-harness": {
+                    "status": "selected",
+                    "evidence_note": "Must be applied next.",
+                }
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\kh\skills\workflow_usability_harness\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": "# Workflow Usability Harness\nRead-only instructions mention workflow_usability_auto.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "I read workflow-usability-harness and will inspect the project now.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["skill"] == "workflow-usability-harness"
+            and issue["status"] == "immediate_next_skill_not_applied"
+        )
+        self.assertEqual(issue["severity"], "P0")
+        self.assertIn("SKILL.md/support-file read", issue["action"])
+
+    def test_immediate_next_skill_support_reference_output_is_not_runtime_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\kh\skills\workflow_usability_harness\references\usage.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "# Workflow Usability Harness Usage\n"
+                            "Runtime auto mode performs apply_workflow_usability_runtime and progress_panel."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            )
+        )
+
+    def test_immediate_next_skill_runtime_evidence_after_source_work_is_too_late(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\work\src\app.py",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "workflow-usability-harness applied: workflow_usability_auto=true, "
+                            "progress_panel rendered."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["skill"] == "workflow-usability-harness"
+            and issue["status"] == "immediate_next_skill_not_applied"
+        )
+        self.assertIn(r"Get-Content C:\work\src\app.py", issue["order_break_sample"])
+        self.assertIn("Work continued", issue["reason"])
+
+    def test_apply_patch_before_immediate_evidence_is_flagged(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "apply_patch",
+                        "input": "*** Begin Patch\n*** Update File: app.py\n+print('x')\n*** End Patch",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["skill"] == "workflow-usability-harness"
+            and issue["status"] == "immediate_next_skill_not_applied"
+        )
+        self.assertIn("apply_patch", issue["order_break_sample"])
+
+    def test_immediate_next_skills_must_preserve_front_door_order(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["goal-state-harness", "workflow-usability-harness"],
+            "immediate_next_skills": ["goal-state-harness", "workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "skill": "workflow-usability-harness",
+                                "status": "applied",
+                                "application_mode": "runtime",
+                                "evidence": ["progress_panel"],
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"status": "active", "objective": "review immediate skills"},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["skill"] == "workflow-usability-harness"
+            and issue["status"] == "immediate_next_skill_order_violation"
+        )
+        self.assertIn("goal-state-harness", issue["reason"])
+        self.assertEqual(issue["expected_order"], ["goal-state-harness", "workflow-usability-harness"])
+
+    def test_assistant_self_claim_does_not_apply_immediate_skill(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "workflow-usability-harness applied: workflow_usability_auto=true, "
+                            "progress_panel rendered, session_start_context captured."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            )
+        )
+
+    def test_assistant_json_self_claim_does_not_apply_immediate_skill(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "skill": "workflow-usability-harness",
+                                "status": "applied",
+                                "application_mode": "runtime",
+                                "evidence": ["progress_panel"],
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            )
+        )
+
+    def test_immediate_blocked_negation_is_not_blocked_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "workflow-usability-harness is not blocked yet; blocked_actions was reviewed.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            )
+        )
+
+    def test_event_msg_task_complete_escalates_immediate_missing_to_p0(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["skill"] == "workflow-usability-harness"
+            and issue["status"] == "immediate_next_skill_not_applied"
+        )
+        self.assertEqual(issue["severity"], "P0")
+
+    def test_immediate_next_skill_passes_with_runtime_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "classification": {"complexity": "medium", "domain": "software"},
+            "plugin_route": {"route": "single", "controller": "kh"},
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "skill": "workflow-usability-harness",
+                                "status": "applied",
+                                "application_mode": "runtime",
+                                "evidence": ["progress_panel", "session_start_context"],
+                                "artifacts": [".kh/development/run/state/host_panel.codex.json"],
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            )
+        )
+
+    def test_thread_goal_updated_applies_goal_state_immediate_skill(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["goal-state-harness"],
+            "immediate_next_skills": ["goal-state-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"status": "active", "objective": "audit KH usage"},
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "goal-state-harness"
+                and issue["status"].startswith("immediate_next_skill")
+                for issue in audit.issues
+            )
+        )
+
+    def test_immediate_next_skill_passes_with_skipped_rationale(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["token-optimizer"],
+            "immediate_next_skills": ["token-optimizer"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "token-optimizer status=skipped skipped_with_rationale "
+                            "reason=short focused audit output, no large command output or transcript was processed."
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "token-optimizer"
+                and issue["status"].startswith("immediate_next_skill")
+                for issue in audit.issues
+            )
+        )
+
+    def test_immediate_next_skill_passes_with_blocked_reason(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "workflow-usability-harness status=blocked blocked_reason=host progress "
+                            "state API unavailable in this read-only review. recovery=retry when host "
+                            "progress state API is available."
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["status"].startswith("immediate_next_skill")
+                for issue in audit.issues
+            )
+        )
+
+    def test_immediate_blocked_without_recovery_is_not_blocked_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "workflow-usability-harness status=blocked blocked_reason=unavailable.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            )
+        )
+
+    def test_assistant_blocked_self_claim_does_not_apply_immediate_skill(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        for content in [
+            "workflow-usability-harness status=blocked blocked_reason=missing host panel recovery=retry later",
+            json.dumps(
+                {
+                    "skill": "workflow-usability-harness",
+                    "status": "blocked",
+                    "blocked_reason": "missing host panel",
+                    "recovery": "retry later",
+                }
+            ),
+        ]:
+            path = self.write_session(
+                [
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call_output",
+                            "output": json.dumps(front_door_output),
+                        },
+                    },
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "message", "role": "assistant", "content": content},
+                    },
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                    },
+                ]
+            )
+
+            audit = analyze_session_skills(path)
+
+            self.assertTrue(
+                any(
+                    issue["skill"] == "workflow-usability-harness"
+                    and issue["status"] == "immediate_next_skill_not_applied"
+                    for issue in audit.issues
+                )
+            )
+
+    def test_immediate_missing_with_user_refinement_and_completion_is_p0(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"rg -n RowStyle C:\work\app.cs",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "그럼 그 방향으로 더 봐봐",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["skill"] == "workflow-usability-harness"
+            and issue["status"] == "immediate_next_skill_not_applied"
+        )
+        self.assertEqual(issue["severity"], "P0")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,7 +82,8 @@ class AlwaysOnFrontDoorTests(unittest.TestCase):
         self.assertFalse(summary["execution_gate"]["can_execute"])
         self.assertEqual(summary["execution_gate"]["status"], "blocked_until_brainstorming_handoff")
         self.assertIn("MEMORY.md_lookup", summary["execution_gate"]["blocked_actions"])
-        self.assertIn("brainstorming-harness", summary["selected_not_executed_skills"])
+        self.assertIn("brainstorming-harness", summary["immediate_next_skills"])
+        self.assertNotIn("brainstorming-harness", summary["selected_not_executed_skills"])
 
     def test_new_korean_web_product_request_without_pdf_still_brainstorms(self):
         request = (

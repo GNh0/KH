@@ -102,10 +102,11 @@ class KhFrontDoorResult:
             for name, status in self.skill_statuses.items()
             if status.get("status") == "applied" and status.get("application_mode") == "runtime"
         ]
+        immediate_next = set(self.immediate_next_skills)
         selected_not_executed_skills = [
             name
             for name, status in self.skill_statuses.items()
-            if name not in runtime_applied_skills
+            if name not in runtime_applied_skills and name not in immediate_next
         ]
         return {
             "front_door_status": self.front_door_status,
@@ -487,6 +488,7 @@ def _recommended_skills(classification: Dict[str, Any], plugin_route: Dict[str, 
     if classification.get("complexity") in {"heavy", "high_risk"}:
         skills.extend(
             [
+                "workflow-usability-harness",
                 "host-agent-orchestration",
                 "goal-state-harness",
                 "development-lifecycle-harness",
@@ -586,9 +588,6 @@ def _immediate_next_skills(
     controller = plugin_route.get("controller", {}) or {}
     controller_id = str(controller.get("provider_id") or "")
 
-    if controller_id and controller_id not in {"kh", "none"}:
-        return []
-
     status = str(execution_gate.get("status") or "")
     if status == "blocked_until_brainstorming_handoff":
         return ["brainstorming-harness"] if "brainstorming-harness" in recommended else []
@@ -604,6 +603,9 @@ def _immediate_next_skills(
             "verification-before-completion-harness",
         ]
         return [skill for skill in ordered if skill in recommended][:4]
+
+    if controller_id and controller_id not in {"kh", "none"}:
+        return []
 
     ordered = [
         "command-output-harness",

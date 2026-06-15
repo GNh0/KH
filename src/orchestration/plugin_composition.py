@@ -151,6 +151,75 @@ EXPLICIT_PROVIDER_LEADS = (
     "delegate to",
 )
 
+MENTION_ONLY_CONTEXT_MARKERS = (
+    "example",
+    "examples",
+    "risk",
+    "risks",
+    "concern",
+    "concerns",
+    "review",
+    "audit",
+    "compare",
+    "comparison",
+    "versus",
+    "vs",
+    "mention",
+    "mentions",
+    "mentioned",
+    "hide",
+    "hides",
+    "mask",
+    "masks",
+    "not use",
+    "not using",
+    "not call",
+    "not load",
+    "does not use",
+    "does not call",
+    "cannot use",
+    "can't use",
+    "fails to use",
+    "\uc608\uc2dc",
+    "\ub9ac\uc2a4\ud06c",
+    "\uc6b0\ub824",
+    "\uac80\ud1a0",
+    "\ud3c9\uac00",
+    "\ube44\uad50",
+    "\uc5b8\uae09",
+    "\uac00\ub9bc",
+    "\uac00\ub824",
+    "\ubabb",
+    "\uc54a",
+)
+
+MENTION_ONLY_SUFFIXES = (
+    "etc",
+    "etc.",
+    "and so on",
+    "among others",
+    "\ub4f1",
+)
+
+NEGATED_TRIGGER_CONTEXT_MARKERS = (
+    "not a request to",
+    "not asking to",
+    "do not",
+    "don't",
+    "never",
+    "no need to",
+    "without",
+    "risk example",
+    "only a risk",
+    "only an example",
+    "example, not",
+    "\uc608\uc2dc",
+    "\ub9ac\uc2a4\ud06c",
+    "\uc694\uccad\uc774 \uc544\ub2d8",
+    "\ud558\uc9c0 \ub9c8",
+    "\ud558\uc9c0\ub9c8",
+)
+
 
 @dataclass(frozen=True)
 class CapabilityProvider:
@@ -432,6 +501,8 @@ def _explicit_provider_name_match(text: str, name: str) -> bool:
         return True
     if not _contains_provider_name(text, normalized):
         return False
+    if _has_provider_mention_only_context(text, normalized):
+        return False
     if _has_invocation_context(text, normalized):
         return True
     return not _is_common_provider_word(normalized)
@@ -446,6 +517,19 @@ def _has_invocation_context(text: str, name: str) -> bool:
     lead_pattern = rf"(?<![a-z0-9])(?:{lead})(?:\s+(?:the|a|an))?\s+{re.escape(name)}(?![a-z0-9])"
     suffix_pattern = rf"(?<![a-z0-9]){re.escape(name)}\s+(?:plugin|tool|skill|provider|connector)(?![a-z0-9])"
     return bool(re.search(lead_pattern, text) or re.search(suffix_pattern, text))
+
+
+def _has_provider_mention_only_context(text: str, name: str) -> bool:
+    name_pattern = re.escape(name)
+    if re.search(rf"(?<![a-z0-9]){name_pattern}\s*(?:,?\s*(?:{'|'.join(re.escape(item) for item in MENTION_ONLY_SUFFIXES)}))(?![a-z0-9])", text):
+        return True
+    for match in re.finditer(rf"(?<![a-z0-9]){name_pattern}(?![a-z0-9])", text):
+        before = text[max(0, match.start() - 96) : match.start()]
+        after = text[match.end() : min(len(text), match.end() + 96)]
+        window = f"{before} {after}"
+        if any(marker in window for marker in MENTION_ONLY_CONTEXT_MARKERS):
+            return True
+    return False
 
 
 def _is_common_provider_word(name: str) -> bool:
@@ -529,7 +613,7 @@ def _assistant_roles(
     roles: List[ProviderRole] = []
     used_capabilities: Set[str] = set()
     for capability, triggers in SPECIALIST_TRIGGERS.items():
-        if not _contains_any(text, triggers):
+        if not _contains_specialist_trigger(text, capability, triggers):
             continue
         provider = _best_provider_for_capability(capability, providers, excluded_provider_ids)
         if provider is None or capability in used_capabilities:
@@ -571,7 +655,7 @@ def _unavailable_specialists(
 ) -> Dict[str, str]:
     unavailable: Dict[str, str] = {}
     for capability, triggers in SPECIALIST_TRIGGERS.items():
-        if not _contains_any(text, triggers):
+        if not _contains_specialist_trigger(text, capability, triggers):
             continue
         if _best_provider_for_capability(capability, providers, set()) is None:
             unavailable[capability] = SPECIALIST_FALLBACKS.get(capability, "manual_fallback")
@@ -650,6 +734,44 @@ def _contains_any(text: str, needles: Iterable[str]) -> bool:
                 return True
             continue
         if needle in text:
+            return True
+    return False
+
+
+def _contains_specialist_trigger(text: str, capability: str, needles: Iterable[str]) -> bool:
+    for needle in needles:
+        normalized = str(needle or "").strip().lower()
+        if not normalized:
+            continue
+        if capability == "sql_formatting" and _has_negated_trigger_context(text, normalized):
+            continue
+        if capability == "sql_formatting" and normalized in {
+            "sql-formatting",
+            "sql formatting",
+            "sql-formatting skill",
+            "sql formatting skill",
+            "t-sql formatting",
+            "tsql formatting",
+        }:
+            if _contains_provider_name(text, normalized) and not _has_provider_mention_only_context(text, normalized):
+                return True
+            continue
+        if len(normalized) <= 3 and normalized.isalnum():
+            if re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", text):
+                return True
+            continue
+        if normalized in text:
+            return True
+    return False
+
+
+def _has_negated_trigger_context(text: str, trigger: str) -> bool:
+    pattern = re.escape(trigger)
+    for match in re.finditer(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", text):
+        before = text[max(0, match.start() - 80) : match.start()]
+        after = text[match.end() : min(len(text), match.end() + 80)]
+        window = f"{before} {after}"
+        if any(marker in window for marker in NEGATED_TRIGGER_CONTEXT_MARKERS):
             return True
     return False
 

@@ -439,6 +439,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             )
 
     issues.extend(_kh_front_door_issues(path))
+    issues.extend(_immediate_next_skill_issues(path, skill_rows))
     issues.extend(_front_door_latency_issues(path))
     issues.extend(_large_output_latency_issues(path))
     issues.extend(_stale_skill_cache_issues(path))
@@ -740,6 +741,386 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
             )
             waiting_for_front_door = False
     return issues
+
+
+def _immediate_next_skill_issues(path: Path, skill_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    events = _session_payload_events(path)
+    known_skills = {str(row.get("name", "")) for row in skill_rows}
+
+    for index, event in enumerate(events):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        data = _front_door_json(_strip_passive_prefix(_payload_text(payload)))
+        if not data:
+            continue
+        immediate = _ordered_unique(str(item) for item in data.get("immediate_next_skills", []) or [])
+        immediate = [skill for skill in immediate if skill in known_skills]
+        if not immediate:
+            continue
+        issues.extend(
+            _immediate_skill_sequence_issues(
+                events=events,
+                start_index=index + 1,
+                immediate=immediate,
+                front_door_sample=_short(_payload_text(payload)),
+            )
+        )
+    return issues
+
+
+def _ordered_unique(values: Iterable[str]) -> List[str]:
+    seen: Set[str] = set()
+    ordered: List[str] = []
+    for raw in values:
+        value = str(raw or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _immediate_skill_sequence_issues(
+    *,
+    events: List[Dict[str, Any]],
+    start_index: int,
+    immediate: List[str],
+    front_door_sample: str,
+) -> List[Dict[str, Any]]:
+    resolved: Set[str] = set()
+    order_violations: Dict[str, str] = {}
+    late_after_work: Dict[str, str] = {}
+    samples: Dict[str, str] = {}
+    pending_index = 0
+    order_break_sample = ""
+    previous_call_was_passive = False
+    task_completed = False
+
+    for event in events[start_index:]:
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("type") == "message" and str(payload.get("role", "")).lower() == "user":
+            if not order_break_sample or _is_immediate_sequence_stop_user_message(_payload_text(payload)):
+                break
+            continue
+        if payload.get("type") == "task_complete":
+            task_completed = True
+            break
+        text = _payload_text(payload)
+        if not text:
+            previous_call_was_passive = False
+            continue
+        clean_text = _strip_passive_prefix(text)
+        lowered = clean_text.lower()
+        payload_type = str(payload.get("type", ""))
+        passive = _passive_reference(lowered) or (
+            payload_type in {"function_call_output", "custom_tool_call_output"}
+            and previous_call_was_passive
+        )
+        previous_call_was_passive = (
+            payload_type in {"function_call", "custom_tool_call"} and passive
+        )
+        if _looks_like_front_door_runtime_output(lowered):
+            continue
+        if pending_index < len(immediate) and not order_break_sample and _immediate_order_break(
+            payload, lowered, immediate[pending_index]
+        ):
+            order_break_sample = _short(clean_text)
+
+        matches = []
+        for position, skill_name in enumerate(immediate):
+            if skill_name in resolved:
+                continue
+            status = _immediate_skill_event_status(payload, lowered, skill_name, passive)
+            if not status:
+                continue
+            sample = _short(clean_text)
+            samples.setdefault(skill_name, sample)
+            matches.append((position, skill_name, status, sample))
+        if not matches:
+            continue
+
+        by_position = {position: (skill_name, status, sample) for position, skill_name, status, sample in matches}
+        if pending_index not in by_position:
+            for position, skill_name, _status, sample in matches:
+                if position > pending_index:
+                    order_violations.setdefault(skill_name, sample)
+            continue
+
+        while pending_index < len(immediate) and pending_index in by_position:
+            skill_name, _status, _sample = by_position[pending_index]
+            if order_break_sample:
+                late_after_work.setdefault(skill_name, samples.get(skill_name, ""))
+            else:
+                resolved.add(skill_name)
+            pending_index += 1
+
+        for position, skill_name, _status, sample in matches:
+            if skill_name not in resolved and position > pending_index:
+                order_violations.setdefault(skill_name, sample)
+
+    issues: List[Dict[str, Any]] = []
+    for position, skill_name in enumerate(immediate):
+        if skill_name in resolved and skill_name not in order_violations:
+            continue
+        order_violation = order_violations.get(skill_name, "")
+        late_sample = late_after_work.get(skill_name, "")
+        status = "immediate_next_skill_order_violation" if order_violation else "immediate_next_skill_not_applied"
+        reason = (
+            f"Front-door emitted `{skill_name}` in immediate_next_skills, but the same turn "
+            "did not record concrete applied/skipped/blocked evidence before continuing."
+        )
+        if order_violation:
+            expected = immediate[position - 1] if position > 0 else skill_name
+            reason = (
+                f"Front-door required immediate_next_skills in order, but `{skill_name}` produced evidence "
+                f"before preceding skill evidence was complete."
+            )
+            if position > 0:
+                reason += f" Expected prior skill: `{expected}`."
+        if order_break_sample:
+            reason += " Work continued before the immediate skill sequence completed."
+        issues.append(
+            {
+                "skill": skill_name,
+                "status": status,
+                "severity": "P0" if task_completed else "P1",
+                "reason": reason,
+                "action": (
+                    "After front-door returns, execute immediate_next_skills first and in order. "
+                    "A SKILL.md/support-file read or catalog lookup is only inspection evidence; "
+                    "record runtime evidence, an explicit blocked reason, or an explicit "
+                    "skipped_with_rationale before source exploration, implementation, verification, "
+                    "or final claims."
+                ),
+                "front_door": front_door_sample,
+                "followup_sample": samples.get(skill_name, "") or late_sample,
+                "order_break_sample": order_break_sample,
+                "order_violation_sample": order_violation,
+                "expected_order": immediate,
+            }
+        )
+    return issues
+
+
+def _immediate_skill_event_status(
+    payload: Dict[str, Any],
+    lowered: str,
+    skill_name: str,
+    passive: bool,
+) -> str:
+    if passive:
+        return ""
+    payload_type = str(payload.get("type", ""))
+    if skill_name == "goal-state-harness" and payload_type == "thread_goal_updated":
+        return "applied"
+    structured_payload = _is_immediate_structured_runtime_payload(payload_type, lowered)
+    if payload_type in {"message", "agent_message", "task_complete"}:
+        return ""
+    aliases = {skill_name, skill_name.replace("-", "_")}
+    runtime_markers = {marker.lower() for marker in RUNTIME_MARKERS.get(skill_name, [])}
+    alias_hit = any(alias.lower() in lowered for alias in aliases)
+    marker_hit = any(marker in lowered for marker in runtime_markers)
+    if not alias_hit and not marker_hit:
+        return ""
+    if structured_payload and _is_immediate_blocked_evidence(lowered):
+        return "blocked"
+    if structured_payload and _is_immediate_skipped_evidence(lowered):
+        return "skipped"
+    if structured_payload and (
+        _is_immediate_applied_evidence(lowered, aliases)
+        or (marker_hit and _has_runtime_output_context(lowered))
+    ):
+        return "applied"
+    return ""
+
+
+def _is_immediate_sequence_stop_user_message(text: str) -> bool:
+    lowered = text.lower()
+    stop_markers = [
+        "stop",
+        "pause",
+        "cancel",
+        "abort",
+        "new task",
+        "different task",
+        "\uc911\ub2e8",
+        "\uba48\ucdb0",
+        "\ucde8\uc18c",
+        "\uc0c8 \uc791\uc5c5",
+        "\ub2e4\ub978 \uc791\uc5c5",
+    ]
+    return any(marker in lowered for marker in stop_markers)
+
+
+def _is_immediate_structured_runtime_payload(payload_type: str, lowered: str) -> bool:
+    if payload_type in {"function_call_output", "custom_tool_call_output", "thread_goal_updated"}:
+        return True
+    return False
+
+
+def _has_runtime_output_context(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in [
+            '"status"',
+            "'status'",
+            '"application_mode"',
+            "'application_mode'",
+            '"evidence"',
+            "'evidence'",
+            ".kh/",
+            ".uaf/",
+            "current_goal.json",
+            "goal_ledger",
+            "host_panel",
+            "runtime",
+            "artifact",
+            "wrote",
+            "written",
+            "created",
+            "updated",
+        ]
+    )
+
+
+def _immediate_order_break(payload: Dict[str, Any], lowered: str, skill_name: str) -> bool:
+    payload_type = str(payload.get("type", ""))
+    if payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    if _is_current_skill_support_read(lowered, skill_name):
+        return False
+    if _is_front_door_order_evidence(payload, lowered):
+        return False
+    return _is_non_kh_work_start(payload, lowered)
+
+
+def _is_immediate_blocked_evidence(lowered: str) -> bool:
+    status_seen = any(
+        marker in lowered
+        for marker in [
+            '"status": "blocked"',
+            "'status': 'blocked'",
+            "status=blocked",
+            "cannot apply",
+            "cannot run",
+            "unable to apply",
+            "unable to run",
+            "unavailable",
+        ]
+    )
+    reason_seen = any(
+        marker in lowered
+        for marker in [
+            "blocked_reason",
+            "blocked reason",
+            '"reason"',
+            "'reason'",
+            "reason=",
+            "because",
+            "missing",
+            "unavailable",
+        ]
+    )
+    recovery_seen = any(
+        marker in lowered
+        for marker in [
+            "recovery",
+            "retry",
+            "next_action",
+            "next action",
+            "requires",
+            "need ",
+            "needs ",
+            "permission",
+            "approval",
+            "install",
+            "read-only",
+            "fallback",
+        ]
+    )
+    if status_seen and reason_seen and recovery_seen:
+        return True
+    false_markers = [
+        "not blocked",
+        "not currently blocked",
+        "no blocker",
+        "no blockers",
+        "unblocked",
+        "blocked_actions",
+    ]
+    if any(marker in lowered for marker in false_markers):
+        return False
+    return False
+
+
+def _is_immediate_skipped_evidence(lowered: str) -> bool:
+    status_seen = any(
+        marker in lowered
+        for marker in [
+            '"status": "skipped"',
+            "'status': 'skipped'",
+            "status=skipped",
+            "skipped_with_rationale",
+            "considered_not_needed",
+            "passthrough",
+        ]
+    )
+    rationale_seen = any(
+        marker in lowered
+        for marker in [
+            "rationale",
+            "reason",
+            "because",
+            "not applicable",
+            "not needed",
+            "source-of-truth",
+            "contract-sensitive",
+            "blocked_reason",
+        ]
+    )
+    return status_seen and rationale_seen
+
+
+def _is_immediate_applied_evidence(lowered: str, aliases: Set[str]) -> bool:
+    if not any(alias.lower() in lowered for alias in aliases):
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            '"status": "applied"',
+            "'status': 'applied'",
+            "status=applied",
+            '"application_mode": "runtime"',
+            "'application_mode': 'runtime'",
+            "application_mode=runtime",
+            "runtime evidence",
+            "runtime-applied",
+        ]
+    )
+
+
+def _is_current_skill_support_read(lowered: str, skill_name: str) -> bool:
+    folder = skill_name.replace("-", "_").lower()
+    if folder not in lowered:
+        return False
+    if "\\skills\\" not in lowered and "/skills/" not in lowered:
+        return False
+    support_markers = [
+        "skill.md",
+        "\\references\\",
+        "/references/",
+        "\\examples\\",
+        "/examples/",
+        "\\scripts\\smoke_check.py",
+        "/scripts/smoke_check.py",
+        "\\scripts\\demo.py",
+        "/scripts/demo.py",
+    ]
+    return any(marker in lowered for marker in support_markers)
 
 
 def _front_door_latency_issues(path: Path, threshold_seconds: float = 60.0) -> List[Dict[str, Any]]:
@@ -1666,6 +2047,9 @@ def _front_door_selected_skill(path: Path, skill_name: str) -> bool:
         data = _front_door_json(_strip_passive_prefix(text))
         if not data:
             continue
+        immediate = {str(item) for item in data.get("immediate_next_skills", []) or []}
+        if skill_name in immediate:
+            return True
         selected = {str(item) for item in data.get("selected_not_executed_skills", []) or []}
         if skill_name in selected:
             return True
@@ -2247,7 +2631,7 @@ def _session_payload_events(path: Path) -> List[Dict[str, Any]]:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if event.get("type") == "response_item" and isinstance(event.get("payload"), dict):
+        if event.get("type") in {"response_item", "event_msg"} and isinstance(event.get("payload"), dict):
             events.append(event)
     return events
 
@@ -2631,6 +3015,18 @@ def _payload_text(payload: Dict[str, Any]) -> str:
         return f"{payload.get('name', '')} {payload.get('arguments') or payload.get('input') or ''}"
     if payload_type in {"function_call_output", "custom_tool_call_output"}:
         return _content_text(payload.get("output") or payload.get("content"))
+    if payload_type == "thread_goal_updated":
+        goal = payload.get("goal", {}) or {}
+        return json.dumps(
+            {
+                "type": "thread_goal_updated",
+                "skill": "goal-state-harness",
+                "status": "applied",
+                "goal_status": goal.get("status", ""),
+                "objective": goal.get("objective", ""),
+            },
+            ensure_ascii=False,
+        )
     if payload_type == "task_complete":
         return str(payload.get("last_agent_message", ""))
     return ""
@@ -2725,6 +3121,9 @@ def _front_door_skill_status(text: str, skill_name: str) -> str:
     runtime_applied = {str(item) for item in data.get("runtime_applied_skills", []) or []}
     if skill_name in runtime_applied:
         return "applied"
+    immediate = {str(item) for item in data.get("immediate_next_skills", []) or []}
+    if skill_name in immediate:
+        return "selected"
     selected = {str(item) for item in data.get("selected_not_executed_skills", []) or []}
     if skill_name in selected:
         return "selected"
@@ -2990,7 +3389,7 @@ def _looks_like_front_door_runtime_output(lowered: str) -> bool:
         "front_door_status" in lowered
         and "runtime_applied_skills" in lowered
         and "selected_not_executed_skills" in lowered
-        and "skill_status_summary" in lowered
+        and ("skill_status_summary" in lowered or "immediate_next_skills" in lowered)
     )
 
 

@@ -107,6 +107,76 @@ class KhFrontDoorTests(unittest.TestCase):
             any("Apply selected provider `sql-formatting`" in action for action in result.to_dict()["required_next_actions"])
         )
 
+    def test_front_door_does_not_route_provider_when_name_is_review_example(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "Review whether KH hides other skills such as `sql-formatting` etc.; "
+                    "this is only a risk example, not a provider to apply, and not a request to format SQL.",
+                    project=Path(tmp),
+                    host="codex",
+                )
+        payload = result.to_dict()
+
+        self.assertNotEqual(payload["plugin_route"]["controller"]["provider_id"], "sql-formatting")
+        self.assertNotIn("explicit_user_request:sql-formatting", payload["plugin_route"]["reasons"])
+        self.assertNotIn(
+            "sql-formatting",
+            {assistant["provider_id"] for assistant in payload["plugin_route"]["assistants"]},
+        )
+        self.assertFalse(
+            any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
+        )
+
+    def test_heavy_non_kh_provider_route_still_requires_preflight_immediate_skills(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "Use sql-formatting to refactor every SQL file in this project, "
+                    "run verification, and prepare commit evidence.",
+                    project=Path(tmp),
+                    host="codex",
+                )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["plugin_route"]["controller"]["provider_id"], "sql-formatting")
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertEqual(
+            payload["immediate_next_skills"],
+            [
+                "goal-state-harness",
+                "workflow-usability-harness",
+                "token-optimizer",
+                "host-agent-orchestration",
+            ],
+        )
+        self.assertTrue(
+            payload["required_next_actions"][0].startswith("NEXT SKILL EXECUTION")
+        )
+
     def test_front_door_warns_but_recovers_from_stale_host_cache_paths(self):
         old_cache_path = (
             r"C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace\kh-uaf"
@@ -362,7 +432,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["plugin_route"]["controller"], "kh")
         self.assertIn("brainstorming-harness", payload["recommended_skills"])
         self.assertEqual(payload["immediate_next_skills"], ["brainstorming-harness"])
-        self.assertIn("brainstorming-harness", payload["selected_not_executed_skills"])
+        self.assertNotIn("brainstorming-harness", payload["selected_not_executed_skills"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertEqual(payload["execution_gate"]["status"], "blocked_until_brainstorming_handoff")
         self.assertIn("implementation", payload["execution_gate"]["blocked_actions"])
@@ -409,7 +479,8 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["domain"], "operations")
         self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
         self.assertIn("brainstorming-harness", payload["recommended_skills"])
-        self.assertIn("brainstorming-harness", payload["selected_not_executed_skills"])
+        self.assertIn("brainstorming-harness", payload["immediate_next_skills"])
+        self.assertNotIn("brainstorming-harness", payload["selected_not_executed_skills"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertIn("MEMORY.md_lookup", payload["execution_gate"]["blocked_actions"])
         self.assertTrue(
@@ -435,7 +506,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertNotIn("brainstorming-harness", payload["recommended_skills"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertEqual(payload["execution_gate"]["status"], "blocked_until_large_work_preflight")
-        self.assertIn("goal-state-harness", payload["selected_not_executed_skills"])
+        self.assertIn("goal-state-harness", payload["immediate_next_skills"])
         self.assertIn("development-lifecycle-harness", payload["selected_not_executed_skills"])
         self.assertTrue(
             any("Create or update GoalState" in action for action in payload["required_next_actions"])
@@ -458,7 +529,8 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["complexity"], "medium")
         self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
         self.assertIn("memory-state-harness", payload["recommended_skills"])
-        self.assertIn("memory-state-harness", summary["selected_not_executed_skills"])
+        self.assertIn("memory-state-harness", summary["immediate_next_skills"])
+        self.assertNotIn("memory-state-harness", summary["selected_not_executed_skills"])
         self.assertIn("memory_scope_decision", payload["classification"]["evidence_required"])
         self.assertIn("global_memory_candidate_policy", payload["classification"]["evidence_required"])
         self.assertTrue(
@@ -522,7 +594,8 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["domain"], "analysis")
         self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
         self.assertIn("brainstorming-harness", payload["recommended_skills"])
-        self.assertIn("brainstorming-harness", payload["selected_not_executed_skills"])
+        self.assertIn("brainstorming-harness", payload["immediate_next_skills"])
+        self.assertNotIn("brainstorming-harness", payload["selected_not_executed_skills"])
         self.assertTrue(
             any("analysis output" in action for action in payload["required_next_actions"])
         )
@@ -539,7 +612,8 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
         self.assertIn("command-output-harness", payload["recommended_skills"])
         self.assertIn("token-optimizer", payload["recommended_skills"])
-        self.assertIn("command-output-harness", payload["selected_not_executed_skills"])
+        self.assertIn("command-output-harness", payload["immediate_next_skills"])
+        self.assertNotIn("command-output-harness", payload["selected_not_executed_skills"])
         self.assertEqual(
             payload["skill_status_summary"]["command-output-harness"]["status"],
             "skipped_with_rationale",

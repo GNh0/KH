@@ -32,7 +32,8 @@ Only after the command returns should selected follow-up skills be read or appli
 - Use this bootstrap for work-bearing requests: project files, code changes, generated assets/documents, long logs, review, QA, verification, subagents, persistence, branch work, or risky commands.
 - If an earlier message in the same conversation or project asked to actively/default-use KH/UAF skills or harnesses, keep `kh_active_directive=active` for later work-bearing turns until explicit opt-out.
 - Count this skill as `applied` only when the runtime front-door command ran or a concrete blocked/direct rationale was recorded.
-- SKILL.md reads, plugin listings, marketplace metadata, and `selected_not_executed_skills` are not execution evidence.
+- A SKILL.md read, plugin listing, marketplace metadata, or `selected_not_executed_skills` entry is not execution evidence.
+- `immediate_next_skills` must produce same-turn applied/skipped/blocked evidence before source exploration, implementation, verification, or final claims; session audit treats SKILL.md-only handling as `immediate_next_skill_not_applied`.
 
 ## Workflow
 
@@ -67,6 +68,7 @@ Only after the command returns should selected follow-up skills be read or appli
 - Do not treat a user saying "develop/make/create" as implementation approval when front-door selected brainstorming.
 - Do not treat selected follow-up skills as exclusive; specialist plugins may still be routed after intake.
 - Do not skip `immediate_next_skills` and jump directly to source exploration, implementation, verification, or final claims.
+- Do not treat a support-file read as immediate skill application, even when the support file contains runtime marker names.
 
 ## UAF implementation targets
 
@@ -76,7 +78,9 @@ Only after the command returns should selected follow-up skills be read or appli
 - `src.skills.uaf_skill_catalog.collect_packaged_skills`
 - `skills/always_on_front_door/SKILL.md`
 - `skills/automatic_intake_harness/SKILL.md`
+- `src.orchestration.session_skill_audit.analyze_session_skills`
 - `tests.test_kh_front_door_always_on`
+- `tests.test_session_skill_audit`
 
 ## Support files
 
