@@ -398,7 +398,8 @@ def _strip_comments(sql: str) -> str:
 def _normalized_contract_line(line: str, *, preserve_literals: bool = False) -> str:
     without_comments = re.sub(r"--.*$", "", line)
     without_literals = without_comments if preserve_literals else re.sub(r"'(?:''|[^'])*'", "?", without_comments)
-    return re.sub(r"\s+", " ", without_literals.strip()).upper()
+    collapsed = re.sub(r"\s+", " ", without_literals.strip())
+    return re.sub(r"\s+;", ";", collapsed).upper()
 
 
 def _extract_predicates(sql: str) -> List[str]:

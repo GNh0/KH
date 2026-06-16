@@ -69,6 +69,24 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         self.assertIn("join_condition_indentation", codes)
         self.assertIn("case_not_parenthesized", codes)
 
+    def test_powerbuilder_update_host_variable_semicolon_spacing_is_preserved(self):
+        original = _fixture("pbl_update_semicolon_space.original.sql")
+        formatted = _fixture("pbl_update_semicolon_space.formatted.sql")
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["mechanical_checks"]["status"], "passed")
+
+    def test_powerbuilder_delete_host_variable_semicolon_spacing_is_preserved(self):
+        original = _fixture("pbl_delete_semicolon_space.original.sql")
+        formatted = _fixture("pbl_delete_semicolon_space.formatted.sql")
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["mechanical_checks"]["status"], "passed")
+
     def test_verifier_allows_alias_only_comment_update(self):
         original = (
             "SELECT A.STATUS\n"

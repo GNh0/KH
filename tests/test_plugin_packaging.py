@@ -15,13 +15,17 @@ def _version_tuple(value: str) -> tuple[int, ...]:
     return tuple(map(int, _version_base(value).split(".")))
 
 
+def _manifest(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 class PluginPackagingTests(unittest.TestCase):
     def test_codex_plugin_manifest_exposes_repo_skills(self):
         manifest_path = Path(".codex-plugin") / "plugin.json"
 
         self.assertTrue(manifest_path.is_file())
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        root_manifest = json.loads(Path("plugin.json").read_text(encoding="utf-8"))
+        manifest = _manifest(manifest_path)
+        root_manifest = _manifest(Path("plugin.json"))
 
         self.assertEqual(manifest["name"], "kh-uaf")
         self.assertEqual(manifest["version"], root_manifest["version"])
@@ -36,6 +40,15 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn("Skill", " ".join(interface["capabilities"]))
         self.assertIn("KH-Bench Verified", " ".join(interface["capabilities"]))
         self.assertIn("https://github.com/GNh0/KH", manifest["repository"])
+
+    def test_release_manifest_versions_match(self):
+        root_manifest = _manifest(Path("plugin.json"))
+        codex_manifest = _manifest(Path(".codex-plugin") / "plugin.json")
+        agent_manifest = _manifest(Path(".agents") / "plugins" / "kh-uaf" / "plugin.json")
+
+        self.assertEqual(root_manifest["version"], codex_manifest["version"])
+        self.assertEqual(root_manifest["version"], agent_manifest["version"])
+        self.assertGreaterEqual(_version_tuple(root_manifest["version"]), (2, 9, 10))
 
     def test_repo_marketplace_exposes_git_backed_plugin(self):
         marketplace_path = Path(".agents") / "plugins" / "marketplace.json"
@@ -80,7 +93,7 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertTrue(manifest_path.is_file())
         self.assertTrue(skill_path.is_file())
 
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = _manifest(manifest_path)
         self.assertEqual(manifest["name"], "kh-uaf")
 
         content = skill_path.read_text(encoding="utf-8")
