@@ -371,6 +371,7 @@ def _normalized_comment_for_preservation(comment: str) -> str:
         "ALIAS.",
         normalized,
     )
+    normalized = re.sub(r"\s*(=|<>|!=|<=|>=)\s*", r"\1", normalized)
     normalized = re.sub(r"\s+", " ", normalized.strip()).upper()
     for index, literal in enumerate(literals):
         normalized = normalized.replace(f"__SQL_LITERAL_{index}__", literal)
@@ -399,6 +400,7 @@ def _normalized_contract_line(line: str, *, preserve_literals: bool = False) -> 
     without_comments = re.sub(r"--.*$", "", line)
     without_literals = without_comments if preserve_literals else re.sub(r"'(?:''|[^'])*'", "?", without_comments)
     collapsed = re.sub(r"\s+", " ", without_literals.strip())
+    collapsed = re.sub(r"\s*(=|<>|!=|<=|>=)\s*", r"\1", collapsed)
     return re.sub(r"\s+;", ";", collapsed).upper()
 
 
@@ -429,6 +431,8 @@ def _extract_join_conditions(sql: str) -> List[str]:
         if re.search(r"\bJOIN\b", upper):
             in_join = True
             current_join_is_ba011t = "BA011T" in upper
+            if not current_join_is_ba011t:
+                result.extend(_extract_inline_join_conditions(line))
             continue
         if in_join and re.match(r"^\s*(WHERE|GROUP BY|ORDER BY|HAVING|UNION|SELECT|FROM)\b", upper):
             in_join = False
@@ -436,6 +440,23 @@ def _extract_join_conditions(sql: str) -> List[str]:
         if in_join and not current_join_is_ba011t and re.match(r"^\s*(ON|AND|OR)\b", upper) and "=" in line:
             result.append(_normalized_contract_line(line))
     return result
+
+
+def _extract_inline_join_conditions(line: str) -> List[str]:
+    if not re.search(r"\bON\b", line, flags=re.IGNORECASE):
+        return []
+    after_on = re.split(r"\bON\b", line, maxsplit=1, flags=re.IGNORECASE)[1]
+    pieces = re.split(r"\b(AND|OR)\b", after_on, flags=re.IGNORECASE)
+    conditions: List[str] = []
+    first = pieces[0].strip()
+    if first and "=" in first:
+        conditions.append(_normalized_contract_line(f"ON {first}"))
+    for index in range(1, len(pieces), 2):
+        operator = pieces[index].upper()
+        condition = pieces[index + 1].strip() if index + 1 < len(pieces) else ""
+        if condition and "=" in condition:
+            conditions.append(_normalized_contract_line(f"{operator} {condition}"))
+    return conditions
 
 
 def _extract_calculations(sql: str) -> List[str]:
@@ -458,6 +479,8 @@ def _lowercase_sql_tokens(unprotected_sql: str) -> List[str]:
     tokens = []
     for match in re.finditer(r"(?<![A-Za-z0-9_@#])(@?[A-Za-z_][A-Za-z0-9_@$#]*)(?![A-Za-z0-9_])", unprotected_sql):
         token = match.group(1)
+        if match.start(1) > 0 and unprotected_sql[match.start(1) - 1] == ":":
+            continue
         if token.startswith("@@"):
             continue
         if any("a" <= char <= "z" for char in token):
@@ -609,7 +632,7 @@ def _check_ba011t_conversion(original: str, formatted: str) -> List[SqlFormattin
             SqlFormattingIssue(
                 code="ba011t_scalar_lookup_retained",
                 severity="error",
-                message="BA011T scalar lookup should be converted to a BA011T join when practical.",
+                message="Verified BA011T scalar lookup should be converted to a BA011T join unless a concrete safety exception is recorded.",
                 evidence=["DBO.F_BA011T_FIND_SUBNM"],
             )
         )

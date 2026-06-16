@@ -32,7 +32,7 @@ The verifier blocks when string literals, Korean literals, comment shape/count, 
 
 ## Style rules
 
-The verifier checks the established host-local style: uppercase identifiers outside literals/comments, leading-comma procedure parameters and SELECT columns, JOIN indentation, parenthesized CASE expressions, and BA011T scalar-to-join conversion shape when applicable.
+The verifier checks the established host-local style: uppercase identifiers outside literals/comments, leading-comma procedure parameters and SELECT columns, JOIN indentation, parenthesized CASE expressions, and verified scalar lookup conversion shape when applicable. Unknown scalar functions stay unchanged unless DB/MCP metadata, project source, or the host-local style contract proves an equivalent lookup join. `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is treated as a verified `BA011T` lookup contract when the host-local `sql-formatting` skill is available.
 
 ## Evidence
 

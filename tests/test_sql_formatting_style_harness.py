@@ -69,6 +69,74 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         self.assertIn("join_condition_indentation", codes)
         self.assertIn("case_not_parenthesized", codes)
 
+    def test_verifier_blocks_retained_ba011t_scalar_lookup(self):
+        formatted = (
+            "CREATE OR ALTER PROCEDURE [DBO].[SP_DEMO_SELECT]\n"
+            "      @WORKTYPE    VARCHAR(20) = NULL\n"
+            "    , @ORGDIV      VARCHAR(2)  = NULL\n"
+            "AS\n"
+            "BEGIN\n"
+            "    SET NOCOUNT ON\n"
+            "\n"
+            "    SELECT A.ORDNUM\n"
+            "         , DBO.F_BA011T_FIND_SUBNM('DE001', A.STATUS, 'Y') AS STATUSNM\n"
+            "         , (CASE WHEN A.CHKYN = 'Y' THEN '?뺤씤' END) AS CHKYNM\n"
+            "         , A.QTY * A.PRICE AS AMT\n"
+            "    FROM DE100T A\n"
+            "        LEFT OUTER JOIN DE110T B\n"
+            "                     ON A.ORDNUM = B.ORDNUM\n"
+            "                     AND A.ORDSEQ = B.ORDSEQ\n"
+            "    WHERE A.ORGDIV = @ORGDIV\n"
+            "      AND A.STATUS = '吏꾪뻾'\n"
+            "--AND A.STATUS = '蹂대쪟'\n"
+            "END\n"
+        )
+
+        result = verify_sql_formatting_style(_fixture("original_select.sql"), formatted)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.exit_code, 1)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("ba011t_scalar_lookup_retained", codes)
+
+    def test_verifier_allows_lowercase_powerbuilder_host_variables(self):
+        original = (
+            "select a.col_a, b.col_b,\n"
+            "case when a.flag_yn='Y' then '<KOREAN_LITERAL>' end flag_nm,\n"
+            "dbo.F_BA011T_FIND_SUBNM('CD001',a.status_cd,'Y') status_nm\n"
+            "from t_main a\n"
+            "left outer join t_flow b on a.key_col=b.key_col and a.seq=b.seq\n"
+            "where a.date_col between :ls_frdt and :ls_todt\n"
+            "and a.status_cd like :ls_status ;\n"
+            "--and a.flag_yn='Y'\n"
+        )
+        formatted = (
+            "SELECT A.COL_A\n"
+            "     , B.COL_B\n"
+            "     , (CASE WHEN A.FLAG_YN = 'Y' THEN '<KOREAN_LITERAL>' END) AS FLAG_NM\n"
+            "     , ISNULL(C.SUBNM, '') AS STATUS_NM\n"
+            "FROM T_MAIN A\n"
+            "        LEFT OUTER JOIN T_FLOW B\n"
+            "                     ON A.KEY_COL = B.KEY_COL\n"
+            "                     AND A.SEQ = B.SEQ\n"
+            "\n"
+            "        LEFT OUTER JOIN BA011T C\n"
+            "                     ON C.MAINCD = 'CD001'\n"
+            "                     AND A.STATUS_CD = C.SUBCD\n"
+            "                     AND C.USEYN = 'Y'\n"
+            "WHERE A.DATE_COL BETWEEN :ls_frdt AND :ls_todt\n"
+            "  AND A.STATUS_CD LIKE :ls_status;\n"
+            "--AND A.FLAG_YN = 'Y'\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["mechanical_checks"]["status"], "passed")
+
     def test_powerbuilder_update_host_variable_semicolon_spacing_is_preserved(self):
         original = _fixture("pbl_update_semicolon_space.original.sql")
         formatted = _fixture("pbl_update_semicolon_space.formatted.sql")

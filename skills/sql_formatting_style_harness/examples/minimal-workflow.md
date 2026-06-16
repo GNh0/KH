@@ -27,6 +27,8 @@ An agent formats a stored procedure and claims it followed the host-local `sql-f
 - A comment is removed or uncommented.
 - A predicate or JOIN condition changes.
 - A new `ELSE` is added.
+- A verified `DBO.F_BA011T_FIND_SUBNM` lookup is left as a scalar function without a concrete safety reason.
+- An unknown scalar function is converted without DB/MCP, project-source, or style-contract evidence.
 - The agent claims semantic equivalence without DB-backed evidence.
 
 ## Done criteria

@@ -12,6 +12,7 @@ description: Use when KH must verify SQL/T-SQL formatting output against the hos
 - Use the host-local `sql-formatting` skill as the primary formatting standard when it exists.
 - Do not replace, suppress, or reinterpret the host-local skill. This harness verifies outputs from that skill or from an agent that claims to follow it.
 - Treat SQL, T-SQL, stored procedures, comments, Korean literals, and business rule text as contract-sensitive passthrough content. Do not token-compress it.
+- Treat unknown scalar functions as contract-sensitive text unless DB/MCP metadata, project source, or the host-local style contract proves an equivalent lookup join. `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is a verified BA011T lookup contract when the host-local `sql-formatting` skill is available.
 - Report this skill as applied only when `src.skills.sql_formatting_style.verify_sql_formatting_style` or the module CLI produced a `HarnessResult`-shaped result.
 - A `selected_not_executed_skills` entry, a skill-file read, or a style-standard mention is not execution evidence.
 
@@ -41,7 +42,7 @@ description: Use when KH must verify SQL/T-SQL formatting output against the hos
 - Check SELECT leading-comma columns.
 - Check JOIN indentation shape.
 - Check parenthesized CASE expressions.
-- Check BA011T scalar-to-join conversion shape when the scalar function appears in the original SQL.
+- Check BA011T scalar-to-join conversion shape when the verified scalar lookup appears in the original SQL.
 
 ## PowerBuilder validation path
 
@@ -61,7 +62,7 @@ The harness does not claim to prove DB semantics. Execution-plan changes, result
 - `metadata.style_contract_source` with host-local path/hash when available or packaged fallback reference otherwise.
 - `metadata.mechanical_checks.status`.
 - Preservation issue list for string literals, Korean literals, comment shape/count/text, predicates, JOIN conditions, calculations, and `ELSE` additions.
-- Style issue list for uppercase identifiers, stored procedure parameter layout, SELECT leading commas, JOIN indentation, CASE parentheses, and BA011T conversion shape.
+- Style issue list for uppercase identifiers, stored procedure parameter layout, SELECT leading commas, JOIN indentation, CASE parentheses, verified scalar lookup conversion decisions, and BA011T conversion shape.
 - `metadata.semantic_checks.status=not_proven` unless separate DB-backed evidence is attached outside this regex verifier.
 - `metadata.token_optimizer_status=passthrough`.
 - PowerBuilder validation plan or fragment-level verifier results when the source is a PBL/PB export.
@@ -73,6 +74,7 @@ The harness does not claim to prove DB semantics. Execution-plan changes, result
 - Do not token-compress SQL, stored procedures, Korean literals, comments, or other contract-sensitive text.
 - Do not treat regex preservation checks as proof of DB semantic equivalence.
 - Do not trigger the harness for mention-only risk examples that are not actionable SQL formatting requests.
+- Do not require scalar-to-join conversion for unknown scalar functions when the function body or lookup contract cannot be checked. Preserve those functions and require the formatter to state why conversion was skipped.
 - Do not write exports, fragments, or verifier output into `C:\GWERP`.
 
 ## UAF implementation targets
