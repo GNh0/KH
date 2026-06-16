@@ -300,6 +300,7 @@ def _check_style(original: str, formatted: str) -> List[SqlFormattingIssue]:
 
     issues.extend(_check_procedure_parameter_layout(formatted))
     issues.extend(_check_select_leading_commas(formatted))
+    issues.extend(_check_insert_select_layout(formatted))
     issues.extend(_check_join_indentation(formatted))
     issues.extend(_check_case_parentheses(formatted))
     issues.extend(_check_ba011t_conversion(original, formatted))
@@ -558,6 +559,9 @@ def _check_select_leading_commas(sql: str) -> List[SqlFormattingIssue]:
                 continue
             if re.match(r"^(FROM|WHERE|GROUP BY|ORDER BY|HAVING|UNION|END|ELSE)\b", stripped, flags=re.IGNORECASE):
                 break
+            if column_seen and _looks_like_select_continuation_line(candidate):
+                index += 1
+                continue
             current_indent = len(candidate) - len(candidate.lstrip(" "))
             if current_indent >= select_indent and column_seen and not candidate.lstrip().startswith(","):
                 issues.append(
@@ -572,6 +576,106 @@ def _check_select_leading_commas(sql: str) -> List[SqlFormattingIssue]:
             column_seen = True
             index += 1
     return issues
+
+
+def _looks_like_select_continuation_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith(","):
+        return False
+    if re.match(r"^(AND|OR|WHEN|ELSE|END|FROM|WHERE|GROUP BY|ORDER BY|HAVING|UNION)\b", stripped, flags=re.IGNORECASE):
+        return False
+    if stripped.startswith(("+", "-", "*", "/", ")", ".")):
+        return True
+    if re.match(r"^(PARTITION\s+BY|ORDER\s+BY)\b", stripped, flags=re.IGNORECASE):
+        return True
+    if stripped == ")":
+        return True
+    return False
+
+
+def _check_insert_select_layout(sql: str) -> List[SqlFormattingIssue]:
+    issues: List[SqlFormattingIssue] = []
+    for block in _extract_insert_column_blocks(sql):
+        lines = _meaningful_insert_lines(block)
+        if len(lines) < 8:
+            continue
+        single_column_lines = [line for line in lines if _looks_like_single_insert_column_line(line)]
+        if len(single_column_lines) >= max(8, int(len(lines) * 0.8)):
+            issues.append(
+                SqlFormattingIssue(
+                    code="insert_select_single_column_per_line",
+                    severity="error",
+                    message=(
+                        "Wide INSERT INTO ... SELECT mappings should use the existing grouped horizontal "
+                        "stored-procedure layout, with long CASE/ROW_NUMBER/ISNULL expressions wrapped only "
+                        "for that mapping instead of making the entire insert one target column per line."
+                    ),
+                    evidence=single_column_lines[:6],
+                )
+            )
+    return issues
+
+
+def _extract_insert_column_blocks(sql: str) -> List[str]:
+    blocks: List[str] = []
+    for match in re.finditer(r"\bINSERT\s+INTO\b", sql, flags=re.IGNORECASE):
+        open_index = sql.find("(", match.end())
+        if open_index < 0:
+            continue
+        close_index = _find_matching_parenthesis(sql, open_index)
+        if close_index < 0:
+            continue
+        remainder = sql[close_index + 1 : close_index + 2500]
+        if not re.search(r"\bSELECT\b", remainder, flags=re.IGNORECASE):
+            continue
+        blocks.append(sql[open_index + 1 : close_index])
+    return blocks
+
+
+def _find_matching_parenthesis(sql: str, open_index: int) -> int:
+    depth = 0
+    index = open_index
+    in_string = False
+    while index < len(sql):
+        char = sql[index]
+        if char == "'":
+            if in_string and index + 1 < len(sql) and sql[index + 1] == "'":
+                index += 2
+                continue
+            in_string = not in_string
+        elif not in_string:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return index
+        index += 1
+    return -1
+
+
+def _meaningful_insert_lines(block: str) -> List[str]:
+    lines = []
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped in {"(", ")"}:
+            continue
+        lines.append(stripped.rstrip(","))
+    return lines
+
+
+def _looks_like_single_insert_column_line(line: str) -> bool:
+    stripped = line.strip()
+    if stripped.startswith("--"):
+        stripped = stripped[2:].strip()
+    if stripped.startswith(","):
+        stripped = stripped[1:].strip()
+    stripped = re.sub(r"/\*.*?\*/", "", stripped).strip()
+    return bool(re.fullmatch(r"(?:\[[A-Z_][A-Z0-9_@$#]*\]|[A-Z_][A-Z0-9_@$#]*)(?:\s+AS\s+\w+)?", stripped, flags=re.IGNORECASE))
 
 
 def _check_join_indentation(sql: str) -> List[SqlFormattingIssue]:

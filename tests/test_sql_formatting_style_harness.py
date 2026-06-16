@@ -137,6 +137,101 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         self.assertTrue(result.success, result.to_dict())
         self.assertEqual(result.metadata["mechanical_checks"]["status"], "passed")
 
+    def test_verifier_blocks_wide_insert_select_one_column_per_line(self):
+        original = (
+            "INSERT INTO SA130T\n"
+            "(\n"
+            "    ORGDIV, ORDNUM, ORDSEQ, PORSEQ\n"
+            "  , PRNTITEMCD, SPECNUM, CHLDITEMCD, CHLDITEMNM\n"
+            "  , DWGNO, CHLDQTY, CHLDUNIT, DOGUB\n"
+            ")\n"
+            "SELECT @ORGDIV, A.ORDNUM, A.ORDSEQ, A.PORSEQ\n"
+            "     , A.PRNTITEMCD, A.SPECNUM, A.CHLDITEMCD, A.CHLDITEMNM\n"
+            "     , A.DWGNO, A.CHLDQTY, A.CHLDUNIT, A.DOGUB\n"
+            "FROM SA130T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+        formatted = (
+            "INSERT INTO SA130T (\n"
+            "      ORGDIV\n"
+            "    , ORDNUM\n"
+            "    , ORDSEQ\n"
+            "    , PORSEQ\n"
+            "    , PRNTITEMCD\n"
+            "    , SPECNUM\n"
+            "    , CHLDITEMCD\n"
+            "    , CHLDITEMNM\n"
+            "    , DWGNO\n"
+            "    , CHLDQTY\n"
+            "    , CHLDUNIT\n"
+            "    , DOGUB\n"
+            ")\n"
+            "SELECT @ORGDIV\n"
+            "     , A.ORDNUM\n"
+            "     , A.ORDSEQ\n"
+            "     , A.PORSEQ\n"
+            "     , A.PRNTITEMCD\n"
+            "     , A.SPECNUM\n"
+            "     , A.CHLDITEMCD\n"
+            "     , A.CHLDITEMNM\n"
+            "     , A.DWGNO\n"
+            "     , A.CHLDQTY\n"
+            "     , A.CHLDUNIT\n"
+            "     , A.DOGUB\n"
+            "FROM SA130T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("insert_select_single_column_per_line", codes)
+
+    def test_verifier_allows_wide_insert_select_grouped_layout(self):
+        grouped = (
+            "INSERT INTO SA130T\n"
+            "(\n"
+            "      ORGDIV                  , ORDNUM                  , ORDSEQ                  , PORSEQ\n"
+            "    , PRNTITEMCD              , SPECNUM                 , CHLDITEMCD              , CHLDITEMNM\n"
+            "    , DWGNO                   , CHLDQTY                 , CHLDUNIT                , DOGUB\n"
+            ")\n"
+            "SELECT @ORGDIV                , A.ORDNUM                , A.ORDSEQ                , A.PORSEQ\n"
+            "     , A.PRNTITEMCD           , A.SPECNUM               , A.CHLDITEMCD            , A.CHLDITEMNM\n"
+            "     , A.DWGNO                , A.CHLDQTY               , A.CHLDUNIT              , A.DOGUB\n"
+            "FROM SA130T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+
+        result = verify_sql_formatting_style(grouped, grouped)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_verifier_allows_grouped_insert_with_wrapped_long_expression(self):
+        grouped = (
+            "INSERT INTO SA130T\n"
+            "(\n"
+            "      ORGDIV                  , ORDNUM                  , ORDSEQ                  , PORSEQ\n"
+            "    , PRNTITEMCD              , SPECNUM                 , CHLDITEMCD              , CHLDITEMNM\n"
+            ")\n"
+            "SELECT @ORGDIV                , A4.ORDNUM               , A4.ORDSEQ\n"
+            "     , ISNULL(A4.MAXPORSEQ, 0)\n"
+            "       + ROW_NUMBER() OVER (\n"
+            "                            PARTITION BY A4.ORDNUM, A4.ORDSEQ\n"
+            "                            ORDER BY A4.SEQ\n"
+            "                           )\n"
+            "     , A4.PRNTITEMCD          , A4.SPECNUM              , A4.CHLDITEMCD           , A4.CHLDITEMNM\n"
+            "FROM SA130T A4\n"
+            "WHERE A4.ORGDIV = @ORGDIV;\n"
+        )
+
+        result = verify_sql_formatting_style(grouped, grouped)
+
+        self.assertTrue(result.success, result.to_dict())
+
     def test_powerbuilder_update_host_variable_semicolon_spacing_is_preserved(self):
         original = _fixture("pbl_update_semicolon_space.original.sql")
         formatted = _fixture("pbl_update_semicolon_space.formatted.sql")

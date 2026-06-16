@@ -43,6 +43,7 @@ description: Use when KH must verify SQL/T-SQL formatting output against the hos
 - Check JOIN indentation shape.
 - Check parenthesized CASE expressions.
 - Check BA011T scalar-to-join conversion shape when the verified scalar lookup appears in the original SQL.
+- Check wide `INSERT INTO ... SELECT` mappings so they keep the user's grouped horizontal stored-procedure layout instead of one-column-per-line output. Long `CASE`, `ROW_NUMBER`, `ISNULL`, arithmetic, or concatenation expressions may wrap onto continuation lines for that mapping.
 
 ## PowerBuilder validation path
 
@@ -62,7 +63,7 @@ The harness does not claim to prove DB semantics. Execution-plan changes, result
 - `metadata.style_contract_source` with host-local path/hash when available or packaged fallback reference otherwise.
 - `metadata.mechanical_checks.status`.
 - Preservation issue list for string literals, Korean literals, comment shape/count/text, predicates, JOIN conditions, calculations, and `ELSE` additions.
-- Style issue list for uppercase identifiers, stored procedure parameter layout, SELECT leading commas, JOIN indentation, CASE parentheses, verified scalar lookup conversion decisions, and BA011T conversion shape.
+- Style issue list for uppercase identifiers, stored procedure parameter layout, SELECT leading commas, wide INSERT grouped layout, JOIN indentation, CASE parentheses, verified scalar lookup conversion decisions, and BA011T conversion shape.
 - `metadata.semantic_checks.status=not_proven` unless separate DB-backed evidence is attached outside this regex verifier.
 - `metadata.token_optimizer_status=passthrough`.
 - PowerBuilder validation plan or fragment-level verifier results when the source is a PBL/PB export.
