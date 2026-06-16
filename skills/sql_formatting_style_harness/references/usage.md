@@ -13,6 +13,7 @@ Use this harness after SQL/T-SQL formatting has been produced by the host-local 
 
 1. Keep original and formatted SQL uncompressed.
 2. Call `src.skills.sql_formatting_style.verify_sql_formatting_style(original, formatted)`.
+   If a CTE or `#` temporary table was intentionally introduced, pass `cte_temp_table_reason="<concrete reason>"`.
 3. Inspect `metadata.mechanical_checks.status`.
 4. Treat any preservation error as blocking.
 5. Treat `metadata.semantic_checks.status=not_proven` as a required follow-up when DB semantics, performance, or schema-dependent rewrites matter.
@@ -32,7 +33,9 @@ The verifier blocks when string literals, Korean literals, comment shape/count, 
 
 ## Style rules
 
-The verifier checks the established host-local style: uppercase identifiers outside literals/comments, leading-comma procedure parameters and SELECT columns, wide `INSERT INTO ... SELECT` grouped horizontal layout with per-mapping continuation lines for long expressions, JOIN indentation, parenthesized CASE expressions, and verified scalar lookup conversion shape when applicable. Unknown scalar functions stay unchanged unless DB/MCP metadata, project source, or the host-local style contract proves an equivalent lookup join. `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is treated as a verified `BA011T` lookup contract when the host-local `sql-formatting` skill is available.
+The verifier checks the established host-local style: uppercase identifiers outside literals/comments, leading-comma procedure parameters and SELECT columns, wide `INSERT INTO ... SELECT` grouped horizontal layout with per-mapping continuation lines for long expressions, no newly introduced CTEs or `#` temporary tables by default, JOIN indentation, parenthesized CASE expressions, and verified scalar lookup conversion shape when applicable. Unknown scalar functions stay unchanged unless DB/MCP metadata, project source, or the host-local style contract proves an equivalent lookup join. `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is treated as a verified `BA011T` lookup contract when the host-local `sql-formatting` skill is available.
+
+Use CTEs or `#` temporary tables only as exceptions: explicit user request, recursive logic, repeated multi-statement reuse, a large intermediate set that needs indexing/statistics, procedural staging that cannot be expressed cleanly inline, or measured performance evidence. If one is used, the formatter should state the reason; otherwise recommendations should stay in the direct join, derived table, aggregate subquery, and existing stored-procedure style.
 
 ## Evidence
 
@@ -44,6 +47,7 @@ Report:
 - `metadata.mechanical_checks.style_issues`.
 - `metadata.semantic_checks.status` and reason.
 - `metadata.token_optimizer_status=passthrough`.
+- `metadata.cte_temp_table_reason` when an exception was used.
 
 ## Failure handling
 

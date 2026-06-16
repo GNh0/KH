@@ -31,7 +31,8 @@ description: Use when KH must verify SQL/T-SQL formatting output against the hos
 3. Run the verifier with original and formatted SQL.
 4. Block completion when mechanical preservation checks fail.
 5. Block or request DB-backed evidence when semantic equivalence matters beyond regex checks.
-6. Include the verifier result, style contract source path/hash, and token optimizer passthrough status in handoff evidence.
+6. When a CTE or `#` temporary table is intentionally introduced, pass a concrete `cte_temp_table_reason` to the verifier and keep that reason in evidence.
+7. Include the verifier result, style contract source path/hash, and token optimizer passthrough status in handoff evidence.
 
 ## Mechanical checks
 
@@ -44,6 +45,7 @@ description: Use when KH must verify SQL/T-SQL formatting output against the hos
 - Check parenthesized CASE expressions.
 - Check BA011T scalar-to-join conversion shape when the verified scalar lookup appears in the original SQL.
 - Check wide `INSERT INTO ... SELECT` mappings so they keep the user's grouped horizontal stored-procedure layout instead of one-column-per-line output. Long `CASE`, `ROW_NUMBER`, `ISNULL`, arithmetic, or concatenation expressions may wrap onto continuation lines for that mapping.
+- Check that formatted/recommended SQL does not introduce CTEs or `#` temporary tables when the original did not already use them. These patterns are exceptions, not the default recommendation style.
 
 ## PowerBuilder validation path
 
@@ -66,6 +68,7 @@ The harness does not claim to prove DB semantics. Execution-plan changes, result
 - Style issue list for uppercase identifiers, stored procedure parameter layout, SELECT leading commas, wide INSERT grouped layout, JOIN indentation, CASE parentheses, verified scalar lookup conversion decisions, and BA011T conversion shape.
 - `metadata.semantic_checks.status=not_proven` unless separate DB-backed evidence is attached outside this regex verifier.
 - `metadata.token_optimizer_status=passthrough`.
+- `metadata.cte_temp_table_reason` when CTE or `#` temporary table usage is intentionally introduced as an exception.
 - PowerBuilder validation plan or fragment-level verifier results when the source is a PBL/PB export.
 
 ## Common mistakes
@@ -76,6 +79,7 @@ The harness does not claim to prove DB semantics. Execution-plan changes, result
 - Do not treat regex preservation checks as proof of DB semantic equivalence.
 - Do not trigger the harness for mention-only risk examples that are not actionable SQL formatting requests.
 - Do not require scalar-to-join conversion for unknown scalar functions when the function body or lookup contract cannot be checked. Preserve those functions and require the formatter to state why conversion was skipped.
+- Do not introduce CTEs or `#` temporary tables as a default "cleaner" rewrite. Prefer direct joins, derived tables, aggregate subqueries, and existing stored-procedure style unless there is an explicit request or a concrete technical reason.
 - Do not write exports, fragments, or verifier output into `C:\GWERP`.
 
 ## UAF implementation targets

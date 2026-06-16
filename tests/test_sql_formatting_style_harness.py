@@ -232,6 +232,348 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
 
         self.assertTrue(result.success, result.to_dict())
 
+    def test_verifier_blocks_new_cte_introduction_by_default(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "     , SUM(B.QTY) AS QTY\n"
+            "FROM SA100T A\n"
+            "        LEFT OUTER JOIN SA110T B\n"
+            "                     ON A.ORDNUM = B.ORDNUM\n"
+            "WHERE A.ORGDIV = @ORGDIV\n"
+            "GROUP BY A.ORDNUM;\n"
+        )
+        formatted = (
+            "WITH ORDER_QTY AS (\n"
+            "    SELECT B.ORDNUM\n"
+            "         , SUM(B.QTY) AS QTY\n"
+            "    FROM SA110T B\n"
+            "    GROUP BY B.ORDNUM\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "     , C.QTY\n"
+            "FROM SA100T A\n"
+            "        LEFT OUTER JOIN ORDER_QTY C\n"
+            "                     ON A.ORDNUM = C.ORDNUM\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("cte_introduced_without_reason", codes)
+
+    def test_verifier_blocks_new_temp_table_introduction_by_default(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "     , A.CUSTCD\n"
+            "FROM SA100T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+        formatted = (
+            "SELECT A.ORDNUM\n"
+            "     , A.CUSTCD\n"
+            "INTO #ORDER_WORK\n"
+            "FROM SA100T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+            "\n"
+            "SELECT A.ORDNUM\n"
+            "     , A.CUSTCD\n"
+            "FROM #ORDER_WORK A;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("temp_table_introduced_without_reason", codes)
+
+    def test_verifier_allows_existing_cte_and_temp_table_to_remain(self):
+        sql = (
+            "WITH ORDER_QTY AS (\n"
+            "    SELECT T.ORDNUM\n"
+            "         , SUM(T.QTY) AS QTY\n"
+            "    FROM #ORDER_WORK T\n"
+            "    GROUP BY T.ORDNUM\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "     , A.QTY\n"
+            "FROM ORDER_QTY A;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_verifier_blocks_cte_column_list_introduction(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "     , A.QTY\n"
+            "FROM SA110T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+        formatted = (
+            "WITH ORDER_QTY (ORDNUM, QTY) AS (\n"
+            "    SELECT A.ORDNUM\n"
+            "         , A.QTY\n"
+            "    FROM SA110T A\n"
+            "    WHERE A.ORGDIV = @ORGDIV\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "     , A.QTY\n"
+            "FROM ORDER_QTY A;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("cte_introduced_without_reason", codes)
+
+    def test_verifier_blocks_cte_after_begin_introduction(self):
+        original = (
+            "CREATE OR ALTER PROCEDURE DBO.SP_SAMPLE_SELECT\n"
+            "      @ORGDIV VARCHAR(2) = NULL\n"
+            "AS\n"
+            "BEGIN\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM SA110T A\n"
+            "    WHERE A.ORGDIV = @ORGDIV;\n"
+            "END\n"
+        )
+        formatted = (
+            "CREATE OR ALTER PROCEDURE DBO.SP_SAMPLE_SELECT\n"
+            "      @ORGDIV VARCHAR(2) = NULL\n"
+            "AS\n"
+            "BEGIN\n"
+            "    WITH ORDER_QTY AS (\n"
+            "        SELECT A.ORDNUM\n"
+            "        FROM SA110T A\n"
+            "        WHERE A.ORGDIV = @ORGDIV\n"
+            "    )\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM ORDER_QTY A;\n"
+            "END\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("cte_introduced_without_reason", codes)
+
+    def test_verifier_does_not_treat_nolock_as_cte(self):
+        sql = (
+            "SELECT A.ORDNUM\n"
+            "FROM SA100T A WITH (NOLOCK)\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_verifier_ignores_cte_and_temp_markers_inside_literals_and_comments(self):
+        sql = (
+            "SELECT 'WITH ORDER_QTY AS (' AS SAMPLE_TEXT\n"
+            "     , '#ORDER_WORK' AS TEMP_NAME\n"
+            "FROM SA100T A\n"
+            "WHERE A.ORGDIV = @ORGDIV\n"
+            "-- SELECT * INTO #ORDER_WORK FROM SA100T\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_verifier_allows_new_cte_with_recorded_exception_reason(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "FROM SA110T A\n"
+            "WHERE A.ORGDIV = @ORGDIV\n"
+        )
+        formatted = (
+            "WITH ORDER_BASE AS (\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM SA110T A\n"
+            "    WHERE A.ORGDIV = @ORGDIV\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "FROM ORDER_BASE A;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            cte_temp_table_reason="explicit user request to show the same logic as a CTE variant",
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("cte_exception_reason_recorded", codes)
+
+    def test_verifier_rejects_vague_cte_exception_reason(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "FROM SA110T A\n"
+            "WHERE A.ORGDIV = @ORGDIV\n"
+        )
+        formatted = (
+            "WITH ORDER_BASE AS (\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM SA110T A\n"
+            "    WHERE A.ORGDIV = @ORGDIV\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "FROM ORDER_BASE A;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            cte_temp_table_reason="looks cleaner",
+        )
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("cte_introduced_without_reason", codes)
+
+    def test_verifier_blocks_added_cte_when_original_already_has_one(self):
+        original = (
+            "WITH BASE AS (\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM SA110T A\n"
+            "    WHERE A.ORGDIV = @ORGDIV\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "FROM BASE A;\n"
+        )
+        formatted = (
+            "WITH BASE AS (\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM SA110T A\n"
+            "    WHERE A.ORGDIV = @ORGDIV\n"
+            "), EXTRA AS (\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM SA120T A\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "FROM BASE A;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("cte_introduced_without_reason", codes)
+
+    def test_verifier_rejects_negated_exception_reason(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "FROM SA110T A\n"
+            "WHERE A.ORGDIV = @ORGDIV\n"
+        )
+        formatted = (
+            "WITH ORDER_BASE AS (\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM SA110T A\n"
+            "    WHERE A.ORGDIV = @ORGDIV\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "FROM ORDER_BASE A;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            cte_temp_table_reason="not explicit, just cleaner for readability",
+        )
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("cte_introduced_without_reason", codes)
+
+    def test_verifier_rejects_negated_performance_exception_reason(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "FROM SA110T A\n"
+            "WHERE A.ORGDIV = @ORGDIV\n"
+        )
+        formatted = (
+            "WITH ORDER_BASE AS (\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM SA110T A\n"
+            "    WHERE A.ORGDIV = @ORGDIV\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "FROM ORDER_BASE A;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            cte_temp_table_reason="no measured performance evidence, just cleaner",
+        )
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("cte_introduced_without_reason", codes)
+
+    def test_verifier_allows_temp_table_select_into_with_recorded_exception_reason(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "     , A.CUSTCD\n"
+            "FROM SA100T A\n"
+            "WHERE A.ORGDIV = @ORGDIV\n"
+        )
+        formatted = (
+            "SELECT A.ORDNUM\n"
+            "     , A.CUSTCD\n"
+            "INTO #ORDER_WORK\n"
+            "FROM SA100T A\n"
+            "WHERE A.ORGDIV = @ORGDIV\n"
+        )
+
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            cte_temp_table_reason="large intermediate result needs indexing/statistics before repeated reuse",
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("temp_table_exception_reason_recorded", codes)
+
     def test_powerbuilder_update_host_variable_semicolon_spacing_is_preserved(self):
         original = _fixture("pbl_update_semicolon_space.original.sql")
         formatted = _fixture("pbl_update_semicolon_space.formatted.sql")

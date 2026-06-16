@@ -30,6 +30,7 @@ An agent formats a stored procedure and claims it followed the host-local `sql-f
 - A verified `DBO.F_BA011T_FIND_SUBNM` lookup is left as a scalar function without a concrete safety reason.
 - An unknown scalar function is converted without DB/MCP, project-source, or style-contract evidence.
 - A wide business-table `INSERT INTO ... SELECT` mapping is reformatted as one target column per line instead of the grouped horizontal stored-procedure style.
+- A CTE or `#` temporary table is introduced even though the original SQL did not use one and no concrete exception was requested or recorded.
 - The agent claims semantic equivalence without DB-backed evidence.
 
 ## Done criteria

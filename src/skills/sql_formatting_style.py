@@ -36,12 +36,13 @@ def verify_sql_formatting_style(
     formatted_sql: str,
     *,
     style_contract_path: str | os.PathLike[str] | None = None,
+    cte_temp_table_reason: str | None = None,
 ) -> HarnessResult:
     """Verify SQL formatting output against the host-local sql-formatting contract."""
     original = str(original_sql or "")
     formatted = str(formatted_sql or "")
     preservation_issues = _check_preservation(original, formatted)
-    style_issues = _check_style(original, formatted)
+    style_issues = _check_style(original, formatted, cte_temp_table_reason=cte_temp_table_reason)
     issues = preservation_issues + style_issues
     mechanical_passed = not any(issue.severity == "error" for issue in issues)
     metadata = {
@@ -66,6 +67,7 @@ def verify_sql_formatting_style(
         },
         "token_optimizer_status": "passthrough",
         "token_optimizer_reason": "SQL/stored procedure text is contract-sensitive and was not compressed.",
+        "cte_temp_table_reason": cte_temp_table_reason or "",
     }
     return HarnessResult(
         success=mechanical_passed,
@@ -283,7 +285,7 @@ def _check_preservation(original: str, formatted: str) -> List[SqlFormattingIssu
     return issues
 
 
-def _check_style(original: str, formatted: str) -> List[SqlFormattingIssue]:
+def _check_style(original: str, formatted: str, *, cte_temp_table_reason: str | None = None) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
     unprotected = _strip_literals_and_comments(formatted)
 
@@ -301,6 +303,7 @@ def _check_style(original: str, formatted: str) -> List[SqlFormattingIssue]:
     issues.extend(_check_procedure_parameter_layout(formatted))
     issues.extend(_check_select_leading_commas(formatted))
     issues.extend(_check_insert_select_layout(formatted))
+    issues.extend(_check_cte_temp_table_introduction(original, formatted, cte_temp_table_reason=cte_temp_table_reason))
     issues.extend(_check_join_indentation(formatted))
     issues.extend(_check_case_parentheses(formatted))
     issues.extend(_check_ba011t_conversion(original, formatted))
@@ -557,7 +560,7 @@ def _check_select_leading_commas(sql: str) -> List[SqlFormattingIssue]:
             if not stripped or stripped.startswith("--"):
                 index += 1
                 continue
-            if re.match(r"^(FROM|WHERE|GROUP BY|ORDER BY|HAVING|UNION|END|ELSE)\b", stripped, flags=re.IGNORECASE):
+            if re.match(r"^(INTO|FROM|WHERE|GROUP BY|ORDER BY|HAVING|UNION|END|ELSE)\b", stripped, flags=re.IGNORECASE):
                 break
             if column_seen and _looks_like_select_continuation_line(candidate):
                 index += 1
@@ -584,7 +587,7 @@ def _looks_like_select_continuation_line(line: str) -> bool:
         return False
     if stripped.startswith(","):
         return False
-    if re.match(r"^(AND|OR|WHEN|ELSE|END|FROM|WHERE|GROUP BY|ORDER BY|HAVING|UNION)\b", stripped, flags=re.IGNORECASE):
+    if re.match(r"^(AND|OR|WHEN|ELSE|END|INTO|FROM|WHERE|GROUP BY|ORDER BY|HAVING|UNION)\b", stripped, flags=re.IGNORECASE):
         return False
     if stripped.startswith(("+", "-", "*", "/", ")", ".")):
         return True
@@ -616,6 +619,131 @@ def _check_insert_select_layout(sql: str) -> List[SqlFormattingIssue]:
                 )
             )
     return issues
+
+
+def _check_cte_temp_table_introduction(
+    original: str,
+    formatted: str,
+    *,
+    cte_temp_table_reason: str | None = None,
+) -> List[SqlFormattingIssue]:
+    issues: List[SqlFormattingIssue] = []
+    original_unprotected = _strip_literals_and_comments(original)
+    formatted_unprotected = _strip_literals_and_comments(formatted)
+    exception_allowed = _has_cte_temp_table_exception_reason(cte_temp_table_reason)
+
+    introduced_ctes = sorted(_extract_statement_cte_names(formatted_unprotected) - _extract_statement_cte_names(original_unprotected))
+    if introduced_ctes:
+        if exception_allowed:
+            issues.append(
+                SqlFormattingIssue(
+                    code="cte_exception_reason_recorded",
+                    severity="warning",
+                    message="A CTE was introduced with a recorded exception reason.",
+                    evidence=[cte_temp_table_reason or "", *introduced_ctes[:4]],
+                    check_kind="style",
+                )
+            )
+        else:
+            issues.append(
+                SqlFormattingIssue(
+                    code="cte_introduced_without_reason",
+                    severity="error",
+                    message=(
+                        "Do not introduce a CTE in SQL recommendations or formatting by default. "
+                        "Use the existing join/derived-table style unless recursion, repeated logic, an explicit request, "
+                        "or another concrete reason is recorded."
+                    ),
+                    evidence=introduced_ctes[:8],
+                )
+            )
+
+    introduced_temp_tables = sorted(
+        _extract_temp_table_names(formatted_unprotected) - _extract_temp_table_names(original_unprotected)
+    )
+    if introduced_temp_tables:
+        if exception_allowed:
+            issues.append(
+                SqlFormattingIssue(
+                    code="temp_table_exception_reason_recorded",
+                    severity="warning",
+                    message="# temporary tables were introduced with a recorded exception reason.",
+                    evidence=[cte_temp_table_reason or "", *introduced_temp_tables[:4]],
+                    check_kind="style",
+                )
+            )
+        else:
+            issues.append(
+                SqlFormattingIssue(
+                    code="temp_table_introduced_without_reason",
+                    severity="error",
+                    message=(
+                        "Do not introduce # temporary tables in SQL recommendations or formatting by default. "
+                        "Use direct joins, derived tables, or aggregate subqueries unless repeated reuse, indexing/statistics, "
+                        "procedural staging, measured performance evidence, or an explicit request justifies a temp table."
+                    ),
+                    evidence=introduced_temp_tables[:8],
+                )
+            )
+    return issues
+
+
+def _extract_statement_cte_names(unprotected_sql: str) -> set[str]:
+    cte_name = r"([A-Z_][A-Z0-9_@$#]*)\s*(?:\([^)]*\)\s*)?AS\s*\("
+    first_pattern = rf"(?:^|;|\bBEGIN(?:\s+TRY|\s+CATCH)?\b)\s*WITH\s+{cte_name}"
+    extra_pattern = rf",\s*{cte_name}"
+    names = {
+        match.group(1).upper()
+        for match in re.finditer(first_pattern, unprotected_sql, flags=re.IGNORECASE | re.DOTALL)
+    }
+    names.update(
+        match.group(1).upper()
+        for match in re.finditer(extra_pattern, unprotected_sql, flags=re.IGNORECASE | re.DOTALL)
+    )
+    return names
+
+
+def _has_cte_temp_table_exception_reason(reason: str | None) -> bool:
+    normalized = re.sub(r"\s+", " ", str(reason or "").strip()).lower()
+    if len(normalized) < 12:
+        return False
+    negated_exception = (
+        r"\b(?:not|no|without)\s+"
+        r"(?:explicit|user\s+request|reason|evidence|recursive|recursion|reuse|repeated|"
+        r"multiple\s+statements?|multi-?statement|index(?:ing|es)?|statistics|large\s+intermediate|"
+        r"procedural\s+staging|measured\s+performance|performance\s+evidence)\b"
+    )
+    if re.search(negated_exception, normalized):
+        return False
+    exception_patterns = [
+        r"\bexplicit\s+user\s+request\b",
+        r"\buser\s+(?:asked|requested|requires?)\b",
+        r"\brecurs(?:ive|ion)\b",
+        r"\brepeated\s+reuse\b",
+        r"\breuse\s+across\s+multiple\s+statements?\b",
+        r"\bmulti-?statement\b",
+        r"\bmultiple\s+statements?\b",
+        r"\bneeds?\s+index(?:ing|es)?\b",
+        r"\bindex(?:ing|ed)?\s*/?\s*statistics\b",
+        r"\bstatistics\b",
+        r"\blarge\s+intermediate\b",
+        r"\bprocedural\s+staging\b",
+        r"\bmeasured\s+performance\b",
+        r"\bperformance\s+evidence\b",
+        r"\bstatistics\s+io\b",
+    ]
+    return any(re.search(pattern, normalized) for pattern in exception_patterns)
+
+
+def _extract_temp_table_names(unprotected_sql: str) -> set[str]:
+    return {
+        match.group(1).upper()
+        for match in re.finditer(
+            r"(?<![A-Z0-9_#])((?:##|#)[A-Z_][A-Z0-9_]*)\b",
+            unprotected_sql,
+            flags=re.IGNORECASE,
+        )
+    }
 
 
 def _extract_insert_column_blocks(sql: str) -> List[str]:
