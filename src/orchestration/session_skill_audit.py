@@ -362,6 +362,13 @@ ACCEPTANCE_SEVERITY = {
 
 
 @dataclass(frozen=True)
+class SessionTextRecord:
+    text: str
+    payload_type: str
+    role: str = ""
+
+
+@dataclass(frozen=True)
 class SessionSkillAudit:
     session_id: str
     path: str
@@ -378,7 +385,8 @@ class SessionSkillAudit:
 def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     path = Path(session_path)
     postmortem = analyze_codex_session_jsonl(path)
-    texts = _session_texts(path)
+    text_records = _session_text_records(path)
+    texts = [record.text for record in text_records]
     active_texts = [_strip_passive_prefix(text) for text in texts if not _is_passive_text(text)]
     combined_text = "\n".join(active_texts)
     catalog = collect_packaged_skills()
@@ -390,7 +398,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     for skill in skills:
         name = str(skill.get("name", ""))
         aliases = _skill_aliases(skill)
-        observations = _observations(texts, aliases, name)
+        observations = _observations(text_records, aliases, name)
         status = observations["status"]
         is_required = name in required
         acceptance = _acceptance_for_skill(
@@ -1150,7 +1158,7 @@ def _front_door_latency_issues(path: Path, threshold_seconds: float = 60.0) -> L
             skill_read_event = event
             continue
 
-        if payload_type in {"function_call", "custom_tool_call"} and _is_front_door_order_evidence(payload, lowered):
+        if _is_front_door_runtime_command(payload, lowered):
             front_door_at = ts
             front_door_event = event
             break
@@ -2390,27 +2398,67 @@ def _has_no_subagent_rationale(lowered: str) -> bool:
 
 
 def _has_parallel_strategy_rationale(lowered: str) -> bool:
-    if re.search(
+    match = re.search(
         r"\bparallel_strategy(?:_decision)?\s*[:=]\s*"
         r"(parallel|sequential|read-only-side-agents|read_only_side_agents|blocked)\b",
         lowered,
-    ):
-        return True
+    )
+    if match:
+        strategy = match.group(1).replace("_", "-")
+        if strategy == "parallel":
+            return _has_parallel_execution_evidence(lowered)
+        return _has_no_parallel_rationale(lowered)
+    if "parallel_strategy_decision=parallel" in lowered:
+        return _has_parallel_execution_evidence(lowered)
     return any(
         marker in lowered
         for marker in [
             "parallel_strategy_decision=sequential",
-            "parallel_strategy_decision=parallel",
             "parallel_strategy_decision=blocked",
             "parallel_strategy_decision=read-only-side-agents",
             "parallel not useful",
             "no-parallel rationale",
-            "bounded parallel",
-            "fan-out",
-            "fan-in",
             "shared-state risk",
             "shared state risk",
             "sequential with rationale",
+        ]
+    )
+
+
+def _has_no_parallel_rationale(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in [
+            "sequential with rationale",
+            "no-parallel rationale",
+            "parallel not useful",
+            "shared-state risk",
+            "shared state risk",
+            "shared-state",
+            "shared state",
+            "tiny",
+            "single file",
+            "small task",
+            "blocked",
+            "read-only-side-agents",
+            "read_only_side_agents",
+        ]
+    )
+
+
+def _has_parallel_execution_evidence(lowered: str) -> bool:
+    return (
+        ("fan-out" in lowered or "fan_out" in lowered)
+        and ("fan-in" in lowered or "fan_in" in lowered)
+    ) or any(
+        marker in lowered
+        for marker in [
+            "parallel_wave_count",
+            "parallel wave count",
+            "parallel waves",
+            "role results",
+            "role_results",
+            "fan_in_complete",
         ]
     )
 
@@ -2896,19 +2944,24 @@ def _is_kh_front_door_evidence(lowered: str) -> bool:
 
 def _is_front_door_order_evidence(payload: Dict[str, Any], lowered: str) -> bool:
     payload_type = str(payload.get("type", ""))
-    tool_name = str(payload.get("name", "")).lower()
-    if payload_type in {"function_call", "custom_tool_call"}:
-        if tool_name in {"shell_command", "functions.shell_command"}:
-            return (
-                "src.orchestration.kh_front_door" in lowered
-                or " -m src.orchestration.kh_front_door" in lowered
-                or "python -m src.orchestration.kh_front_door" in lowered
-                or "front_door.py" in lowered
-            )
-        return False
-    if payload_type == "function_call_output":
-        return _looks_like_front_door_runtime_output(lowered)
+    if payload_type in {"function_call_output", "custom_tool_call_output"}:
+        return _has_front_door_success_or_blocked_evidence(lowered)
     return False
+
+
+def _is_front_door_runtime_command(payload: Dict[str, Any], lowered: str) -> bool:
+    payload_type = str(payload.get("type", ""))
+    if payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "src.orchestration.kh_front_door",
+            "kh_front_door",
+            "front_door.py",
+            "always_on_front_door",
+        ]
+    )
 
 
 def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:
@@ -2972,7 +3025,11 @@ def summarize_session_skill_audits(paths: Iterable[str | Path]) -> Dict[str, Any
 
 
 def _session_texts(path: Path) -> List[str]:
-    texts: List[str] = []
+    return [record.text for record in _session_text_records(path)]
+
+
+def _session_text_records(path: Path) -> List[SessionTextRecord]:
+    texts: List[SessionTextRecord] = []
     previous_call_was_passive = False
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
@@ -2991,14 +3048,15 @@ def _session_texts(path: Path) -> List[str]:
                 continue
         text = _payload_text(payload)
         if text:
-            payload_type = payload.get("type")
+            payload_type = str(payload.get("type", ""))
+            role = str(payload.get("role", "")).lower()
             passive = _passive_reference(text.lower()) or (
                 payload_type in {"function_call_output", "custom_tool_call_output"}
                 and previous_call_was_passive
             )
             if passive:
                 text = PASSIVE_REFERENCE_PREFIX + text
-            texts.append(text)
+            texts.append(SessionTextRecord(text=text, payload_type=payload_type, role=role))
             previous_call_was_passive = payload_type in {"function_call", "custom_tool_call"} and passive
         else:
             previous_call_was_passive = False
@@ -3054,7 +3112,7 @@ def _skill_aliases(skill: Dict[str, Any]) -> Set[str]:
     return {alias for alias in aliases if alias}
 
 
-def _observations(texts: List[str], aliases: Set[str], skill_name: str) -> Dict[str, Any]:
+def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str], skill_name: str) -> Dict[str, Any]:
     mentions = 0
     inspections = 0
     runtime_hits = 0
@@ -3064,16 +3122,24 @@ def _observations(texts: List[str], aliases: Set[str], skill_name: str) -> Dict[
     active_evidence: List[str] = []
     runtime_markers = RUNTIME_MARKERS.get(skill_name, [])
 
-    for text in texts:
+    for item in texts:
+        if isinstance(item, SessionTextRecord):
+            text = item.text
+            payload_type = item.payload_type
+            role = item.role
+        else:
+            text = str(item)
+            payload_type = ""
+            role = ""
         passive = _is_passive_text(text)
         clean_text = _strip_passive_prefix(text)
         lowered = clean_text.lower()
         front_door_status = _front_door_skill_status(clean_text, skill_name)
         alias_hit = bool(front_door_status) or any(alias.lower() in lowered for alias in aliases)
-        runtime_hit = (
-            front_door_status == "applied"
-            or (not front_door_status and any(marker.lower() in lowered for marker in runtime_markers))
-        )
+        runtime_marker_hit = not front_door_status and any(marker.lower() in lowered for marker in runtime_markers)
+        if skill_name == "token-optimizer" and runtime_marker_hit:
+            runtime_marker_hit = _is_token_optimizer_runtime_source(payload_type, role, lowered)
+        runtime_hit = front_door_status == "applied" or runtime_marker_hit
         if not alias_hit and not runtime_hit:
             continue
         mentions += 1
@@ -3081,7 +3147,10 @@ def _observations(texts: List[str], aliases: Set[str], skill_name: str) -> Dict[
             inspections += 1
         if passive:
             passive_references += 1
-        explicit_hit = False if front_door_status and front_door_status != "applied" else _explicit_application(lowered, aliases)
+        if skill_name == "token-optimizer" and front_door_status != "applied":
+            explicit_hit = False
+        else:
+            explicit_hit = False if front_door_status and front_door_status != "applied" else _explicit_application(lowered, aliases)
         if not passive and (runtime_hit or explicit_hit):
             runtime_hits += 1
         if not passive and (
@@ -3112,6 +3181,66 @@ def _observations(texts: List[str], aliases: Set[str], skill_name: str) -> Dict[
         "evidence": evidence,
         "active_evidence": active_evidence,
     }
+
+
+def _is_token_optimizer_runtime_source(payload_type: str, role: str = "", lowered: str = "") -> bool:
+    payload_type = str(payload_type)
+    role = str(role).lower()
+    lowered = str(lowered).lower()
+    if payload_type in {"function_call", "custom_tool_call"}:
+        return _is_token_optimizer_runtime_command(lowered)
+    if payload_type in {"function_call_output", "custom_tool_call_output"}:
+        return _looks_like_token_optimizer_runtime_output(lowered)
+    if payload_type == "thread_goal_updated":
+        return True
+    if payload_type in {"message", "agent_message"} and role in {"assistant", "agent"}:
+        return False
+    return False
+
+
+def _is_token_optimizer_runtime_command(lowered: str) -> bool:
+    read_only_markers = [
+        "rg ",
+        "select-string",
+        "get-content",
+        "findstr",
+        "type ",
+        "grep ",
+        "git grep",
+        "git diff",
+        "git show",
+    ]
+    if any(marker in lowered for marker in read_only_markers):
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "python -m src.skills.token_optimizer",
+            "src.skills.token_optimizer",
+            "summarize_command_output(",
+            "optimize_context_content(",
+            "summarize_agent_transcript(",
+            "compare_token_usage(",
+            "aggregate_token_usage_stats(",
+            "optimize_workflow_task_results(",
+        ]
+    )
+
+
+def _looks_like_token_optimizer_runtime_output(lowered: str) -> bool:
+    if "{" not in lowered or "}" not in lowered:
+        return False
+    if not any(marker in lowered for marker in ["estimated_tokens_saved", "token_savings_ratio", "token_usage"]):
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "runtime_token_optimization",
+            "metadata.token_optimizer",
+            "token_optimizer",
+            "token_usage",
+        ]
+    )
 
 
 def _front_door_skill_status(text: str, skill_name: str) -> str:
@@ -3385,12 +3514,32 @@ def _looks_like_read_only_command(lowered: str) -> bool:
 
 
 def _looks_like_front_door_runtime_output(lowered: str) -> bool:
+    if "{" not in lowered or "}" not in lowered:
+        return False
     return (
-        "front_door_status" in lowered
-        and "runtime_applied_skills" in lowered
-        and "selected_not_executed_skills" in lowered
-        and ("skill_status_summary" in lowered or "immediate_next_skills" in lowered)
+        ('"front_door_status"' in lowered or "'front_door_status'" in lowered)
+        and ('"runtime_applied_skills"' in lowered or "'runtime_applied_skills'" in lowered)
+        and ('"selected_not_executed_skills"' in lowered or "'selected_not_executed_skills'" in lowered)
+        and (
+            '"skill_status_summary"' in lowered
+            or "'skill_status_summary'" in lowered
+            or '"immediate_next_skills"' in lowered
+            or "'immediate_next_skills'" in lowered
+        )
     )
+
+
+def _has_front_door_success_or_blocked_evidence(text: str) -> bool:
+    data = _front_door_json(text)
+    if not data:
+        return False
+    status = str(data.get("front_door_status", "")).strip().lower()
+    runtime_applied = {str(item).strip() for item in data.get("runtime_applied_skills", []) or []}
+    if status in {"ok", "success", "passed"} and "always-on-front-door" in runtime_applied:
+        return True
+    if status == "blocked":
+        return _is_immediate_blocked_evidence(text.lower())
+    return False
 
 
 def _looks_like_skill_doc_output(lowered: str) -> bool:

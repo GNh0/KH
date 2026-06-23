@@ -385,7 +385,12 @@ def analyze_codex_session_jsonl(
                 if pattern.search(text):
                     skills.add(skill)
             if payload_type not in {"function_call", "custom_tool_call"}:
-                _merge_token_optimizer_evidence(token_optimizer_evidence, text)
+                _merge_token_optimizer_evidence(
+                    token_optimizer_evidence,
+                    text,
+                    payload_type=payload_type,
+                    role=message_role,
+                )
             if REVIEWER_PATTERN.search(text):
                 subagents["reviewer_mentions"] += 1
             if re.search(r"with fixes|blocking issues|findings|critical|high:", text, re.IGNORECASE):
@@ -427,7 +432,12 @@ def analyze_codex_session_jsonl(
             elif name in {"close_agent", "finish_agent"}:
                 subagents["closed"] += 1
             if command:
-                _merge_token_optimizer_evidence(token_optimizer_evidence, command)
+                _merge_token_optimizer_evidence(
+                    token_optimizer_evidence,
+                    command,
+                    payload_type=payload_type,
+                    role=message_role,
+                )
                 _update_git_state(git_state, command)
                 if _is_verification_command(command) and len(verification_commands) < max_verification_commands:
                     verification_commands.append(redact_sensitive_text(command))
@@ -609,7 +619,13 @@ def _token_optimizer_status(token_gate: Dict[str, Any], evidence: Dict[str, Any]
     return "considered_not_needed"
 
 
-def _merge_token_optimizer_evidence(evidence: Dict[str, Any], text: str) -> None:
+def _merge_token_optimizer_evidence(
+    evidence: Dict[str, Any],
+    text: str,
+    *,
+    payload_type: str = "",
+    role: str = "",
+) -> None:
     if not text:
         return
     if re.search(r"name:\s*token-optimizer|# Token Optimizer Skill", text, re.IGNORECASE):
@@ -620,18 +636,91 @@ def _merge_token_optimizer_evidence(evidence: Dict[str, Any], text: str) -> None
     if re.search(r"token_optimizer[/\\]SKILL\.md|token_optimizer\\SKILL\.md|token_optimizer/SKILL\.md", text, re.IGNORECASE):
         evidence["skill_doc_reads"] = int(evidence.get("skill_doc_reads", 0)) + 1
         return
-    if re.search(
-        r"src\.skills\.token_optimizer|python\s+-m\s+src\.skills\.token_optimizer|"
-        r"src\.orchestration\.runtime_token_optimizer|optimize_workflow_task_results|"
-        r"runtime_token_optimization|metadata\.token_optimizer|"
-        r"summarize_command_output|optimize_context_content|summarize_agent_transcript|"
-        r"aggregate_token_usage_stats|compare_token_usage",
-        text,
-        re.IGNORECASE,
-    ):
+    runtime_evidence = bool(
+        re.search(
+            r"src\.skills\.token_optimizer|python\s+-m\s+src\.skills\.token_optimizer|"
+            r"src\.orchestration\.runtime_token_optimizer|optimize_workflow_task_results|"
+            r"runtime_token_optimization|metadata\.token_optimizer|"
+            r"summarize_command_output|optimize_context_content|summarize_agent_transcript|"
+            r"aggregate_token_usage_stats|compare_token_usage",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    explicit_usage = bool(
+        re.search(
+            r"token_savings_ratio|estimated_tokens_saved|without_token_optimizer|with_token_optimizer",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    runtime_source = _is_token_optimizer_runtime_source(payload_type, role, text)
+    if runtime_evidence and runtime_source:
         evidence["runtime_calls"] = int(evidence.get("runtime_calls", 0)) + 1
-    if re.search(r"token_savings_ratio|estimated_tokens_saved|without_token_optimizer|with_token_optimizer", text, re.IGNORECASE):
+    elif runtime_evidence:
+        evidence["status_mentions"] = int(evidence.get("status_mentions", 0)) + 1
+    if explicit_usage and runtime_source:
         evidence["explicit_usage_records"] = int(evidence.get("explicit_usage_records", 0)) + 1
+
+
+def _is_token_optimizer_runtime_source(payload_type: str, role: str = "", text: str = "") -> bool:
+    payload_type = str(payload_type)
+    role = str(role).lower()
+    lowered = str(text).lower()
+    if payload_type in {"function_call", "custom_tool_call"}:
+        return _is_token_optimizer_runtime_command(lowered)
+    if payload_type in {"function_call_output", "custom_tool_call_output"}:
+        return _looks_like_token_optimizer_runtime_output(lowered)
+    if payload_type == "thread_goal_updated":
+        return True
+    if payload_type in {"message", "agent_message"} and role in {"assistant", "agent"}:
+        return False
+    return False
+
+
+def _is_token_optimizer_runtime_command(lowered: str) -> bool:
+    read_only_markers = [
+        "rg ",
+        "select-string",
+        "get-content",
+        "findstr",
+        "type ",
+        "grep ",
+        "git grep",
+        "git diff",
+        "git show",
+    ]
+    if any(marker in lowered for marker in read_only_markers):
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "python -m src.skills.token_optimizer",
+            "src.skills.token_optimizer",
+            "summarize_command_output(",
+            "optimize_context_content(",
+            "summarize_agent_transcript(",
+            "compare_token_usage(",
+            "aggregate_token_usage_stats(",
+            "optimize_workflow_task_results(",
+        ]
+    )
+
+
+def _looks_like_token_optimizer_runtime_output(lowered: str) -> bool:
+    if "{" not in lowered or "}" not in lowered:
+        return False
+    if not any(marker in lowered for marker in ["estimated_tokens_saved", "token_savings_ratio", "token_usage"]):
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "runtime_token_optimization",
+            "metadata.token_optimizer",
+            "token_optimizer",
+            "token_usage",
+        ]
+    )
 
 
 def _merge_resume_guard_evidence(resume_state: Dict[str, Any], text: str) -> None:

@@ -158,6 +158,7 @@ def build_kh_front_door(
     providers: Iterable[CapabilityProvider | Dict[str, Any]] | None = None,
     host_skill_paths: Sequence[str] | None = None,
     prefer_cache: bool = False,
+    request_context: Dict[str, Any] | None = None,
 ) -> KhFrontDoorResult:
     """Run KH intake before any source exploration or implementation work."""
     repo_root = _repo_root()
@@ -188,12 +189,15 @@ def build_kh_front_door(
     else:
         warnings.append("No packaged KH skills directory was found.")
 
-    context = {
-        "host": host,
-        "project": str(project_path),
-        "project_markers": _project_markers(project_path),
-        "kh_front_door": True,
-    }
+    context = _merge_front_door_context(
+        request_context,
+        {
+            "host": host,
+            "project": str(project_path),
+            "project_markers": _project_markers(project_path),
+            "kh_front_door": True,
+        },
+    )
     classification = classify_request(prompt, context).to_dict()
     provider_snapshot = list(providers) if providers is not None else _default_providers(host)
     plugin_route = compose_plugin_route(prompt, providers=provider_snapshot, context=context).to_dict()
@@ -357,6 +361,19 @@ def _project_markers(project_path: Path) -> List[str]:
         if (project_path / marker).exists():
             markers.append(marker)
     return markers
+
+
+def _merge_front_door_context(
+    request_context: Dict[str, Any] | None,
+    base_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    merged = dict(request_context or {})
+    base_markers = [str(marker) for marker in base_context.get("project_markers", [])]
+    supplied_markers = [str(marker) for marker in merged.get("project_markers", [])]
+    markers = _dedupe([*base_markers, *supplied_markers])
+    merged.update(base_context)
+    merged["project_markers"] = markers
+    return merged
 
 
 def _default_providers(host: str) -> List[Dict[str, Any]]:
@@ -927,12 +944,15 @@ def main() -> int:
         help="Host-provided KH skill path to validate. Repeat for multiple paths.",
     )
     parser.add_argument("--providers-json", default="", help="Optional JSON provider snapshot.")
+    parser.add_argument("--context-json", default="", help="Optional JSON request context from the host/session.")
+    parser.add_argument("--context-file", default="", help="Optional UTF-8 JSON file containing request context.")
     parser.add_argument("--prefer-cache", action="store_true", help="Prefer the latest installed kh-uaf cache over repo-local skills.")
     parser.add_argument("--summary", action="store_true", help="Print a compact front-door summary.")
     args = parser.parse_args()
     prompt = _resolve_prompt_arg(args.prompt, args.prompt_file, args.prompt_stdin)
 
     providers = json.loads(args.providers_json) if args.providers_json else None
+    request_context = _resolve_context_arg(args.context_json, args.context_file)
     result = build_kh_front_door(
         prompt=prompt,
         project=args.project or None,
@@ -940,6 +960,7 @@ def main() -> int:
         providers=providers,
         host_skill_paths=args.host_skill_path,
         prefer_cache=args.prefer_cache,
+        request_context=request_context,
     )
     payload = result.to_summary_dict() if args.summary else result.to_dict()
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
@@ -955,6 +976,16 @@ def _resolve_prompt_arg(prompt: str, prompt_file: str, prompt_stdin: bool) -> st
     if prompt_stdin:
         return sys.stdin.read()
     return prompt
+
+
+def _resolve_context_arg(context_json: str, context_file: str) -> Dict[str, Any] | None:
+    if context_json and context_file:
+        raise SystemExit("provide only one of --context-json or --context-file")
+    if context_file:
+        return json.loads(Path(context_file).read_text(encoding="utf-8"))
+    if context_json:
+        return json.loads(context_json)
+    return None
 
 
 if __name__ == "__main__":

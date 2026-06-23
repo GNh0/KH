@@ -191,6 +191,164 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         }
         self.assertIn("insert_select_single_column_per_line", codes)
 
+    def test_verifier_blocks_outer_query_internal_t_alias(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "     , A.ORDSEQ\n"
+            "FROM SA110T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+        formatted = (
+            "SELECT T.ORDNUM\n"
+            "     , T.ORDSEQ\n"
+            "FROM SA110T T\n"
+            "WHERE T.ORGDIV = @ORGDIV;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("outer_query_uses_derived_table_internal_alias", codes)
+
+    def test_verifier_blocks_ad_hoc_outer_aliases(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "     , B.CUSTNM\n"
+            "FROM SA100T A\n"
+            "        LEFT OUTER JOIN BA020T B\n"
+            "                     ON A.CUSTCD = B.CUSTCD;\n"
+        )
+        formatted = (
+            "SELECT TT.ORDNUM\n"
+            "     , YY.CUSTNM\n"
+            "FROM SA100T TT\n"
+            "        LEFT OUTER JOIN BA020T YY\n"
+            "                     ON TT.CUSTCD = YY.CUSTCD;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("ad_hoc_outer_alias", codes)
+
+    def test_verifier_blocks_derived_table_outer_internal_alias(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "     , B.CNT\n"
+            "FROM SA100T A\n"
+            "        LEFT OUTER JOIN (\n"
+            "            SELECT T.ORDNUM\n"
+            "                 , COUNT(*) AS CNT\n"
+            "            FROM SA110T T\n"
+            "            GROUP BY T.ORDNUM\n"
+            "        ) B\n"
+            "                     ON A.ORDNUM = B.ORDNUM;\n"
+        )
+        formatted = (
+            "SELECT A.ORDNUM\n"
+            "     , T.CNT\n"
+            "FROM SA100T A\n"
+            "        LEFT OUTER JOIN (\n"
+            "            SELECT T.ORDNUM\n"
+            "                 , COUNT(*) AS CNT\n"
+            "            FROM SA110T T\n"
+            "            GROUP BY T.ORDNUM\n"
+            "        ) T\n"
+            "                     ON A.ORDNUM = T.ORDNUM;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("outer_query_uses_derived_table_internal_alias", codes)
+
+    def test_verifier_allows_raw_table_qualifier_in_independent_statement(self):
+        sql = (
+            "SELECT A.ORDNUM\n"
+            "FROM SA110T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+            "\n"
+            "SELECT SA110T.ORDNUM\n"
+            "FROM SA110T\n"
+            "WHERE SA110T.ORGDIV = @ORGDIV;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_verifier_blocks_grouped_insert_target_with_vertical_select_values(self):
+        original = (
+            "INSERT INTO SA130T\n"
+            "(\n"
+            "      ORGDIV                  , ORDNUM                  , ORDSEQ                  , PORSEQ\n"
+            "    , PRNTITEMCD              , SPECNUM                 , CHLDITEMCD              , CHLDITEMNM\n"
+            ")\n"
+            "SELECT @ORGDIV                , A4.ORDNUM               , A4.ORDSEQ               , A4.PORSEQ\n"
+            "     , A4.PRNTITEMCD          , A4.SPECNUM              , A4.CHLDITEMCD           , A4.CHLDITEMNM\n"
+            "FROM SA130T A4;\n"
+        )
+        formatted = (
+            "INSERT INTO SA130T\n"
+            "(\n"
+            "      ORGDIV                  , ORDNUM                  , ORDSEQ                  , PORSEQ\n"
+            "    , PRNTITEMCD              , SPECNUM                 , CHLDITEMCD              , CHLDITEMNM\n"
+            ")\n"
+            "SELECT @ORGDIV\n"
+            "     , A4.ORDNUM\n"
+            "     , A4.ORDSEQ\n"
+            "     , A4.PORSEQ\n"
+            "     , A4.PRNTITEMCD\n"
+            "     , A4.SPECNUM\n"
+            "     , A4.CHLDITEMCD\n"
+            "     , A4.CHLDITEMNM\n"
+            "FROM SA130T A4;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("insert_select_value_list_verticalized", codes)
+
+    def test_verifier_blocks_korean_comment_mojibake_damage(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "     , A.SIZSEQ /* \ub3c4\uba74\ud655\uc815\uc720\ubb34 */\n"
+            "FROM SA110T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+        formatted = (
+            "SELECT A.ORDNUM\n"
+            "     , A.SIZSEQ /* ???? */\n"
+            "FROM SA110T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        preservation_codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["preservation_issues"]
+        }
+        self.assertIn("korean_text_damaged", preservation_codes)
+
     def test_verifier_allows_wide_insert_select_grouped_layout(self):
         grouped = (
             "INSERT INTO SA130T\n"

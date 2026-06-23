@@ -219,6 +219,17 @@ def resolve_style_contract_source(
 
 def _check_preservation(original: str, formatted: str) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
+    korean_damage = _korean_text_damage_issue(original, formatted)
+    if korean_damage:
+        issues.append(
+            SqlFormattingIssue(
+                code="korean_text_damaged",
+                severity="error",
+                message="Korean text from the original SQL appears to be damaged or replaced.",
+                evidence=korean_damage,
+            )
+        )
+
     original_literals = _extract_string_literals(original)
     formatted_literals = _extract_string_literals(formatted)
     if re.search(r"\bDBO\.F_BA011T_FIND_SUBNM\s*\(", original, flags=re.IGNORECASE):
@@ -300,6 +311,7 @@ def _check_style(original: str, formatted: str, *, cte_temp_table_reason: str | 
             )
         )
 
+    issues.extend(_check_alias_rules(formatted))
     issues.extend(_check_procedure_parameter_layout(formatted))
     issues.extend(_check_select_leading_commas(formatted))
     issues.extend(_check_insert_select_layout(formatted))
@@ -479,6 +491,189 @@ def _contains_korean(value: str) -> bool:
     return bool(re.search(r"[\uac00-\ud7a3]", value))
 
 
+def _korean_text_damage_issue(original: str, formatted: str) -> List[str]:
+    original_fragments = _extract_korean_fragments(original)
+    if not original_fragments:
+        return []
+    formatted_fragments = _extract_korean_fragments(formatted)
+    original_text = " ".join(original_fragments)
+    formatted_text = " ".join(formatted_fragments)
+    evidence = []
+    if original_fragments and not formatted_fragments and _has_replacement_damage_markers(formatted):
+        evidence.append("original contains Korean text but formatted output contains no Korean text and has replacement markers")
+    for fragment in original_fragments[:12]:
+        if fragment not in formatted_text:
+            evidence.append(f"missing_korean_fragment={fragment}")
+        if len(evidence) >= 6:
+            break
+    if _contains_korean(original_text) and "\ufffd" in formatted:
+        evidence.append("formatted output contains Unicode replacement character")
+    return evidence[:8]
+
+
+def _extract_korean_fragments(sql: str) -> List[str]:
+    return re.findall(r"[\uac00-\ud7a3]{2,}", sql)
+
+
+def _has_replacement_damage_markers(value: str) -> bool:
+    return "\ufffd" in value or bool(re.search(r"\?{2,}", value))
+
+
+def _check_alias_rules(sql: str) -> List[SqlFormattingIssue]:
+    issues: List[SqlFormattingIssue] = []
+    unprotected = _strip_literals_and_comments(sql)
+    outer_aliases = _extract_outer_table_aliases(unprotected)
+    invalid_outer = [
+        alias
+        for alias in outer_aliases
+        if _is_derived_internal_alias(alias) or not _is_allowed_outer_alias(alias)
+    ]
+    if invalid_outer:
+        code = (
+            "outer_query_uses_derived_table_internal_alias"
+            if any(_is_derived_internal_alias(alias) for alias in invalid_outer)
+            else "ad_hoc_outer_alias"
+        )
+        issues.append(
+            SqlFormattingIssue(
+                code=code,
+                severity="error",
+                message=(
+                    "Outer query table aliases must follow the host SQL formatting contract "
+                    "(A/A1, B/B1, C, D...); T/T1/TA1 are reserved for derived-table internals."
+                ),
+                evidence=invalid_outer[:8],
+            )
+        )
+    table_qualifiers = _raw_table_qualifiers_after_aliasing(unprotected)
+    if table_qualifiers:
+        issues.append(
+            SqlFormattingIssue(
+                code="raw_table_qualifier_after_aliasing",
+                severity="error",
+                message="After a table has an alias, column references should use the alias rather than the raw table name.",
+                evidence=table_qualifiers[:8],
+            )
+        )
+    return issues
+
+
+def _extract_outer_table_aliases(unprotected_sql: str) -> List[str]:
+    aliases: List[str] = []
+    depth = 0
+    pending_derived_table = False
+    for line in unprotected_sql.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        starts_derived = bool(
+            re.match(
+                r"^(?:FROM|(?:LEFT\s+OUTER|RIGHT\s+OUTER|FULL\s+OUTER|INNER|CROSS)?\s*JOIN)\s*\(",
+                stripped,
+                flags=re.IGNORECASE,
+            )
+        )
+        if depth <= 0 and starts_derived:
+            pending_derived_table = True
+
+        depth += stripped.count("(") - stripped.count(")")
+        if pending_derived_table:
+            if depth <= 0:
+                alias = _derived_table_alias_from_line(stripped)
+                if alias:
+                    aliases.append(alias)
+                pending_derived_table = False
+            continue
+
+        if depth <= 0:
+            match = re.match(
+                r"^(?:FROM|(?:LEFT\s+OUTER|RIGHT\s+OUTER|FULL\s+OUTER|INNER|CROSS)?\s*JOIN)\s+"
+                r"(?:\[?DBO\]?\.)?\[?[A-Z_][A-Z0-9_@$#]*\]?\s+(?:AS\s+)?([A-Z][A-Z0-9_]*)\b",
+                stripped,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                aliases.append(match.group(1).upper())
+    return aliases
+
+
+def _derived_table_alias_from_line(line: str) -> str:
+    close_index = line.rfind(")")
+    if close_index < 0:
+        return ""
+    tail = line[close_index + 1 :].strip()
+    match = re.match(r"(?:AS\s+)?([A-Z][A-Z0-9_]*)\b", tail, flags=re.IGNORECASE)
+    return match.group(1).upper() if match else ""
+
+
+def _is_derived_internal_alias(alias: str) -> bool:
+    return bool(re.fullmatch(r"T\d*|T[A-Z]\d+", alias.upper()))
+
+
+def _is_allowed_outer_alias(alias: str) -> bool:
+    upper = alias.upper()
+    return bool(re.fullmatch(r"[A-SU-Z]\d*", upper))
+
+
+def _raw_table_qualifiers_after_aliasing(unprotected_sql: str) -> List[str]:
+    evidence = []
+    for statement in _split_top_level_semicolons(unprotected_sql):
+        table_names = []
+        for match in re.finditer(
+            r"\b(?:FROM|JOIN)[ \t]+(?:\[?DBO\]?\.)?\[?([A-Z_][A-Z0-9_@$#]*)\]?[ \t]+(?:AS[ \t]+)?([A-Z][A-Z0-9_]*)\b",
+            statement,
+            flags=re.IGNORECASE,
+        ):
+            table, alias = match.group(1).upper(), match.group(2).upper()
+            if table != alias and not _is_sql_clause_keyword(alias):
+                table_names.append(table)
+        for table in sorted(set(table_names)):
+            if re.search(rf"\b{re.escape(table)}\s*\.", statement, flags=re.IGNORECASE):
+                evidence.append(f"{table}.")
+    return evidence
+
+
+def _is_sql_clause_keyword(token: str) -> bool:
+    return token.upper() in {
+        "WHERE",
+        "JOIN",
+        "LEFT",
+        "RIGHT",
+        "FULL",
+        "INNER",
+        "CROSS",
+        "ON",
+        "GROUP",
+        "ORDER",
+        "HAVING",
+        "UNION",
+        "EXCEPT",
+        "INTERSECT",
+    }
+
+
+def _split_top_level_semicolons(sql: str) -> List[str]:
+    statements: List[str] = []
+    current: List[str] = []
+    depth = 0
+    for char in sql:
+        if char == "(":
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+        if char == ";" and depth == 0:
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            continue
+        current.append(char)
+    tail = "".join(current).strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
 def _lowercase_sql_tokens(unprotected_sql: str) -> List[str]:
     tokens = []
     for match in re.finditer(r"(?<![A-Za-z0-9_@#])(@?[A-Za-z_][A-Za-z0-9_@$#]*)(?![A-Za-z0-9_])", unprotected_sql):
@@ -616,6 +811,36 @@ def _check_insert_select_layout(sql: str) -> List[SqlFormattingIssue]:
                         "for that mapping instead of making the entire insert one target column per line."
                     ),
                     evidence=single_column_lines[:6],
+                )
+            )
+    issues.extend(_check_insert_select_value_layout(sql))
+    return issues
+
+
+def _check_insert_select_value_layout(sql: str) -> List[SqlFormattingIssue]:
+    issues: List[SqlFormattingIssue] = []
+    for statement in _extract_insert_select_statements(sql):
+        target_block = statement["target_block"]
+        select_block = statement["select_block"]
+        target_lines = _meaningful_insert_lines(target_block)
+        if _count_insert_target_columns(target_block) < 8:
+            continue
+        if _target_columns_are_vertical(target_lines):
+            continue
+        select_value_lines = _meaningful_select_value_lines(select_block)
+        if len(select_value_lines) < 8:
+            continue
+        single_value_lines = [line for line in select_value_lines if _looks_like_single_select_value_line(line)]
+        if len(single_value_lines) >= max(8, int(len(select_value_lines) * 0.8)):
+            issues.append(
+                SqlFormattingIssue(
+                    code="insert_select_value_list_verticalized",
+                    severity="error",
+                    message=(
+                        "Wide INSERT INTO ... SELECT mappings should keep target columns and SELECT values "
+                        "in comparable grouped horizontal rows unless an individual long expression needs wrapping."
+                    ),
+                    evidence=single_value_lines[:6],
                 )
             )
     return issues
@@ -762,6 +987,56 @@ def _extract_insert_column_blocks(sql: str) -> List[str]:
     return blocks
 
 
+def _extract_insert_select_statements(sql: str) -> List[Dict[str, str]]:
+    statements: List[Dict[str, str]] = []
+    for match in re.finditer(r"\bINSERT\s+INTO\b", sql, flags=re.IGNORECASE):
+        open_index = sql.find("(", match.end())
+        if open_index < 0:
+            continue
+        close_index = _find_matching_parenthesis(sql, open_index)
+        if close_index < 0:
+            continue
+        select_match = re.search(r"\bSELECT\b", sql[close_index + 1 :], flags=re.IGNORECASE)
+        if not select_match:
+            continue
+        select_start = close_index + 1 + select_match.start()
+        from_index = _find_top_level_keyword(sql, select_start, "FROM")
+        if from_index < 0:
+            continue
+        statements.append(
+            {
+                "target_block": sql[open_index + 1 : close_index],
+                "select_block": sql[select_start:from_index],
+            }
+        )
+    return statements
+
+
+def _find_top_level_keyword(sql: str, start: int, keyword: str) -> int:
+    depth = 0
+    in_string = False
+    keyword_re = re.compile(rf"\b{re.escape(keyword)}\b", flags=re.IGNORECASE)
+    index = start
+    while index < len(sql):
+        char = sql[index]
+        if char == "'":
+            if in_string and index + 1 < len(sql) and sql[index + 1] == "'":
+                index += 2
+                continue
+            in_string = not in_string
+        elif not in_string:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth = max(0, depth - 1)
+            elif depth == 0:
+                match = keyword_re.match(sql, index)
+                if match:
+                    return index
+        index += 1
+    return -1
+
+
 def _find_matching_parenthesis(sql: str, open_index: int) -> int:
     depth = 0
     index = open_index
@@ -796,6 +1071,57 @@ def _meaningful_insert_lines(block: str) -> List[str]:
     return lines
 
 
+def _count_insert_target_columns(block: str) -> int:
+    return len(_split_top_level_commas(block))
+
+
+def _split_top_level_commas(value: str) -> List[str]:
+    items: List[str] = []
+    depth = 0
+    in_string = False
+    start = 0
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == "'":
+            if in_string and index + 1 < len(value) and value[index + 1] == "'":
+                index += 2
+                continue
+            in_string = not in_string
+        elif not in_string:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth = max(0, depth - 1)
+            elif char == "," and depth == 0:
+                item = value[start:index].strip()
+                if item:
+                    items.append(item)
+                start = index + 1
+        index += 1
+    tail = value[start:].strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
+def _meaningful_select_value_lines(block: str) -> List[str]:
+    lines = []
+    for line in block.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.upper() == "SELECT":
+            continue
+        if stripped.upper().startswith("SELECT "):
+            stripped = stripped[7:].strip()
+        lines.append(stripped.rstrip(","))
+    return lines
+
+
+def _target_columns_are_vertical(lines: Sequence[str]) -> bool:
+    single_column_lines = [line for line in lines if _looks_like_single_insert_column_line(line)]
+    return len(single_column_lines) >= max(8, int(len(lines) * 0.8))
+
+
 def _looks_like_single_insert_column_line(line: str) -> bool:
     stripped = line.strip()
     if stripped.startswith("--"):
@@ -804,6 +1130,26 @@ def _looks_like_single_insert_column_line(line: str) -> bool:
         stripped = stripped[1:].strip()
     stripped = re.sub(r"/\*.*?\*/", "", stripped).strip()
     return bool(re.fullmatch(r"(?:\[[A-Z_][A-Z0-9_@$#]*\]|[A-Z_][A-Z0-9_@$#]*)(?:\s+AS\s+\w+)?", stripped, flags=re.IGNORECASE))
+
+
+def _looks_like_single_select_value_line(line: str) -> bool:
+    stripped = line.strip()
+    if stripped.startswith("--"):
+        return False
+    if stripped.startswith(","):
+        stripped = stripped[1:].strip()
+    if not stripped:
+        return False
+    upper = stripped.upper()
+    if stripped.startswith(("+", "-", "*", "/", ")")):
+        return False
+    if re.match(r"^(PARTITION\s+BY|ORDER\s+BY|WHEN|ELSE|END)\b", upper):
+        return False
+    if "," in stripped:
+        return False
+    if re.search(r"\b(OVER|CASE)\b", stripped, flags=re.IGNORECASE) and not re.search(r"\bEND\b", stripped, flags=re.IGNORECASE):
+        return False
+    return bool(re.search(r"^(@|:|'|[A-Z_][A-Z0-9_@$#]*\.|[A-Z_][A-Z0-9_@$#]*\()", stripped, flags=re.IGNORECASE))
 
 
 def _check_join_indentation(sql: str) -> List[SqlFormattingIssue]:

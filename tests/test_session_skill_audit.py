@@ -78,8 +78,8 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         rows = {row["name"]: row for row in audit.skills}
 
-        self.assertEqual(audit.total_skills, 40)
-        self.assertEqual(audit.coverage["total_skills"], 40)
+        self.assertEqual(audit.total_skills, 41)
+        self.assertEqual(audit.coverage["total_skills"], 41)
         self.assertTrue(rows["token-optimizer"]["required"])
         self.assertTrue(rows["goal-state-harness"]["required"])
         self.assertIn("token-optimizer", audit.coverage["required_missing_skill_names"])
@@ -510,15 +510,32 @@ class SessionSkillAuditTests(unittest.TestCase):
                 {
                     "type": "response_item",
                     "payload": {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": (
-                            "workflow_usability_auto applied apply_workflow_usability_runtime, "
-                            "src.orchestration.runtime_token_optimizer.optimize_workflow_task_results "
-                            "produced runtime_token_optimization with estimated_tokens_saved=2000, "
-                            "src.orchestration.runtime_memory resolved memory_scope=project/chat "
-                            "and recorded memory_context plus memory_candidates_recorded, "
-                            "GoalState goal_ledger evidence_required complete, progress.json written."
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "runtime_token_optimization": {
+                                    "status": "used",
+                                    "source": "src.orchestration.runtime_token_optimizer.optimize_workflow_task_results",
+                                    "estimated_tokens_saved": 2000,
+                                },
+                                "workflow_usability_auto": {
+                                    "status": "applied",
+                                    "handler": "apply_workflow_usability_runtime",
+                                },
+                                "memory": {
+                                    "source": "src.orchestration.runtime_memory",
+                                    "memory_scope": "project/chat",
+                                    "memory_context": True,
+                                    "memory_candidates_recorded": True,
+                                },
+                                "goal": {
+                                    "source": "GoalState",
+                                    "goal_ledger": "complete",
+                                    "evidence_required": "complete",
+                                    "progress": "progress.json",
+                                },
+                            },
+                            ensure_ascii=False,
                         ),
                     },
                 },
@@ -535,6 +552,41 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertEqual(rows["workflow-usability-harness"]["status"], "applied")
         self.assertEqual(rows["goal-state-harness"]["status"], "applied")
         self.assertNotIn("token-optimizer", audit.coverage["required_missing_skill_names"])
+
+    def test_assistant_only_token_optimizer_claim_is_not_runtime_application(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 80_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "I used src.orchestration.runtime_token_optimizer.optimize_workflow_task_results "
+                            "and produced runtime_token_optimization with estimated_tokens_saved=2000."
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertNotEqual(rows["token-optimizer"]["status"], "applied")
+        self.assertEqual(rows["token-optimizer"]["acceptance"]["status"], "missing_application")
+        self.assertIn("token-optimizer", audit.coverage["required_missing_skill_names"])
 
     def test_passive_skill_docs_do_not_count_as_runtime_application(self):
         path = self.write_session(
@@ -1576,6 +1628,120 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_parallel_strategy_parallel_without_fan_in_evidence_is_flagged(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": [
+                "host-agent-orchestration",
+                "subagent-review-pipeline",
+                "parallel-orchestration-harness",
+                "role-execution-audit-harness",
+            ],
+            "skill_status_summary": {
+                "host-agent-orchestration": {"status": "skipped_with_rationale"},
+                "subagent-review-pipeline": {"status": "skipped_with_rationale"},
+                "parallel-orchestration-harness": {"status": "skipped_with_rationale"},
+                "role-execution-audit-harness": {"status": "skipped_with_rationale"},
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "host_runtime=codex-main; nested_subagents_available=true; "
+                            "subagent_strategy=dispatch; parallel_strategy_decision=parallel; "
+                            "role_execution_audit.status=passed."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: index.html\n+<div></div>\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "parallel-orchestration-harness"
+                and issue["status"] == "missing_parallel_strategy"
+                for issue in audit.issues
+            )
+        )
+
+    def test_parallel_strategy_parallel_with_only_workflow_dispatch_result_is_flagged(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": ["always-on-front-door", "automatic-intake-harness"],
+            "selected_not_executed_skills": ["parallel-orchestration-harness"],
+            "skill_status_summary": {
+                "parallel-orchestration-harness": {"status": "skipped_with_rationale"}
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "parallel_strategy_decision=parallel; WorkflowDispatchResult status=success."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: index.html\n+<div></div>\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "parallel-orchestration-harness"
+                and issue["status"] == "missing_parallel_strategy"
+                for issue in audit.issues
+            )
+        )
+
     def test_subagent_single_controller_rationale_satisfies_strategy_audit(self):
         path = self.write_subagent_session(
             [
@@ -1970,6 +2136,25 @@ class SessionSkillAuditTests(unittest.TestCase):
                 {
                     "type": "response_item",
                     "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "front_door_status": "ok",
+                                "runtime_applied_skills": ["always-on-front-door"],
+                                "selected_not_executed_skills": [],
+                                "skill_status_summary": {
+                                    "always-on-front-door": {
+                                        "status": "applied",
+                                        "application_mode": "runtime",
+                                    }
+                                },
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
                         "type": "function_call",
                         "name": "shell_command",
                         "arguments": "Get-ChildItem -Recurse -Filter *.html",
@@ -2019,18 +2204,6 @@ class SessionSkillAuditTests(unittest.TestCase):
                             "---\n"
                             "# Always On Front Door\n"
                             "Required outputs include front_door_status and runtime_applied_skills."
-                        ),
-                    },
-                },
-                {
-                    "type": "response_item",
-                    "payload": {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": (
-                            "plugin_composition selected KH as controller, "
-                            "request_complexity classification=medium, "
-                            "skill_application bundle recorded considered_not_needed entries."
                         ),
                     },
                 },
@@ -2127,12 +2300,19 @@ class SessionSkillAuditTests(unittest.TestCase):
                 {
                     "type": "response_item",
                     "payload": {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": (
-                            "plugin_composition selected KH as controller, "
-                            "request_complexity classification=medium, "
-                            "skill_application bundle recorded considered_not_needed entries."
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "front_door_status": "ok",
+                                "runtime_applied_skills": ["always-on-front-door"],
+                                "selected_not_executed_skills": [],
+                                "skill_status_summary": {
+                                    "always-on-front-door": {
+                                        "status": "applied",
+                                        "application_mode": "runtime",
+                                    }
+                                },
+                            }
                         ),
                     },
                 },
@@ -2246,6 +2426,65 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertTrue(rows["qa-gate-harness"]["required"])
 
     def test_kh_front_door_command_counts_as_front_door_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": ["always-on-front-door"],
+            "selected_not_executed_skills": [],
+            "skill_status_summary": {
+                "always-on-front-door": {"status": "applied", "application_mode": "runtime"}
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use the KH plugin for this source analysis.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "python -m src.orchestration.kh_front_door "
+                            "--prompt \"Use the KH plugin for this source analysis.\" --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.cs",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+        self.assertIn("runtime_applied_skills", audit.coverage)
+
+    def test_front_door_command_without_success_output_does_not_count_as_evidence(self):
         path = self.write_session(
             [
                 {
@@ -2280,6 +2519,61 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
+    def test_custom_tool_front_door_output_counts_as_front_door_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": ["always-on-front-door"],
+            "selected_not_executed_skills": [],
+            "skill_status_summary": {
+                "always-on-front-door": {"status": "applied", "application_mode": "runtime"}
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use the KH plugin for this source analysis.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "shell_command",
+                        "input": "python -m src.orchestration.kh_front_door --summary",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.cs",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
         self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
@@ -2287,9 +2581,62 @@ class SessionSkillAuditTests(unittest.TestCase):
                 for issue in audit.issues
             )
         )
-        self.assertIn("runtime_applied_skills", audit.coverage)
+
+    def test_front_door_error_output_does_not_count_as_front_door_evidence(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use the KH plugin for this source analysis.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "front_door_status": "error",
+                                "runtime_applied_skills": [],
+                                "selected_not_executed_skills": [],
+                                "skill_status_summary": {},
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.cs",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
 
     def test_skill_local_front_door_wrapper_counts_as_front_door_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": ["always-on-front-door"],
+            "selected_not_executed_skills": [],
+            "skill_status_summary": {
+                "always-on-front-door": {"status": "applied", "application_mode": "runtime"}
+            },
+        }
         path = self.write_session(
             [
                 {
@@ -2309,6 +2656,13 @@ class SessionSkillAuditTests(unittest.TestCase):
                             "python C:\\kh\\skills\\always_on_front_door\\scripts\\front_door.py "
                             "--prompt \"Build an operations support product in this folder.\" --summary"
                         ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
                     },
                 },
                 {

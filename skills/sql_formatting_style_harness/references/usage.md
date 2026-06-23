@@ -2,7 +2,11 @@
 
 Use this harness after SQL/T-SQL formatting has been produced by the host-local `sql-formatting` skill or by an agent claiming to follow that skill.
 
-## Inputs
+## When to use
+
+Use this verifier when a SQL/T-SQL formatting result must prove that it preserved business logic, followed the host-local SQL style contract, and did not introduce unapproved CTE, temporary-table, alias, layout, or scalar-function rewrites. It is a verifier harness, not the formatter itself.
+
+## Inputs to collect
 
 - Original SQL or stored procedure text.
 - Formatted SQL or stored procedure text.
@@ -37,7 +41,7 @@ The verifier checks the established host-local style: uppercase identifiers outs
 
 Use CTEs or `#` temporary tables only as exceptions: explicit user request, recursive logic, repeated multi-statement reuse, a large intermediate set that needs indexing/statistics, procedural staging that cannot be expressed cleanly inline, or measured performance evidence. If one is used, the formatter should state the reason; otherwise recommendations should stay in the direct join, derived table, aggregate subquery, and existing stored-procedure style.
 
-## Evidence
+## Evidence to produce
 
 Report:
 
@@ -52,6 +56,10 @@ Report:
 ## Failure handling
 
 If the host-local `sql-formatting` skill is unavailable, the verifier records the packaged fallback reference. That fallback is evidence for the verifier's checks only; it is not a replacement formatting standard.
+
+## Quality bar
+
+A passing result must preserve literals, Korean text, comments, predicates, JOIN conditions, calculations, and row-shape semantics; reject ad hoc outer aliases such as `T`, `TT`, or `YY`; keep wide `INSERT INTO ... SELECT` mappings horizontally grouped unless a single expression needs continuation; and block CTE or `#` temporary-table introductions unless the caller provides a concrete exception reason. Scalar-function-to-join rewrites are allowed only when the verifier can prove the lookup contract from host-local style guidance, source, or DB/MCP metadata.
 
 ## PowerBuilder source validation hook
 

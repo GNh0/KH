@@ -292,6 +292,78 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("memory_state_request", result.reasons)
         self.assertIn("parallel_orchestration_request", result.reasons)
 
+    def test_kh_audit_repair_followup_does_not_route_light(self):
+        result = classify_request(
+            "\uc774\uc81c \uadf8\ub7fc \uadf8 \uae30\uc900\uc73c\ub85c \ub2e4\uc2dc \uc2f9\ub2e4 \ubcf4\uc644\ud558\uc790??",
+            {"project_markers": ["docs/kh"], "kh_active_directive": "active"},
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertIn("goal-state-harness", result.required_harnesses)
+        self.assertIn("contextual_audit_repair_request", result.reasons)
+
+    def test_kh_skill_alias_correction_does_not_route_light(self):
+        result = classify_request(
+            "\uc2a4\ud0ac \uc81c\ub300\ub85c \uc548\uc77d\uc744\ub798 \uc57c \ubcc4\uce6d \uc81c\ub300\ub85c \uc548\ud558\ub0d0??",
+            {"project_markers": ["docs/kh"], "kh_active_directive": "active"},
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertIn("contextual_audit_repair_request", result.reasons)
+
+    def test_kh_audit_repair_followup_uses_explicit_session_context_without_project_markers(self):
+        result = classify_request(
+            "\uc774\uc81c \uadf8\ub7fc \uadf8 \uae30\uc900\uc73c\ub85c \ub2e4\uc2dc \uc2f9\ub2e4 \ubcf4\uc644\ud558\uc790??",
+            {
+                "domain": "software",
+                "has_active_artifact": True,
+                "requires_resume": True,
+                "prior_context_kind": "session_audit",
+            },
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertIn("contextual_audit_repair_request", result.reasons)
+
+    def test_contextual_repair_reference_without_context_does_not_escalate_to_heavy(self):
+        result = classify_request("\uadf8 \uae30\uc900\uc73c\ub85c \ub2e4\uc2dc \uc124\uba85\ud574\uc918?")
+
+        self.assertNotEqual(result.complexity, "heavy")
+        self.assertNotEqual(result.recommended_execution, "role_dag")
+
+    def test_kh_context_does_not_swallow_ordinary_security_fix(self):
+        result = classify_request(
+            "Fix the SQL injection vulnerability and add regression tests.",
+            {"project_markers": ["docs/kh"], "domain": "software", "has_active_artifact": True},
+        )
+
+        self.assertEqual(result.domain, "security")
+        self.assertIn("security_review", result.evidence_required)
+        self.assertNotIn("contextual_audit_repair_request", result.reasons)
+
+    def test_kh_context_does_not_swallow_vague_explanation_request(self):
+        result = classify_request(
+            "\uc2a4\ud0ac \uc81c\ub300\ub85c \uc548\uc77d\uc740 \uc774\uc720 \uc124\uba85\ud574\uc918",
+            {"project_markers": ["docs/kh"], "kh_active_directive": "active"},
+        )
+
+        self.assertNotIn("contextual_audit_repair_request", result.reasons)
+
+    def test_kh_context_does_not_swallow_non_kh_routing_bug(self):
+        result = classify_request(
+            "Fix the React routing bug in this app.",
+            {"project_markers": ["docs/kh"], "kh_active_directive": "active"},
+        )
+
+        self.assertEqual(result.domain, "software")
+        self.assertNotIn("contextual_audit_repair_request", result.reasons)
+
     def test_specific_verified_html_tool_does_not_route_to_brainstorming(self):
         result = classify_request("Build a small HTML todo tool and verify it.")
 

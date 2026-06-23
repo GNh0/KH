@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -121,6 +123,116 @@ class AlwaysOnFrontDoorTests(unittest.TestCase):
         self.assertIn("brainstorming-harness", classification.required_harnesses)
         self.assertFalse(summary["execution_gate"]["can_execute"])
         self.assertIn("global_codex_MEMORY.md", summary["execution_gate"]["blocked_actions"])
+
+    def test_contextual_kh_audit_repair_followup_opens_large_work_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "docs" / "kh").mkdir(parents=True)
+            request = (
+                "\uc774\uc81c \uadf8\ub7fc \uadf8 \uae30\uc900\uc73c\ub85c "
+                "\ub2e4\uc2dc \uc2f9\ub2e4 \ubcf4\uc644\ud558\uc790??"
+            )
+
+            result = build_kh_front_door(request, project=project, host="codex")
+
+        summary = result.to_summary_dict()
+        self.assertEqual(summary["classification"]["complexity"], "heavy")
+        self.assertEqual(summary["classification"]["recommended_execution"], "role_dag")
+        self.assertEqual(summary["plugin_route"]["controller"], "kh")
+        self.assertEqual(summary["execution_gate"]["status"], "blocked_until_large_work_preflight")
+        self.assertIn("goal-state-harness", summary["immediate_next_skills"])
+        self.assertIn("workflow-usability-harness", summary["immediate_next_skills"])
+
+    def test_contextual_kh_audit_repair_followup_uses_request_context_without_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = (
+                "\uc774\uc81c \uadf8\ub7fc \uadf8 \uae30\uc900\uc73c\ub85c "
+                "\ub2e4\uc2dc \uc2f9\ub2e4 \ubcf4\uc644\ud558\uc790??"
+            )
+            result = build_kh_front_door(
+                request,
+                project=tmp,
+                host="codex",
+                request_context={
+                    "domain": "software",
+                    "has_active_artifact": True,
+                    "requires_resume": True,
+                    "prior_context_kind": "session_audit",
+                },
+            )
+
+        summary = result.to_summary_dict()
+        self.assertEqual(summary["classification"]["complexity"], "heavy")
+        self.assertEqual(summary["execution_gate"]["status"], "blocked_until_large_work_preflight")
+
+    def test_front_door_cli_accepts_context_json_for_session_audit_followup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_file = Path(tmp) / "prompt.txt"
+            prompt_file.write_text(
+                "\uc774\uc81c \uadf8\ub7fc \uadf8 \uae30\uc900\uc73c\ub85c "
+                "\ub2e4\uc2dc \uc2f9\ub2e4 \ubcf4\uc644\ud558\uc790??",
+                encoding="utf-8",
+            )
+            context = json.dumps(
+                {
+                    "domain": "software",
+                    "has_active_artifact": True,
+                    "requires_resume": True,
+                    "prior_context_kind": "session_audit",
+                }
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.orchestration.kh_front_door",
+                    "--prompt-file",
+                    str(prompt_file),
+                    "--project",
+                    tmp,
+                    "--host",
+                    "codex",
+                    "--context-json",
+                    context,
+                    "--summary",
+                ],
+                capture_output=True,
+                encoding="utf-8",
+                text=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["classification"]["complexity"], "heavy")
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_large_work_preflight")
+
+    def test_kh_project_marker_does_not_turn_security_fix_into_audit_repair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            (project / "docs" / "kh").mkdir(parents=True)
+            result = build_kh_front_door(
+                "Fix the SQL injection vulnerability and add regression tests.",
+                project=project,
+                host="codex",
+            )
+
+        classification = result.classification
+        self.assertEqual(classification["domain"], "security")
+        self.assertIn("security_review", classification["evidence_required"])
+        self.assertNotIn("contextual_audit_repair_request", classification["reasons"])
+
+    def test_kh_active_directive_does_not_turn_react_routing_bug_into_audit_repair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = build_kh_front_door(
+                "Fix the React routing bug in this app.",
+                project=tmp,
+                host="codex",
+                request_context={"kh_active_directive": "active"},
+            )
+
+        classification = result.classification
+        self.assertEqual(classification["domain"], "software")
+        self.assertNotIn("contextual_audit_repair_request", classification["reasons"])
 
     def test_session_audit_flags_front_door_miss_as_always_on_failure(self):
         path = self.write_session(

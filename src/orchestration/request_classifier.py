@@ -52,6 +52,102 @@ LARGE_WORK_BUNDLE_EVIDENCE = [
     "compound_handoff",
 ]
 
+KH_PROJECT_MARKERS = {".kh", "docs/kh"}
+CONTEXTUAL_REPAIR_REFERENCE_TERMS = {
+    "that standard",
+    "that basis",
+    "same standard",
+    "based on that",
+    "based on the audit",
+    "from the audit",
+    "session audit",
+    "those issues",
+    "\uadf8 \uae30\uc900",
+    "\uadf8\uae30\uc900",
+    "\uadf8 \ub0b4\uc6a9",
+    "\uc544\uae4c \uae30\uc900",
+    "\uc138\uc158 \uac10\uc0ac",
+    "\ub300\ud654 \uae30\ub85d",
+    "\ubb38\uc81c\uc810",
+}
+CONTEXTUAL_REPAIR_ACTION_TERMS = {
+    "harden",
+    "fix",
+    "repair",
+    "patch",
+    "improve",
+    "tighten",
+    "regression",
+    "cover everything",
+    "\ubcf4\uc644",
+    "\uc218\uc815",
+    "\uace0\uccd0",
+    "\uac1c\uc120",
+    "\ucc98\ub9ac",
+}
+CONTEXTUAL_REPAIR_FAILURE_TERMS = {
+    "\uc81c\ub300\ub85c \uc548",
+    "\uc81c\ub300\ub85c \ubabb",
+    "\uc548\uc77d",
+    "\uc548 \uc77d",
+    "\uc548\ud558",
+    "\uc548 \ud558",
+    "\ubabb",
+}
+CONTEXTUAL_REPAIR_SUBJECT_TERMS = {
+    "kh",
+    "uaf",
+    "skill",
+    "skills",
+    "harness",
+    "harnesses",
+    "front-door",
+    "front door",
+    "routing",
+    "session",
+    "audit",
+    "sql",
+    "alias",
+    "\uc2a4\ud0ac",
+    "\ud558\ub124\uc2a4",
+    "\ud504\ub7f0\ud2b8\ub3c4\uc5b4",
+    "\ub77c\uc6b0\ud305",
+    "\uc138\uc158",
+    "\uac10\uc0ac",
+    "\uc624\ucf00\uc2a4\ud2b8\ub808\uc774\uc158",
+    "\ubcd1\ub82c",
+    "\ubcc4\uce6d",
+}
+STRICT_CONTEXTUAL_REPAIR_SUBJECT_TERMS = {
+    "kh",
+    "uaf",
+    "skill",
+    "skills",
+    "harness",
+    "harnesses",
+    "front-door",
+    "front door",
+    "session audit",
+    "skill audit",
+    "postmortem",
+    "orchestration",
+    "parallel",
+    "\uc2a4\ud0ac",
+    "\ud558\ub124\uc2a4",
+    "\ud504\ub7f0\ud2b8\ub3c4\uc5b4",
+    "\uc138\uc158 \uac10\uc0ac",
+    "\uc624\ucf00\uc2a4\ud2b8\ub808\uc774\uc158",
+    "\ubcd1\ub82c",
+}
+EXPLANATION_ONLY_TERMS = {
+    "why",
+    "explain",
+    "explanation",
+    "reason",
+    "\uc774\uc720",
+    "\uc124\uba85",
+}
+
 MEMORY_STATE_REQUEST_TERMS = {
     "persistent memory",
     "durable memory",
@@ -1846,6 +1942,14 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_high_risk(normalized, domain, context):
         return _high_risk_classification(domain, cross_cutting, evidence_required, reasons)
 
+    if _is_contextual_audit_repair_request(normalized, context):
+        return _heavy_classification(
+            _contextual_audit_repair_domain(domain, context),
+            cross_cutting,
+            evidence_required,
+            [*reasons, "contextual_audit_repair_request"],
+        )
+
     if _is_complex_extraction_deliverable_request(normalized):
         return _complex_extraction_deliverable_classification(
             domain,
@@ -3189,6 +3293,68 @@ def _is_memory_state_request(normalized: str) -> bool:
     ):
         return True
     return False
+
+
+def _is_contextual_audit_repair_request(normalized: str, context: dict) -> bool:
+    has_repair_action = _contains_any(normalized, CONTEXTUAL_REPAIR_ACTION_TERMS)
+    has_failure_signal = _contains_any(normalized, CONTEXTUAL_REPAIR_FAILURE_TERMS)
+    if not has_repair_action:
+        if not has_failure_signal:
+            return False
+    if has_failure_signal and not has_repair_action and _is_explanation_only_request(normalized):
+        return False
+    has_subject = _contains_any(normalized, STRICT_CONTEXTUAL_REPAIR_SUBJECT_TERMS)
+    has_reference = _contains_any(normalized, CONTEXTUAL_REPAIR_REFERENCE_TERMS)
+    has_context = _has_audit_repair_context(context)
+    if has_subject and (has_reference or has_context):
+        return True
+    return has_repair_action and has_reference and has_context
+
+
+def _contextual_audit_repair_domain(domain: str, context: dict) -> str:
+    if _has_audit_repair_context(context):
+        return "software"
+    return domain
+
+
+def _has_audit_repair_context(context: dict) -> bool:
+    if _is_kh_project_context(context) or context.get("kh_active_directive") == "active":
+        return True
+    prior_kind = str(context.get("prior_context_kind") or context.get("active_context_kind") or "").strip().lower()
+    if prior_kind in {"session_audit", "skill_audit", "kh_hardening", "postmortem", "session_postmortem"}:
+        return True
+    if context.get("session_audit") or context.get("skill_audit"):
+        return True
+    if context.get("requires_resume") and str(context.get("active_context_kind") or "").strip().lower() in {
+        "session_audit",
+        "skill_audit",
+        "kh_hardening",
+    }:
+        return True
+    return False
+
+
+def _is_explanation_only_request(normalized: str) -> bool:
+    return _contains_any(normalized, EXPLANATION_ONLY_TERMS) and not _contains_any(
+        normalized,
+        {
+            "fix",
+            "repair",
+            "patch",
+            "harden",
+            "improve",
+            "\ubcf4\uc644",
+            "\uc218\uc815",
+            "\uace0\uccd0",
+            "\uac1c\uc120",
+            "\ucc98\ub9ac",
+        },
+    )
+
+
+def _is_kh_project_context(context: dict) -> bool:
+    markers = {str(marker).strip().lower() for marker in context.get("project_markers", [])}
+    return bool(markers & KH_PROJECT_MARKERS)
 
 
 def _is_parallel_orchestration_request(normalized: str) -> bool:
