@@ -368,6 +368,31 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
 
         self.assertTrue(result.success, result.to_dict())
 
+    def test_verifier_blocks_join_conditions_not_deep_enough_inside_if_exists(self):
+        bad_block = (
+            "        IF EXISTS (\n"
+            "                    SELECT 1\n"
+            "                    FROM DEV000T A\n"
+            "                            INNER JOIN @TMP B\n"
+            "                                    ON A.ID = B.ID\n"
+            "                                    AND A.QCCODE = B.QCCODE\n"
+            "                    --WHERE ISNULL(B.GBN, '') <> 'DEL'\n"
+            "                  )\n"
+            "        BEGIN\n"
+            "            RAISERROR('이미 확인완료된 프로그램입니다.', 16, 1);\n"
+            "            RETURN;\n"
+            "        END\n"
+        )
+
+        result = verify_sql_formatting_style(bad_block, bad_block)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("join_condition_indentation", codes)
+
     def test_verifier_allows_grouped_insert_with_wrapped_long_expression(self):
         grouped = (
             "INSERT INTO SA130T\n"
@@ -922,6 +947,41 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         self.assertEqual(payload["plugin_route"]["controller"]["provider_id"], "sql-formatting")
         self.assertIn("sql-formatting-style-harness", payload["recommended_skills"])
         self.assertIn("sql-formatting-style-harness", payload["skill_statuses"])
+        self.assertTrue(
+            any("SQL PRE-OUTPUT GATE" in action for action in payload["required_next_actions"])
+        )
+
+    def test_front_door_adds_sql_pre_output_gate_for_generated_stored_procedure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "Begin Tran\n"
+                    "EXEC UP_SYS_SYSTEMCHECKLIST_SAVE @p_WorkType = 'LIST', @XML_DATA = '<ROOT />'\n"
+                    "Rollback\n"
+                    "SAVE procedure with IF EXISTS and RAISERROR.",
+                    project=Path(tmp),
+                    host="codex",
+                )
+
+        payload = result.to_dict()
+        self.assertEqual(payload["plugin_route"]["route"], "hybrid")
+        self.assertTrue(
+            any(role["provider_id"] == "sql-formatting" for role in payload["plugin_route"]["assistants"])
+        )
+        self.assertIn("sql-formatting-style-harness", payload["recommended_skills"])
+        self.assertTrue(
+            any("SQL PRE-OUTPUT GATE" in action for action in payload["required_next_actions"])
+        )
 
     def test_front_door_does_not_select_verifier_for_mention_only_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1155,11 +1155,15 @@ def _looks_like_single_select_value_line(line: str) -> bool:
 def _check_join_indentation(sql: str) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
     in_join = False
+    current_join_indent = -1
+    current_condition_indent = -1
     for line in sql.splitlines():
         stripped = line.lstrip(" ")
         if re.match(r"(LEFT\s+OUTER\s+JOIN|INNER\s+JOIN|JOIN)\b", stripped, flags=re.IGNORECASE):
             in_join = True
+            current_condition_indent = -1
             leading = len(line) - len(stripped)
+            current_join_indent = leading
             if leading % 4 != 0 or leading < 8:
                 issues.append(
                     SqlFormattingIssue(
@@ -1172,14 +1176,27 @@ def _check_join_indentation(sql: str) -> List[SqlFormattingIssue]:
             continue
         if in_join and re.match(r"(WHERE|GROUP BY|ORDER BY|HAVING|UNION|SELECT|FROM)\b", stripped, flags=re.IGNORECASE):
             in_join = False
+            current_join_indent = -1
+            current_condition_indent = -1
         if in_join and re.match(r"(ON|AND)\b", stripped, flags=re.IGNORECASE) and "=" in stripped:
             leading = len(line) - len(stripped)
-            if leading < 10:
+            if leading < 10 or (current_join_indent >= 0 and leading < current_join_indent + 13):
                 issues.append(
                     SqlFormattingIssue(
                         code="join_condition_indentation",
                         severity="error",
                         message="JOIN ON/AND conditions should be indented under the JOIN.",
+                        evidence=[line],
+                    )
+                )
+            if current_condition_indent < 0:
+                current_condition_indent = leading
+            elif leading != current_condition_indent:
+                issues.append(
+                    SqlFormattingIssue(
+                        code="join_condition_alignment",
+                        severity="error",
+                        message="JOIN ON/AND conditions for the same JOIN should start in the same column.",
                         evidence=[line],
                     )
                 )

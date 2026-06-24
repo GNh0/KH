@@ -112,11 +112,11 @@ SPECIALIST_TRIGGERS = {
 }
 
 SQL_STATEMENT_PATTERN = re.compile(
-    r"\b(?:select|insert\s+into|update|delete\s+from|merge|create\s+(?:or\s+alter\s+)?procedure)\b",
+    r"\b(?:select|insert\s+into|update|delete\s+from|merge|exec(?:ute)?|if\s+exists|raiserror|throw|openxml|begin\s+tran|rollback|create\s+(?:or\s+alter\s+)?procedure)\b",
     re.IGNORECASE,
 )
 SQL_CONTEXT_PATTERN = re.compile(
-    r"\b(?:from|where|join|set|values|group\s+by|order\s+by)\b",
+    r"\b(?:from|where|join|set|values|group\s+by|order\s+by|procedure|proc|exec(?:ute)?|raiserror|openxml|if\s+exists|저장\s*프로시저|프로시저)\b|@[a-z_][a-z0-9_]*",
     re.IGNORECASE,
 )
 SQL_OUTPUT_REQUEST_MARKERS = (
@@ -131,6 +131,14 @@ SQL_OUTPUT_REQUEST_MARKERS = (
     "rewrite",
     "write",
     "create",
+    "generate",
+    "produce",
+    "draft",
+    "query",
+    "procedure",
+    "stored procedure",
+    "proc",
+    "save",
     "build",
     "make",
     "add",
@@ -139,12 +147,25 @@ SQL_OUTPUT_REQUEST_MARKERS = (
     "\uc815\ub9ac",
     "\uc791\uc131",
     "\ub9cc\ub4e4",
+    "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800",
+    "\ud504\ub85c\uc2dc\uc800",
+    "\ucffc\ub9ac",
     "\ucd94\uac00",
     "\ubc14\uafd4",
     "\ub2ec\ub77c",
     "\uc870\ud68c\ub418\ub3c4\ub85d",
     "\uc815\ub82c",
     "\ub9de\ucdb0",
+    "indent",
+    "indentation",
+    "block",
+    "\ub4e4\uc5ec\uc4f0\uae30",
+    "\ube14\ub7ed",
+    "\ube14\ub85d",
+    "\ubabb\ub9de\ucd94",
+    "\ubabb \ub9de\ucd94",
+    "\uc548\ub9de",
+    "\uc548 \ub9de",
     "\ud558\uace0\uc2f6",
     "\ud558\uace0 \uc2f6",
     "\uc2f6\uac70\ub4e0",
@@ -172,6 +193,9 @@ SQL_IMPERATIVE_MARKERS = (
     "rewrite",
     "write",
     "create",
+    "generate",
+    "produce",
+    "draft",
     "build",
     "make",
     "add",
@@ -186,6 +210,16 @@ SQL_IMPERATIVE_MARKERS = (
     "\uc870\ud68c\ub418\ub3c4\ub85d",
     "\uc815\ub82c",
     "\ub9de\ucdb0",
+    "indent",
+    "indentation",
+    "block",
+    "\ub4e4\uc5ec\uc4f0\uae30",
+    "\ube14\ub7ed",
+    "\ube14\ub85d",
+    "\ubabb\ub9de\ucd94",
+    "\ubabb \ub9de\ucd94",
+    "\uc548\ub9de",
+    "\uc548 \ub9de",
     "\ud558\uace0\uc2f6",
     "\ud558\uace0 \uc2f6",
     "\uc2f6\uac70\ub4e0",
@@ -531,6 +565,11 @@ def _decision(
     confidence: float | None = None,
 ) -> PluginCompositionDecision:
     assistants = assistants or []
+    recorded_reasons = list(reasons)
+    for assistant in assistants:
+        assistant_reason = f"specialist_trigger:{assistant.provider_id}:{assistant.capability}"
+        if assistant_reason not in recorded_reasons:
+            recorded_reasons.append(assistant_reason)
     selected = {controller.provider_id, *(assistant.provider_id for assistant in assistants)}
     ignored = [
         provider.provider_id
@@ -547,7 +586,7 @@ def _decision(
         ask_user=ask_user,
         classification=classification.to_dict(),
         available_providers_snapshot=[provider.to_dict() for provider in providers],
-        reasons=_dedupe(reasons),
+        reasons=_dedupe(recorded_reasons),
         confidence=classification.confidence if confidence is None else confidence,
     )
 

@@ -173,6 +173,52 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertNotIn("parallel-orchestration-harness", audit.coverage["required_missing_skill_names"])
         self.assertNotIn("subagent-review-pipeline", audit.coverage["required_missing_skill_names"])
 
+    def test_stored_procedure_generation_before_sql_formatting_is_flagged(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Begin Tran\n"
+                            "   EXEC UP_SYS_SYSTEMCHECKLIST_SAVE @p_WorkType = 'LIST', @XML_DATA = '<ROOT />'\n"
+                            "Rollback\n\n"
+                            "이 저장 프로시저 하나 만들어줄래? KH SAVE프로시저 양식으로 하고 "
+                            "DEV000T에 저장되면 되고 IF EXISTS 해서 RAISERROR 발생하게 해줘."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "```sql\n"
+                            "CREATE PROCEDURE [dbo].[UP_SYS_SYSTEMCHECKLIST_SAVE]\n"
+                            "    @WORKTYPE VARCHAR(20) = NULL\n"
+                            "AS\n"
+                            "BEGIN\n"
+                            "    INSERT INTO @TMP (GBN, ID, QCCODE)\n"
+                            "    SELECT A.GBN, A.ID, A.QCCODE\n"
+                            "    FROM OPENXML(@DOC_ID, '/ROOT/DataTable', 1) A;\n"
+                            "END\n"
+                            "```"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertTrue(rows["sql-formatting-style-harness"]["required"])
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+
     def test_sql_output_scope_does_not_require_development_orchestration_noise(self):
         path = self.write_session(
             [

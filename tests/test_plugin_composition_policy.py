@@ -231,6 +231,57 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertEqual(decision.controller.capability, "sql_formatting")
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
 
+    def test_stored_procedure_generation_request_adds_sql_formatting_assistant(self):
+        decision = compose_plugin_route(
+            "Begin Tran\n"
+            "   EXEC UP_SYS_SYSTEMCHECKLIST_SAVE @p_WorkType = 'LIST', @XML_DATA = '<ROOT />'\n"
+            "Rollback\n\n"
+            "이 저장 프로시저 하나 만들어줄래? KH SAVE프로시저 양식으로 하고 "
+            "DEV000T에 저장되면 되고 IF EXISTS 해서 RAISERROR 발생하게 해줘.",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertEqual(decision.route, "hybrid")
+        self.assertEqual(decision.controller.provider_id, "kh")
+        self.assertTrue(any(role.provider_id == "sql-formatting" for role in decision.assistants))
+        self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
+    def test_sql_generation_request_routes_to_sql_formatting_without_skill_name(self):
+        decision = compose_plugin_route(
+            "Generate a SQL query for this requirement.\n"
+            "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertEqual(decision.route, "single")
+        self.assertEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertEqual(decision.controller.capability, "sql_formatting")
+        self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
+    def test_sql_block_indentation_correction_routes_to_sql_formatting(self):
+        decision = compose_plugin_route(
+            "IF EXISTS (\n"
+            "    SELECT 1\n"
+            "    FROM DEV000T A\n"
+            "        INNER JOIN @TMP B\n"
+            "            ON A.ID = B.ID\n"
+            "            AND A.QCCODE = B.QCCODE\n"
+            ") 인데 왜 블럭 들여쓰기 못맞추냐?",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertEqual(decision.controller.capability, "sql_formatting")
+
     def test_sql_equivalence_question_does_not_route_to_formatting_by_default(self):
         decision = compose_plugin_route(
             "SELECT * FROM SA110T WHERE ORDDT BETWEEN @FRDT AND @TODT\n"

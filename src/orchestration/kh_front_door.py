@@ -718,6 +718,20 @@ def _required_next_actions(
         )
     controller = plugin_route.get("controller", {}) or {}
     controller_id = str(controller.get("provider_id") or "")
+    selected_roles = [controller]
+    selected_roles.extend(plugin_route.get("assistants", []) or [])
+    sql_role_ids = [
+        str(role.get("provider_id") or "")
+        for role in selected_roles
+        if isinstance(role, dict)
+        and role.get("capability") == "sql_formatting"
+        and str(role.get("provider_id") or "") not in {"", "kh", "none"}
+    ]
+    if sql_role_ids:
+        formatted_roles = ", ".join(f"`{role_id}`" for role_id in _dedupe(sql_role_ids))
+        actions.append(
+            f"SQL PRE-OUTPUT GATE: before emitting, rewriting, or correcting any SQL/T-SQL, apply selected provider {formatted_roles}; read the host-local sql-formatting SKILL.md, preserve literals/comments/Korean text, and record sql-formatting-style-harness verifier evidence or an explicit blocked reason."
+        )
     if controller_id and controller_id not in {"kh", "none"}:
         actions.append(
             f"Apply selected provider `{controller_id}` next; if it is a host-local skill, read that skill's SKILL.md and follow only its delegated scope."
