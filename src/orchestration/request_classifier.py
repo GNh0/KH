@@ -3146,7 +3146,37 @@ def _is_complex_extraction_deliverable_request(normalized: str) -> bool:
         and (re.search(r"\bquality_\d+\b", normalized) is not None or "pblscripter" in normalized)
         and _contains_any(normalized, {"pbl", "sql"})
     )
+    if artifact and _is_visual_reference_only_sql_request(normalized):
+        artifact = False
     return sql_requested and (artifact or mapping_requested or mojibake_artifact_request)
+
+
+def _is_visual_reference_only_sql_request(normalized: str) -> bool:
+    if not _contains_any(normalized, {"like the image", "like this image", "\uc774\ubbf8\uc9c0\ucc98\ub7fc", "\uc2a4\ud06c\ub9b0\uc0f7\ucc98\ub7fc"}):
+        return False
+    if _contains_any(
+        normalized,
+        {
+            "give me the image",
+            "create image",
+            "make image",
+            "export image",
+            "replace actual data",
+            "bound column",
+            "binding",
+            "png",
+            "svg",
+            "pdf",
+            "render",
+            "\uc774\ubbf8\uc9c0\ub85c",
+            "\uc774\ubbf8\uc9c0\ub97c",
+            "\ubc14\uc778\ub529",
+            "\uceec\ub7fc\uba85",
+            "\uc2e4\uc81c\ub370\uc774\ud130",
+        },
+    ):
+        return False
+    return True
 
 
 def _is_contextual_review_request(normalized: str, context: dict) -> bool:

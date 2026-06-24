@@ -210,6 +210,57 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertEqual(decision.controller.capability, "sql_formatting")
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
 
+    def test_pasted_sql_output_request_routes_to_sql_formatting_without_skill_name(self):
+        decision = compose_plugin_route(
+            "SELECT *\n"
+            "FROM BA011T\n"
+            "WHERE MAINCD = 'DZ010'\n\n"
+            "SELECT *\n"
+            "FROM BA011T\n"
+            "WHERE MAINCD = 'DZ011'\n\n"
+            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \ub300\ubd84\ub958 \uc911\ubd84\ub958\ud574\uc11c "
+            "\uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertEqual(decision.route, "single")
+        self.assertEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertEqual(decision.controller.capability, "sql_formatting")
+        self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
+    def test_sql_equivalence_question_does_not_route_to_formatting_by_default(self):
+        decision = compose_plugin_route(
+            "SELECT * FROM SA110T WHERE ORDDT BETWEEN @FRDT AND @TODT\n"
+            "\uc774\uac70\ub97c \ubc14\uafd4\ub3c4 \ub611\uac19\uc774 \ub3d9\uc791\ud560\uae4c?",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertNotEqual(decision.controller.provider_id, "sql-formatting")
+
+    def test_sql_diagnostic_question_does_not_route_to_formatting_by_default(self):
+        for prompt in [
+            "Why does this return two rows?\nSELECT A.SUBCD FROM BA011T A ORDER BY A.SUBCD",
+            "Can you explain this query?\nSELECT A.SUBCD FROM BA011T A JOIN BA011T B ON B.CHRREF1 = A.SUBCD",
+            "Explain this query so that I can understand it.\nSELECT A.SUBCD FROM BA011T A JOIN BA011T B ON B.CHRREF1 = A.SUBCD",
+            "\uc774 \ucffc\ub9ac\uac00 \uc65c \ub450 \uc904\uc774 \ub098\uc640?\nSELECT A.SUBCD FROM BA011T A ORDER BY A.SUBCD",
+        ]:
+            with self.subTest(prompt=prompt):
+                decision = compose_plugin_route(
+                    prompt,
+                    providers=[
+                        {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                        {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+                    ],
+                )
+
+                self.assertNotEqual(decision.controller.provider_id, "sql-formatting")
+
     def test_unavailable_explicit_provider_is_reported_before_fallback(self):
         decision = compose_plugin_route(
             "Use Superpowers to build a SaaS app.",

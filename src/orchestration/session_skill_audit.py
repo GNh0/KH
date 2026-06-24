@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Set
 
+from src.orchestration.plugin_composition import looks_like_sql_output_request
 from src.orchestration.request_classifier import classify_request
 from src.orchestration.session_postmortem import analyze_codex_session_jsonl
 from src.skills.uaf_skill_catalog import collect_packaged_skills
@@ -23,6 +24,10 @@ STATUS_RANK = {
 }
 
 PASSIVE_REFERENCE_PREFIX = "__kh_passive_reference__ "
+SQL_ANSWER_PATTERN = re.compile(
+    r"\b(?:SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE|CREATE\s+(?:OR\s+ALTER\s+)?PROCEDURE)\b[\s\S]{0,400}\b(?:FROM|WHERE|JOIN|SET|VALUES|ORDER\s+BY)\b",
+    re.IGNORECASE,
+)
 
 RUNTIME_MARKERS = {
     "always-on-front-door": [
@@ -204,6 +209,13 @@ RUNTIME_MARKERS = {
         "src.orchestration.scenario_evaluator",
         "meaningful_signal",
     ],
+    "sql-formatting-style-harness": [
+        "sql-formatting-style-harness",
+        "verify_sql_formatting_style",
+        "src.skills.sql_formatting_style",
+        "style_contract_source",
+        "mechanical_checks",
+    ],
 }
 
 ACCEPTANCE_OUTPUT_MARKERS = {
@@ -315,6 +327,10 @@ ACCEPTANCE_OUTPUT_MARKERS = {
     },
     "skill-catalog": {
         "catalog_result": ["uaf_skill_catalog", "total_skills", "valid_skills", "invalid_skills"],
+    },
+    "sql-formatting-style-harness": {
+        "verifier": ["verify_sql_formatting_style", "mechanical_checks", "style_contract_source"],
+        "sql_passthrough": ["token_optimizer_status", "passthrough", "contract-sensitive"],
     },
     "snapshot-state-harness": {
         "snapshot": ["snapshot", "rollback", "checkpoint", "snapshotmanager"],
@@ -454,6 +470,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_cross_scope_context_issues(path))
     issues.extend(_global_memory_scope_issues(path))
     issues.extend(_target_substitution_issues(path))
+    issues.extend(_host_local_sql_formatting_issues(path))
     issues.extend(_brainstorm_option_choice_execution_issues(path))
     issues.extend(_brainstorming_depth_issues(path))
     issues.extend(_subagent_strategy_issues(path, postmortem.to_dict()))
@@ -1514,6 +1531,8 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
         evidence_texts.append(clean_text)
     active_text = "\n".join(evidence_texts)
     lowered = active_text.lower()
+    if looks_like_sql_output_request(lowered):
+        return []
     front_door_selected_brainstorming = _front_door_selected_skill(path, "brainstorming-harness")
     front_door_blocked_execution = _front_door_blocks_execution(path)
     if not (_early_domain_discovery_text(lowered) or front_door_selected_brainstorming or front_door_blocked_execution):
@@ -1627,6 +1646,108 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
     return issues
 
 
+def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
+    records = [
+        record
+        for record in _session_text_records(path)
+        if not _is_passive_text(record.text)
+    ]
+    request_index = -1
+    for index, record in enumerate(records):
+        if record.role == "user" and looks_like_sql_output_request(record.text.lower()):
+            request_index = index
+            break
+    if request_index < 0:
+        return []
+
+    first_sql_answer_index = -1
+    first_sql_skill_index = -1
+    for index, record in enumerate(records[request_index + 1 :], request_index + 1):
+        lowered = record.text.lower()
+        if first_sql_skill_index < 0 and _looks_like_sql_formatting_application(record):
+            first_sql_skill_index = index
+        if record.role == "assistant" and _looks_like_sql_answer(lowered):
+            first_sql_answer_index = index
+            break
+
+    if first_sql_answer_index < 0:
+        return []
+    if first_sql_skill_index >= 0 and first_sql_skill_index < first_sql_answer_index:
+        return []
+
+    return [
+        {
+            "skill": "sql-formatting",
+            "status": "missing_before_sql_output",
+            "severity": "P1",
+            "reason": (
+                "An actionable SQL output request received SQL before the host-local "
+                "sql-formatting skill or sql-formatting provider route was applied."
+            ),
+            "action": (
+                "Route actionable SQL output through the host-local sql-formatting skill first, "
+                "then use sql-formatting-style-harness when KH verification evidence is required."
+            ),
+            "samples": [_short(records[first_sql_answer_index].text)],
+        }
+    ]
+
+
+def _looks_like_sql_formatting_application(record: SessionTextRecord) -> bool:
+    lowered = record.text.lower()
+    if record.payload_type in {"function_call", "custom_tool_call"}:
+        return (
+            ("sql-formatting" in lowered or "sql_formatting" in lowered or "sql formatting" in lowered)
+            and ("skill.md" in lowered or "\\sql-formatting\\" in lowered or "/sql-formatting/" in lowered)
+        )
+    if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+        return False
+    return _has_sql_formatting_route_evidence(lowered)
+
+
+def _has_sql_formatting_route_evidence(lowered: str) -> bool:
+    if not ("sql-formatting" in lowered or "sql_formatting" in lowered or "sql formatting" in lowered):
+        return False
+    data = _json_object_from_text(lowered)
+    if data:
+        plugin_route = data.get("plugin_route", {}) if isinstance(data.get("plugin_route"), dict) else {}
+        if not plugin_route and ("controller" in data or "assistants" in data):
+            plugin_route = data
+        if plugin_route:
+            if _sql_formatting_role(plugin_route.get("controller")):
+                return True
+            assistants = plugin_route.get("assistants", []) or []
+            if isinstance(assistants, list) and any(_sql_formatting_role(item) for item in assistants):
+                return True
+            return False
+    return any(
+        marker in lowered
+        for marker in [
+            '"controller": "sql-formatting"',
+            "'controller': 'sql-formatting'",
+            "controller=sql-formatting",
+            "specialist_trigger:sql-formatting:sql_formatting",
+            "explicit_user_request:sql-formatting",
+        ]
+    )
+
+
+def _sql_formatting_role(value: Any) -> bool:
+    if isinstance(value, str):
+        return value == "sql-formatting"
+    if not isinstance(value, dict):
+        return False
+    provider_id = str(value.get("provider_id", "") or value.get("id", "") or value.get("name", ""))
+    capability = str(value.get("capability", ""))
+    return provider_id == "sql-formatting" or capability == "sql_formatting"
+
+
+def _looks_like_sql_answer(lowered: str) -> bool:
+    if "```sql" in lowered:
+        return True
+    return bool(SQL_ANSWER_PATTERN.search(lowered))
+
+
 def _brainstorm_option_choice_execution_issues(path: Path) -> List[Dict[str, Any]]:
     events = list(_session_payload_events(path))
     choice_index = -1
@@ -1668,6 +1789,8 @@ def _brainstorm_option_choice_execution_issues(path: Path) -> List[Dict[str, Any
         name = str(payload.get("name", ""))
         text = _payload_text(payload)
         lowered = text.lower()
+        if _looks_like_front_door_prompt_bootstrap(lowered):
+            continue
         if name in {"apply_patch", "imagegen"} or "apply_patch" in lowered:
             samples.append(_short(text))
         elif name == "shell_command" and any(
@@ -2490,7 +2613,7 @@ def _session_has_implementation_activity(path: Path, postmortem: Dict[str, Any],
 
 
 def _has_implementation_execution_signal(lowered: str) -> bool:
-    return any(
+    non_prompt_write = any(
         marker in lowered
         for marker in [
             "*** begin patch",
@@ -2498,7 +2621,6 @@ def _has_implementation_execution_signal(lowered: str) -> bool:
             "update file:",
             "apply_patch",
             "new-item",
-            "set-content",
             "out-file",
             "copy-item",
             "move-item",
@@ -2511,6 +2633,19 @@ def _has_implementation_execution_signal(lowered: str) -> bool:
             "wrote styles.css",
             "wrote app.js",
         ]
+    )
+    if non_prompt_write:
+        return True
+    if "set-content" not in lowered:
+        return False
+    return not _looks_like_front_door_prompt_bootstrap(lowered)
+
+
+def _looks_like_front_door_prompt_bootstrap(lowered: str) -> bool:
+    return (
+        "set-content" in lowered
+        and "kh-front-door-prompt.txt" in lowered
+        and ("front_door.py" in lowered or "kh_front_door" in lowered)
     )
 
 
@@ -3273,6 +3408,10 @@ def _front_door_json(text: str) -> Dict[str, Any]:
     lowered = text.lower()
     if not _looks_like_front_door_runtime_output(lowered):
         return {}
+    return _json_object_from_text(text)
+
+
+def _json_object_from_text(text: str) -> Dict[str, Any]:
     start = text.find("{")
     end = text.rfind("}")
     if start < 0 or end <= start:
@@ -3580,6 +3719,7 @@ def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[s
     token_gate = postmortem.get("token_gate", {}) or {}
     subagents = postmortem.get("subagent_summary", {}) or {}
     verification_commands = postmortem.get("verification_commands", []) or []
+    sql_specialist_scope = _is_sql_specialist_answer_scope(postmortem, lowered, active_texts)
 
     if _has_nontrivial_work_signals(postmortem, lowered):
         _add(required, "always-on-front-door", "non-trivial KH-capable session should enter KH front-door before any other work")
@@ -3587,6 +3727,14 @@ def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[s
         _add(required, "plugin-composition-policy", "automatic intake should choose direct, single-provider, hybrid, or clarify route")
         _add(required, "request-complexity-router", "automatic intake should classify request complexity before work")
         _add(required, "skill-catalog", "automatic intake should resolve the packaged skill source before claiming skill use")
+    if looks_like_sql_output_request(lowered):
+        _add(
+            required,
+            "sql-formatting-style-harness",
+            "actionable SQL output should be checked against the host-local sql-formatting style contract",
+        )
+    if sql_specialist_scope:
+        return required
     if token_gate.get("required") or _large_session(postmortem):
         _require_core_large_work(required, "large or token-heavy session")
     if subagents.get("spawned", 0) or "spawn_agent" in lowered:
@@ -3640,13 +3788,63 @@ def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[s
         _add(required, "plugin-composition-policy", "multiple plugins or providers may apply")
     if any(marker in lowered for marker in ["delete ", "remove-item", "drop table", "secret", "api_key", "token=", "permission denied", "destructive", "requires approval"]):
         _add(required, "guard-policy-harness", "permission, secret, or destructive-action risk appeared")
-    if _early_domain_discovery_text(lowered):
+    if _early_domain_discovery_text(lowered) and not looks_like_sql_output_request(lowered):
         _add(required, "brainstorming-harness", "early domain discovery appeared")
     if _mentions_architecture_workflow(lowered):
         _add(required, "architect-pipeline", "design or architecture planning appeared")
     if any(marker in lowered for marker in ["domain-orchestration-harness", "work_design", "role_decomposition", "qa/qc", "risk_policy"]):
         _add(required, "domain-orchestration-harness", "domain design/decomposition appeared")
     return required
+
+
+def _is_sql_specialist_answer_scope(
+    postmortem: Dict[str, Any],
+    lowered: str,
+    active_texts: List[str] | None = None,
+) -> bool:
+    if not looks_like_sql_output_request(lowered):
+        return False
+    subagents = postmortem.get("subagent_summary", {}) or {}
+    if int(subagents.get("spawned", 0) or 0):
+        return False
+    if _renderable_artifact_required(lowered):
+        return False
+    disqualifying_markers = [
+        "*** begin patch",
+        "apply_patch",
+        "add file:",
+        "update file:",
+        "new-item",
+        "out-file",
+        "copy-item",
+        "move-item",
+        "git commit",
+        "git push",
+        "python -m unittest",
+        "pytest",
+        "npm test",
+        "npm.cmd run test",
+        "node --check",
+        "browser qa",
+        "browser verification",
+        "screenshot",
+        "worktree",
+        "spawn_agent",
+    ]
+    if any(marker in lowered for marker in disqualifying_markers):
+        return False
+    texts = active_texts or [lowered]
+    non_front_door_tool_text = "\n".join(
+        text.lower()
+        for text in texts
+        if "function_call" in text.lower()
+        and not _looks_like_front_door_prompt_bootstrap(text.lower())
+        and "kh_front_door" not in text.lower()
+        and "always_on_front_door" not in text.lower()
+    )
+    if any(marker in non_front_door_tool_text for marker in ["set-content", "remove-item", "invoke-webrequest"]):
+        return False
+    return True
 
 
 def _renderable_artifact_required(lowered: str) -> bool:

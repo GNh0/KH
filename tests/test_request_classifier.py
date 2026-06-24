@@ -398,6 +398,21 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("render_validation", result.evidence_required)
         self.assertIn("complex_source_extraction_deliverable", result.reasons)
 
+    def test_sql_query_like_image_reference_is_not_heavy_artifact_work(self):
+        result = classify_request(
+            "SELECT *\n"
+            "FROM BA011T\n"
+            "WHERE MAINCD = 'DZ010'\n\n"
+            "SELECT *\n"
+            "FROM BA011T\n"
+            "WHERE MAINCD = 'DZ011'\n\n"
+            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \ub300\ubd84\ub958 \uc911\ubd84\ub958\ud574\uc11c "
+            "\uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?"
+        )
+
+        self.assertNotEqual(result.complexity, "heavy")
+        self.assertNotIn("complex_source_extraction_deliverable", result.reasons)
+
     def test_mojibake_pbl_sql_artifact_request_is_not_downgraded_to_medium(self):
         result = classify_request(
             "c:\\pblscripter ? ????? ???? ?? quality_470 / quality_004.pbl "

@@ -107,6 +107,42 @@ class KhFrontDoorTests(unittest.TestCase):
             any("Apply selected provider `sql-formatting`" in action for action in result.to_dict()["required_next_actions"])
         )
 
+    def test_front_door_routes_actionable_pasted_sql_to_host_local_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "SELECT *\n"
+                    "FROM BA011T\n"
+                    "WHERE MAINCD = 'DZ010'\n\n"
+                    "SELECT *\n"
+                    "FROM BA011T\n"
+                    "WHERE MAINCD = 'DZ011'\n\n"
+                    "\uc774\ubbf8\uc9c0\ucc98\ub7fc \ub300\ubd84\ub958 \uc911\ubd84\ub958\ud574\uc11c "
+                    "\uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?",
+                    project=Path.cwd(),
+                    host="codex",
+                )
+        payload = result.to_dict()
+        summary = result.to_summary_dict()
+
+        self.assertEqual(summary["plugin_route"]["route"], "single")
+        self.assertEqual(summary["plugin_route"]["controller"], "sql-formatting")
+        self.assertEqual(payload["plugin_route"]["controller"]["capability"], "sql_formatting")
+        self.assertIn("specialist_trigger:sql-formatting:sql_formatting", payload["plugin_route"]["reasons"])
+        self.assertTrue(
+            any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
+        )
+
     def test_front_door_does_not_route_provider_when_name_is_review_example(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp) / "skills" / "sql-formatting"

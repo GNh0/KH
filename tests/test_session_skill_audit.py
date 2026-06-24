@@ -131,6 +131,293 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertFalse(rows["worktree-isolation-harness"]["required"])
         self.assertNotIn("snapshot-state-harness", audit.coverage["required_missing_skill_names"])
 
+    def test_sql_output_before_host_local_sql_formatting_is_flagged_without_brainstorm_noise(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "SELECT *\n"
+                            "FROM BA011T\n"
+                            "WHERE MAINCD = 'DZ010'\n\n"
+                            "SELECT *\n"
+                            "FROM BA011T\n"
+                            "WHERE MAINCD = 'DZ011'\n\n"
+                            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \ub300\ubd84\ub958 \uc911\ubd84\ub958\ud574\uc11c "
+                            "\uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T AS A\nWHERE A.MAINCD = 'DZ010';\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertTrue(rows["sql-formatting-style-harness"]["required"])
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertNotIn("brainstorming-harness", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("host-agent-orchestration", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("parallel-orchestration-harness", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("subagent-review-pipeline", audit.coverage["required_missing_skill_names"])
+
+    def test_sql_output_scope_does_not_require_development_orchestration_noise(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\n"
+                            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \uc21c\uc11c\ub85c "
+                            "\uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "A reviewer would say this is verified with fixes.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T A\nORDER BY A.SUBCD;\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertIn("sql-formatting-style-harness", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("quality-gates-harness", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("review-gate-harness", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("host-agent-orchestration", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("parallel-orchestration-harness", audit.coverage["required_missing_skill_names"])
+
+    def test_sql_formatting_mention_only_does_not_suppress_missing_before_sql_output(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\n"
+                            "\uc815\ub9ac\ud574\uc11c \ub2ec\ub77c"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "I should use sql-formatting first.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T A;\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+
+    def test_sql_formatting_front_door_route_suppresses_missing_before_sql_output(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": [],
+            "skill_status_summary": {},
+            "plugin_route": {
+                "route": "single",
+                "controller": {
+                    "provider_id": "sql-formatting",
+                    "capability": "sql_formatting",
+                },
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\n"
+                            "\uc815\ub9ac\ud574\uc11c \ub2ec\ub77c"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T A;\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
+
+    def test_sql_formatting_provider_snapshot_only_does_not_suppress_missing_before_sql_output(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": [],
+            "skill_status_summary": {},
+            "plugin_route": {
+                "route": "single",
+                "controller": {
+                    "provider_id": "kh",
+                    "capability": "workflow_control",
+                },
+            },
+            "available_providers_snapshot": [
+                {
+                    "provider_id": "sql-formatting",
+                    "capability": "sql_formatting",
+                }
+            ],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\n"
+                            "\uc815\ub9ac\ud574\uc11c \ub2ec\ub77c"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T A;\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+
+    def test_front_door_prompt_set_content_is_not_implementation_activity(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "$promptPath = Join-Path $env:TEMP \"kh-front-door-prompt.txt\"\n"
+                            "Set-Content -LiteralPath $promptPath -Value @'\n"
+                            "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\n"
+                            "'@ -Encoding UTF8\n"
+                            "python \"C:\\Users\\KONEIT\\.codex\\plugins\\cache\\kh-uaf-marketplace\\kh-uaf\\2.9.76\\skills\\always_on_front_door\\scripts\\front_door.py\" --prompt-file $promptPath --summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "front_door_status": "ok",
+                                "runtime_applied_skills": [
+                                    "always-on-front-door",
+                                    "automatic-intake-harness",
+                                    "plugin-composition-policy",
+                                    "request-complexity-router",
+                                    "skill-catalog",
+                                ],
+                                "selected_not_executed_skills": [],
+                                "skill_status_summary": {},
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertNotIn("host-agent-orchestration", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("parallel-orchestration-harness", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("subagent-review-pipeline", audit.coverage["required_missing_skill_names"])
+        self.assertNotIn("role-execution-audit-harness", audit.coverage["required_missing_skill_names"])
+
     def test_always_on_front_door_skill_read_delay_is_flagged(self):
         path = self.write_session(
             [

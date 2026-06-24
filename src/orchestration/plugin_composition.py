@@ -111,6 +111,100 @@ SPECIALIST_TRIGGERS = {
     },
 }
 
+SQL_STATEMENT_PATTERN = re.compile(
+    r"\b(?:select|insert\s+into|update|delete\s+from|merge|create\s+(?:or\s+alter\s+)?procedure)\b",
+    re.IGNORECASE,
+)
+SQL_CONTEXT_PATTERN = re.compile(
+    r"\b(?:from|where|join|set|values|group\s+by|order\s+by)\b",
+    re.IGNORECASE,
+)
+SQL_OUTPUT_REQUEST_MARKERS = (
+    "align",
+    "convert",
+    "format",
+    "clean",
+    "normalize",
+    "organize",
+    "standardize",
+    "refactor",
+    "rewrite",
+    "write",
+    "create",
+    "build",
+    "make",
+    "add",
+    "change",
+    "modify",
+    "\uc815\ub9ac",
+    "\uc791\uc131",
+    "\ub9cc\ub4e4",
+    "\ucd94\uac00",
+    "\ubc14\uafd4",
+    "\ub2ec\ub77c",
+    "\uc870\ud68c\ub418\ub3c4\ub85d",
+    "\uc815\ub82c",
+    "\ub9de\ucdb0",
+    "\ud558\uace0\uc2f6",
+    "\ud558\uace0 \uc2f6",
+    "\uc2f6\uac70\ub4e0",
+    "\ub418\ub3c4\ub85d",
+)
+SQL_EQUIVALENCE_QUESTION_MARKERS = (
+    "same behavior",
+    "equivalent",
+    "will this work",
+    "\ub611\uac19",
+    "\uac19\uc774 \ub3d9\uc791",
+    "\ub3d9\uc791\ud560\uae4c",
+    "\ud574\ub3c4 \ub420\uae4c",
+    "\uac00\ub2a5\ud560\uae4c",
+)
+SQL_IMPERATIVE_MARKERS = (
+    "align",
+    "convert",
+    "format",
+    "clean",
+    "normalize",
+    "organize",
+    "standardize",
+    "refactor",
+    "rewrite",
+    "write",
+    "create",
+    "build",
+    "make",
+    "add",
+    "change",
+    "modify",
+    "\uc815\ub9ac",
+    "\uc791\uc131",
+    "\ub9cc\ub4e4",
+    "\ucd94\uac00",
+    "\ubc14\uafd4",
+    "\ub2ec\ub77c",
+    "\uc870\ud68c\ub418\ub3c4\ub85d",
+    "\uc815\ub82c",
+    "\ub9de\ucdb0",
+    "\ud558\uace0\uc2f6",
+    "\ud558\uace0 \uc2f6",
+    "\uc2f6\uac70\ub4e0",
+    "\ub418\ub3c4\ub85d",
+)
+
+SQL_DIAGNOSTIC_QUESTION_MARKERS = (
+    "why",
+    "explain",
+    "what does",
+    "how does",
+    "diagnose",
+    "\uc65c",
+    "\uc124\uba85",
+    "\uc6d0\uc778",
+    "\ubb50\uac00",
+    "\ubb34\uc2a8",
+)
+
 SPECIALIST_FALLBACKS = {
     "browser_qa": "manual_qa_evidence",
     "repo_pr_ci": "local_git_commands",
@@ -347,7 +441,10 @@ def compose_plugin_route(
         )
 
     specialist_controller = _single_specialist_controller(lowered, available)
-    if specialist_controller and classification.complexity in {"light", "medium"}:
+    if specialist_controller and (
+        classification.complexity in {"light", "medium"}
+        or _allow_single_sql_specialist_for_one_off_request(lowered, specialist_controller)
+    ):
         reasons.append(f"specialist_trigger:{specialist_controller.provider_id}:{specialist_controller.capability}")
         assistants = _assistant_roles(lowered, available, {specialist_controller.provider_id})
         return _decision(
@@ -649,6 +746,36 @@ def _single_specialist_controller(
     )
 
 
+def _allow_single_sql_specialist_for_one_off_request(text: str, role: ProviderRole) -> bool:
+    if role.capability != "sql_formatting" or not looks_like_sql_output_request(text):
+        return False
+    broad_markers = (
+        " every ",
+        " all ",
+        " project",
+        " folder",
+        " files",
+        " stored procedure",
+        " procedure",
+        " verification",
+        " evidence",
+        " commit",
+        " pbl",
+        " powerbuilder",
+        "\\",
+        "/",
+        "\uc804\uccb4",
+        "\ud504\ub85c\uc81d\ud2b8",
+        "\ud3f4\ub354",
+        "\ud30c\uc77c",
+        "\ud504\ub85c\uc2dc\uc800",
+        "\uac80\uc99d",
+        "\uc99d\uac70",
+        "\ucee4\ubc0b",
+    )
+    return not any(marker in f" {text} " for marker in broad_markers)
+
+
 def _unavailable_specialists(
     text: str,
     providers: List[CapabilityProvider],
@@ -739,6 +866,8 @@ def _contains_any(text: str, needles: Iterable[str]) -> bool:
 
 
 def _contains_specialist_trigger(text: str, capability: str, needles: Iterable[str]) -> bool:
+    if capability == "sql_formatting" and looks_like_sql_output_request(text):
+        return True
     for needle in needles:
         normalized = str(needle or "").strip().lower()
         if not normalized:
@@ -763,6 +892,32 @@ def _contains_specialist_trigger(text: str, capability: str, needles: Iterable[s
         if normalized in text:
             return True
     return False
+
+
+def looks_like_sql_output_request(text: str) -> bool:
+    """Detect actionable SQL/T-SQL output requests without requiring the user to name a skill."""
+    lowered = str(text or "").lower()
+    if not SQL_STATEMENT_PATTERN.search(lowered) or not SQL_CONTEXT_PATTERN.search(lowered):
+        return False
+    if _has_sql_equivalence_question_without_output_request(lowered):
+        return False
+    if _has_sql_diagnostic_question_without_output_request(lowered):
+        return False
+    return any(marker in lowered for marker in SQL_OUTPUT_REQUEST_MARKERS)
+
+
+def _has_sql_equivalence_question_without_output_request(lowered: str) -> bool:
+    if not any(marker in lowered for marker in SQL_EQUIVALENCE_QUESTION_MARKERS):
+        return False
+    if any(marker in lowered for marker in ["\ubc14\uafd4\ub3c4", "\ubcc0\uacbd\ud574\ub3c4", "\ud574\ub3c4 \ub420"]):
+        return True
+    return not any(marker in lowered for marker in SQL_IMPERATIVE_MARKERS)
+
+
+def _has_sql_diagnostic_question_without_output_request(lowered: str) -> bool:
+    if not any(marker in lowered for marker in SQL_DIAGNOSTIC_QUESTION_MARKERS):
+        return False
+    return not any(marker in lowered for marker in SQL_IMPERATIVE_MARKERS)
 
 
 def _has_negated_trigger_context(text: str, trigger: str) -> bool:
