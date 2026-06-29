@@ -518,6 +518,13 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertIn("host_progress_panel", result.evidence)
             self.assertEqual(result.token_optimizer_provider["provider"], "kh")
             self.assertEqual(result.token_optimization["status"], "used")
+            self.assertGreater(result.token_optimization["summary"]["actual_tokens_saved"], 0)
+            self.assertEqual(
+                result.token_optimization["summary"]["actual_usage_scope"],
+                "actual_optimizer_input_output_payload",
+            )
+            self.assertTrue(result.token_optimization["summary"]["token_count_is_estimate"])
+            self.assertFalse(result.token_optimization["summary"]["billing_tokens_available"])
             self.assertEqual(result.memory_state["status"], "candidates_recorded")
             self.assertEqual(result.memory_state["recorded_count"], 1)
             self.assertIn("runtime_token_optimization", result.evidence)
@@ -529,6 +536,7 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertEqual(progress.token_optimizer_status, "used")
             task_optimizer = progress.tasks[0].metadata["workflow_task_result"]["metadata"]["token_optimizer"]
             self.assertEqual(task_optimizer["status"], "used")
+            self.assertGreater(task_optimizer["summary"]["actual_tokens_saved"], 0)
             self.assertIn("ERROR: runtime failed", task_optimizer["records"][0]["stdout"])
             self.assertIn("development_progress_valid", result.evidence)
 

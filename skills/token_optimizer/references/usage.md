@@ -50,8 +50,17 @@ Quality rule: token savings must never hide source-of-truth details and must nev
    - `with_token_optimizer`
    - `estimated_tokens_saved`
    - `token_savings_ratio`
+   - `actual_usage_scope`
+   - `actual_tokens_saved`
+   - `actual_token_savings_ratio`
+   - `actual_bytes_saved`
+   - `actual_byte_savings_ratio`
+   - `token_count_method`
+   - `token_count_is_estimate`
+   - `billing_tokens_available`
    - `by_strategy` for workflow summaries
    - RTK-style `by_command_family` stats for optimized command output
+   These fields describe the actual optimizer input/output payload counted by KH. They are not provider billing token telemetry unless the host explicitly exposes that telemetry.
 10. When optimization is not applied during heavy work, report `considered_not_needed`, `passthrough`, or `blocked` with a short reason.
 11. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 12. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
@@ -64,7 +73,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 - `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
-- Before/after token usage statistics for every optimized item or aggregate workflow.
+- Before/after token usage statistics for every optimized item or aggregate workflow, with optimizer-local telemetry separated from provider billing-token availability.
 - Runtime workflow `token_optimization` summary and per-task `metadata.token_optimizer` records when optimizing `WorkflowTaskResult` objects.
 - RTK-style command-family savings statistics for command output, even when KH is the provider.
 - Lifecycle evidence preserved during compression: `task_status`, `review_status`, `commit_sha`, `next_task`, RED/GREEN state, exit code, sandbox retry reason, file references, and reviewer severity.
@@ -79,4 +88,4 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 
 ## Quality bar
 
-A valid use of `token-optimizer` must leave enough evidence for another agent to answer: why this skill applied, what ran or was applied, what changed, how many estimated tokens were saved compared with no optimizer, and what still needs attention.
+A valid use of `token-optimizer` must leave enough evidence for another agent to answer: why this skill applied, what ran or was applied, what changed, how many optimizer-local payload tokens/bytes were saved compared with no optimizer, whether those token counts are local estimates or provider billing tokens, and what still needs attention.

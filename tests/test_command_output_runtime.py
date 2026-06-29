@@ -20,6 +20,20 @@ from src.skills.token_optimizer import (
 
 
 class CommandOutputRuntimeTests(unittest.TestCase):
+    def assertTokenUsageTelemetry(self, token_usage):
+        self.assertEqual(token_usage["actual_usage_scope"], "actual_optimizer_input_output_payload")
+        self.assertEqual(token_usage["token_count_method"], "deterministic_local_estimate_chars_div_4")
+        self.assertTrue(token_usage["token_count_is_estimate"])
+        self.assertFalse(token_usage["billing_tokens_available"])
+        self.assertEqual(
+            token_usage["actual_tokens_saved"],
+            token_usage["actual_without_token_optimizer"] - token_usage["actual_with_token_optimizer"],
+        )
+        self.assertIn("actual_usage", token_usage)
+        self.assertEqual(token_usage["actual_usage"]["scope"], "actual_optimizer_input_output_payload")
+        self.assertTrue(token_usage["actual_usage"]["token_count_is_estimate"])
+        self.assertFalse(token_usage["actual_usage"]["billing_tokens_available"])
+
     def test_summary_preserves_exit_code_and_failure_context(self):
         stdout = "\n".join(f"progress {index}" for index in range(40))
         stderr = "\n".join([
@@ -40,6 +54,7 @@ class CommandOutputRuntimeTests(unittest.TestCase):
         self.assertGreater(result.metadata["token_savings_ratio"], 0)
         self.assertGreater(result.metadata["token_usage"]["without_token_optimizer"], result.metadata["token_usage"]["with_token_optimizer"])
         self.assertGreater(result.metadata["token_usage"]["estimated_tokens_saved"], 0)
+        self.assertTokenUsageTelemetry(result.metadata["token_usage"])
 
     def test_truncate_logs_prioritizes_failed_pytest_over_bulk_passed_tests(self):
         log = _pytest_bulk_log()
@@ -387,6 +402,10 @@ SELECT @CUSTCD, @CUSTNM
         self.assertGreater(stats["without_token_optimizer"], stats["with_token_optimizer"])
         self.assertGreater(stats["estimated_tokens_saved"], 0)
         self.assertGreater(stats["token_savings_ratio"], 0.9)
+        self.assertGreater(stats["actual_tokens_saved"], 0)
+        self.assertGreater(stats["actual_token_savings_ratio"], 0.9)
+        self.assertGreater(stats["actual_bytes_saved"], 0)
+        self.assertTokenUsageTelemetry(stats)
 
     def test_aggregate_token_usage_stats_summarizes_multiple_records(self):
         records = [
@@ -399,8 +418,12 @@ SELECT @CUSTCD, @CUSTNM
         self.assertEqual(summary["case_count"], 2)
         self.assertGreater(summary["without_token_optimizer"], summary["with_token_optimizer"])
         self.assertGreater(summary["estimated_tokens_saved"], 0)
+        self.assertGreater(summary["actual_tokens_saved"], 0)
+        self.assertGreater(summary["actual_bytes_saved"], 0)
+        self.assertTokenUsageTelemetry(summary)
         self.assertIn("command-output", summary["by_strategy"])
         self.assertIn("minify-code", summary["by_strategy"])
+        self.assertGreater(summary["by_strategy"]["command-output"]["actual_tokens_saved"], 0)
 
     def test_agent_transcript_summary_preserves_lifecycle_quality_evidence(self):
         transcript = _agent_lifecycle_transcript()
@@ -411,6 +434,7 @@ SELECT @CUSTCD, @CUSTNM
         self.assertEqual(result.metadata["strategy"], "agent-transcript")
         self.assertGreater(result.metadata["token_usage"]["estimated_tokens_saved"], 0)
         self.assertGreater(result.metadata["token_usage"]["token_savings_ratio"], 0.7)
+        self.assertTokenUsageTelemetry(result.metadata["token_usage"])
         for fact in [
             "task_status: Task 4 in_progress",
             "review_status: spec compliant; quality with fixes",
@@ -453,9 +477,15 @@ SELECT @CUSTCD, @CUSTNM
         self.assertEqual(report["status"], "used")
         self.assertEqual(report["provider"]["provider"], "kh")
         self.assertGreater(report["summary"]["estimated_tokens_saved"], 0)
+        self.assertGreater(report["summary"]["actual_tokens_saved"], 0)
+        self.assertTokenUsageTelemetry(report["summary"])
         self.assertIn("test", report["rtk_style_stats"]["by_command_family"])
         self.assertGreater(
             report["rtk_style_stats"]["by_command_family"]["test"]["estimated_tokens_saved"],
+            0,
+        )
+        self.assertGreater(
+            report["rtk_style_stats"]["by_command_family"]["test"]["actual_tokens_saved"],
             0,
         )
 
@@ -465,6 +495,7 @@ SELECT @CUSTCD, @CUSTNM
         self.assertEqual(record["kind"], "command-output")
         self.assertEqual(record["exit_code"], 1)
         self.assertEqual(record["command_family"], "test")
+        self.assertTokenUsageTelemetry(record["token_usage"])
         self.assertIn("tests/test_invoice.py::test_total_rounding FAILED", record["stdout"])
         self.assertIn("119999 == 120000", record["stdout"])
 
@@ -491,6 +522,8 @@ SELECT @CUSTCD, @CUSTNM
         record = optimized_results[0].metadata["token_optimizer"]["records"][0]
         self.assertEqual(record["kind"], "agent-transcript")
         self.assertGreater(record["token_usage"]["estimated_tokens_saved"], 0)
+        self.assertGreater(record["token_usage"]["actual_tokens_saved"], 0)
+        self.assertTokenUsageTelemetry(record["token_usage"])
         for fact in [
             "task_status: Task 4 in_progress",
             "review_status: spec compliant; quality with fixes",

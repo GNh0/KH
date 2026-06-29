@@ -198,16 +198,56 @@ def _rtk_style_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "with_token_optimizer": 0,
                 "estimated_tokens_saved": 0,
                 "token_savings_ratio": 0.0,
+                "actual_usage_scope": str(token_usage.get("actual_usage_scope", "actual_optimizer_input_output_payload")),
+                "token_count_method": str(
+                    token_usage.get("token_count_method", "deterministic_local_estimate_chars_div_4")
+                ),
+                "token_count_is_estimate": bool(token_usage.get("token_count_is_estimate", True)),
+                "billing_tokens_available": False,
+                "actual_without_token_optimizer": 0,
+                "actual_with_token_optimizer": 0,
+                "actual_tokens_saved": 0,
+                "actual_token_savings_ratio": 0.0,
+                "actual_without_token_optimizer_bytes": 0,
+                "actual_with_token_optimizer_bytes": 0,
+                "actual_bytes_saved": 0,
+                "actual_byte_savings_ratio": 0.0,
+                "actual_without_token_optimizer_chars": 0,
+                "actual_with_token_optimizer_chars": 0,
+                "actual_chars_saved": 0,
+                "actual_char_savings_ratio": 0.0,
             },
         )
         bucket["case_count"] += 1
         bucket["without_token_optimizer"] += int(token_usage.get("without_token_optimizer", 0))
         bucket["with_token_optimizer"] += int(token_usage.get("with_token_optimizer", 0))
         bucket["estimated_tokens_saved"] += int(token_usage.get("estimated_tokens_saved", 0))
+        bucket["actual_without_token_optimizer"] += int(token_usage.get("actual_without_token_optimizer", 0))
+        bucket["actual_with_token_optimizer"] += int(token_usage.get("actual_with_token_optimizer", 0))
+        bucket["actual_tokens_saved"] += int(token_usage.get("actual_tokens_saved", 0))
+        bucket["actual_without_token_optimizer_bytes"] += int(
+            token_usage.get("actual_without_token_optimizer_bytes", 0)
+        )
+        bucket["actual_with_token_optimizer_bytes"] += int(token_usage.get("actual_with_token_optimizer_bytes", 0))
+        bucket["actual_bytes_saved"] += int(token_usage.get("actual_bytes_saved", 0))
+        bucket["actual_without_token_optimizer_chars"] += int(
+            token_usage.get("actual_without_token_optimizer_chars", 0)
+        )
+        bucket["actual_with_token_optimizer_chars"] += int(token_usage.get("actual_with_token_optimizer_chars", 0))
+        bucket["actual_chars_saved"] += int(token_usage.get("actual_chars_saved", 0))
     for bucket in by_family.values():
         raw = bucket["without_token_optimizer"]
         saved = bucket["estimated_tokens_saved"]
         bucket["token_savings_ratio"] = round(saved / raw, 4) if raw else 0.0
+        actual_raw = bucket["actual_without_token_optimizer"]
+        actual_saved = bucket["actual_tokens_saved"]
+        bucket["actual_token_savings_ratio"] = round(actual_saved / actual_raw, 4) if actual_raw else 0.0
+        actual_raw_bytes = bucket["actual_without_token_optimizer_bytes"]
+        actual_saved_bytes = bucket["actual_bytes_saved"]
+        bucket["actual_byte_savings_ratio"] = round(actual_saved_bytes / actual_raw_bytes, 4) if actual_raw_bytes else 0.0
+        actual_raw_chars = bucket["actual_without_token_optimizer_chars"]
+        actual_saved_chars = bucket["actual_chars_saved"]
+        bucket["actual_char_savings_ratio"] = round(actual_saved_chars / actual_raw_chars, 4) if actual_raw_chars else 0.0
     return {
         "style": "rtk-compatible-command-family-stats",
         "provider": "kh",
@@ -228,7 +268,7 @@ def _workflow_status(records: List[Dict[str, Any]], skipped_count: int) -> str:
 
 def _record_status(metadata: Dict[str, Any]) -> str:
     token_usage = dict(metadata.get("token_usage", {}))
-    if int(token_usage.get("estimated_tokens_saved", 0)) > 0:
+    if int(token_usage.get("actual_tokens_saved", token_usage.get("estimated_tokens_saved", 0))) > 0:
         return "used"
     if metadata.get("passthrough_reason") or metadata.get("fallback_reason"):
         return "passthrough"

@@ -1041,6 +1041,11 @@ class SessionSkillAuditTests(unittest.TestCase):
                                     "status": "used",
                                     "source": "src.orchestration.runtime_token_optimizer.optimize_workflow_task_results",
                                     "estimated_tokens_saved": 2000,
+                                    "actual_tokens_saved": 2000,
+                                    "actual_usage_scope": "actual_optimizer_input_output_payload",
+                                    "token_count_method": "deterministic_local_estimate_chars_div_4",
+                                    "token_count_is_estimate": True,
+                                    "billing_tokens_available": False,
                                 },
                                 "workflow_usability_auto": {
                                     "status": "applied",
@@ -1159,6 +1164,102 @@ class SessionSkillAuditTests(unittest.TestCase):
                 for issue in audit.issues
             )
         )
+
+    def test_read_only_diff_output_with_token_telemetry_shape_does_not_count_as_runtime_application(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 80_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": json.dumps({"command": "git diff -- src/skills/token_optimizer.py"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "runtime_token_optimization": {
+                                    "status": "used",
+                                    "actual_tokens_saved": 2000,
+                                    "actual_usage_scope": "actual_optimizer_input_output_payload",
+                                    "billing_tokens_available": False,
+                                }
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertNotEqual(rows["token-optimizer"]["status"], "applied")
+        self.assertEqual(rows["token-optimizer"]["acceptance"]["status"], "missing_application")
+        self.assertIn("token-optimizer", audit.coverage["required_missing_skill_names"])
+
+    def test_plain_rg_output_with_token_telemetry_shape_does_not_count_as_runtime_application(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 80_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": json.dumps({"command": "rg \"actual_tokens_saved\" src"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "runtime_token_optimization": {
+                                    "status": "used",
+                                    "actual_tokens_saved": 2000,
+                                    "actual_usage_scope": "actual_optimizer_input_output_payload",
+                                    "billing_tokens_available": False,
+                                }
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertNotEqual(rows["token-optimizer"]["status"], "applied")
+        self.assertEqual(rows["token-optimizer"]["acceptance"]["status"], "missing_application")
+        self.assertIn("token-optimizer", audit.coverage["required_missing_skill_names"])
 
     def test_applied_memory_harness_requires_scope_and_record_outputs(self):
         path = self.write_session(

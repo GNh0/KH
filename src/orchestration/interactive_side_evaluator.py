@@ -943,6 +943,14 @@ def evaluate_skill_side_turn(
                 "without_token_optimizer": token_usage.get("without_token_optimizer", 0),
                 "with_token_optimizer": token_usage.get("with_token_optimizer", 0),
                 "estimated_tokens_saved": token_usage.get("estimated_tokens_saved", 0),
+                "actual_usage_scope": token_usage.get("actual_usage_scope", ""),
+                "token_count_method": token_usage.get("token_count_method", ""),
+                "token_count_is_estimate": token_usage.get("token_count_is_estimate", True),
+                "billing_tokens_available": token_usage.get("billing_tokens_available", False),
+                "actual_tokens_saved": token_usage.get("actual_tokens_saved", 0),
+                "actual_token_savings_ratio": token_usage.get("actual_token_savings_ratio", 0.0),
+                "actual_bytes_saved": token_usage.get("actual_bytes_saved", 0),
+                "actual_byte_savings_ratio": token_usage.get("actual_byte_savings_ratio", 0.0),
             }
         )
 

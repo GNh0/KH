@@ -271,6 +271,7 @@ def analyze_codex_session_jsonl(
         "branch_checked": False,
     }
     verification_commands: List[str] = []
+    last_tool_call_was_token_optimizer_runtime: bool | None = None
 
     for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
         if not line.strip():
@@ -325,6 +326,9 @@ def analyze_codex_session_jsonl(
                             "sample": _short(redact_sensitive_text(last_message), 260),
                         }
                     )
+
+        if payload_type not in {"function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"}:
+            last_tool_call_was_token_optimizer_runtime = None
 
         if text and not instruction_context:
             if payload_type == "message" and message_role == "user":
@@ -386,7 +390,11 @@ def analyze_codex_session_jsonl(
             for skill, pattern in SKILL_PATTERNS.items():
                 if pattern.search(text):
                     skills.add(skill)
-            if payload_type not in {"function_call", "custom_tool_call"}:
+            token_output_allowed = (
+                payload_type not in {"function_call_output", "custom_tool_call_output"}
+                or last_tool_call_was_token_optimizer_runtime is not False
+            )
+            if payload_type not in {"function_call", "custom_tool_call"} and token_output_allowed:
                 _merge_token_optimizer_evidence(
                     token_optimizer_evidence,
                     text,
@@ -411,14 +419,16 @@ def analyze_codex_session_jsonl(
             raw_arguments = payload.get("arguments") or payload.get("input")
             arguments = _parse_arguments(raw_arguments)
             command = str(arguments.get("command", ""))
+            call_text = command or str(raw_arguments or "")
+            last_tool_call_was_token_optimizer_runtime = _is_token_optimizer_runtime_command(call_text.lower())
             if active_resume_line:
-                _merge_resume_guard_evidence(resume_state, command or str(raw_arguments or ""))
-                if _is_resume_implementation_tool(name, command or str(raw_arguments or "")):
+                _merge_resume_guard_evidence(resume_state, call_text)
+                if _is_resume_implementation_tool(name, call_text):
                     resume_state["implementation_tools_after_resume"].append(
                         {
                             "line": line_number,
                             "name": name,
-                            "command": _short(redact_sensitive_text(command or str(raw_arguments or "")), 260),
+                            "command": _short(redact_sensitive_text(call_text), 260),
                         }
                     )
             if active_stop_line and not _is_allowed_after_stop_tool(name, command):
@@ -463,6 +473,7 @@ def analyze_codex_session_jsonl(
             failure = _verification_failure_from_output(output_text)
             if failure:
                 verification_failures.append({"line": line_number, **failure})
+            last_tool_call_was_token_optimizer_runtime = None
 
     token_status = _token_optimizer_status(token_info, token_optimizer_evidence)
     review_status = _derive_review_status(subagents, review_with_fixes)
@@ -666,7 +677,9 @@ def _merge_token_optimizer_evidence(
     )
     explicit_usage = bool(
         re.search(
-            r"token_savings_ratio|estimated_tokens_saved|without_token_optimizer|with_token_optimizer",
+            r"token_savings_ratio|estimated_tokens_saved|without_token_optimizer|with_token_optimizer|"
+            r"actual_token_savings_ratio|actual_tokens_saved|actual_without_token_optimizer|"
+            r"actual_with_token_optimizer|actual_usage_scope|actual_usage",
             text,
             re.IGNORECASE,
         )
@@ -741,7 +754,17 @@ def _is_token_optimizer_runtime_command(lowered: str) -> bool:
 def _looks_like_token_optimizer_runtime_output(lowered: str) -> bool:
     if "{" not in lowered or "}" not in lowered:
         return False
-    if not any(marker in lowered for marker in ["estimated_tokens_saved", "token_savings_ratio", "token_usage"]):
+    if not any(
+        marker in lowered
+        for marker in [
+            "estimated_tokens_saved",
+            "token_savings_ratio",
+            "actual_tokens_saved",
+            "actual_token_savings_ratio",
+            "actual_usage",
+            "token_usage",
+        ]
+    ):
         return False
     return any(
         marker in lowered
@@ -788,7 +811,7 @@ def _merge_resume_guard_evidence(resume_state: Dict[str, Any], text: str) -> Non
         ) + 1
     if re.search(
         r"src\.skills\.token_optimizer|src\.orchestration\.runtime_token_optimizer|"
-        r"runtime_token_optimization|estimated_tokens_saved|summarize_command_output|"
+        r"runtime_token_optimization|estimated_tokens_saved|actual_tokens_saved|summarize_command_output|"
         r"optimize_workflow_task_results|metadata\.token_optimizer",
         text,
         re.IGNORECASE,

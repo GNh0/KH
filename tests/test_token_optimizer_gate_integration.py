@@ -30,6 +30,16 @@ class TokenOptimizerGateIntegrationTests(unittest.TestCase):
         self.assertIn("must never reduce answer quality", content)
         self.assertIn("passthrough", content)
 
+    def test_token_optimizer_docs_separate_payload_telemetry_from_billing_tokens(self):
+        content = read_text("skills/token_optimizer/SKILL.md")
+        reference = read_text("skills/token_optimizer/references/usage.md")
+        combined = f"{content}\n{reference}"
+
+        self.assertIn("actual_usage_scope", combined)
+        self.assertIn("actual_tokens_saved", combined)
+        self.assertIn("billing_tokens_available", combined)
+        self.assertIn("provider billing tokens", combined)
+
     def test_development_lifecycle_wires_token_gate_into_heavy_work(self):
         content = read_text("skills/development_lifecycle_harness/SKILL.md")
         reference = read_text("skills/development_lifecycle_harness/references/usage.md")

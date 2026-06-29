@@ -684,6 +684,11 @@ class SessionPostmortemGuardTests(unittest.TestCase):
                                     "status": "used",
                                     "source": "src.orchestration.runtime_token_optimizer.optimize_workflow_task_results",
                                     "estimated_tokens_saved": 12000,
+                                    "actual_tokens_saved": 12000,
+                                    "actual_usage_scope": "actual_optimizer_input_output_payload",
+                                    "token_count_method": "deterministic_local_estimate_chars_div_4",
+                                    "token_count_is_estimate": True,
+                                    "billing_tokens_available": False,
                                 }
                             }
                         ),
@@ -768,6 +773,53 @@ class SessionPostmortemGuardTests(unittest.TestCase):
 
         self.assertEqual(postmortem.token_optimizer_status, "blocked")
         self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 0)
+
+    def test_read_only_diff_output_with_token_telemetry_shape_does_not_count_as_usage(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 60_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": json.dumps({"command": "git diff -- src/skills/token_optimizer.py"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "runtime_token_optimization": {
+                                    "status": "used",
+                                    "actual_tokens_saved": 12000,
+                                    "actual_usage_scope": "actual_optimizer_input_output_payload",
+                                    "billing_tokens_available": False,
+                                }
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.token_optimizer_status, "blocked")
+        self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 0)
+        self.assertEqual(postmortem.token_optimizer_evidence["explicit_usage_records"], 0)
 
     def test_resume_guard_blocks_implementation_without_kh_preflight(self):
         path = self.write_session(

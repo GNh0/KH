@@ -9,6 +9,14 @@ from src.contracts import HarnessResult
 from src.skills.base import agent_skill
 
 
+TOKEN_USAGE_SCOPE = "actual_optimizer_input_output_payload"
+TOKEN_COUNT_METHOD = "deterministic_local_estimate_chars_div_4"
+TOKEN_COUNT_NOTE = (
+    "Counts are derived from the actual optimizer input/output text with KH's local token estimator; "
+    "provider billing token usage is not exposed to this harness."
+)
+
+
 IMPORTANT_LOG_PATTERNS = tuple(
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
@@ -398,7 +406,7 @@ def summarize_session_jsonl(session_jsonl: str, max_lines: int = 80) -> HarnessR
 
 @agent_skill(
     name="compare_token_usage",
-    description="Estimate token use before and after token optimization for reporting savings.",
+    description="Report before/after token use for actual optimizer input and output text.",
 )
 def compare_token_usage(
     raw_text: str,
@@ -416,6 +424,12 @@ def compare_token_usage(
         "with_token_optimizer": with_optimizer,
         "estimated_tokens_saved": saved,
         "token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
+        **_actual_usage_metrics(
+            raw_text=raw_text,
+            optimized_text=optimized_text,
+            without_optimizer=without_optimizer,
+            with_optimizer=with_optimizer,
+        ),
     }
 
 
@@ -428,6 +442,13 @@ def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]
     without_optimizer = sum(record["without_token_optimizer"] for record in normalized)
     with_optimizer = sum(record["with_token_optimizer"] for record in normalized)
     saved = max(0, without_optimizer - with_optimizer)
+    actual_without_optimizer = sum(record["actual_without_token_optimizer"] for record in normalized)
+    actual_with_optimizer = sum(record["actual_with_token_optimizer"] for record in normalized)
+    actual_saved = max(0, actual_without_optimizer - actual_with_optimizer)
+    actual_without_bytes = sum(record["actual_without_token_optimizer_bytes"] for record in normalized)
+    actual_with_bytes = sum(record["actual_with_token_optimizer_bytes"] for record in normalized)
+    actual_without_chars = sum(record["actual_without_token_optimizer_chars"] for record in normalized)
+    actual_with_chars = sum(record["actual_with_token_optimizer_chars"] for record in normalized)
     by_strategy: Dict[str, Dict[str, Any]] = {}
     for record in normalized:
         strategy = record["strategy"] or "unknown"
@@ -439,16 +460,53 @@ def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]
                 "with_token_optimizer": 0,
                 "estimated_tokens_saved": 0,
                 "token_savings_ratio": 0.0,
+                "actual_usage_scope": TOKEN_USAGE_SCOPE,
+                "token_count_method": TOKEN_COUNT_METHOD,
+                "token_count_is_estimate": True,
+                "billing_tokens_available": False,
+                "actual_without_token_optimizer": 0,
+                "actual_with_token_optimizer": 0,
+                "actual_tokens_saved": 0,
+                "actual_token_savings_ratio": 0.0,
+                "actual_without_token_optimizer_bytes": 0,
+                "actual_with_token_optimizer_bytes": 0,
+                "actual_bytes_saved": 0,
+                "actual_byte_savings_ratio": 0.0,
+                "actual_without_token_optimizer_chars": 0,
+                "actual_with_token_optimizer_chars": 0,
+                "actual_chars_saved": 0,
+                "actual_char_savings_ratio": 0.0,
             },
         )
         bucket["case_count"] += 1
         bucket["without_token_optimizer"] += record["without_token_optimizer"]
         bucket["with_token_optimizer"] += record["with_token_optimizer"]
         bucket["estimated_tokens_saved"] += record["estimated_tokens_saved"]
+        bucket["actual_without_token_optimizer"] += record["actual_without_token_optimizer"]
+        bucket["actual_with_token_optimizer"] += record["actual_with_token_optimizer"]
+        bucket["actual_tokens_saved"] += record["actual_tokens_saved"]
+        bucket["actual_without_token_optimizer_bytes"] += record["actual_without_token_optimizer_bytes"]
+        bucket["actual_with_token_optimizer_bytes"] += record["actual_with_token_optimizer_bytes"]
+        bucket["actual_bytes_saved"] += record["actual_bytes_saved"]
+        bucket["actual_without_token_optimizer_chars"] += record["actual_without_token_optimizer_chars"]
+        bucket["actual_with_token_optimizer_chars"] += record["actual_with_token_optimizer_chars"]
+        bucket["actual_chars_saved"] += record["actual_chars_saved"]
     for bucket in by_strategy.values():
         bucket["token_savings_ratio"] = _savings_ratio(
             bucket["without_token_optimizer"],
             bucket["with_token_optimizer"],
+        )
+        bucket["actual_token_savings_ratio"] = _savings_ratio(
+            bucket["actual_without_token_optimizer"],
+            bucket["actual_with_token_optimizer"],
+        )
+        bucket["actual_byte_savings_ratio"] = _savings_ratio(
+            bucket["actual_without_token_optimizer_bytes"],
+            bucket["actual_with_token_optimizer_bytes"],
+        )
+        bucket["actual_char_savings_ratio"] = _savings_ratio(
+            bucket["actual_without_token_optimizer_chars"],
+            bucket["actual_with_token_optimizer_chars"],
         )
     return {
         "case_count": len(normalized),
@@ -456,6 +514,31 @@ def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]
         "with_token_optimizer": with_optimizer,
         "estimated_tokens_saved": saved,
         "token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
+        "actual_usage_scope": TOKEN_USAGE_SCOPE,
+        "token_count_method": TOKEN_COUNT_METHOD,
+        "token_count_note": TOKEN_COUNT_NOTE,
+        "token_count_is_estimate": True,
+        "billing_tokens_available": False,
+        "actual_without_token_optimizer": actual_without_optimizer,
+        "actual_with_token_optimizer": actual_with_optimizer,
+        "actual_tokens_saved": actual_saved,
+        "actual_token_savings_ratio": _savings_ratio(actual_without_optimizer, actual_with_optimizer),
+        "actual_without_token_optimizer_bytes": actual_without_bytes,
+        "actual_with_token_optimizer_bytes": actual_with_bytes,
+        "actual_bytes_saved": max(0, actual_without_bytes - actual_with_bytes),
+        "actual_byte_savings_ratio": _savings_ratio(actual_without_bytes, actual_with_bytes),
+        "actual_without_token_optimizer_chars": actual_without_chars,
+        "actual_with_token_optimizer_chars": actual_with_chars,
+        "actual_chars_saved": max(0, actual_without_chars - actual_with_chars),
+        "actual_char_savings_ratio": _savings_ratio(actual_without_chars, actual_with_chars),
+        "actual_usage": _aggregate_actual_usage(
+            actual_without_optimizer=actual_without_optimizer,
+            actual_with_optimizer=actual_with_optimizer,
+            actual_without_bytes=actual_without_bytes,
+            actual_with_bytes=actual_with_bytes,
+            actual_without_chars=actual_without_chars,
+            actual_with_chars=actual_with_chars,
+        ),
         "by_strategy": by_strategy,
     }
 
@@ -468,6 +551,103 @@ def estimate_token_count(text: str) -> int:
     if not text:
         return 0
     return max(1, (len(text) + 3) // 4)
+
+
+def _actual_usage_metrics(
+    raw_text: str,
+    optimized_text: str,
+    without_optimizer: int,
+    with_optimizer: int,
+) -> Dict[str, Any]:
+    raw_bytes = len(raw_text.encode("utf-8", errors="replace"))
+    optimized_bytes = len(optimized_text.encode("utf-8", errors="replace"))
+    raw_chars = len(raw_text)
+    optimized_chars = len(optimized_text)
+    token_saved = max(0, without_optimizer - with_optimizer)
+    bytes_saved = max(0, raw_bytes - optimized_bytes)
+    chars_saved = max(0, raw_chars - optimized_chars)
+    return {
+        "actual_usage_scope": TOKEN_USAGE_SCOPE,
+        "token_count_method": TOKEN_COUNT_METHOD,
+        "token_count_note": TOKEN_COUNT_NOTE,
+        "token_count_is_estimate": True,
+        "billing_tokens_available": False,
+        "actual_without_token_optimizer": without_optimizer,
+        "actual_with_token_optimizer": with_optimizer,
+        "actual_tokens_saved": token_saved,
+        "actual_token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
+        "actual_without_token_optimizer_bytes": raw_bytes,
+        "actual_with_token_optimizer_bytes": optimized_bytes,
+        "actual_bytes_saved": bytes_saved,
+        "actual_byte_savings_ratio": _savings_ratio(raw_bytes, optimized_bytes),
+        "actual_without_token_optimizer_chars": raw_chars,
+        "actual_with_token_optimizer_chars": optimized_chars,
+        "actual_chars_saved": chars_saved,
+        "actual_char_savings_ratio": _savings_ratio(raw_chars, optimized_chars),
+        "actual_usage": _actual_usage_payload(
+            without_optimizer=without_optimizer,
+            with_optimizer=with_optimizer,
+            raw_bytes=raw_bytes,
+            optimized_bytes=optimized_bytes,
+            raw_chars=raw_chars,
+            optimized_chars=optimized_chars,
+        ),
+    }
+
+
+def _actual_usage_payload(
+    without_optimizer: int,
+    with_optimizer: int,
+    raw_bytes: int,
+    optimized_bytes: int,
+    raw_chars: int,
+    optimized_chars: int,
+) -> Dict[str, Any]:
+    return {
+        "scope": TOKEN_USAGE_SCOPE,
+        "token_count_method": TOKEN_COUNT_METHOD,
+        "token_count_note": TOKEN_COUNT_NOTE,
+        "token_count_is_estimate": True,
+        "billing_tokens_available": False,
+        "without_optimizer": {
+            "tokens": without_optimizer,
+            "bytes": raw_bytes,
+            "characters": raw_chars,
+        },
+        "with_optimizer": {
+            "tokens": with_optimizer,
+            "bytes": optimized_bytes,
+            "characters": optimized_chars,
+        },
+        "saved": {
+            "tokens": max(0, without_optimizer - with_optimizer),
+            "bytes": max(0, raw_bytes - optimized_bytes),
+            "characters": max(0, raw_chars - optimized_chars),
+        },
+        "savings_ratio": {
+            "tokens": _savings_ratio(without_optimizer, with_optimizer),
+            "bytes": _savings_ratio(raw_bytes, optimized_bytes),
+            "characters": _savings_ratio(raw_chars, optimized_chars),
+        },
+    }
+
+
+def _aggregate_actual_usage(
+    actual_without_optimizer: int,
+    actual_with_optimizer: int,
+    actual_without_bytes: int,
+    actual_with_bytes: int,
+    actual_without_chars: int,
+    actual_with_chars: int,
+) -> Dict[str, Any]:
+    return _actual_usage_payload(
+        without_optimizer=actual_without_optimizer,
+        with_optimizer=actual_with_optimizer,
+        raw_bytes=actual_without_bytes,
+        optimized_bytes=actual_with_bytes,
+        raw_chars=actual_without_chars,
+        optimized_chars=actual_with_chars,
+    )
 
 
 def _important_line_indices(lines: list[str], excluded: set[int]) -> list[int]:
@@ -627,6 +807,56 @@ def _token_usage_record(record: Dict[str, Any]) -> Dict[str, Any]:
     without_optimizer = int(token_usage.get("without_token_optimizer", 0))
     with_optimizer = int(token_usage.get("with_token_optimizer", 0))
     saved = max(0, without_optimizer - with_optimizer)
+    actual_usage = token_usage.get("actual_usage") if isinstance(token_usage.get("actual_usage"), dict) else {}
+    actual_without = int(
+        token_usage.get(
+            "actual_without_token_optimizer",
+            actual_usage.get("without_optimizer", {}).get("tokens", without_optimizer)
+            if isinstance(actual_usage.get("without_optimizer"), dict)
+            else without_optimizer,
+        )
+    )
+    actual_with = int(
+        token_usage.get(
+            "actual_with_token_optimizer",
+            actual_usage.get("with_optimizer", {}).get("tokens", with_optimizer)
+            if isinstance(actual_usage.get("with_optimizer"), dict)
+            else with_optimizer,
+        )
+    )
+    actual_saved = max(0, actual_without - actual_with)
+    actual_without_bytes = int(
+        token_usage.get(
+            "actual_without_token_optimizer_bytes",
+            actual_usage.get("without_optimizer", {}).get("bytes", 0)
+            if isinstance(actual_usage.get("without_optimizer"), dict)
+            else 0,
+        )
+    )
+    actual_with_bytes = int(
+        token_usage.get(
+            "actual_with_token_optimizer_bytes",
+            actual_usage.get("with_optimizer", {}).get("bytes", 0)
+            if isinstance(actual_usage.get("with_optimizer"), dict)
+            else 0,
+        )
+    )
+    actual_without_chars = int(
+        token_usage.get(
+            "actual_without_token_optimizer_chars",
+            actual_usage.get("without_optimizer", {}).get("characters", 0)
+            if isinstance(actual_usage.get("without_optimizer"), dict)
+            else 0,
+        )
+    )
+    actual_with_chars = int(
+        token_usage.get(
+            "actual_with_token_optimizer_chars",
+            actual_usage.get("with_optimizer", {}).get("characters", 0)
+            if isinstance(actual_usage.get("with_optimizer"), dict)
+            else 0,
+        )
+    )
     return {
         "label": str(token_usage.get("label", "")),
         "strategy": str(token_usage.get("strategy", "")),
@@ -634,6 +864,28 @@ def _token_usage_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "with_token_optimizer": with_optimizer,
         "estimated_tokens_saved": int(token_usage.get("estimated_tokens_saved", saved)),
         "token_savings_ratio": float(token_usage.get("token_savings_ratio", _savings_ratio(without_optimizer, with_optimizer))),
+        "actual_usage_scope": str(token_usage.get("actual_usage_scope", TOKEN_USAGE_SCOPE)),
+        "token_count_method": str(token_usage.get("token_count_method", TOKEN_COUNT_METHOD)),
+        "token_count_is_estimate": bool(token_usage.get("token_count_is_estimate", True)),
+        "billing_tokens_available": bool(token_usage.get("billing_tokens_available", False)),
+        "actual_without_token_optimizer": actual_without,
+        "actual_with_token_optimizer": actual_with,
+        "actual_tokens_saved": int(token_usage.get("actual_tokens_saved", actual_saved)),
+        "actual_token_savings_ratio": float(
+            token_usage.get("actual_token_savings_ratio", _savings_ratio(actual_without, actual_with))
+        ),
+        "actual_without_token_optimizer_bytes": actual_without_bytes,
+        "actual_with_token_optimizer_bytes": actual_with_bytes,
+        "actual_bytes_saved": int(token_usage.get("actual_bytes_saved", max(0, actual_without_bytes - actual_with_bytes))),
+        "actual_byte_savings_ratio": float(
+            token_usage.get("actual_byte_savings_ratio", _savings_ratio(actual_without_bytes, actual_with_bytes))
+        ),
+        "actual_without_token_optimizer_chars": actual_without_chars,
+        "actual_with_token_optimizer_chars": actual_with_chars,
+        "actual_chars_saved": int(token_usage.get("actual_chars_saved", max(0, actual_without_chars - actual_with_chars))),
+        "actual_char_savings_ratio": float(
+            token_usage.get("actual_char_savings_ratio", _savings_ratio(actual_without_chars, actual_with_chars))
+        ),
     }
 
 

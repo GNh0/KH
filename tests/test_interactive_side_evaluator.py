@@ -127,6 +127,11 @@ class InteractiveSideEvaluatorTests(unittest.TestCase):
         token_usage = report["summary"]["token_usage"]
         self.assertGreater(token_usage["without_token_optimizer"], token_usage["with_token_optimizer"])
         self.assertGreater(token_usage["estimated_tokens_saved"], 0)
+        self.assertGreater(token_usage["actual_tokens_saved"], 0)
+        self.assertEqual(token_usage["actual_usage_scope"], "actual_optimizer_input_output_payload")
+        self.assertEqual(token_usage["token_count_method"], "deterministic_local_estimate_chars_div_4")
+        self.assertTrue(token_usage["token_count_is_estimate"])
+        self.assertFalse(token_usage["billing_tokens_available"])
         self.assertIn("command-output", token_usage["by_strategy"])
 
     def test_skill_side_evaluator_rejects_conversation_without_kh_trace(self):
@@ -160,6 +165,7 @@ class InteractiveSideEvaluatorTests(unittest.TestCase):
         self.assertGreaterEqual(summary["multi_skill_turn_count"], 3)
         self.assertGreaterEqual(summary["token_usage"]["case_count"], 5)
         self.assertGreater(summary["token_usage"]["estimated_tokens_saved"], 1000)
+        self.assertGreater(summary["token_usage"]["actual_tokens_saved"], 1000)
         for route in ["skill_call", "workflow_harness", "procedure_policy"]:
             self.assertIn(route, summary["route_counts"])
 
@@ -175,6 +181,7 @@ class InteractiveSideEvaluatorTests(unittest.TestCase):
         self.assertEqual(payload["unexpected_failures"], [])
         self.assertEqual(payload["summary"]["skill_count"], payload["summary"]["catalog_skill_count"])
         self.assertGreater(payload["summary"]["token_usage"]["estimated_tokens_saved"], 0)
+        self.assertGreater(payload["summary"]["token_usage"]["actual_tokens_saved"], 0)
 
     def test_module_cli_outputs_stress_skill_side_summary_json(self):
         completed = subprocess.run(

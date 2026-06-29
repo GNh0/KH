@@ -51,6 +51,8 @@ RUNTIME_MARKERS = {
         "summarize_agent_transcript",
         "runtime_token_optimization",
         "estimated_tokens_saved",
+        "actual_tokens_saved",
+        "actual_usage",
     ],
     "memory-state-harness": [
         "MemoryStore",
@@ -343,7 +345,15 @@ ACCEPTANCE_OUTPUT_MARKERS = {
     },
     "token-optimizer": {
         "token_decision": ["token_optimizer_status", "runtime_token_optimization", "token optimization"],
-        "savings_or_passthrough": ["estimated_tokens_saved", "tokens saved", "passthrough", "considered_not_needed", "blocked"],
+        "savings_or_passthrough": [
+            "actual_tokens_saved",
+            "actual_usage",
+            "estimated_tokens_saved",
+            "tokens saved",
+            "passthrough",
+            "considered_not_needed",
+            "blocked",
+        ],
     },
     "traceability-matrix-harness": {
         "traceability": ["traceability", "requirements", "evidence keys", "review gates"],
@@ -3568,7 +3578,17 @@ def _is_token_optimizer_runtime_command(lowered: str) -> bool:
 def _looks_like_token_optimizer_runtime_output(lowered: str) -> bool:
     if "{" not in lowered or "}" not in lowered:
         return False
-    if not any(marker in lowered for marker in ["estimated_tokens_saved", "token_savings_ratio", "token_usage"]):
+    if not any(
+        marker in lowered
+        for marker in [
+            "estimated_tokens_saved",
+            "token_savings_ratio",
+            "actual_tokens_saved",
+            "actual_token_savings_ratio",
+            "actual_usage",
+            "token_usage",
+        ]
+    ):
         return False
     return any(
         marker in lowered
@@ -3836,6 +3856,13 @@ def _looks_like_read_only_command(lowered: str) -> bool:
         "test-path",
         "rg --files",
         "rg -n",
+        "rg ",
+        "git status",
+        "git diff",
+        "git show",
+        "git grep",
+        "git log",
+        "git branch",
     ]
     if not any(marker in lowered for marker in read_markers):
         return False
