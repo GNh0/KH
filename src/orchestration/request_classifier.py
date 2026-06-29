@@ -681,6 +681,98 @@ CONDITIONAL_MUTATION_COMMAND_RE = re.compile(
     f"(?:{'|'.join(map(re.escape, DIRECT_MUTATION_ACTION_FORMS))}))"
     f"\\s*(?:{REQUEST_COMMAND_SUFFIX_RE})?(?=$|[\\s.!?])"
 )
+LOCALIZED_PATCH_ACTION_TERMS = {
+    "add",
+    "delete",
+    "hide",
+    "insert",
+    "include",
+    "remove",
+    "rename",
+    "replace",
+    "wire",
+    "update",
+    "change",
+    "fix",
+    "patch",
+    "reflect",
+    "apply",
+    "\ucd94\uac00",
+    "\ucd94\uac00\ud574",
+    "\ub123\uc5b4",
+    "\ubc18\uc601",
+    "\uc218\uc815",
+    "\uace0\uccd0",
+    "\uc0ad\uc81c",
+    "\uc228\uaca8",
+    "\uc228\uae30",
+    "\uad50\uccb4",
+    "\ubc14\uafd4",
+    "\ubcc0\uacbd",
+}
+LOCALIZED_PATCH_SCOPE_TERMS = {
+    "selector",
+    "css selector",
+    "single selector",
+    "one selector",
+    "class selector",
+    "one line",
+    "single line",
+    "one-line",
+    "localized patch",
+    "tiny patch",
+    "current file",
+    "target file",
+    "\uc140\ub809\ud130",
+    "\uc120\ud0dd\uc790",
+    "\ud55c \uc904",
+    "\ud55c\uc904",
+    "\ud574\ub2f9 \uc904",
+    "\ud604\uc7ac \ud30c\uc77c",
+    "\ub300\uc0c1 \ud30c\uc77c",
+    "\uc791\uc740 \uc218\uc815",
+}
+LOCALIZED_PATCH_CONTEXT_KEYS = {
+    "localized_patch_context",
+    "small_patch_context",
+    "target_selector",
+    "target_line",
+    "target_symbol",
+}
+LOCALIZED_PATCH_SCOPE_VALUES = {
+    "line",
+    "single_line",
+    "one_line",
+    "selector",
+    "single_selector",
+    "one_selector",
+    "small_patch",
+    "localized_patch",
+    "tiny_patch",
+}
+LOCALIZED_PATCH_BROAD_TERMS = {
+    "add tests",
+    "all files",
+    "auth flow",
+    "whole project",
+    "entire project",
+    "refactor",
+    "architecture",
+    "add regression tests",
+    "regression tests",
+    "security vulnerability",
+    "sql injection",
+    "test coverage",
+    "workflow",
+    "\uc804\uccb4 \ud30c\uc77c",
+    "\ud504\ub85c\uc81d\ud2b8 \uc804\uccb4",
+    "\ub9ac\ud329\ud1a0\ub9c1",
+    "\uc544\ud0a4\ud14d\ucc98",
+    "\ud14c\uc2a4\ud2b8 \ucd94\uac00",
+    "\ud750\ub984",
+}
+FILE_REFERENCE_RE = re.compile(r"(?<![a-z0-9_])[\w.-]+\.(?:html|css|js|jsx|ts|tsx|py|cs|sql|md|json|xml|xaml)\b")
+CSS_SELECTOR_REFERENCE_RE = re.compile(r"(?<![a-z0-9_])[#.](?!env\b|git\b|gitignore\b|editorconfig\b|prettierrc\b|eslintrc\b|npmrc\b)[a-z][a-z0-9_-]*\b")
 MEDIUM_TERMS = {
     "summarize",
     "compare",
@@ -1990,6 +2082,18 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_unapproved_product_discovery_request(normalized, context, domain):
         return _brainstorming_classification(domain, cross_cutting, evidence_required, reasons, normalized)
 
+    if _is_localized_patch_continuation(normalized, context):
+        return _classification(
+            complexity="medium",
+            domain="software" if domain == "general" else domain,
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "localized_patch_evidence"]),
+            reasons=[*reasons, "localized_patch_continuation"],
+            confidence=0.8,
+        )
+
     if _is_source_condition_mutation_command(normalized):
         return _heavy_classification(
             domain,
@@ -2093,6 +2197,14 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             evidence_required=_dedupe(followup_evidence),
             reasons=[*reasons, "active_artifact_followup"],
             confidence=0.72,
+        )
+
+    if _is_dotfile_config_mutation(normalized, context):
+        return _heavy_classification(
+            "software" if domain == "general" else domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "dotfile_config_mutation"],
         )
 
     if _is_light_direct_task(normalized) or _is_tiny_inline_transform(normalized):
@@ -3034,6 +3146,54 @@ def _is_heavy_work(normalized: str, domain: str) -> bool:
     if domain == "investment" and _contains_any(normalized, {"scenario matrix", "valuation analysis"}):
         return True
     return False
+
+
+def _is_localized_patch_continuation(normalized: str, context: dict) -> bool:
+    if not _contains_any(normalized, LOCALIZED_PATCH_ACTION_TERMS):
+        return False
+    if _has_conditional_mutation_command(normalized):
+        return False
+    if _contains_any(normalized, LOCALIZED_PATCH_BROAD_TERMS):
+        return False
+
+    context_scope = _has_localized_patch_context(context)
+    text_scope = (
+        _contains_any(normalized, LOCALIZED_PATCH_SCOPE_TERMS)
+        or FILE_REFERENCE_RE.search(normalized) is not None
+        or CSS_SELECTOR_REFERENCE_RE.search(normalized) is not None
+    )
+    if not (context_scope or text_scope):
+        return False
+
+    has_target = (
+        _has_active_artifact(context)
+        or context_scope
+        or FILE_REFERENCE_RE.search(normalized) is not None
+        or CSS_SELECTOR_REFERENCE_RE.search(normalized) is not None
+    )
+    if not has_target:
+        return False
+
+    token_count = len(normalized.split())
+    return token_count <= 32 or bool(context_scope)
+
+
+def _is_dotfile_config_mutation(normalized: str, context: dict) -> bool:
+    target = str(context.get("target_file") or context.get("current_file") or "").strip().lower()
+    dotfile_targets = {".env", ".gitignore", ".editorconfig", ".prettierrc", ".eslintrc", ".npmrc"}
+    if target in dotfile_targets and _contains_any(normalized, LOCALIZED_PATCH_ACTION_TERMS):
+        return True
+    return any(target in normalized for target in dotfile_targets) and _contains_any(
+        normalized,
+        LOCALIZED_PATCH_ACTION_TERMS | {"create", "make", "write", "\ub9cc\ub4e4", "\uc0dd\uc131"},
+    )
+
+
+def _has_localized_patch_context(context: dict) -> bool:
+    if any(context.get(key) for key in LOCALIZED_PATCH_CONTEXT_KEYS):
+        return True
+    scope = str(context.get("change_scope") or context.get("patch_scope") or "").strip().lower()
+    return scope in LOCALIZED_PATCH_SCOPE_VALUES
 
 
 def _is_readonly_source_condition_question(normalized: str) -> bool:

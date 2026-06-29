@@ -4,6 +4,10 @@ import argparse
 import json
 import os
 import re
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
+    tomllib = None  # type: ignore[assignment]
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
@@ -17,6 +21,9 @@ class MarketplaceConfig:
     ref: str = ""
     sparse_paths: List[str] = field(default_factory=list)
     last_revision: str = ""
+    parse_status: str = "not_checked"
+    parse_error: str = ""
+    encoding_warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -84,6 +91,8 @@ class KhPluginInstallAudit:
             "expected_source_version": self.expected_source_version,
             "latest_installed_version": self.latest_installed_version,
             "installed_cache_versions": [cache.version_dir for cache in self.installed_caches],
+            "config_parse_status": self.marketplace_config.parse_status,
+            "config_encoding_warnings": list(self.marketplace_config.encoding_warnings),
             "findings": list(self.findings),
             "recommended_actions": list(self.recommended_actions),
         }
@@ -111,6 +120,12 @@ def audit_kh_plugin_install(
     if not config.exists:
         findings.append("Codex config.toml was not found.")
         actions.append("Add the KH UAF marketplace in Codex before testing plugin installation.")
+    elif config.parse_status == "invalid":
+        findings.append(f"Codex config.toml is not valid TOML: {config.parse_error}")
+        actions.append("Fix config.toml parse errors before upgrading or judging plugin cache state.")
+    elif config.encoding_warnings:
+        findings.append("Codex config.toml contains possible encoding damage or replacement characters.")
+        actions.append("Review config.toml encoding and repair damaged text before editing marketplace settings.")
     elif config.ref == "main" and descriptor.source_ref:
         findings.append(
             "Marketplace config ref is the marketplace descriptor layer; plugin source ref comes from marketplace.json."
@@ -142,7 +157,18 @@ def audit_kh_plugin_install(
         actions.append("Verify the active session skill list points at the latest installed cache path, not only the filesystem cache.")
 
     status = "ok"
-    if any("behind source version" in finding or "No installed" in finding or "not found" in finding for finding in findings):
+    if any(
+        marker in finding
+        for finding in findings
+        for marker in [
+            "behind source version",
+            "No installed",
+            "not found",
+            "not valid TOML",
+            "encoding damage",
+            "replacement characters",
+        ]
+    ):
         status = "attention_required"
 
     return KhPluginInstallAudit(
@@ -168,10 +194,27 @@ def _read_marketplace_config(path: Path, marketplace_name: str) -> MarketplaceCo
     if not path.exists():
         return MarketplaceConfig(path=str(path), exists=False)
 
+    text = path.read_text(encoding="utf-8", errors="replace")
+    encoding_warnings = _config_encoding_warnings(text)
+    parse_status = "unavailable"
+    parse_error = ""
+    parsed_data: Dict[str, Any] = {}
+    if tomllib is not None:
+        try:
+            parsed = tomllib.loads(text)
+            parse_status = "ok"
+            marketplaces = parsed.get("marketplaces", {}) if isinstance(parsed, dict) else {}
+            section = marketplaces.get(marketplace_name, {}) if isinstance(marketplaces, dict) else {}
+            if isinstance(section, dict):
+                parsed_data = dict(section)
+        except Exception as exc:  # TOMLDecodeError keeps Python-version-specific type details
+            parse_status = "invalid"
+            parse_error = str(exc)
+
     block: List[str] = []
     in_block = False
     header = f"[marketplaces.{marketplace_name}]"
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in text.splitlines():
         stripped = line.strip()
         if stripped == header:
             in_block = True
@@ -181,7 +224,8 @@ def _read_marketplace_config(path: Path, marketplace_name: str) -> MarketplaceCo
         if in_block:
             block.append(stripped)
 
-    data = _parse_simple_toml_block(block)
+    fallback_data = _parse_simple_toml_block(block)
+    data = {**fallback_data, **parsed_data}
     return MarketplaceConfig(
         path=str(path),
         exists=True,
@@ -189,6 +233,9 @@ def _read_marketplace_config(path: Path, marketplace_name: str) -> MarketplaceCo
         ref=str(data.get("ref", "")),
         sparse_paths=list(data.get("sparse_paths", [])),
         last_revision=str(data.get("last_revision", "")),
+        parse_status=parse_status,
+        parse_error=parse_error,
+        encoding_warnings=encoding_warnings,
     )
 
 
@@ -210,6 +257,13 @@ def _parse_simple_toml_block(lines: List[str]) -> Dict[str, Any]:
         else:
             data[key] = raw.strip("\"'")
     return data
+
+
+def _config_encoding_warnings(text: str) -> List[str]:
+    warnings: List[str] = []
+    if "\ufffd" in text:
+        warnings.append("unicode_replacement_character")
+    return warnings
 
 
 def _read_marketplace_plugin_source(path: Path, plugin_name: str) -> MarketplacePluginSource:

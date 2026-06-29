@@ -7,12 +7,14 @@ BUNDLE_STATUS_VALUES = {
     "considered_not_needed",
     "skipped_with_rationale",
     "blocked",
+    "pending_immediate_execution",
 }
 BUNDLE_APPLICATION_MODES = {
     "runtime",
     "procedural",
     "considered",
     "blocked",
+    "immediate_gate",
 }
 BUNDLE_MEMBER_SKILLS = [
     "request-complexity-router",

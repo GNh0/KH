@@ -39,7 +39,7 @@ Internal skill/harness instructions and subagent packets can stay in English. Fi
 
 ## What It Includes
 
-- 40 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 41 packaged skills/harnesses with support files, smoke checks, and runnable demos.
 - `always-on-front-door` as the host-visible bootstrap skill that should run before other work-bearing skills or plugins.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.

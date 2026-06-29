@@ -354,6 +354,138 @@ class SessionSkillAuditTests(unittest.TestCase):
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
 
         self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
+
+
+    def test_sql_formatting_route_passes_when_style_verifier_runs_before_output(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["sql-formatting-style-harness"],
+            "plugin_route": {
+                "route": "single",
+                "controller": {
+                    "provider_id": "sql-formatting",
+                    "capability": "sql_formatting",
+                },
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "skill": "sql-formatting-style-harness",
+                                "status": "passed",
+                                "source": "src.skills.sql_formatting_style.verify_sql_formatting_style",
+                                "mechanical_checks": {"literal_preservation": "passed"},
+                                "style_contract_source": "host-local sql-formatting",
+                                "token_optimizer_status": "passthrough",
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T A;\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertNotIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
+
+    def test_sql_formatting_style_verifier_call_without_output_does_not_pass(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["sql-formatting-style-harness"],
+            "plugin_route": {
+                "route": "single",
+                "controller": {
+                    "provider_id": "sql-formatting",
+                    "capability": "sql_formatting",
+                },
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "arguments": json.dumps({"skill": "sql-formatting-style-harness"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T A;\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
 
     def test_sql_formatting_provider_snapshot_only_does_not_suppress_missing_before_sql_output(self):
         front_door_output = {
@@ -722,6 +854,65 @@ class SessionSkillAuditTests(unittest.TestCase):
                 for issue in audit.issues
             )
         )
+
+    def test_memory_topic_mention_is_not_global_import_approval(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Review memory scope and global-memory boundary behavior.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' -Pattern 'dashboard'",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "memory-state-harness"
+                and issue["status"] == "global_memory_lookup_without_scope_approval"
+                for issue in audit.issues
+            )
+        )
+
+    def test_explicit_session_id_allows_prior_context_lookup(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "019e8078-4bde-7813-a1db-5025a3881511 session id logs read and analyze.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' -Pattern '019e8078'",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertNotIn(("memory-state-harness", "global_memory_lookup_without_scope_approval"), issues)
 
     def test_new_project_global_static_memory_shortcut_is_flagged_even_if_front_door_misroutes(self):
         front_door_output = {
@@ -3777,6 +3968,85 @@ class SessionSkillAuditTests(unittest.TestCase):
             and issue["status"] == "immediate_next_skill_not_applied"
         )
         self.assertEqual(issue["severity"], "P0")
+
+
+    def test_immediate_applied_echo_output_is_not_runtime_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": "workflow-usability-harness status=applied runtime evidence",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "workflow-usability-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            )
+        )
+
+    def test_global_codex_memory_lookup_requires_explicit_scope_request(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Create a small local dashboard in this folder.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' -Pattern 'dashboard'",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "memory-state-harness"
+                and issue["status"] == "global_memory_lookup_without_scope_approval"
+                for issue in audit.issues
+            )
+        )
 
     def test_immediate_next_skill_passes_with_runtime_evidence(self):
         front_door_output = {

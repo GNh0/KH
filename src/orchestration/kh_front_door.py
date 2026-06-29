@@ -205,6 +205,7 @@ def build_kh_front_door(
     skill_statuses = _front_door_skill_statuses(recommended_skills, classification, skill_source)
     execution_gate = _execution_gate(classification, plugin_route, recommended_skills)
     immediate_next_skills = _immediate_next_skills(classification, plugin_route, recommended_skills, execution_gate)
+    skill_statuses = _mark_immediate_next_skill_statuses(skill_statuses, immediate_next_skills)
 
     large_work_bundle = None
     large_work_validation = None
@@ -609,6 +610,26 @@ def _front_door_skill_statuses(
                 ["required_next_actions"],
             )
     return statuses
+
+
+def _mark_immediate_next_skill_statuses(
+    statuses: Dict[str, Dict[str, Any]],
+    immediate_next_skills: Sequence[str],
+) -> Dict[str, Dict[str, Any]]:
+    if not immediate_next_skills:
+        return statuses
+    updated = {name: dict(status) for name, status in statuses.items()}
+    for skill in immediate_next_skills:
+        if skill not in updated:
+            continue
+        updated[skill] = _status(
+            "pending_immediate_execution",
+            "immediate_gate",
+            "Front-door selected this skill as an immediate next gate; no runtime execution is claimed until applied, skipped_with_rationale, passthrough, or blocked evidence is recorded in the same turn.",
+            ["immediate_next_skills", "required_next_actions"],
+        )
+        updated[skill]["metadata"] = {"front_door_immediate_gate": True}
+    return updated
 
 
 def _immediate_next_skills(

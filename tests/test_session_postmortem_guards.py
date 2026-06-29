@@ -526,6 +526,103 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         self.assertFalse(postmortem.token_gate["required"])
         self.assertEqual(postmortem.token_optimizer_status, "considered_not_needed")
 
+
+    def test_required_token_gate_accepts_structured_passthrough_decision(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 60_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "skill": "token-optimizer",
+                                "token_optimizer_status": "passthrough",
+                                "passthrough_reason": "contract-sensitive SQL must preserve exact source text",
+                                "provider": "kh",
+                                "strategy": "raw_passthrough",
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.token_optimizer_status, "passthrough")
+        self.assertEqual(postmortem.token_optimizer_evidence["explicit_passthrough_records"], 1)
+
+    def test_generic_tool_output_passthrough_string_does_not_satisfy_token_gate(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 60_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": "token_optimizer_status=passthrough because someone wrote it in a generic tool log",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.token_optimizer_status, "blocked")
+        self.assertEqual(postmortem.token_optimizer_evidence["explicit_passthrough_records"], 0)
+
+    def test_assistant_only_passthrough_claim_does_not_satisfy_token_gate(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 60_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "token_optimizer_status=passthrough because this was contract-sensitive.",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.token_optimizer_status, "blocked")
+        self.assertEqual(postmortem.token_optimizer_evidence["explicit_passthrough_records"], 0)
+
     def test_token_optimizer_runtime_call_counts_as_usage(self):
         path = self.write_session(
             [

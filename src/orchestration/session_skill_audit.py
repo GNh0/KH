@@ -721,7 +721,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
 
             if (
                 _is_kh_front_door_request(lowered)
-                or _is_automatic_intake_request(text)
+                or (_is_automatic_intake_request(text) and not _looks_like_external_specialist_direct_question(lowered))
                 or (kh_active_directive_seen and _is_kh_active_followup_request(text))
             ):
                 waiting_for_front_door = True
@@ -997,12 +997,15 @@ def _has_runtime_output_context(lowered: str) -> bool:
             "'application_mode'",
             '"evidence"',
             "'evidence'",
+            '"artifacts"',
+            "'artifacts'",
+            '"source"',
+            "'source'",
             ".kh/",
             ".uaf/",
             "current_goal.json",
             "goal_ledger",
             "host_panel",
-            "runtime",
             "artifact",
             "wrote",
             "written",
@@ -1111,21 +1114,22 @@ def _is_immediate_skipped_evidence(lowered: str) -> bool:
 
 
 def _is_immediate_applied_evidence(lowered: str, aliases: Set[str]) -> bool:
-    if not any(alias.lower() in lowered for alias in aliases):
+    alias_set = {alias.lower() for alias in aliases}
+    if not any(alias in lowered for alias in alias_set):
         return False
-    return any(
-        marker in lowered
-        for marker in [
-            '"status": "applied"',
-            "'status': 'applied'",
-            "status=applied",
-            '"application_mode": "runtime"',
-            "'application_mode': 'runtime'",
-            "application_mode=runtime",
-            "runtime evidence",
-            "runtime-applied",
-        ]
-    )
+    data = _json_object_from_text(lowered)
+    if not data:
+        return False
+    status = str(data.get("status", "")).lower()
+    skill = str(data.get("skill", "") or data.get("name", "")).lower()
+    mode = str(data.get("application_mode", "")).lower()
+    if status != "applied":
+        return False
+    if skill and skill not in alias_set:
+        return False
+    if mode == "runtime":
+        return True
+    return any(key in data for key in ["evidence", "artifacts", "artifact", "source", "result", "metadata"])
 
 
 def _is_current_skill_support_read(lowered: str, skill_name: str) -> bool:
@@ -1428,7 +1432,8 @@ def _target_substitution_issues(path: Path) -> List[Dict[str, Any]]:
 def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
     front_door_brainstorm_gate = _front_door_selected_skill(path, "brainstorming-harness") or _front_door_blocks_execution(path)
     new_project_context = _session_has_new_project_discovery_request(path)
-    if not (front_door_brainstorm_gate or new_project_context):
+    explicit_import = _session_has_explicit_memory_import_request(path) or _session_has_scoped_memory_import_evidence(path)
+    if explicit_import:
         return []
     samples: List[str] = []
     for event in _session_payload_events(path):
@@ -1445,7 +1450,7 @@ def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
                 break
     if not samples:
         return []
-    if not front_door_brainstorm_gate:
+    if not front_door_brainstorm_gate and new_project_context:
         return [
             {
                 "skill": "memory-state-harness",
@@ -1461,6 +1466,25 @@ def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
                     "`%CODEX_HOME%/memories/MEMORY.md` or `%CODEX_HOME%/memories/skills/...` lookup. "
                     "If front-door fails to select brainstorming, stop and record router_failure instead of "
                     "using memory-derived implementation shortcuts."
+                ),
+                "samples": samples,
+            }
+        ]
+    if not front_door_brainstorm_gate and not new_project_context:
+        return [
+            {
+                "skill": "memory-state-harness",
+                "status": "global_memory_lookup_without_scope_approval",
+                "severity": "P1",
+                "reason": (
+                    "The session read host-global Codex memory without an explicit prior-context request, "
+                    "approved cross-scope import, or scoped KH memory evidence. Similar keywords in old chats "
+                    "must not become current project/chat memory by default."
+                ),
+                "action": (
+                    "Use project/chat-scoped KH memory by default. Read `%CODEX_HOME%/memories/...` only when "
+                    "the user explicitly requests prior context or when memory-state-harness records "
+                    "explicit_cross_scope_memory_import, parent_memory_access, or global_memory_candidate approval evidence."
                 ),
                 "samples": samples,
             }
@@ -1673,7 +1697,25 @@ def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
     if first_sql_answer_index < 0:
         return []
     if first_sql_skill_index >= 0 and first_sql_skill_index < first_sql_answer_index:
-        return []
+        first_verifier_index = -1
+        first_blocked_index = -1
+        for index, record in enumerate(records[first_sql_skill_index + 1 : first_sql_answer_index], first_sql_skill_index + 1):
+            if first_verifier_index < 0 and _looks_like_sql_formatting_style_verifier(record):
+                first_verifier_index = index
+            if first_blocked_index < 0 and _looks_like_sql_style_verifier_blocked(record):
+                first_blocked_index = index
+        if first_verifier_index >= 0 or first_blocked_index >= 0:
+            return []
+        return [
+            {
+                "skill": "sql-formatting-style-harness",
+                "status": "missing_sql_formatting_style_verifier",
+                "severity": "P1",
+                "reason": "SQL formatting routed through the host-local skill, but KH did not record verifier evidence before SQL output.",
+                "action": "Run or record `verify_sql_formatting_style` / `src.skills.sql_formatting_style` evidence before emitting final SQL, or record a blocked reason before output.",
+                "samples": [_short(records[first_sql_answer_index].text)],
+            }
+        ]
 
     return [
         {
@@ -1703,6 +1745,37 @@ def _looks_like_sql_formatting_application(record: SessionTextRecord) -> bool:
     if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
         return False
     return _has_sql_formatting_route_evidence(lowered)
+
+def _looks_like_sql_formatting_style_verifier(record: SessionTextRecord) -> bool:
+    lowered = record.text.lower()
+    if record.payload_type not in {"function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"}:
+        return False
+    if not any(
+        marker in lowered
+        for marker in [
+            "verify_sql_formatting_style",
+            "src.skills.sql_formatting_style",
+            "sql-formatting-style-harness",
+            "sql_formatting_style",
+            "mechanical_checks",
+            "style_contract_source",
+        ]
+    ):
+        return False
+    if record.payload_type in {"function_call", "custom_tool_call"}:
+        return False
+    if _looks_like_sql_style_verifier_blocked(record):
+        return False
+    return any(marker in lowered for marker in ["passed", "issues", "mechanical_checks", "style_contract_source", "token_optimizer_status"])
+
+
+def _looks_like_sql_style_verifier_blocked(record: SessionTextRecord) -> bool:
+    lowered = record.text.lower()
+    if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+        return False
+    if not any(marker in lowered for marker in ["sql-formatting-style-harness", "verify_sql_formatting_style", "src.skills.sql_formatting_style"]):
+        return False
+    return _is_immediate_blocked_evidence(lowered)
 
 
 def _has_sql_formatting_route_evidence(lowered: str) -> bool:
@@ -2787,6 +2860,115 @@ def _shares_run_prefix(left: str, right: str) -> bool:
     return left_parts[:-1] == right_parts[:-1]
 
 
+def _session_has_explicit_memory_import_request(path: Path) -> bool:
+    scope_markers = [
+        "memory",
+        "memories",
+        "memory.md",
+        "prior context",
+        "previous conversation",
+        "previous chat",
+        "old session",
+        "rollout",
+        "session id",
+        "\uc138\uc158",
+        "\ub300\ud654",
+        "\uc774\uc804",
+        "\uba54\ubaa8\ub9ac",
+        "\uae30\uc5b5",
+        "\ub85c\uadf8",
+    ]
+    cross_scope_markers = [
+        "prior context",
+        "previous conversation",
+        "previous chat",
+        "old session",
+        "session id",
+        "rollout",
+        "memory.md",
+        "memories",
+        "\uc774\uc804 \uc138\uc158",
+        "\uc774\uc804 \ub300\ud654",
+        "\uc9c0\ub09c \uc138\uc158",
+        "\uc138\uc158 id",
+        "\ub300\ud654 \uae30\ub85d",
+        "\ub85c\uadf8",
+    ]
+    action_markers = [
+        "read",
+        "load",
+        "import",
+        "reuse",
+        "use previous",
+        "use prior",
+        "reference",
+        "look at",
+        "check",
+        "inspect",
+        "analyze",
+        "review the previous",
+        "\uc77d",
+        "\ubd10",
+        "\ubcf4",
+        "\uc870\ud68c",
+        "\ud655\uc778",
+        "\ucc38\uc870",
+        "\uac00\uc838",
+        "\ubd88\ub7ec",
+        "\ubd84\uc11d",
+        "\uc7ac\ud65c\uc6a9",
+    ]
+    negation_markers = [
+        "do not read",
+        "don't read",
+        "do not use",
+        "don't use",
+        "without memory",
+        "no memory",
+        "\uc77d\uc9c0\ub9c8",
+        "\uc77d\uc9c0 \ub9c8",
+        "\uc4f0\uc9c0\ub9c8",
+        "\uc4f0\uc9c0 \ub9c8",
+        "\uc0ac\uc6a9\ud558\uc9c0\ub9c8",
+        "\ucc38\uc870\ud558\uc9c0\ub9c8",
+        "\uba54\ubaa8\ub9ac \uc5c6\uc774",
+    ]
+    for record in _session_text_records(path):
+        if record.role != "user":
+            continue
+        lowered = record.text.lower()
+        if any(marker in lowered for marker in negation_markers):
+            continue
+        if re.search(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", lowered):
+            return True
+        has_scope_topic = any(marker in lowered for marker in scope_markers)
+        has_cross_scope = any(marker in lowered for marker in cross_scope_markers)
+        has_action = any(marker in lowered for marker in action_markers)
+        if has_cross_scope and has_action:
+            return True
+        if "memory.md" in lowered and has_action:
+            return True
+        if has_scope_topic and has_action and any(marker in lowered for marker in ["previous", "prior", "\uc774\uc804", "\uc9c0\ub09c"]):
+            return True
+    return False
+
+
+def _session_has_scoped_memory_import_evidence(path: Path) -> bool:
+    markers = [
+        "explicit_cross_scope_memory_import",
+        "memory_import_approved",
+        "parent_memory_access",
+        "parent_memory_access_approved",
+        "global_memory_candidate",
+        "memory_scope_decision",
+    ]
+    for record in _session_text_records(path):
+        lowered = record.text.lower()
+        if any(marker in lowered for marker in markers):
+            return True
+    return False
+
+
 def _is_stale_kh_skill_cache_failure(lowered: str) -> bool:
     if "kh-uaf-marketplace" not in lowered or "kh-uaf" not in lowered:
         return False
@@ -2981,6 +3163,8 @@ def _is_automatic_intake_request(text: str) -> bool:
     lowered = text.lower()
     if _is_kh_front_door_evidence(lowered):
         return False
+    if _looks_like_external_specialist_direct_question(lowered):
+        return False
     try:
         classification = classify_request(text, {"kh_session_audit": True})
     except Exception:
@@ -3110,6 +3294,18 @@ def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:
     tool_name = str(payload.get("name", "")).lower()
     if tool_name in {"apply_patch"}:
         return True
+    if tool_name in {
+        "open",
+        "web.run",
+        "view_image",
+        "functions.view_image",
+        "browser",
+        "browser.open",
+        "read_file",
+        "computer-use",
+        "mcp__codex_apps__github__search",
+    }:
+        return True
     if tool_name not in {"shell_command", "functions.shell_command"}:
         return False
     return any(
@@ -3119,7 +3315,14 @@ def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:
             "test-path",
             "select-string",
             "rg ",
+            "rg --files",
             "git ",
+            "git show",
+            "git diff",
+            "git grep",
+            "dir ",
+            "ls ",
+            "findstr",
             "get-content",
             "python ",
             "copy-item",
@@ -3399,6 +3602,8 @@ def _front_door_skill_status(text: str, skill_name: str) -> str:
             return "applied"
         if status == "blocked":
             return "blocked"
+        if status == "pending_immediate_execution":
+            return "selected"
         if status:
             return "skipped"
     return ""
@@ -3650,6 +3855,29 @@ def _looks_like_read_only_command(lowered: str) -> bool:
         "git push",
     ]
     return not any(marker in lowered for marker in write_or_runtime_markers)
+
+
+def _looks_like_external_specialist_direct_question(lowered: str) -> bool:
+    if not any(marker in lowered for marker in ["openai", "chatgpt", "codex", "gpt", "api", "model"]):
+        return False
+    if any(
+        marker in lowered
+        for marker in [
+            "repo",
+            "repository",
+            "folder",
+            "path",
+            "file",
+            "implement",
+            "fix",
+            "patch",
+            "test",
+            "review this code",
+            "sql",
+        ]
+    ):
+        return False
+    return any(marker in lowered for marker in ["latest", "docs", "documentation", "model", "pricing", "limit", "release", "how do i", "what is", "\ucd94\ucc9c", "\ubb38\uc11c", "\ucd5c\uc2e0", "\ubaa8\ub378"])
 
 
 def _looks_like_front_door_runtime_output(lowered: str) -> bool:

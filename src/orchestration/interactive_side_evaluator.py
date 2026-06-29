@@ -506,6 +506,16 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         _skill_turn(
             "routing-evaluation",
             5,
+            "Before returning formatted SQL, verify it still matches the host-local sql-formatting style contract.",
+            "Use the SQL formatting style harness after host-local sql-formatting has produced SQL. Record mechanical_checks for literal preservation, comments, and aliases, and attach style_contract_source before final SQL output.",
+            "sql-formatting-style-harness",
+            ["mechanical_checks", "style_contract_source"],
+            "skill_call",
+            ["sql-formatting", "mechanical_checks", "style_contract"],
+        ),
+        _skill_turn(
+            "routing-evaluation",
+            6,
             "Run many SIDE-style human scenarios and check routing, evidence, gates, and resume.",
             "Use scenario evaluation with SIDE transcripts, classification checks, evidence expectations, gate decisions, and resume handoff coverage.",
             "scenario-evaluation-harness",
@@ -515,7 +525,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            6,
+            7,
             "The work passed review; now capture what the system should learn for next time.",
             "Use compound engineering to record review learning, scoped memory candidates, system updates, and regression checks before finishing.",
             "compound-engineering-harness",
@@ -525,7 +535,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            7,
+            8,
             "We keep repeating this workflow; turn it into a reusable skill folder.",
             "Use workflow skill distillation to identify the repeatable workflow, extract contracts, and scaffold a reusable skill with examples and smoke checks.",
             "workflow-skill-distiller",

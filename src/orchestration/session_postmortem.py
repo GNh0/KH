@@ -213,6 +213,8 @@ def analyze_codex_session_jsonl(
         "runtime_calls": 0,
         "skill_doc_reads": 0,
         "explicit_usage_records": 0,
+        "explicit_passthrough_records": 0,
+        "blocked_reason_records": 0,
         "status_mentions": 0,
     }
     subagents = {
@@ -614,6 +616,8 @@ def _merge_token_gate(
 def _token_optimizer_status(token_gate: Dict[str, Any], evidence: Dict[str, Any]) -> str:
     if evidence.get("runtime_calls") or evidence.get("explicit_usage_records"):
         return "used"
+    if evidence.get("explicit_passthrough_records"):
+        return "passthrough"
     if token_gate.get("required"):
         return "blocked"
     return "considered_not_needed"
@@ -633,6 +637,19 @@ def _merge_token_optimizer_evidence(
         return
     if re.search(r"token[-_]optimizer|token_optimizer_status", text, re.IGNORECASE):
         evidence["status_mentions"] = int(evidence.get("status_mentions", 0)) + 1
+    decision_source = _is_token_optimizer_decision_source(payload_type, role, text)
+    if decision_source and re.search(
+        r"token_optimizer_status\s*[:=]\s*['\"]?passthrough|status\s*[:=]\s*['\"]?passthrough|contract-sensitive|raw passthrough",
+        text,
+        re.IGNORECASE,
+    ):
+        evidence["explicit_passthrough_records"] = int(evidence.get("explicit_passthrough_records", 0)) + 1
+    if decision_source and re.search(
+        r"token_optimizer_status\s*[:=]\s*['\"]?blocked|blocked_reason|fallback_reason|provider_unavailable|unavailable",
+        text,
+        re.IGNORECASE,
+    ):
+        evidence["blocked_reason_records"] = int(evidence.get("blocked_reason_records", 0)) + 1
     if re.search(r"token_optimizer[/\\]SKILL\.md|token_optimizer\\SKILL\.md|token_optimizer/SKILL\.md", text, re.IGNORECASE):
         evidence["skill_doc_reads"] = int(evidence.get("skill_doc_reads", 0)) + 1
         return
@@ -662,6 +679,20 @@ def _merge_token_optimizer_evidence(
     if explicit_usage and runtime_source:
         evidence["explicit_usage_records"] = int(evidence.get("explicit_usage_records", 0)) + 1
 
+
+
+
+def _is_token_optimizer_decision_source(payload_type: str, role: str = "", text: str = "") -> bool:
+    payload_type = str(payload_type)
+    role = str(role).lower()
+    lowered = str(text).lower()
+    if payload_type in {"function_call_output", "custom_tool_call_output", "thread_goal_updated"}:
+        return _looks_like_token_optimizer_decision_output(lowered)
+    if payload_type in {"function_call", "custom_tool_call"}:
+        return _is_token_optimizer_runtime_command(lowered)
+    if payload_type in {"message", "agent_message"} and role in {"assistant", "agent"}:
+        return False
+    return False
 
 def _is_token_optimizer_runtime_source(payload_type: str, role: str = "", text: str = "") -> bool:
     payload_type = str(payload_type)
@@ -719,6 +750,31 @@ def _looks_like_token_optimizer_runtime_output(lowered: str) -> bool:
             "metadata.token_optimizer",
             "token_optimizer",
             "token_usage",
+        ]
+    )
+
+
+def _looks_like_token_optimizer_decision_output(lowered: str) -> bool:
+    if _looks_like_token_optimizer_runtime_output(lowered):
+        return True
+    if "{" not in lowered or "}" not in lowered:
+        return False
+    if "token_optimizer_status" not in lowered and "token_optimizer" not in lowered:
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "passthrough_reason",
+            "fallback_reason",
+            "blocked_reason",
+            "provider_unavailable",
+            "token_optimizer_provider",
+            '"provider"',
+            "'provider'",
+            '"strategy"',
+            "'strategy'",
+            "quality_rationale",
+            "decision_source",
         ]
     )
 
@@ -951,6 +1007,8 @@ def _recommended_actions(
     actions: List[str] = []
     if token_status == "blocked":
         actions.append("Run token-optimizer or record passthrough before continuing the large session.")
+        if token_optimizer_evidence.get("blocked_reason_records"):
+            actions.append("Token optimizer blockage has a reason record, but the workflow still needs passthrough or recovery evidence before completion.")
         if token_optimizer_evidence.get("skill_doc_reads") and not token_optimizer_evidence.get("runtime_calls"):
             actions.append("Reading token-optimizer docs is inspection, not usage; require runtime evidence or explicit passthrough.")
     if review_status == "review_incomplete":

@@ -95,6 +95,90 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertIn("source_condition_mutation_command", result.reasons)
                 self.assertIn("goal-state-harness", result.required_harnesses)
 
+    def test_localized_patch_continuation_does_not_trigger_role_dag(self):
+        cases = [
+            (
+                "standalone_resource.html \ud55c \uc904, .leave-list selector \ucd94\uac00",
+                {},
+            ),
+            (
+                "\uadf8\ub7fc \ucd94\uac00\ud574\uc918\ubd10",
+                {
+                    "domain": "software",
+                    "has_active_artifact": True,
+                    "localized_patch_context": True,
+                    "target_selector": ".leave-list",
+                    "current_file": "standalone_resource.html",
+                },
+            ),
+            (
+                "\ud604\uc7ac \ud30c\uc77c\uc758 \ud55c\uc904\ub9cc \ubc18\uc601\ud574\uc918",
+                {"domain": "software", "current_file": "standalone_resource.html", "patch_scope": "single_line"},
+            ),
+        ]
+
+        for prompt, context in cases:
+            with self.subTest(prompt=prompt, context=context):
+                result = classify_request(prompt, context=context)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("localized_patch_continuation", result.reasons)
+                self.assertIn("localized_patch_evidence", result.evidence_required)
+                self.assertNotIn("goal-state-harness", result.required_harnesses)
+
+    def test_localized_patch_context_does_not_hide_broad_or_conditional_work(self):
+        cases = [
+            (
+                "fix the auth flow and add tests",
+                {"domain": "software", "target_file": "src/auth.py"},
+            ),
+            (
+                "if missing, add it",
+                {
+                    "domain": "software",
+                    "has_active_artifact": True,
+                    "localized_patch_context": True,
+                    "target_file": "src/auth.py",
+                },
+            ),
+            (
+                "check if validation logic exists and add it if missing",
+                {
+                    "domain": "software",
+                    "has_active_artifact": True,
+                    "localized_patch_context": True,
+                    "target_file": "src/auth.py",
+                },
+            ),
+            (
+                "add .env file",
+                {"domain": "software", "target_file": ".env"},
+            ),
+        ]
+
+        for prompt, context in cases:
+            with self.subTest(prompt=prompt, context=context):
+                result = classify_request(prompt, context=context)
+                self.assertEqual(result.complexity, "heavy")
+                self.assertEqual(result.recommended_execution, "role_dag")
+                self.assertNotIn("localized_patch_continuation", result.reasons)
+
+    def test_localized_patch_supports_remove_hide_replace_rename(self):
+        cases = [
+            "remove .old-banner from standalone_resource.html",
+            "standalone_resource.html .old-banner \uc0ad\uc81c",
+            "standalone_resource.html .old-banner \uc228\uaca8",
+            "replace .old-banner with .new-banner in standalone_resource.html",
+            "rename .old-banner selector in standalone_resource.html",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("localized_patch_continuation", result.reasons)
+
     def test_korean_missing_condition_mutation_commands_route_heavy(self):
         cases = [
             "\ud655\uc778\ud558\uace0 \uc5c6\uc73c\uba74 \ucd94\uac00\ud574\uc918",

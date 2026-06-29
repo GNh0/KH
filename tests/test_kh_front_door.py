@@ -263,19 +263,19 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("verification-before-completion-harness", payload["recommended_skills"])
         self.assertEqual(
             payload["skill_statuses"]["goal-state-harness"]["status"],
-            "skipped_with_rationale",
+            "pending_immediate_execution",
         )
         self.assertEqual(
             payload["skill_statuses"]["goal-state-harness"]["application_mode"],
-            "procedural",
+            "immediate_gate",
         )
         self.assertEqual(
             payload["skill_statuses"]["token-optimizer"]["status"],
-            "skipped_with_rationale",
+            "pending_immediate_execution",
         )
         self.assertEqual(
             payload["large_work_orchestration_bundle"]["token_optimizer_status"],
-            "skipped_with_rationale",
+            "pending_immediate_execution",
         )
         self.assertTrue(payload["large_work_bundle_validation"]["valid"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
@@ -474,7 +474,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("implementation", payload["execution_gate"]["blocked_actions"])
         self.assertEqual(
             payload["skill_status_summary"]["brainstorming-harness"]["status"],
-            "skipped_with_rationale",
+            "pending_immediate_execution",
         )
         self.assertTrue(
             any("Apply `brainstorming-harness`" in action for action in payload["required_next_actions"])
@@ -652,7 +652,11 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertNotIn("command-output-harness", payload["selected_not_executed_skills"])
         self.assertEqual(
             payload["skill_status_summary"]["command-output-harness"]["status"],
-            "skipped_with_rationale",
+            "pending_immediate_execution",
+        )
+        self.assertEqual(
+            payload["skill_status_summary"]["command-output-harness"]["application_mode"],
+            "immediate_gate",
         )
 
     def test_readonly_update_condition_question_does_not_trigger_large_preflight(self):
@@ -730,6 +734,49 @@ class KhFrontDoorTests(unittest.TestCase):
                     "blocked_until_large_work_preflight",
                 )
                 self.assertIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_localized_selector_patch_does_not_trigger_large_preflight(self):
+        result = build_kh_front_door(
+            "standalone_resource.html \ud55c \uc904, .leave-list selector \ucd94\uac00",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("localized_patch_continuation", payload["classification"]["reasons"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_context_supplied_localized_patch_does_not_trigger_large_preflight(self):
+        result = build_kh_front_door(
+            "\uadf8\ub7fc \ucd94\uac00\ud574\uc918\ubd10",
+            project=Path.cwd(),
+            host="codex",
+            request_context={
+                "domain": "software",
+                "has_active_artifact": True,
+                "localized_patch_context": True,
+                "target_selector": ".leave-list",
+                "current_file": "standalone_resource.html",
+            },
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("localized_patch_continuation", payload["classification"]["reasons"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
 
     def test_subagent_packets_require_worker_workspace_decision_for_autonomy_tests(self):
         repo_root = Path(__file__).resolve().parents[1]
