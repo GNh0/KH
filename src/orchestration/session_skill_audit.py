@@ -528,7 +528,7 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
                 "severity": "P1",
                 "reason": token_reason
                 or "token gate required optimization but runtime usage or passthrough evidence was missing",
-                "action": "Run token optimizer, record runtime token_optimization evidence, or record explicit passthrough before completion.",
+                "action": "Run token optimizer, record runtime token_optimization evidence, record explicit passthrough, or record explicit considered_not_needed with not_used_reason before completion.",
             }
         )
     review_status = postmortem.get("review_status", "")
@@ -3997,7 +3997,12 @@ def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[s
     if sql_specialist_scope:
         return required
     if token_gate.get("required") or _large_session(postmortem):
-        _require_core_large_work(required, "large or token-heavy session")
+        token_reason = "large or token-heavy session"
+        if "subagent_transcripts_require_token_decision" in {
+            str(reason) for reason in token_gate.get("reasons", []) or []
+        }:
+            token_reason = "subagent packets/transcripts require a token decision"
+        _require_core_large_work(required, token_reason)
     if subagents.get("spawned", 0) or "spawn_agent" in lowered:
         _add(required, "host-agent-orchestration", "subagents or host delegation appeared in the session")
         _add(required, "subagent-review-pipeline", "subagent work requires packet/review policy")

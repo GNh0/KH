@@ -54,3 +54,47 @@ Latest source-checkout verification after version bump:
 ## Remaining Operational Step
 
 After this commit is pushed, upgrade KH UAF in Codex so the installed cache moves from `2.9.84` to `2.9.85`, then open a fresh session before judging blind automatic intake.
+
+## 2.9.86 Follow-up: Subagent Token Evidence Gate
+
+Trigger: live blind subagent tests produced plausible answers, but the test assessment did not fail the run when `token-optimizer` evidence was absent. That was an evaluation gap: response quality and actual skill/harness application must be judged separately.
+
+Changes:
+
+- Treat any spawned subagent as requiring an explicit token optimizer decision for task packets/transcripts.
+- Count namespaced subagent tools such as `multi_agent_v1.spawn_agent` and `multi_agent_v1.close_agent`.
+- Count subagent tools wrapped inside `multi_tool_use.parallel` via `tool_uses[].recipient_name`.
+- Block token optimizer status when subagents ran but no runtime optimizer, passthrough, or explicit `considered_not_needed` decision exists.
+- Require an explicit non-empty `not_used_reason` field before accepting `token_optimizer_status=considered_not_needed`; generic `token_optimizer_status_reason`, `rationale`, or provider metadata is not enough.
+- Replace raw internal token-gate reason keys in user-facing audit output with readable wording.
+- Update token-gate remediation text to include the valid short-content escape hatch: explicit `considered_not_needed` with `not_used_reason`.
+
+Subagent review evidence:
+
+- Galileo found a P1: `considered_not_needed` could pass with only `token_optimizer_status` and `token_optimizer_provider`, without `not_used_reason`.
+- Ampere confirmed the missing-token-evidence failure was visible but flagged confusing internal reason text and the same weak `considered_not_needed` acceptance.
+- Godel confirmed the focused test went red after the reason text was made human-readable, and requested coverage for missing `not_used_reason`, namespaced close tools, and `multi_tool_use.parallel` wrappers.
+- Averroes found a final blocker: `considered_not_needed` still accepted alternate rationale fields without `not_used_reason`. That path is now blocked and covered by regression tests.
+
+Verification:
+
+- `python -m unittest tests.test_session_skill_audit`
+  - 95 tests passed.
+- `python -m unittest tests.test_token_optimizer_gate_integration tests.test_skill_transitions`
+  - 14 tests passed.
+- `python -m unittest tests.test_token_optimizer_gate_integration tests.test_workflow_usability_layer`
+  - 19 tests passed.
+- `python -m unittest discover -s tests -q`
+  - 723 tests passed.
+- `python -m py_compile src\orchestration\session_postmortem.py src\orchestration\session_skill_audit.py tests\test_session_skill_audit.py`
+  - Passed.
+- Synthetic audit check:
+  - `multi_tool_use.parallel` containing `multi_agent_v1.spawn_agent` and `multi_agent_v1.close_agent` is counted as `spawned=1`, `closed=1`.
+  - Missing token decision yields `token_optimizer_status=blocked`.
+  - `considered_not_needed` with `token_optimizer_status_reason` but no `not_used_reason` remains blocked.
+  - Audit action says to run token optimizer, record runtime evidence, record passthrough, or record explicit `considered_not_needed` with `not_used_reason`.
+
+Operational step:
+
+- Bumped plugin manifests to `2.9.86`.
+- After push, upgrade KH UAF in Codex so the installed cache moves to `2.9.86`, then rerun blind subagent tests. A blind subagent response without token optimizer evidence should now fail the session audit instead of being treated as acceptable.

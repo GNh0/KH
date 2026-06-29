@@ -88,6 +88,203 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertTrue(any(issue["skill"] == "token-optimizer" for issue in audit.issues))
         self.assertTrue(any(issue["status"] == "blocked" for issue in audit.issues))
 
+    def test_subagent_without_token_optimizer_decision_is_blocked(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "multi_agent_v1.spawn_agent",
+                        "arguments": json.dumps({"message": "blind user-style task"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps({"agent_id": "agent-a"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "Subagent returned a useful answer, so this is done.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertEqual(audit.postmortem["subagent_summary"]["spawned"], 1)
+        self.assertTrue(rows["token-optimizer"]["required"])
+        self.assertEqual(rows["token-optimizer"]["required_reason"], "subagent packets/transcripts require a token decision")
+        self.assertEqual(rows["token-optimizer"]["token_optimizer_status"], "blocked")
+        self.assertIn("subagent was spawned", rows["token-optimizer"]["token_optimizer_status_reason"])
+        self.assertIn(("token-optimizer", "blocked"), issues)
+
+    def test_subagent_considered_not_needed_requires_explicit_token_decision(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "token_optimizer_status": "considered_not_needed",
+                                "token_optimizer_provider": "kh",
+                                "not_used_reason": "Subagent packet and transcript stayed below the configured threshold.",
+                                "decision_source": "subagent preflight",
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "multi_agent_v1.spawn_agent",
+                        "arguments": json.dumps({"message": "blind user-style task"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps({"agent_id": "agent-a"}),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertEqual(rows["token-optimizer"]["token_optimizer_status"], "considered_not_needed")
+        self.assertNotIn(("token-optimizer", "blocked"), issues)
+
+    def test_subagent_considered_not_needed_without_not_used_reason_is_blocked(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "token_optimizer_status": "considered_not_needed",
+                                "token_optimizer_provider": "kh",
+                                "decision_source": "subagent preflight",
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "multi_agent_v1.spawn_agent",
+                        "arguments": json.dumps({"message": "blind user-style task"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps({"agent_id": "agent-a"}),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertEqual(rows["token-optimizer"]["token_optimizer_status"], "blocked")
+        self.assertIn(("token-optimizer", "blocked"), issues)
+
+    def test_subagent_considered_not_needed_with_status_reason_only_is_blocked(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "token_optimizer_status": "considered_not_needed",
+                                "token_optimizer_provider": "kh",
+                                "token_optimizer_status_reason": "The packet is short.",
+                                "decision_source": "subagent preflight",
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "multi_agent_v1.spawn_agent",
+                        "arguments": json.dumps({"message": "blind user-style task"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps({"agent_id": "agent-a"}),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertEqual(rows["token-optimizer"]["token_optimizer_status"], "blocked")
+        self.assertIn(("token-optimizer", "blocked"), issues)
+
+    def test_parallel_wrapper_subagent_tools_are_counted(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "multi_tool_use.parallel",
+                        "arguments": json.dumps(
+                            {
+                                "tool_uses": [
+                                    {
+                                        "recipient_name": "multi_agent_v1.spawn_agent",
+                                        "parameters": {"message": "blind user-style task"},
+                                    },
+                                    {
+                                        "recipient_name": "multi_agent_v1.close_agent",
+                                        "parameters": {"target": "agent-a"},
+                                    },
+                                ]
+                            }
+                        ),
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertEqual(audit.postmortem["subagent_summary"]["spawned"], 1)
+        self.assertEqual(audit.postmortem["subagent_summary"]["closed"], 1)
+
     def test_front_door_worktree_skill_name_does_not_force_snapshot_requirement(self):
         front_door_output = {
             "front_door_status": "ok",

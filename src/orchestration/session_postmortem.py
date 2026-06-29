@@ -442,10 +442,15 @@ def analyze_codex_session_jsonl(
                         "command": _short(redact_sensitive_text(command or str(raw_arguments or "")), 260),
                     }
                 )
-            if name in {"spawn_agent", "create_agent"}:
+            if _tool_name_matches(name, {"spawn_agent", "create_agent"}):
                 subagents["spawned"] += 1
-            elif name in {"close_agent", "finish_agent"}:
+            elif _tool_name_matches(name, {"close_agent", "finish_agent"}):
                 subagents["closed"] += 1
+            for wrapped_name in _wrapped_tool_names(arguments):
+                if _tool_name_matches(wrapped_name, {"spawn_agent", "create_agent"}):
+                    subagents["spawned"] += 1
+                elif _tool_name_matches(wrapped_name, {"close_agent", "finish_agent"}):
+                    subagents["closed"] += 1
             if command:
                 _merge_token_optimizer_evidence(
                     token_optimizer_evidence,
@@ -478,6 +483,7 @@ def analyze_codex_session_jsonl(
                 verification_failures.append({"line": line_number, **failure})
             last_tool_call_was_token_optimizer_runtime = None
 
+    _merge_subagent_token_gate(token_info, subagents)
     token_status = _token_optimizer_status(token_info, token_optimizer_evidence)
     token_status_reason = _token_optimizer_status_reason(token_status, token_info, token_optimizer_evidence)
     review_status = _derive_review_status(subagents, review_with_fixes)
@@ -630,6 +636,13 @@ def _merge_token_gate(
         _append_unique(token_gate["reasons"], "context_ratio_above_threshold")
 
 
+def _merge_subagent_token_gate(token_gate: Dict[str, Any], subagents: Dict[str, Any]) -> None:
+    if int(subagents.get("spawned", 0) or 0) <= 0:
+        return
+    token_gate["required"] = True
+    _append_unique(token_gate["reasons"], "subagent_transcripts_require_token_decision")
+
+
 def _token_optimizer_status(token_gate: Dict[str, Any], evidence: Dict[str, Any]) -> str:
     if evidence.get("structured_used_records") or evidence.get("explicit_usage_records"):
         return "used"
@@ -639,6 +652,8 @@ def _token_optimizer_status(token_gate: Dict[str, Any], evidence: Dict[str, Any]
         return "blocked"
     if evidence.get("runtime_calls"):
         return "used"
+    if evidence.get("considered_not_needed_records"):
+        return "considered_not_needed"
     if token_gate.get("required"):
         return "blocked"
     return "considered_not_needed"
@@ -659,7 +674,11 @@ def _token_optimizer_status_reason(
         if evidence.get("blocked_reason_records"):
             return "Token optimizer not used because a blocked/fallback reason was recorded, but no recovery, runtime optimizer, or passthrough evidence was recorded."
         if token_gate.get("required"):
-            reasons = ", ".join(str(reason) for reason in token_gate.get("reasons", []) if reason)
+            reasons = ", ".join(
+                _token_gate_reason_label(str(reason))
+                for reason in token_gate.get("reasons", [])
+                if reason
+            )
             suffix = f" Token gate reasons: {reasons}." if reasons else ""
             return (
                 "Token optimizer not used even though the token gate was required; "
@@ -667,7 +686,40 @@ def _token_optimizer_status_reason(
                 + suffix
             )
         return "Token optimizer not used because no valid runtime optimizer or passthrough evidence was recorded."
+    if evidence.get("considered_not_needed_records"):
+        return "Token optimizer not used because explicit considered_not_needed evidence and not-used rationale were recorded."
     return "Token optimizer not used because the token gate was checked and optimization was not needed for this session."
+
+
+def _tool_name_matches(name: str, expected: set[str]) -> bool:
+    normalized = str(name or "").strip().lower()
+    if normalized in expected:
+        return True
+    tail = re.split(r"[.:]", normalized)[-1]
+    return tail in expected
+
+
+def _wrapped_tool_names(arguments: Dict[str, Any]) -> List[str]:
+    tool_uses = arguments.get("tool_uses")
+    if not isinstance(tool_uses, list):
+        return []
+    names: List[str] = []
+    for item in tool_uses:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("recipient_name") or item.get("name") or item.get("tool_name")
+        if name:
+            names.append(str(name))
+    return names
+
+
+def _token_gate_reason_label(reason: str) -> str:
+    labels = {
+        "subagent_transcripts_require_token_decision": "a subagent was spawned, but no token optimizer decision was recorded for its packet or transcript",
+        "cumulative_tokens_above_threshold": "cumulative token usage crossed the configured threshold",
+        "context_ratio_above_threshold": "the last input approached the model context threshold",
+    }
+    return labels.get(reason, reason)
 
 
 def _merge_token_optimizer_evidence(
@@ -694,7 +746,11 @@ def _merge_token_optimizer_evidence(
         evidence["explicit_passthrough_records"] = int(evidence.get("explicit_passthrough_records", 0)) + 1
     elif structured_counted and structured_status == "blocked":
         evidence["blocked_reason_records"] = int(evidence.get("blocked_reason_records", 0)) + 1
-    elif structured_counted and structured_status == "considered_not_needed":
+    elif (
+        structured_counted
+        and structured_status == "considered_not_needed"
+        and _has_token_not_used_reason(text)
+    ):
         evidence["considered_not_needed_records"] = int(evidence.get("considered_not_needed_records", 0)) + 1
     if structured_status != "passthrough" and decision_source and re.search(
         r"token_optimizer_status\s*[:=]\s*['\"]?passthrough|status\s*[:=]\s*['\"]?passthrough|contract-sensitive|raw passthrough",
@@ -765,6 +821,26 @@ def _structured_token_optimizer_status(text: str) -> str:
         if preferred in statuses:
             return preferred
     return ""
+
+
+def _has_token_not_used_reason(text: str) -> bool:
+    data = _parse_json_object_from_text(text)
+    if not isinstance(data, dict):
+        return False
+
+    def visit(value: Any) -> bool:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                lowered_key = str(key).lower()
+                if lowered_key == "not_used_reason" and str(child).strip():
+                    return True
+                if visit(child):
+                    return True
+        elif isinstance(value, list):
+            return any(visit(child) for child in value)
+        return False
+
+    return visit(data)
 
 
 def _parse_json_object_from_text(text: str) -> Dict[str, Any] | None:
