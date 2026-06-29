@@ -15,6 +15,8 @@ class ScenarioExpectation:
     recommended_execution: str
     evidence_required_contains: List[str] = field(default_factory=list)
     required_harnesses_contains: List[str] = field(default_factory=list)
+    reasons_contains: List[str] = field(default_factory=list)
+    forbidden_reasons_contains: List[str] = field(default_factory=list)
     gate_status: str = "not_applicable"
     missing_evidence: List[str] = field(default_factory=list)
     signal_categories: List[str] = field(default_factory=lambda: ["classification"])
@@ -91,6 +93,15 @@ def default_scenarios() -> List[ScenarioCase]:
         _case("human-followup-file-001", "human-user", "Do the same thing for the other file.", "ambiguous", "general", "clarify"),
         _case("human-review-it-001", "human-user", "Can you review it?", "ambiguous", "general", "clarify"),
         _case("human-shorter-followup-001", "human-user", "Now make it shorter.", "ambiguous", "general", "clarify"),
+        _case(
+            "human-visual-query-order-ambiguous-001",
+            "human-user",
+            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?",
+            "ambiguous",
+            "general",
+            "clarify",
+            reasons=["ambiguous_visual_query_order_request"],
+        ),
         _case(
             "domain-investment-advice-001",
             "domain-expert",
@@ -934,6 +945,8 @@ def evaluate_scenario(scenario: ScenarioCase) -> ScenarioEvaluation:
     _expect_equal(findings, "recommended_execution", expected.recommended_execution, classification["recommended_execution"])
     _expect_contains(findings, "evidence_required", expected.evidence_required_contains, classification["evidence_required"])
     _expect_contains(findings, "required_harnesses", expected.required_harnesses_contains, classification["required_harnesses"])
+    _expect_contains(findings, "reasons", expected.reasons_contains, classification["reasons"])
+    _expect_forbidden(findings, "reasons", expected.forbidden_reasons_contains, classification["reasons"])
 
     if classification["evidence_required"]:
         missing_for_signal = [
@@ -1061,6 +1074,8 @@ def _case(
     gate_status: str = "not_applicable",
     missing: List[str] | None = None,
     signals: List[str] | None = None,
+    reasons: List[str] | None = None,
+    forbidden_reasons: List[str] | None = None,
     tags: List[str] | None = None,
 ) -> ScenarioCase:
     return ScenarioCase(
@@ -1074,6 +1089,8 @@ def _case(
             recommended_execution=execution,
             evidence_required_contains=list(evidence or []),
             required_harnesses_contains=list(harnesses or []),
+            reasons_contains=list(reasons or []),
+            forbidden_reasons_contains=list(forbidden_reasons or []),
             gate_status=gate_status,
             missing_evidence=list(missing or []),
             signal_categories=list(signals or ["classification"]),
@@ -1158,6 +1175,25 @@ def _expect_contains(
                     "category": "evidence" if field == "evidence_required" else "classification",
                     "field": field,
                     "expected": item,
+                    "actual": ", ".join(sorted(actual_set)),
+                }
+            )
+
+
+def _expect_forbidden(
+    findings: List[Dict[str, str]],
+    field: str,
+    forbidden_items: Iterable[str],
+    actual_items: Iterable[str],
+) -> None:
+    actual_set = set(actual_items)
+    for item in forbidden_items:
+        if item in actual_set:
+            findings.append(
+                {
+                    "category": "classification",
+                    "field": field,
+                    "forbidden": item,
                     "actual": ", ".join(sorted(actual_set)),
                 }
             )

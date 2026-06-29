@@ -263,7 +263,15 @@ def _brainstorming_scenario(skill_name: str, output_dir: Path, repo_root: Path) 
         ],
         open_questions=["Select auth provider during architecture."],
         constraints=["private GitHub repo", "full-stack TypeScript MVP"],
-        metadata={"source_pattern": "Superpowers brainstorming adapted for KH UAF"},
+        metadata={
+            "source_pattern": "Superpowers brainstorming adapted for KH UAF",
+            "intent_frame": {"status": "captured"},
+            "problem_frame": {"status": "captured"},
+            "option_frame": {"status": "captured"},
+            "approval_frame": {"status": "direction_only"},
+            "handoff_frame": {"status": "ready_for_review"},
+            "self_review": {"status": "passed"},
+        },
     )
     validation = validate_brainstorm_session(session)
     handoff = build_architect_handoff(session)
@@ -291,7 +299,15 @@ def _brainstorming_scenario(skill_name: str, output_dir: Path, repo_root: Path) 
         blocked_contract="BrainstormHandoff",
         blocked_payload=blocked,
         blocked_reason=blocked["blocked_reason"],
-        missing_inputs=["target_user", "problem", "recommended_option", "decisions"],
+        missing_inputs=[
+            "target_user",
+            "problem",
+            "recommended_option",
+            "decisions",
+            "metadata.intent_frame",
+            "metadata.approval_frame",
+            "metadata.self_review",
+        ],
         contracts=contracts,
         artifacts=[
             _artifact_record_from_file(

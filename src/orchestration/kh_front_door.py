@@ -71,6 +71,7 @@ class KhFrontDoorResult:
     catalog_summary: Dict[str, Any] = field(default_factory=dict)
     large_work_orchestration_bundle: Dict[str, Any] | None = None
     large_work_bundle_validation: Dict[str, Any] | None = None
+    memory_policy: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -92,6 +93,7 @@ class KhFrontDoorResult:
             "catalog_summary": dict(self.catalog_summary),
             "large_work_orchestration_bundle": self.large_work_orchestration_bundle,
             "large_work_bundle_validation": self.large_work_bundle_validation,
+            "memory_policy": dict(self.memory_policy),
             "warnings": list(self.warnings),
         }
 
@@ -138,6 +140,7 @@ class KhFrontDoorResult:
             "execution_gate": dict(self.execution_gate),
             "runtime_applied_skills": runtime_applied_skills,
             "selected_not_executed_skills": selected_not_executed_skills,
+            "memory_policy": dict(self.memory_policy),
             "skill_status_summary": {
                 name: {
                     "status": status.get("status"),
@@ -244,12 +247,26 @@ def build_kh_front_door(
         catalog_summary=catalog_summary,
         large_work_orchestration_bundle=large_work_bundle,
         large_work_bundle_validation=large_work_validation,
+        memory_policy=_memory_policy(project_path, host),
         warnings=warnings,
     )
 
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _memory_policy(project_path: Path, host: str) -> Dict[str, Any]:
+    return {
+        "scope": "project_chat",
+        "project": str(project_path),
+        "host": host,
+        "global_codex_memory_allowed": False,
+        "host_global_memory_write_allowed": False,
+        "host_memory_lookup_before_front_door_allowed": False,
+        "cross_scope_import_requires_explicit_user_approval": True,
+        "subagent_scope": "child_chat_isolated_by_default",
+    }
 
 
 def _select_skill_source(
@@ -533,11 +550,7 @@ def _needs_sql_formatting_style_harness(classification: Dict[str, Any], plugin_r
         return False
     if plugin_route.get("ask_user"):
         return False
-    complexity = str(classification.get("complexity") or "")
-    if complexity in {"medium", "heavy", "high_risk"}:
-        return True
-    evidence = {str(item) for item in classification.get("evidence_required", [])}
-    return bool(evidence & {"test_evidence", "verification_plan", "important_facts_preserved", "command_output_filter"})
+    return True
 
 
 def _front_door_skill_statuses(
@@ -702,14 +715,15 @@ def _build_front_door_bundle(
                 "Large-work skill selected for workflow execution after front-door routing; not executed by the front-door command.",
                 ["large_work_orchestration_bundle"],
             )
+    token_optimizer_status, token_optimizer_status_reason = _front_door_token_optimizer_contract(
+        classification,
+        front_door_statuses,
+    )
     return build_large_work_orchestration_bundle(
         objective=prompt,
         workspace_strategy="front-door-only; select worktree strategy before edits",
-        token_optimizer_status=front_door_statuses.get("token-optimizer", {}).get("status", "considered_not_needed"),
-        token_optimizer_status_reason=(
-            front_door_statuses.get("token-optimizer", {}).get("evidence_note")
-            or "Token optimizer not used by front-door; it only records the token decision gate before workflow execution."
-        ),
+        token_optimizer_status=token_optimizer_status,
+        token_optimizer_status_reason=token_optimizer_status_reason,
         overrides=overrides,
         parallel_strategy_decision="front-door-only; prove independent write sets before parallel execution",
         metadata={
@@ -720,6 +734,38 @@ def _build_front_door_bundle(
                 "recommended_execution": classification.get("recommended_execution"),
             },
         },
+    )
+
+
+def _front_door_token_optimizer_contract(
+    classification: Dict[str, Any],
+    front_door_statuses: Dict[str, Dict[str, Any]],
+) -> tuple[str, str]:
+    """Return token optimizer usage status, separate from skill application status."""
+    skill_status = str(front_door_statuses.get("token-optimizer", {}).get("status") or "")
+    evidence_required = set(classification.get("evidence_required", []) or [])
+    needs_token_gate = bool(
+        {"token_optimization", "token_optimizer_status"} & evidence_required
+        or "token-optimizer" in (classification.get("cross_cutting", []) or [])
+    )
+    if skill_status == "pending_immediate_execution":
+        return (
+            "blocked",
+            "Token optimizer was selected as an immediate next gate but has not run yet; do not report token savings until used, passthrough, considered_not_needed, or blocked evidence is recorded.",
+        )
+    if skill_status == "blocked":
+        return (
+            "blocked",
+            str(front_door_statuses.get("token-optimizer", {}).get("blocked_reason") or "Token optimizer is blocked."),
+        )
+    if needs_token_gate:
+        return (
+            "considered_not_needed",
+            "Front-door recorded the token decision gate; no large command output, transcript, or compressible artifact has been processed yet.",
+        )
+    return (
+        "considered_not_needed",
+        "No large/log-like content crossed the token optimization threshold during front-door intake.",
     )
 
 
@@ -835,6 +881,23 @@ def _execution_gate(
     plugin_route: Dict[str, Any],
     recommended_skills: Sequence[str],
 ) -> Dict[str, Any]:
+    if classification.get("complexity") == "ambiguous" or classification.get("recommended_execution") == "clarify":
+        return {
+            "status": "blocked_until_clarification",
+            "can_execute": False,
+            "reason": "Request classification requires clarification before source exploration, memory lookup, or implementation.",
+            "required_before_execution": ["user_clarification"],
+            "blocked_actions": [
+                "memory_lookup",
+                "global_codex_memory",
+                "cross_chat_or_subagent_memory",
+                "target_or_sibling_folder_scan",
+                "implementation",
+                "deliverable_generation",
+                "verification",
+                "browser_qa",
+            ],
+        }
     if plugin_route.get("ask_user"):
         return {
             "status": "blocked_until_clarification",

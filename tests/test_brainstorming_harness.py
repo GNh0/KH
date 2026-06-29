@@ -34,6 +34,14 @@ class BrainstormingHarnessTests(unittest.TestCase):
             open_questions=["Which auth provider should be used?"],
             constraints=["Private GitHub repo", "TypeScript full-stack MVP"],
             next_skill="architect-pipeline",
+            metadata={
+                "intent_frame": {"status": "captured"},
+                "problem_frame": {"status": "captured"},
+                "option_frame": {"status": "captured"},
+                "approval_frame": {"status": "direction_only"},
+                "handoff_frame": {"status": "ready_for_review"},
+                "self_review": {"status": "passed"},
+            },
         )
 
         validation = validate_brainstorm_session(session)
@@ -62,6 +70,9 @@ class BrainstormingHarnessTests(unittest.TestCase):
         self.assertIn("problem", validation["missing"])
         self.assertIn("recommended_option", validation["missing"])
         self.assertIn("decisions", validation["missing"])
+        self.assertIn("metadata.intent_frame", validation["missing"])
+        self.assertIn("metadata.approval_frame", validation["missing"])
+        self.assertIn("metadata.self_review", validation["missing"])
 
     def test_skill_docs_require_domain_first_compact_brainstorming(self):
         repo_root = Path(__file__).resolve().parents[1]

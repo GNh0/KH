@@ -16,6 +16,12 @@ BUNDLE_APPLICATION_MODES = {
     "blocked",
     "immediate_gate",
 }
+TOKEN_OPTIMIZER_STATUS_VALUES = {
+    "used",
+    "considered_not_needed",
+    "passthrough",
+    "blocked",
+}
 BUNDLE_MEMBER_SKILLS = [
     "request-complexity-router",
     "host-agent-orchestration",
@@ -148,6 +154,8 @@ def validate_large_work_orchestration_bundle(bundle: LargeWorkOrchestrationBundl
     if not bundle.workspace_strategy.strip():
         missing.append("workspace_strategy")
     if not bundle.token_optimizer_status.strip():
+        missing.append("token_optimizer_status")
+    elif bundle.token_optimizer_status not in TOKEN_OPTIMIZER_STATUS_VALUES:
         missing.append("token_optimizer_status")
     if bundle.token_optimizer_status.strip() and not bundle.token_optimizer_status_reason.strip():
         missing.append("token_optimizer_status_reason")

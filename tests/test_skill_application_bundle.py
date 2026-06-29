@@ -92,6 +92,19 @@ class SkillApplicationBundleTests(unittest.TestCase):
         self.assertIn("host-agent-orchestration.status", validation["missing"])
         self.assertIn("host-agent-orchestration.application_mode", validation["missing"])
 
+    def test_validation_rejects_skill_status_as_token_optimizer_usage_status(self):
+        bundle = build_large_work_orchestration_bundle(
+            objective="Build a SaaS CRM MVP.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="pending_immediate_execution",
+            token_optimizer_status_reason="This is a skill gate status, not a token usage status.",
+        )
+
+        validation = validate_large_work_orchestration_bundle(bundle)
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("token_optimizer_status", validation["missing"])
+
     def test_docs_explain_modes_and_minimal_evidence_template(self):
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
         router = read_text("skills/request_complexity_router/SKILL.md")

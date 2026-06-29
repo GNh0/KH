@@ -960,6 +960,36 @@ CONTEXT_FREE_AMBIGUOUS_TERMS = {
     "make it shorter",
 }
 
+AMBIGUOUS_VISUAL_QUERY_ORDER_VISUAL_TERMS = {
+    "like the image",
+    "like this image",
+    "like the screenshot",
+    "as shown in the image",
+    "\uc774\ubbf8\uc9c0\ucc98\ub7fc",
+    "\uc2a4\ud06c\ub9b0\uc0f7\ucc98\ub7fc",
+}
+AMBIGUOUS_VISUAL_QUERY_ORDER_TERMS = {
+    "order",
+    "ordering",
+    "sequence",
+    "sort",
+    "sorted",
+    "\uc21c\uc11c",
+    "\uc815\ub82c",
+}
+AMBIGUOUS_VISUAL_QUERY_DISPLAY_TERMS = {
+    "query",
+    "lookup",
+    "retrieve",
+    "display",
+    "show",
+    "list",
+    "\uc870\ud68c",
+    "\ud45c\uc2dc",
+    "\ubcf4\uc774",
+    "\ub098\uc624",
+}
+
 EXTRA_SOFTWARE_DOMAIN_TERMS = {
     "async/await",
     "jwt",
@@ -2063,6 +2093,15 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             normalized,
         )
 
+    if _is_unreviewed_brainstorm_implementation_request(normalized, context):
+        return _brainstorming_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "brainstorm_implementation_needs_reviewed_handoff"],
+            normalized,
+        )
+
     if _is_approved_brainstorm_continuation(normalized, context):
         return _heavy_classification(
             domain,
@@ -2113,6 +2152,17 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             evidence_required=_dedupe([*evidence_required, "source_summary"]),
             reasons=[*reasons, "readonly_source_condition_question"],
             confidence=0.78,
+        )
+
+    if _is_ambiguous_visual_query_order_request(normalized, context):
+        return _classification(
+            complexity="ambiguous",
+            domain=domain,
+            recommended_execution="clarify",
+            cross_cutting=cross_cutting,
+            evidence_required=evidence_required,
+            reasons=[*reasons, "ambiguous_visual_query_order_request"],
+            confidence=0.58,
         )
 
     if _is_ambiguous(normalized, context):
@@ -3423,12 +3473,31 @@ def _is_unapproved_product_discovery_request(normalized: str, context: dict, dom
 
 
 def _is_approved_brainstorm_continuation(normalized: str, context: dict) -> bool:
-    """Detect a second-turn implementation handoff after a brainstorm choice."""
-    if context.get("brainstorm_handoff_approved") or context.get("has_brainstorm_handoff"):
-        return _contains_any(normalized, BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS)
-    if not _contains_any(normalized, BRAINSTORM_APPROVAL_CONTINUATION_TERMS):
+    """Detect execution only after a reviewed brainstorm handoff and separate approval."""
+    return _has_reviewed_brainstorm_execution_context(context) and _contains_any(
+        normalized,
+        BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS,
+    )
+
+
+def _is_unreviewed_brainstorm_implementation_request(normalized: str, context: dict) -> bool:
+    if _has_reviewed_brainstorm_execution_context(context):
         return False
-    return _contains_any(normalized, BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS)
+    return _contains_any(normalized, BRAINSTORM_APPROVAL_CONTINUATION_TERMS) and _contains_any(
+        normalized,
+        BRAINSTORM_IMPLEMENTATION_CONTINUATION_TERMS,
+    )
+
+
+def _has_reviewed_brainstorm_execution_context(context: dict) -> bool:
+    has_handoff = bool(context.get("has_brainstorm_handoff") or context.get("brainstorm_handoff_approved"))
+    design_reviewed = bool(context.get("design_review_approved") or context.get("brainstorm_handoff_approved"))
+    execution_approved = bool(
+        context.get("implementation_approved")
+        or context.get("execution_approved")
+        or context.get("separate_implementation_approval")
+    )
+    return has_handoff and design_reviewed and execution_approved
 
 
 def _is_mojibake_new_project_request(original: str, normalized: str, context: dict) -> bool:
@@ -3569,6 +3638,8 @@ def _has_blocking_discovery_specificity(normalized: str) -> bool:
 
 
 def _product_discovery_domain(domain: str, normalized: str) -> str:
+    if domain == "operations" or _contains_any(normalized, OPERATIONS_TERMS):
+        return "operations"
     if _contains_any(
         normalized,
         {
@@ -3595,6 +3666,40 @@ def _product_discovery_domain(domain: str, normalized: str) -> str:
     if domain == "general":
         return "product"
     return domain
+
+
+def _is_ambiguous_visual_query_order_request(normalized: str, context: dict) -> bool:
+    """Clarify visual/order/query requests without target context.
+
+    This is an invariant gate, not a phrase fixture: when a prompt references a
+    visual shape plus ordering/query/display behavior but has no active artifact
+    or inline SQL/data, the target may be DB ordering, UI display, report layout,
+    or SQL formatting.
+    """
+    if _has_inline_payload(normalized):
+        return False
+    if _has_visual_query_order_target_context(context):
+        return False
+    if re.search(r"\b(?:select|from|where|join|order\s+by|group\s+by)\b", normalized):
+        return False
+    return (
+        _contains_any(normalized, AMBIGUOUS_VISUAL_QUERY_ORDER_VISUAL_TERMS)
+        and _contains_any(normalized, AMBIGUOUS_VISUAL_QUERY_ORDER_TERMS)
+        and _contains_any(normalized, AMBIGUOUS_VISUAL_QUERY_DISPLAY_TERMS)
+    )
+
+
+def _has_visual_query_order_target_context(context: dict) -> bool:
+    explicit_layer = str(
+        context.get("visual_query_order_target")
+        or context.get("execution_layer")
+        or context.get("target_layer")
+        or ""
+    ).strip().lower()
+    if explicit_layer in {"sql", "database", "db", "ui", "screen", "report", "document"}:
+        return True
+    current_file = str(context.get("current_file") or context.get("active_file") or "").lower()
+    return current_file.endswith(('.sql', '.spsql'))
 
 
 def _is_ambiguous(normalized: str, context: dict) -> bool:

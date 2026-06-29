@@ -139,6 +139,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(summary["plugin_route"]["controller"], "sql-formatting")
         self.assertEqual(payload["plugin_route"]["controller"]["capability"], "sql_formatting")
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", payload["plugin_route"]["reasons"])
+        self.assertIn("sql-formatting-style-harness", payload["recommended_skills"])
         self.assertTrue(
             any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
         )
@@ -170,6 +171,7 @@ class KhFrontDoorTests(unittest.TestCase):
             "sql-formatting",
             {assistant["provider_id"] for assistant in payload["plugin_route"]["assistants"]},
         )
+        self.assertNotIn("sql-formatting-style-harness", payload["recommended_skills"])
         self.assertFalse(
             any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
         )
@@ -212,6 +214,33 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertTrue(
             payload["required_next_actions"][0].startswith("NEXT SKILL EXECUTION")
         )
+
+    def test_ambiguous_visual_query_order_blocks_execution_until_clarified(self):
+        result = build_kh_front_door(
+            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "ambiguous")
+        self.assertEqual(payload["classification"]["recommended_execution"], "clarify")
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_clarification")
+        self.assertIn("user_clarification", payload["execution_gate"]["required_before_execution"])
+
+    def test_ambiguous_visual_query_order_with_active_artifact_blocks_execution(self):
+        result = build_kh_front_door(
+            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?",
+            project=Path.cwd(),
+            host="codex",
+            request_context={"has_active_artifact": True},
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "ambiguous")
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_clarification")
 
     def test_front_door_warns_but_recovers_from_stale_host_cache_paths(self):
         old_cache_path = (
@@ -275,7 +304,11 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         self.assertEqual(
             payload["large_work_orchestration_bundle"]["token_optimizer_status"],
-            "pending_immediate_execution",
+            "blocked",
+        )
+        self.assertIn(
+            "immediate next gate",
+            payload["large_work_orchestration_bundle"]["token_optimizer_status_reason"],
         )
         self.assertTrue(payload["large_work_bundle_validation"]["valid"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
@@ -523,7 +556,7 @@ class KhFrontDoorTests(unittest.TestCase):
             any("do not implement" in action for action in payload["required_next_actions"])
         )
 
-    def test_approved_brainstorm_followup_opens_execution_gate(self):
+    def test_brainstorm_followup_without_handoff_keeps_execution_closed(self):
         result = build_kh_front_door(
             "\uc0ac\uc6a9\uc790\uac00 \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
             "\ub300\uc2dc\ubcf4\ub4dc 1\ubc88 \uae30\ubcf8 \uc7a5\ubd80\ud615 MVP "
@@ -536,6 +569,54 @@ class KhFrontDoorTests(unittest.TestCase):
         payload = result.to_summary_dict()
 
         self.assertEqual(payload["front_door_status"], "ok")
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["domain"], "operations")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_brainstorming_handoff")
+        self.assertIn("brainstorming-harness", payload["immediate_next_skills"])
+        self.assertTrue(
+            any("brainstorming-harness" in action for action in payload["required_next_actions"])
+        )
+
+    def test_brainstorm_handoff_approved_without_execution_approval_stays_closed(self):
+        result = build_kh_front_door(
+            "\uc0ac\uc6a9\uc790\uac00 \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
+            "\ub300\uc2dc\ubcf4\ub4dc 1\ubc88 \uae30\ubcf8 \uc7a5\ubd80\ud615 MVP "
+            "\ubc29\ud5a5\uc744 \uc2b9\uc778\ud568. \ub300\uc0c1 \uacbd\ub85c "
+            "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260604_C "
+            "\uc5d0 \uad6c\ud604 \uc9c4\ud589.",
+            project=Path.cwd(),
+            host="codex",
+            request_context={"brainstorm_handoff_approved": True},
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_brainstorming_handoff")
+
+    def test_reviewed_brainstorm_followup_opens_execution_gate(self):
+        result = build_kh_front_door(
+            "\uc0ac\uc6a9\uc790\uac00 \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
+            "\ub300\uc2dc\ubcf4\ub4dc 1\ubc88 \uae30\ubcf8 \uc7a5\ubd80\ud615 MVP "
+            "\ubc29\ud5a5\uc744 \uc2b9\uc778\ud568. \ub300\uc0c1 \uacbd\ub85c "
+            "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\RetestAutoRoute_20260604_C "
+            "\uc5d0 \uad6c\ud604 \uc9c4\ud589.",
+            project=Path.cwd(),
+            host="codex",
+            request_context={
+                "has_brainstorm_handoff": True,
+                "design_review_approved": True,
+                "separate_implementation_approval": True,
+            },
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["front_door_status"], "ok")
         self.assertEqual(payload["classification"]["complexity"], "heavy")
         self.assertEqual(payload["classification"]["domain"], "operations")
         self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
@@ -543,13 +624,19 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertEqual(payload["execution_gate"]["status"], "blocked_until_large_work_preflight")
         self.assertIn("goal-state-harness", payload["immediate_next_skills"])
-        self.assertIn("development-lifecycle-harness", payload["selected_not_executed_skills"])
-        self.assertTrue(
-            any("Create or update GoalState" in action for action in payload["required_next_actions"])
+
+    def test_front_door_emits_machine_readable_memory_policy(self):
+        result = build_kh_front_door(
+            "Implement this workflow and keep scoped memory evidence.",
+            project=Path.cwd(),
+            host="codex",
         )
-        self.assertTrue(
-            any("HARD PRE-FLIGHT STOP" in action for action in payload["required_next_actions"])
-        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["memory_policy"]["scope"], "project_chat")
+        self.assertFalse(payload["memory_policy"]["global_codex_memory_allowed"])
+        self.assertFalse(payload["memory_policy"]["host_memory_lookup_before_front_door_allowed"])
+        self.assertTrue(payload["memory_policy"]["cross_scope_import_requires_explicit_user_approval"])
 
     def test_memory_state_request_requires_project_chat_scope_and_global_candidate_policy(self):
         result = build_kh_front_door(

@@ -108,6 +108,14 @@ class ProjectMarkdownArtifactTests(unittest.TestCase):
                     )
                 ],
                 constraints=["No external API for first demo"],
+                metadata={
+                    "intent_frame": {"status": "captured"},
+                    "problem_frame": {"status": "captured"},
+                    "option_frame": {"status": "captured"},
+                    "approval_frame": {"status": "direction_only"},
+                    "handoff_frame": {"status": "ready_for_review"},
+                    "self_review": {"status": "passed"},
+                },
             )
 
             result = write_brainstorm_markdown_artifacts(tmp, session, run_id="brainstorm-001")

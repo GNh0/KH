@@ -106,6 +106,16 @@ def validate_brainstorm_session(session: BrainstormSession) -> Dict[str, Any]:
         missing.append("decisions")
     if not session.next_skill.strip():
         missing.append("next_skill")
+    for checkpoint in [
+        "intent_frame",
+        "problem_frame",
+        "option_frame",
+        "approval_frame",
+        "handoff_frame",
+        "self_review",
+    ]:
+        if not session.metadata.get(checkpoint):
+            missing.append(f"metadata.{checkpoint}")
     return {
         "valid": not missing,
         "missing": missing,
@@ -209,6 +219,12 @@ def _brainstorm_evidence(session: BrainstormSession) -> List[str]:
         "brainstorm_handoff",
         "decision_log",
         "recommended_option",
+        "intent_frame",
+        "problem_frame",
+        "option_frame",
+        "approval_frame",
+        "handoff_frame",
+        "self_review",
     ]
     if session.open_questions:
         evidence.append("open_questions")

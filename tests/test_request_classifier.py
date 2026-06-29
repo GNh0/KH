@@ -322,12 +322,62 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertIn("brainstorming-harness", result.recommended_skills)
                 self.assertIn("brainstorm_handoff", result.evidence_required)
 
-    def test_approved_korean_brainstorm_followup_routes_to_heavy_execution(self):
+    def test_brainstorm_implementation_text_without_handoff_stays_in_brainstorming(self):
         result = classify_request(
             "\uc0ac\uc6a9\uc790\uac00 \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
             "\ub300\uc2dc\ubcf4\ub4dc 1\ubc88 \uae30\ubcf8 \uc7a5\ubd80\ud615 MVP "
             "\ubc29\ud5a5\uc744 \uc2b9\uc778\ud568. \ub300\uc0c1 \uacbd\ub85c C:\\work\\Inventory "
             "\uc5d0 \uad6c\ud604 \uc9c4\ud589."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "operations")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", result.recommended_skills)
+        self.assertIn("brainstorm_handoff", result.evidence_required)
+        self.assertIn("brainstorm_implementation_needs_reviewed_handoff", result.reasons)
+        self.assertNotIn("approved_brainstorm_continuation", result.reasons)
+
+    def test_brainstorm_handoff_approved_alone_does_not_open_execution(self):
+        result = classify_request(
+            "\uc0ac\uc6a9\uc790\uac00 \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
+            "\ub300\uc2dc\ubcf4\ub4dc 1\ubc88 \uae30\ubcf8 \uc7a5\ubd80\ud615 MVP "
+            "\ubc29\ud5a5\uc744 \uc2b9\uc778\ud568. \ub300\uc0c1 \uacbd\ub85c C:\\work\\Inventory "
+            "\uc5d0 \uad6c\ud604 \uc9c4\ud589.",
+            {"brainstorm_handoff_approved": True},
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", result.recommended_skills)
+        self.assertIn("brainstorm_implementation_needs_reviewed_handoff", result.reasons)
+        self.assertNotIn("approved_brainstorm_continuation", result.reasons)
+
+    def test_brainstorm_handoff_and_design_review_without_execution_approval_stays_blocked(self):
+        result = classify_request(
+            "\uc0ac\uc6a9\uc790\uac00 \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
+            "\ub300\uc2dc\ubcf4\ub4dc 1\ubc88 \uae30\ubcf8 \uc7a5\ubd80\ud615 MVP "
+            "\ubc29\ud5a5\uc744 \uc2b9\uc778\ud568. \ub300\uc0c1 \uacbd\ub85c C:\\work\\Inventory "
+            "\uc5d0 \uad6c\ud604 \uc9c4\ud589.",
+            {"has_brainstorm_handoff": True, "design_review_approved": True},
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorm_implementation_needs_reviewed_handoff", result.reasons)
+        self.assertNotIn("approved_brainstorm_continuation", result.reasons)
+
+    def test_reviewed_brainstorm_handoff_with_separate_execution_approval_routes_to_heavy(self):
+        result = classify_request(
+            "\uc0ac\uc6a9\uc790\uac00 \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
+            "\ub300\uc2dc\ubcf4\ub4dc 1\ubc88 \uae30\ubcf8 \uc7a5\ubd80\ud615 MVP "
+            "\ubc29\ud5a5\uc744 \uc2b9\uc778\ud568. \ub300\uc0c1 \uacbd\ub85c C:\\work\\Inventory "
+            "\uc5d0 \uad6c\ud604 \uc9c4\ud589.",
+            {
+                "has_brainstorm_handoff": True,
+                "design_review_approved": True,
+                "separate_implementation_approval": True,
+            },
         )
 
         self.assertEqual(result.complexity, "heavy")
@@ -546,6 +596,48 @@ class RequestClassifierTests(unittest.TestCase):
 
         self.assertEqual(result.complexity, "ambiguous")
         self.assertEqual(result.recommended_execution, "clarify")
+
+    def test_visual_query_order_without_target_context_asks_for_clarification(self):
+        cases = [
+            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?",
+            "\uc2a4\ud06c\ub9b0\uc0f7\ucc98\ub7fc \uc815\ub82c\ud574\uc11c \ub098\uc624\uac8c \ud558\uace0 \uc2f6\uc740\ub370",
+            "like the image, make it show in that order",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "ambiguous")
+                self.assertEqual(result.recommended_execution, "clarify")
+                self.assertIn("ambiguous_visual_query_order_request", result.reasons)
+
+    def test_visual_query_order_with_active_artifact_still_asks_for_target_clarification(self):
+        result = classify_request(
+            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?",
+            {"has_active_artifact": True},
+        )
+
+        self.assertEqual(result.complexity, "ambiguous")
+        self.assertEqual(result.recommended_execution, "clarify")
+        self.assertIn("ambiguous_visual_query_order_request", result.reasons)
+
+    def test_visual_query_order_with_explicit_sql_target_context_stays_actionable(self):
+        result = classify_request(
+            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?",
+            {"has_active_artifact": True, "execution_layer": "sql"},
+        )
+
+        self.assertNotEqual(result.complexity, "ambiguous")
+        self.assertNotIn("ambiguous_visual_query_order_request", result.reasons)
+
+    def test_visual_query_order_with_inline_sql_stays_actionable(self):
+        result = classify_request(
+            "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\n"
+            "\uc774\ubbf8\uc9c0\ucc98\ub7fc \ub300\ubd84\ub958 \uc911\ubd84\ub958\ud574\uc11c \uc21c\uc11c\ub85c \uc870\ud68c\ub418\ub3c4\ub85d \ud558\uace0\uc2f6\uac70\ub4e0?"
+        )
+
+        self.assertNotEqual(result.complexity, "ambiguous")
+        self.assertNotIn("ambiguous_visual_query_order_request", result.reasons)
 
     def test_substring_matches_do_not_over_escalate(self):
         earnings = classify_request("Summarize Nvidia's latest earnings and key risks.")
