@@ -75,6 +75,7 @@ def build_progress_compound_capture(progress: DevelopmentRunProgress) -> Compoun
             "task_status": progress.task_status or derive_task_status(progress.tasks),
             "review_status": progress.review_status or derive_review_status(progress.tasks),
             "token_optimizer_status": progress.token_optimizer_status,
+            "token_optimizer_status_reason": progress.token_optimizer_status_reason,
             "workspace_strategy": progress.workspace_strategy,
         },
     )

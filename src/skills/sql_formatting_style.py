@@ -66,7 +66,12 @@ def verify_sql_formatting_style(
             ],
         },
         "token_optimizer_status": "passthrough",
-        "token_optimizer_reason": "SQL/stored procedure text is contract-sensitive and was not compressed.",
+        "token_optimizer_status_reason": (
+            "Token optimizer not used because SQL/stored procedure text is contract-sensitive and was not compressed."
+        ),
+        "not_used_reason": (
+            "Token optimizer not used because SQL/stored procedure text is contract-sensitive and was not compressed."
+        ),
         "cte_temp_table_reason": cte_temp_table_reason or "",
     }
     return HarnessResult(
@@ -122,6 +127,9 @@ def extract_powerbuilder_sql_fragments(
                 "end_line": end + 1,
                 "sql_text": sql_text,
                 "token_optimizer_status": "passthrough",
+                "token_optimizer_status_reason": (
+                    "Token optimizer not used because SQL/stored procedure text is contract-sensitive and was not compressed."
+                ),
             }
         )
         index = end + 1

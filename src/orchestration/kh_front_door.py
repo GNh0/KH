@@ -706,6 +706,10 @@ def _build_front_door_bundle(
         objective=prompt,
         workspace_strategy="front-door-only; select worktree strategy before edits",
         token_optimizer_status=front_door_statuses.get("token-optimizer", {}).get("status", "considered_not_needed"),
+        token_optimizer_status_reason=(
+            front_door_statuses.get("token-optimizer", {}).get("evidence_note")
+            or "Token optimizer not used by front-door; it only records the token decision gate before workflow execution."
+        ),
         overrides=overrides,
         parallel_strategy_decision="front-door-only; prove independent write sets before parallel execution",
         metadata={
@@ -769,7 +773,7 @@ def _required_next_actions(
     if execution_gate and not execution_gate.get("can_execute", True):
         if execution_gate.get("status") == "blocked_until_large_work_preflight":
             actions.append(
-                "HARD PRE-FLIGHT STOP: heavy or role_dag work cannot move into broad source exploration, file writes, DB writes, subagent dispatch, verification, or completion claims until large_work_orchestration_bundle, GoalState, workspace_strategy, token_optimizer_status, host/subagent strategy, parallel strategy, role audit decision, guard/rollback policy, and verification plan evidence are recorded."
+                "HARD PRE-FLIGHT STOP: heavy or role_dag work cannot move into broad source exploration, file writes, DB writes, subagent dispatch, verification, or completion claims until large_work_orchestration_bundle, GoalState, workspace_strategy, token_optimizer_status, token_optimizer_status_reason, host/subagent strategy, parallel strategy, role audit decision, guard/rollback policy, and verification plan evidence are recorded."
             )
         else:
             actions.append(
@@ -788,7 +792,7 @@ def _required_next_actions(
             [
                 "Create or update GoalState before implementation.",
                 "Record workspace_strategy before edits.",
-                "Record token_optimizer_status=used|considered_not_needed|passthrough|blocked before broad reads, implementation tools, subagent packets, or long command-output handling.",
+                "Record token_optimizer_status=used|considered_not_needed|passthrough|blocked and token_optimizer_status_reason before broad reads, implementation tools, subagent packets, or long command-output handling.",
                 "Record host_runtime, nested_subagents_available or not_applicable, subagent_strategy with concrete rationale, parallel_strategy_decision with concrete rationale, and role_execution_audit.status before implementation.",
                 "For DB writes, destructive commands, or shared production state, record guard_policy plus rollback/snapshot strategy before the write.",
                 "When running inside a host subagent, record nested_subagents_available and subagent_strategy=dispatch|single-controller|review-only|blocked before implementation.",

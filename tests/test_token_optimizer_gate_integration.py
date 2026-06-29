@@ -16,6 +16,8 @@ class TokenOptimizerGateIntegrationTests(unittest.TestCase):
         prompt = "\n".join(manifest["interface"]["defaultPrompt"])
 
         self.assertIn("token_optimizer_status", prompt)
+        self.assertIn("token_optimizer_status_reason", prompt)
+        self.assertIn("not_used_reason", prompt)
         self.assertIn("context budget", prompt)
         self.assertIn("large or long-running", prompt)
         self.assertIn("estimated_context_tokens", prompt)
@@ -26,6 +28,8 @@ class TokenOptimizerGateIntegrationTests(unittest.TestCase):
         self.assertIn("context budget gate", content)
         self.assertIn("large or long-running development workflows", content)
         self.assertIn("token_optimizer_status", content)
+        self.assertIn("token_optimizer_status_reason", content)
+        self.assertIn("not_used_reason", content)
         self.assertIn("estimated_context_tokens", content)
         self.assertIn("must never reduce answer quality", content)
         self.assertIn("passthrough", content)
@@ -37,6 +41,8 @@ class TokenOptimizerGateIntegrationTests(unittest.TestCase):
 
         self.assertIn("actual_usage_scope", combined)
         self.assertIn("actual_tokens_saved", combined)
+        self.assertIn("token_optimizer_status_reason", combined)
+        self.assertIn("not_used_reason", combined)
         self.assertIn("billing_tokens_available", combined)
         self.assertIn("provider billing tokens", combined)
 
@@ -48,6 +54,7 @@ class TokenOptimizerGateIntegrationTests(unittest.TestCase):
         self.assertIn("token-optimizer", combined)
         self.assertIn("command-output-harness", combined)
         self.assertIn("token_optimizer_status", combined)
+        self.assertIn("token_optimizer_status_reason", combined)
         self.assertIn("large or long-running", combined)
 
     def test_subagent_pipeline_requires_compact_packets_and_transcript_policy(self):

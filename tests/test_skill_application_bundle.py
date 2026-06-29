@@ -43,6 +43,7 @@ class SkillApplicationBundleTests(unittest.TestCase):
         self.assertEqual(serialized["evidence_key"], "large_work_orchestration_bundle")
         self.assertEqual(serialized["workspace_strategy"], "project-local-worktree")
         self.assertEqual(serialized["token_optimizer_status"], "used")
+        self.assertIn("Token optimizer used", serialized["token_optimizer_status_reason"])
         self.assertEqual(set(serialized["skill_statuses"]), set(BUNDLE_MEMBER_SKILLS))
         self.assertEqual(
             serialized["skill_statuses"]["parallel-orchestration-harness"]["status"],

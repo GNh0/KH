@@ -121,6 +121,10 @@ def apply_workflow_usability_runtime(
             "status",
             runtime_metadata.get("token_optimizer_status", ""),
         )
+        runtime_metadata["token_optimizer_status_reason"] = token_optimization.get(
+            "token_optimizer_status_reason",
+            runtime_metadata.get("token_optimizer_status_reason", ""),
+        )
         progress = build_workflow_development_progress(
             workflow_id=workflow_id,
             file_list=file_list,
@@ -235,6 +239,9 @@ def build_workflow_development_progress(
         commit_sha=str(metadata.get("commit_sha", "")),
         next_task=_next_task_id(task_items, workflow_success),
         token_optimizer_status=str(metadata.get("token_optimizer_status") or _token_optimizer_status(token_decision.to_dict())),
+        token_optimizer_status_reason=str(
+            metadata.get("token_optimizer_status_reason") or _token_optimizer_status_reason(token_decision.to_dict())
+        ),
         skill_statuses=dict(metadata.get("skill_statuses", {})),
         tasks=task_items,
         artifacts=list(metadata.get("artifacts", []) or []),
@@ -401,6 +408,21 @@ def _token_optimizer_status(token_decision: Dict[str, Any]) -> str:
     if token_decision.get("status") == "blocked":
         return "blocked"
     return "considered_not_needed"
+
+
+def _token_optimizer_status_reason(token_decision: Dict[str, Any]) -> str:
+    rationale = str(token_decision.get("rationale", "") or "").strip()
+    status = _token_optimizer_status(token_decision)
+    if status == "passthrough":
+        return _join_reason("Token optimizer not used because content was passed through unchanged", rationale)
+    if status == "blocked":
+        return _join_reason("Token optimizer not used because optimization was blocked", rationale)
+    return "Token optimizer not used because the workflow has not produced large command output or transcripts yet."
+
+
+def _join_reason(prefix: str, reason: str) -> str:
+    clean = reason.strip().rstrip(".")
+    return f"{prefix}: {clean}." if clean else f"{prefix}."
 
 
 def _result_commit_sha(result: WorkflowTaskResult | None, workflow_success: bool) -> str:

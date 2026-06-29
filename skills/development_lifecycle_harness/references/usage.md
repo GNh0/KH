@@ -16,7 +16,7 @@ Do not use this skill only because it is available. Use it when the current task
 - Target workspace, write boundaries, and whether user-facing deliverables are expected.
 - Workspace strategy: `current-checkout`, `project-local-worktree`, `host-worktree`, or `isolated-branch`.
 - Default to isolated workspace for implementation in Git-backed projects. Use `current-checkout` only for documentation-only edits, a single-file small patch, or explicit user instruction.
-- Token context budget inputs: `estimated_context_tokens`, expected tool calls, broad file reads, large outputs, subagent transcripts, and whether `token-optimizer` should be `used`, `considered_not_needed`, `passthrough`, or `blocked`.
+- Token context budget inputs: `estimated_context_tokens`, expected tool calls, broad file reads, large outputs, subagent transcripts, whether `token-optimizer` should be `used`, `considered_not_needed`, `passthrough`, or `blocked`, and the required `token_optimizer_status_reason`.
 - GoalState inputs: objective, success criteria, required evidence, current evidence, active task, missing evidence, and next recommended action.
 - Development progress inputs for task-plan work: `run_id`, task IDs/titles, active task, RED/GREEN status, spec-review status, code-quality-review status, fix/re-review status, commit SHA, next task, and final report fields.
 - Large-work bundle inputs: `large_work_orchestration_bundle.skill_statuses` for `request-complexity-router`, `host-agent-orchestration`, `goal-state-harness`, `development-lifecycle-harness`, `token-optimizer`, `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller`.
@@ -56,14 +56,14 @@ Do not use this skill only because it is available. Use it when the current task
 - Concrete input summary and target workspace or artifact paths.
 - `large_work_orchestration_bundle` with `skill_statuses`, `parallel_strategy_decision`, `memory_candidates`, `compound_handoff`, and no-learning or skip rationales.
 - `workspace_strategy` and its evidence: current checkout rationale, worktree path, host workspace id, or isolated branch name.
-- `token_optimizer_status` and its evidence: savings statistics, `considered_not_needed` rationale, `passthrough` quality reason, or blocked reason.
+- `token_optimizer_status`, `token_optimizer_status_reason`, and its evidence: savings statistics, `considered_not_needed` rationale, `passthrough` quality reason, blocked reason, or `not_used_reason`.
 - GoalState and goal ledger evidence: objective, status, success criteria, evidence required, evidence collected, missing evidence, and next recommended action.
 - Development progress evidence: `.kh/development/<run-id>/state/progress.json`, active task, task statuses, RED/GREEN/review/fix/re-review/commit loop state, and stable final report fields.
 - Skill transition evidence: `skill_transition_handoff`, `required_next_skills`, transition issues, or `skill_transition_policy_passed`.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Verification command or review evidence, including failures and blocked states.
-- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, `token_optimizer_status`, and `skill_statuses`.
+- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, `token_optimizer_status`, `token_optimizer_status_reason`, and `skill_statuses`.
 
 ## Failure handling
 

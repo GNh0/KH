@@ -61,7 +61,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
    - `by_strategy` for workflow summaries
    - RTK-style `by_command_family` stats for optimized command output
    These fields describe the actual optimizer input/output payload counted by KH. They are not provider billing token telemetry unless the host explicitly exposes that telemetry.
-10. When optimization is not applied during heavy work, report `considered_not_needed`, `passthrough`, or `blocked` with a short reason.
+10. Every workflow-level token decision must include `token_optimizer_status_reason`. When optimization is not applied, also report `not_used_reason` so a user can tell whether it was too small, quality-sensitive passthrough, provider/policy blocked, or no optimizable command output/transcript was present.
 11. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 12. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 13. Report the difference between capability available in the repository and behavior actually executed in the current run.
@@ -71,6 +71,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 - Skill name and execution level used for the run.
 - Concrete input summary and target workspace or artifact paths.
 - `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
+- `token_optimizer_status_reason`, plus `not_used_reason` for every non-`used` status.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Before/after token usage statistics for every optimized item or aggregate workflow, with optimizer-local telemetry separated from provider billing-token availability.
@@ -88,4 +89,4 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 
 ## Quality bar
 
-A valid use of `token-optimizer` must leave enough evidence for another agent to answer: why this skill applied, what ran or was applied, what changed, how many optimizer-local payload tokens/bytes were saved compared with no optimizer, whether those token counts are local estimates or provider billing tokens, and what still needs attention.
+A valid use of `token-optimizer` must leave enough evidence for another agent to answer: why this skill applied, whether it was used or deliberately not used, the exact not-used reason when skipped/passthrough/blocked, what ran or was applied, what changed, how many optimizer-local payload tokens/bytes were saved compared with no optimizer, whether those token counts are local estimates or provider billing tokens, and what still needs attention.

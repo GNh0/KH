@@ -47,6 +47,7 @@ def build_progress_panel(progress: DevelopmentRunProgress) -> Dict[str, Any]:
         "task_status": progress.task_status or derive_task_status(progress.tasks),
         "review_status": progress.review_status or derive_review_status(progress.tasks),
         "token_optimizer_status": progress.token_optimizer_status,
+        "token_optimizer_status_reason": progress.token_optimizer_status_reason,
         "commit_sha": fields["commit_sha"],
         "next_task": fields["next_task"],
         "active_task": progress.active_task,
@@ -66,6 +67,7 @@ def render_progress_panel(progress: DevelopmentRunProgress) -> str:
             f"Status: {panel['task_status']} | Review: {panel['review_status']} | "
             f"Token: {panel['token_optimizer_status'] or 'not-recorded'}"
         ),
+        f"Token reason: {panel['token_optimizer_status_reason'] or 'not-recorded'}",
         (
             "Tasks: "
             f"{panel['counts']['complete']} complete, "
@@ -113,6 +115,7 @@ def build_host_progress_panel(progress: DevelopmentRunProgress, host: str = "gen
             "review_status": panel["review_status"],
             "workspace_strategy": panel["workspace_strategy"],
             "token_optimizer_status": panel["token_optimizer_status"] or "not-recorded",
+            "token_optimizer_status_reason": panel["token_optimizer_status_reason"] or "not-recorded",
             "commit_sha": panel["commit_sha"],
             "active_task": panel["active_task"],
             "next_task": panel["next_task"],
@@ -198,6 +201,7 @@ def _progress_section(panel: Dict[str, Any]) -> Dict[str, Any]:
             {"label": "Task Status", "value": panel["task_status"]},
             {"label": "Review Status", "value": panel["review_status"]},
             {"label": "Token Optimizer", "value": panel["token_optimizer_status"] or "not-recorded"},
+            {"label": "Token Optimizer Reason", "value": panel["token_optimizer_status_reason"] or "not-recorded"},
             {"label": "Active Task", "value": panel["active_task"]},
             {"label": "Next Task", "value": panel["next_task"]},
             {"label": "Latest Commit", "value": panel["commit_sha"]},

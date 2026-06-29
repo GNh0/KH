@@ -40,7 +40,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 
 - For large or long-running implementation, design, review, QA, or resume work, run `token-optimizer` as a context budget gate before broad reads, long commands, or subagent handoffs.
 - Use `command-output-harness` plus `token-optimizer` for repeated test, lint, build, traceback, or install logs so exit codes and actionable failures are preserved without flooding context.
-- Final status must include `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`, plus savings, passthrough reason, blocked reason, or skip rationale.
+- Final status must include `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`, plus `token_optimizer_status_reason`; non-`used` decisions must also expose `not_used_reason`.
 
 ## Large Work Orchestration Bundle Policy
 
@@ -51,7 +51,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 - Use the minimal evidence template when runtime evidence would be disproportionate: `skill`, `status`, `application_mode`, `evidence_note`, `evidence_keys`, and optional `blocked_reason`. This does not require AdapterRequest, role results, or wave metadata unless those runtime paths are actually claimed.
 - Do not run every bundle member heavily by default. `memory-state-harness`, `parallel-orchestration-harness`, `subagent-review-pipeline`, `role-execution-audit-harness`, `compound-engineering-harness`, and `workflow-skill-distiller` may be `considered_not_needed` when the run lacks durable memory, independent workers, claimed role DAG execution, or reusable learning.
 - `memory-state-harness` should normally produce memory candidates only unless the user explicitly approves durable promotion and scope.
-- The bundle must preserve `parallel_strategy_decision`, `memory_candidates`, `workspace_strategy`, `token_optimizer_status`, and `compound_handoff` or a no-learning rationale.
+- The bundle must preserve `parallel_strategy_decision`, `memory_candidates`, `workspace_strategy`, `token_optimizer_status`, `token_optimizer_status_reason`, and `compound_handoff` or a no-learning rationale.
 
 ## Skill Transition Policy
 
@@ -69,7 +69,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 2. Choose and record `workspace_strategy` before editing; for implementation in a Git-backed project, prefer isolated workspace unless an in-place exception applies.
 3. Create or refresh `GoalState` before implementation by using `goal-state-harness` for objective, success criteria, required evidence, and blocked-state handling.
 4. For large work, create or update `large_work_orchestration_bundle.skill_statuses` before editing.
-5. Decide `token_optimizer_status` for large or long-running work and route long logs or subagent transcripts through `token-optimizer` when needed.
+5. Decide `token_optimizer_status` and `token_optimizer_status_reason` for large or long-running work and route long logs or subagent transcripts through `token-optimizer` when needed.
 6. Write a short implementation plan for multi-step work with exact files, tests, and verification commands.
 7. For task-plan work, create `.kh/development/<run-id>/state/progress.json` and update it as each task moves through RED, GREEN, spec review, code-quality review, fix, re-review, commit, and next task.
 8. For long task-plan work, render the KH progress panel and, after review, convert progress state to Compound artifacts through `workflow-usability-harness`.
@@ -107,7 +107,7 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - Implementation plan for multi-step work, including files, tests, and verification commands.
 - `large_work_orchestration_bundle` with `skill_statuses` for large work; valid statuses are `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`.
 - `workspace_strategy` with path, branch, host workspace, or in-place rationale.
-- `token_optimizer_status` with token savings, passthrough reason, blocked reason, or `considered_not_needed` rationale for large or long-running workflows.
+- `token_optimizer_status` with `token_optimizer_status_reason`, token savings, passthrough reason, blocked reason, or `considered_not_needed` rationale for large or long-running workflows.
 - GoalState summary with objective, success criteria, required evidence, current evidence, missing evidence, and goal ledger paths.
 - Development progress state at `.kh/development/<run-id>/state/progress.json` for multi-task implementation runs, with task IDs, active task, RED/GREEN status, spec/code-quality review status, commit SHA, and next task.
 - Visible progress panel and progress-to-Compound artifacts for long task-plan runs when `workflow-usability-harness` is applied.
@@ -115,7 +115,7 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - Failing-first test or smoke evidence for behavior changes when practical.
 - Review findings or an explicit no-findings review note.
 - Fresh verification output and final integration status: local only, committed, pushed, or PR-ready.
-- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, `token_optimizer_status`, and `skill_statuses`.
+- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, `token_optimizer_status`, `token_optimizer_status_reason`, and `skill_statuses`.
 - Compound note, distilled skill candidate, scenario regression, or explicit no-reusable-learning rationale when the work produced a repeatable lesson.
 
 ## Common mistakes

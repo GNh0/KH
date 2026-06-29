@@ -58,7 +58,7 @@ If any of those facts would be lost, do not compress that item; use `passthrough
 7. For real workflow task results, call `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results` or let `workflow-usability-harness` call it automatically. This attaches optimized command/subagent records under `metadata.token_optimizer` without deleting raw task metadata.
 8. For before/after reporting, call `src.skills.token_optimizer.compare_token_usage` for one item or `aggregate_token_usage_stats` for a workflow-level summary. Report legacy compatibility fields (`without_token_optimizer`, `with_token_optimizer`, `estimated_tokens_saved`, `token_savings_ratio`) and optimizer-local telemetry (`actual_usage_scope`, `actual_tokens_saved`, `actual_token_savings_ratio`, `actual_bytes_saved`, `actual_byte_savings_ratio`, `token_count_method`, `token_count_is_estimate`, `billing_tokens_available`). Counts are produced from the actual optimizer input/output payload; do not describe them as provider billing tokens unless the host explicitly supplies billing telemetry.
 9. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
-10. Final workflow status must include `token_optimizer_status` and either token savings statistics, passthrough reason, blocked reason, or `considered_not_needed` rationale.
+10. Final workflow status must include `token_optimizer_status` and `token_optimizer_status_reason`. If status is not `used`, also include `not_used_reason` explaining whether the content was too small, passed through for quality, blocked by provider/policy, or had no optimizable command output/transcript.
 11. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 
 ## External Benchmark Recipe
@@ -81,6 +81,7 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - Token-savings estimate or before/after size when used inside a harness result.
 - Token usage before/after statistics when the skill is used as workflow evidence, including optimizer-local actual payload telemetry and a clear `billing_tokens_available` flag.
 - Runtime workflow evidence under `metadata.token_optimizer` for command outputs and agent transcripts when the workflow has `WorkflowTaskResult` objects.
+- `token_optimizer_status_reason` for every workflow-level token decision, and `not_used_reason` whenever status is `considered_not_needed`, `passthrough`, or `blocked`.
 - RTK-style `by_command_family` savings statistics when command output is optimized through KH runtime.
 - Fallback note when truncation or minification cannot safely preserve actionable context.
 - Passthrough note when content is contract-sensitive and should not be compressed.

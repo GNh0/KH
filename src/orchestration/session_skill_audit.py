@@ -447,6 +447,9 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             "passive_references": observations["passive_references"],
             "evidence": observations["evidence"][:8],
         }
+        if name == "token-optimizer":
+            row["token_optimizer_status"] = postmortem.token_optimizer_status
+            row["token_optimizer_status_reason"] = postmortem.token_optimizer_status_reason
         skill_rows.append(row)
         if is_required and STATUS_RANK.get(status, 0) < STATUS_RANK["considered"]:
             issues.append(
@@ -497,6 +500,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
         issues=issues,
         postmortem={
             "token_optimizer_status": postmortem.token_optimizer_status,
+            "token_optimizer_status_reason": postmortem.token_optimizer_status_reason,
             "token_gate": postmortem.token_gate,
             "review_status": postmortem.review_status,
             "subagent_summary": postmortem.subagent_summary,
@@ -516,12 +520,14 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
     issues: List[Dict[str, Any]] = []
     token_status = postmortem.get("token_optimizer_status", "")
     if token_status == "blocked":
+        token_reason = str(postmortem.get("token_optimizer_status_reason", "") or "")
         issues.append(
             {
                 "skill": "token-optimizer",
                 "status": "blocked",
                 "severity": "P1",
-                "reason": "token gate required optimization but runtime usage or passthrough evidence was missing",
+                "reason": token_reason
+                or "token gate required optimization but runtime usage or passthrough evidence was missing",
                 "action": "Run token optimizer, record runtime token_optimization evidence, or record explicit passthrough before completion.",
             }
         )

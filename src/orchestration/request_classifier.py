@@ -48,6 +48,7 @@ LARGE_WORK_BUNDLE_EVIDENCE = [
     "workspace_strategy",
     "parallel_strategy_decision",
     "token_optimizer_status",
+    "token_optimizer_status_reason",
     "memory_candidates",
     "compound_handoff",
 ]

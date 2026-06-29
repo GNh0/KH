@@ -149,6 +149,7 @@ class SessionPostmortem:
     skills_observed: List[str] = field(default_factory=list)
     token_optimizer_status: str = "considered_not_needed"
     token_optimizer_provider: str = "kh"
+    token_optimizer_status_reason: str = ""
     token_gate: Dict[str, Any] = field(default_factory=dict)
     token_optimizer_evidence: Dict[str, Any] = field(default_factory=dict)
     subagent_summary: Dict[str, Any] = field(default_factory=dict)
@@ -214,6 +215,8 @@ def analyze_codex_session_jsonl(
         "skill_doc_reads": 0,
         "explicit_usage_records": 0,
         "explicit_passthrough_records": 0,
+        "structured_used_records": 0,
+        "considered_not_needed_records": 0,
         "blocked_reason_records": 0,
         "status_mentions": 0,
     }
@@ -476,6 +479,7 @@ def analyze_codex_session_jsonl(
             last_tool_call_was_token_optimizer_runtime = None
 
     token_status = _token_optimizer_status(token_info, token_optimizer_evidence)
+    token_status_reason = _token_optimizer_status_reason(token_status, token_info, token_optimizer_evidence)
     review_status = _derive_review_status(subagents, review_with_fixes)
     completion_guard = _build_completion_guard(goal_state, task_complete_count, final_assistant_messages)
     verification_claim_guard = _build_verification_claim_guard(verification_failures, final_assistant_messages)
@@ -529,6 +533,7 @@ def analyze_codex_session_jsonl(
         skills_observed=sorted(skills),
         token_optimizer_status=token_status,
         token_optimizer_provider="kh",
+        token_optimizer_status_reason=token_status_reason,
         token_gate=token_info,
         token_optimizer_evidence=token_optimizer_evidence,
         subagent_summary=subagents,
@@ -554,6 +559,7 @@ def render_session_postmortem(postmortem: SessionPostmortem) -> str:
         f"Session: {postmortem.session_id or '<unknown>'}",
         f"Workspace: {postmortem.cwd or '<unknown>'}",
         f"Token optimizer: {postmortem.token_optimizer_status}",
+        f"Token optimizer reason: {postmortem.token_optimizer_status_reason or '<unknown>'}",
         f"Review: {postmortem.review_status}",
         f"Completion guard: {postmortem.completion_guard.get('status', 'unknown')}",
         f"Verification guard: {postmortem.verification_claim_guard.get('status', 'unknown')}",
@@ -625,13 +631,43 @@ def _merge_token_gate(
 
 
 def _token_optimizer_status(token_gate: Dict[str, Any], evidence: Dict[str, Any]) -> str:
-    if evidence.get("runtime_calls") or evidence.get("explicit_usage_records"):
+    if evidence.get("structured_used_records") or evidence.get("explicit_usage_records"):
         return "used"
     if evidence.get("explicit_passthrough_records"):
         return "passthrough"
+    if evidence.get("blocked_reason_records"):
+        return "blocked"
+    if evidence.get("runtime_calls"):
+        return "used"
     if token_gate.get("required"):
         return "blocked"
     return "considered_not_needed"
+
+
+def _token_optimizer_status_reason(
+    status: str,
+    token_gate: Dict[str, Any],
+    evidence: Dict[str, Any],
+) -> str:
+    if status == "used":
+        return "Token optimizer used; runtime optimizer evidence or token-savings telemetry was recorded."
+    if status == "passthrough":
+        return "Token optimizer not used because explicit passthrough evidence was recorded for quality-sensitive content."
+    if status == "blocked":
+        if evidence.get("skill_doc_reads") and not evidence.get("runtime_calls"):
+            return "Token optimizer not used because only the skill documentation was read; no runtime optimizer or passthrough evidence was recorded."
+        if evidence.get("blocked_reason_records"):
+            return "Token optimizer not used because a blocked/fallback reason was recorded, but no recovery, runtime optimizer, or passthrough evidence was recorded."
+        if token_gate.get("required"):
+            reasons = ", ".join(str(reason) for reason in token_gate.get("reasons", []) if reason)
+            suffix = f" Token gate reasons: {reasons}." if reasons else ""
+            return (
+                "Token optimizer not used even though the token gate was required; "
+                "no runtime optimizer or passthrough evidence was recorded."
+                + suffix
+            )
+        return "Token optimizer not used because no valid runtime optimizer or passthrough evidence was recorded."
+    return "Token optimizer not used because the token gate was checked and optimization was not needed for this session."
 
 
 def _merge_token_optimizer_evidence(
@@ -648,14 +684,25 @@ def _merge_token_optimizer_evidence(
         return
     if re.search(r"token[-_]optimizer|token_optimizer_status", text, re.IGNORECASE):
         evidence["status_mentions"] = int(evidence.get("status_mentions", 0)) + 1
+    structured_status = _structured_token_optimizer_status(text)
     decision_source = _is_token_optimizer_decision_source(payload_type, role, text)
-    if decision_source and re.search(
+    runtime_source = _is_token_optimizer_runtime_source(payload_type, role, text)
+    structured_counted = bool(structured_status and (decision_source or runtime_source))
+    if structured_counted and structured_status == "used":
+        evidence["structured_used_records"] = int(evidence.get("structured_used_records", 0)) + 1
+    elif structured_counted and structured_status == "passthrough":
+        evidence["explicit_passthrough_records"] = int(evidence.get("explicit_passthrough_records", 0)) + 1
+    elif structured_counted and structured_status == "blocked":
+        evidence["blocked_reason_records"] = int(evidence.get("blocked_reason_records", 0)) + 1
+    elif structured_counted and structured_status == "considered_not_needed":
+        evidence["considered_not_needed_records"] = int(evidence.get("considered_not_needed_records", 0)) + 1
+    if structured_status != "passthrough" and decision_source and re.search(
         r"token_optimizer_status\s*[:=]\s*['\"]?passthrough|status\s*[:=]\s*['\"]?passthrough|contract-sensitive|raw passthrough",
         text,
         re.IGNORECASE,
     ):
         evidence["explicit_passthrough_records"] = int(evidence.get("explicit_passthrough_records", 0)) + 1
-    if decision_source and re.search(
+    if structured_status != "blocked" and decision_source and re.search(
         r"token_optimizer_status\s*[:=]\s*['\"]?blocked|blocked_reason|fallback_reason|provider_unavailable|unavailable",
         text,
         re.IGNORECASE,
@@ -684,15 +731,51 @@ def _merge_token_optimizer_evidence(
             re.IGNORECASE,
         )
     )
-    runtime_source = _is_token_optimizer_runtime_source(payload_type, role, text)
     if runtime_evidence and runtime_source:
         evidence["runtime_calls"] = int(evidence.get("runtime_calls", 0)) + 1
     elif runtime_evidence:
         evidence["status_mentions"] = int(evidence.get("status_mentions", 0)) + 1
-    if explicit_usage and runtime_source:
+    if explicit_usage and runtime_source and structured_status in {"", "used"}:
         evidence["explicit_usage_records"] = int(evidence.get("explicit_usage_records", 0)) + 1
 
 
+
+
+def _structured_token_optimizer_status(text: str) -> str:
+    data = _parse_json_object_from_text(text)
+    if not isinstance(data, dict):
+        return ""
+    statuses: List[str] = []
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                lowered_key = str(key).lower()
+                if lowered_key in {"status", "token_optimizer_status"}:
+                    candidate = str(child).strip()
+                    if candidate in {"used", "passthrough", "blocked", "considered_not_needed"}:
+                        statuses.append(candidate)
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(data)
+    for preferred in ["used", "passthrough", "blocked", "considered_not_needed"]:
+        if preferred in statuses:
+            return preferred
+    return ""
+
+
+def _parse_json_object_from_text(text: str) -> Dict[str, Any] | None:
+    raw = str(text or "").strip()
+    if not raw or "{" not in raw or "}" not in raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
 
 
 def _is_token_optimizer_decision_source(payload_type: str, role: str = "", text: str = "") -> bool:

@@ -450,6 +450,7 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         postmortem = analyze_codex_session_jsonl(path)
 
         self.assertEqual(postmortem.token_optimizer_status, "blocked")
+        self.assertIn("no runtime optimizer", postmortem.token_optimizer_status_reason)
         self.assertTrue(postmortem.token_gate["required"])
         self.assertEqual(postmortem.secret_findings[0].kind, "pgpassword")
         self.assertIn("PGPASSWORD='***", postmortem.verification_commands[0])
@@ -490,11 +491,13 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         postmortem = analyze_codex_session_jsonl(path)
 
         self.assertEqual(postmortem.token_optimizer_status, "blocked")
+        self.assertIn("only the skill documentation was read", postmortem.token_optimizer_status_reason)
         self.assertEqual(postmortem.token_optimizer_evidence["skill_doc_reads"], 1)
         self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 0)
         self.assertTrue(
             any("inspection, not usage" in action for action in postmortem.recommended_actions)
         )
+        self.assertIn("Token optimizer reason:", render_session_postmortem(postmortem))
 
     def test_cumulative_tokens_alone_do_not_force_token_gate(self):
         path = self.write_session(
@@ -525,6 +528,7 @@ class SessionPostmortemGuardTests(unittest.TestCase):
 
         self.assertFalse(postmortem.token_gate["required"])
         self.assertEqual(postmortem.token_optimizer_status, "considered_not_needed")
+        self.assertIn("optimization was not needed", postmortem.token_optimizer_status_reason)
 
 
     def test_required_token_gate_accepts_structured_passthrough_decision(self):
@@ -562,6 +566,7 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         postmortem = analyze_codex_session_jsonl(path)
 
         self.assertEqual(postmortem.token_optimizer_status, "passthrough")
+        self.assertIn("explicit passthrough", postmortem.token_optimizer_status_reason)
         self.assertEqual(postmortem.token_optimizer_evidence["explicit_passthrough_records"], 1)
 
     def test_generic_tool_output_passthrough_string_does_not_satisfy_token_gate(self):
@@ -703,6 +708,99 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 1)
         self.assertEqual(postmortem.token_optimizer_evidence["explicit_usage_records"], 1)
 
+    def test_runtime_token_optimizer_passthrough_report_does_not_count_as_usage(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 60_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "runtime_token_optimization": {
+                                    "status": "passthrough",
+                                    "token_optimizer_status_reason": (
+                                        "Token optimizer not used because content was passed through unchanged."
+                                    ),
+                                    "not_used_reason": (
+                                        "Token optimizer not used because content was passed through unchanged."
+                                    ),
+                                    "summary": {
+                                        "actual_tokens_saved": 0,
+                                        "actual_usage_scope": "actual_optimizer_input_output_payload",
+                                    },
+                                }
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.token_optimizer_status, "passthrough")
+        self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 1)
+        self.assertEqual(postmortem.token_optimizer_evidence["explicit_usage_records"], 0)
+        self.assertEqual(postmortem.token_optimizer_evidence["explicit_passthrough_records"], 1)
+
+    def test_runtime_token_optimizer_blocked_report_does_not_count_as_usage(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 60_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "runtime_token_optimization": {
+                                    "status": "blocked",
+                                    "token_optimizer_status_reason": (
+                                        "Token optimizer not used because optimization was blocked."
+                                    ),
+                                    "not_used_reason": "Token optimizer not used because optimization was blocked.",
+                                    "blocked_reason": "required facts could not be preserved",
+                                    "summary": {
+                                        "actual_tokens_saved": 0,
+                                        "actual_usage_scope": "actual_optimizer_input_output_payload",
+                                    },
+                                }
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.token_optimizer_status, "blocked")
+        self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 1)
+        self.assertEqual(postmortem.token_optimizer_evidence["explicit_usage_records"], 0)
+        self.assertEqual(postmortem.token_optimizer_evidence["blocked_reason_records"], 1)
+
     def test_assistant_only_token_optimizer_claim_does_not_count_as_usage(self):
         path = self.write_session(
             [
@@ -735,6 +833,46 @@ class SessionPostmortemGuardTests(unittest.TestCase):
 
         self.assertEqual(postmortem.token_optimizer_status, "blocked")
         self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 0)
+        self.assertEqual(postmortem.token_optimizer_evidence["explicit_usage_records"], 0)
+
+    def test_assistant_only_structured_token_optimizer_claim_does_not_count_as_usage(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 60_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "runtime_token_optimization": {
+                                    "status": "used",
+                                    "actual_tokens_saved": 1200,
+                                    "actual_usage_scope": "actual_optimizer_input_output_payload",
+                                }
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.token_optimizer_status, "blocked")
+        self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 0)
+        self.assertEqual(postmortem.token_optimizer_evidence["structured_used_records"], 0)
         self.assertEqual(postmortem.token_optimizer_evidence["explicit_usage_records"], 0)
 
     def test_read_only_token_optimizer_probe_does_not_count_as_usage(self):
@@ -946,6 +1084,7 @@ class SessionPostmortemGuardTests(unittest.TestCase):
             objective="Finish a feature.",
             workspace_strategy="project-local-worktree",
             token_optimizer_status="used",
+            token_optimizer_status_reason="Token optimizer used; runtime telemetry is available.",
             tasks=[
                 DevelopmentTaskProgress(
                     task_id="task-1",

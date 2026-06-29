@@ -558,8 +558,54 @@ SELECT @CUSTCD, @CUSTNM
         )
 
         self.assertEqual(report["status"], "considered_not_needed")
+        self.assertIn("not used", report["not_used_reason"])
+        self.assertIn("500 tokens", report["token_optimizer_status_reason"])
         self.assertEqual(report["summary"]["case_count"], 0)
         self.assertNotIn("token_optimizer", optimized_results[0].metadata)
+
+    def test_runtime_gate_reports_passthrough_reason_when_provider_preserves_content(self):
+        task_result = WorkflowTaskResult(
+            task_id="task-1",
+            file_name="procedure.sql",
+            role="implementer",
+            status="success",
+            message="done",
+            metadata={
+                "command_output": {
+                    "command": "type procedure.sql",
+                    "stdout": "SELECT 1",
+                    "stderr": "",
+                    "exit_code": 0,
+                }
+            },
+        )
+
+        optimized_results, report = optimize_workflow_task_results(
+            [task_result],
+            metadata={
+                "token_optimizer_provider": "kh",
+                "token_optimizer_content_kind": "contract-sensitive",
+            },
+        )
+
+        self.assertEqual(report["status"], "passthrough")
+        self.assertIn("not used", report["not_used_reason"])
+        self.assertIn("passed through unchanged", report["token_optimizer_status_reason"])
+        self.assertNotIn("token_optimizer", optimized_results[0].metadata)
+
+    def test_runtime_gate_reports_blocked_reason_when_provider_blocks(self):
+        _, report = optimize_workflow_task_results(
+            [],
+            metadata={
+                "token_optimizer_provider": "rtk",
+                "token_optimizer_strict": True,
+                "rtk_available": False,
+            },
+        )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertIn("not used", report["not_used_reason"])
+        self.assertIn("blocked", report["token_optimizer_status_reason"])
 
 
 def _pytest_bulk_log() -> str:

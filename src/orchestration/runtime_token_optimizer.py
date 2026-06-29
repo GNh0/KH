@@ -128,7 +128,7 @@ def optimize_workflow_task_results(
 
     return optimized_results, _report(
         status=_workflow_status(all_records, skipped_count),
-        provider=provider_dict,
+        provider={**provider_dict, "token_optimizer_min_tokens": min_tokens},
         records=all_records,
         skipped_count=skipped_count,
     )
@@ -140,14 +140,19 @@ def _with_token_optimizer_metadata(
     records: List[Dict[str, Any]],
 ) -> WorkflowTaskResult:
     metadata = dict(result.metadata)
+    status = _workflow_status(records, skipped_count=0)
+    reason = _status_reason(status=status, provider=provider, records=records, skipped_count=0)
     metadata["token_optimizer"] = {
-        "status": _workflow_status(records, skipped_count=0),
+        "status": status,
+        "token_optimizer_status_reason": reason,
         "provider": provider,
         "summary": aggregate_token_usage_stats([record.get("token_usage", {}) for record in records]),
         "rtk_style_stats": _rtk_style_stats(records),
         "records": records,
         "evidence": ["runtime_token_optimization"],
     }
+    if status != "used":
+        metadata["token_optimizer"]["not_used_reason"] = reason
     return WorkflowTaskResult(
         task_id=result.task_id,
         file_name=result.file_name,
@@ -167,8 +172,17 @@ def _report(
     passthrough_reason: str = "",
 ) -> Dict[str, Any]:
     public_records = [_public_record(record) for record in records]
+    reason = _status_reason(
+        status=status,
+        provider=provider,
+        records=records,
+        skipped_count=skipped_count,
+        blocked_reason=blocked_reason,
+        passthrough_reason=passthrough_reason,
+    )
     report = {
         "status": status,
+        "token_optimizer_status_reason": reason,
         "provider": provider,
         "summary": aggregate_token_usage_stats([record.get("token_usage", {}) for record in records]),
         "rtk_style_stats": _rtk_style_stats(records),
@@ -178,9 +192,55 @@ def _report(
         "passthrough_reason": passthrough_reason,
         "evidence": ["runtime_token_optimization"] if status in {"used", "passthrough", "blocked"} else [],
     }
+    if status != "used":
+        report["not_used_reason"] = reason
     if status == "used":
         report["evidence"].append("token_usage_stats")
     return report
+
+
+def _status_reason(
+    *,
+    status: str,
+    provider: Dict[str, Any],
+    records: List[Dict[str, Any]],
+    skipped_count: int,
+    blocked_reason: str = "",
+    passthrough_reason: str = "",
+) -> str:
+    if status == "used":
+        return "Token optimizer used; optimizer-local before/after telemetry is available."
+    if status == "blocked":
+        reason = blocked_reason or str(provider.get("rationale", ""))
+        return _join_reason("Token optimizer not used because optimization was blocked", reason)
+    if status == "passthrough":
+        reason = passthrough_reason or _first_record_reason(records) or str(provider.get("rationale", ""))
+        return _join_reason("Token optimizer not used because content was passed through unchanged", reason)
+    if skipped_count:
+        threshold = provider.get("min_tokens") or provider.get("token_optimizer_min_tokens")
+        if threshold:
+            return (
+                "Token optimizer not used because all candidate command outputs or transcripts "
+                f"were below the configured threshold ({threshold} tokens)."
+            )
+        return (
+            "Token optimizer not used because all candidate command outputs or transcripts "
+            "were below the configured threshold."
+        )
+    return "Token optimizer not used because no optimizable command output or transcript was found."
+
+
+def _first_record_reason(records: List[Dict[str, Any]]) -> str:
+    for record in records:
+        reason = str(record.get("passthrough_reason") or record.get("fallback_reason") or "")
+        if reason:
+            return reason
+    return ""
+
+
+def _join_reason(prefix: str, reason: str) -> str:
+    clean = str(reason or "").strip().rstrip(".")
+    return f"{prefix}: {clean}." if clean else f"{prefix}."
 
 
 def _rtk_style_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:

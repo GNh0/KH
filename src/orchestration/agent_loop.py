@@ -67,6 +67,7 @@ class AgentLoop:
             "workflow_usability_auto": True,
             "token_optimizer_provider": "kh",
             "token_optimizer_status": "considered_not_needed",
+            "token_optimizer_status_reason": "Token optimizer not used because dispatch has not produced large command output or transcripts yet.",
             "workspace_strategy": "current-checkout",
             "workflow_usability_run_id": "agent-loop",
         }

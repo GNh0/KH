@@ -96,7 +96,7 @@ Each command resolves to a small set of roles, KH skills, and expected outputs. 
 - Visible progress panel for long task-plan runs.
 - Host progress panel JSON at `.kh/development/<run-id>/state/host_panel.<host>.json` when native host surfaces may display progress.
 - `token_optimizer_provider` decision with provider, status, strategy, fallback, and quality rationale.
-- Runtime `token_optimization` summary with status, token usage savings, preserved command/subagent evidence, and RTK-style command-family statistics when task outputs cross the threshold.
+- Runtime `token_optimization` summary with status, status reason, not-used reason for skipped/passthrough/blocked decisions, token usage savings, preserved command/subagent evidence, and RTK-style command-family statistics when task outputs cross the threshold.
 - Runtime `memory_state` summary with scoped candidate recording paths and promotion mode.
 - Runtime `active_memory_preflight` summary with scoped recall and bounded prompt snapshot paths.
 - Runtime `pre_compaction_memory_flush` summary when compression could otherwise erase decisions or next actions.

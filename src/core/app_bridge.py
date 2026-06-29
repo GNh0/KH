@@ -25,6 +25,10 @@ def create_app_request(
     role_metadata.setdefault("workflow_usability_auto", True)
     role_metadata.setdefault("token_optimizer_provider", "kh")
     role_metadata.setdefault("token_optimizer_status", "considered_not_needed")
+    role_metadata.setdefault(
+        "token_optimizer_status_reason",
+        "Token optimizer not used because app bridge intake has not produced large command output or transcripts yet.",
+    )
     role_metadata.setdefault("workspace_strategy", "host-worktree")
 
     return AdapterRequest(

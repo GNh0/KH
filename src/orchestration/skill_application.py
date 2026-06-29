@@ -70,6 +70,7 @@ class LargeWorkOrchestrationBundle:
     skill_statuses: Dict[str, SkillApplicationStatus]
     workspace_strategy: str
     token_optimizer_status: str
+    token_optimizer_status_reason: str
     parallel_strategy_decision: str
     memory_candidates: List[Dict[str, Any]] = field(default_factory=list)
     compound_handoff: Dict[str, Any] = field(default_factory=dict)
@@ -86,6 +87,7 @@ class LargeWorkOrchestrationBundle:
             },
             "workspace_strategy": self.workspace_strategy,
             "token_optimizer_status": self.token_optimizer_status,
+            "token_optimizer_status_reason": self.token_optimizer_status_reason,
             "parallel_strategy_decision": self.parallel_strategy_decision,
             "memory_candidates": [dict(item) for item in self.memory_candidates],
             "compound_handoff": dict(self.compound_handoff),
@@ -97,6 +99,7 @@ def build_large_work_orchestration_bundle(
     objective: str,
     workspace_strategy: str,
     token_optimizer_status: str,
+    token_optimizer_status_reason: str = "",
     overrides: Dict[str, Dict[str, Any]] | None = None,
     parallel_strategy_decision: str = "sequential with rationale until independent write sets are proven",
     memory_candidates: List[Dict[str, Any]] | None = None,
@@ -125,6 +128,8 @@ def build_large_work_orchestration_bundle(
         skill_statuses=skill_statuses,
         workspace_strategy=workspace_strategy,
         token_optimizer_status=token_optimizer_status,
+        token_optimizer_status_reason=token_optimizer_status_reason
+        or _default_token_optimizer_status_reason(token_optimizer_status),
         parallel_strategy_decision=parallel_strategy_decision,
         memory_candidates=memory_candidates or [],
         compound_handoff=compound_handoff
@@ -144,6 +149,8 @@ def validate_large_work_orchestration_bundle(bundle: LargeWorkOrchestrationBundl
         missing.append("workspace_strategy")
     if not bundle.token_optimizer_status.strip():
         missing.append("token_optimizer_status")
+    if bundle.token_optimizer_status.strip() and not bundle.token_optimizer_status_reason.strip():
+        missing.append("token_optimizer_status_reason")
     if not bundle.parallel_strategy_decision.strip():
         missing.append("parallel_strategy_decision")
     if not bundle.compound_handoff:
@@ -171,6 +178,7 @@ def validate_large_work_orchestration_bundle(bundle: LargeWorkOrchestrationBundl
             "workspace_strategy",
             "parallel_strategy_decision",
             "token_optimizer_status",
+            "token_optimizer_status_reason",
             "memory_candidates",
             "compound_handoff",
         ]
@@ -304,3 +312,13 @@ def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
             evidence_keys=["compound_handoff"],
         ),
     }
+
+
+def _default_token_optimizer_status_reason(status: str) -> str:
+    if status == "used":
+        return "Token optimizer used; runtime token evidence should be attached by the workflow runtime."
+    if status == "passthrough":
+        return "Token optimizer not used because content was passed through unchanged for quality."
+    if status == "blocked":
+        return "Token optimizer not used because optimization was blocked and requires follow-up evidence."
+    return "Token optimizer not used because the large-work bundle has not yet produced optimizable output."

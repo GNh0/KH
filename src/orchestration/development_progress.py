@@ -91,6 +91,7 @@ class DevelopmentRunProgress:
     commit_sha: str = ""
     next_task: str = ""
     token_optimizer_status: str = ""
+    token_optimizer_status_reason: str = ""
     skill_statuses: Dict[str, Any] = field(default_factory=dict)
     artifacts: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -108,6 +109,7 @@ class DevelopmentRunProgress:
             "commit_sha": self.commit_sha,
             "next_task": self.next_task,
             "token_optimizer_status": self.token_optimizer_status,
+            "token_optimizer_status_reason": self.token_optimizer_status_reason,
             "skill_statuses": dict(self.skill_statuses),
             "tasks": [task.to_dict() for task in self.tasks],
             "artifacts": list(self.artifacts),
@@ -128,6 +130,7 @@ class DevelopmentRunProgress:
             commit_sha=str(data.get("commit_sha", "")),
             next_task=str(data.get("next_task", "")),
             token_optimizer_status=str(data.get("token_optimizer_status", "")),
+            token_optimizer_status_reason=str(data.get("token_optimizer_status_reason", "")),
             skill_statuses=dict(data.get("skill_statuses", {})),
             tasks=[
                 DevelopmentTaskProgress.from_dict(item)
@@ -185,6 +188,8 @@ def validate_development_progress(progress: DevelopmentRunProgress) -> Dict[str,
         missing.append("token_optimizer_status")
     elif progress.token_optimizer_status not in TOKEN_OPTIMIZER_STATUSES:
         missing.append("token_optimizer_status")
+    if progress.token_optimizer_status and not progress.token_optimizer_status_reason.strip():
+        missing.append("token_optimizer_status_reason")
     if not progress.tasks:
         missing.append("tasks")
 
@@ -207,6 +212,7 @@ def validate_development_progress(progress: DevelopmentRunProgress) -> Dict[str,
             "review_status",
             "workspace_strategy",
             "token_optimizer_status",
+            "token_optimizer_status_reason",
             "progress_json",
         ]
     return {
@@ -225,6 +231,7 @@ def final_report_fields(progress: DevelopmentRunProgress) -> Dict[str, Any]:
         "next_task": progress.next_task or _next_incomplete_task(progress.tasks),
         "workspace_strategy": progress.workspace_strategy,
         "token_optimizer_status": progress.token_optimizer_status,
+        "token_optimizer_status_reason": progress.token_optimizer_status_reason,
         "skill_statuses": dict(progress.skill_statuses),
     }
 

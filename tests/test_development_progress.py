@@ -21,6 +21,7 @@ class DevelopmentProgressTests(unittest.TestCase):
             objective="Build PipePilot MVP.",
             workspace_strategy="project-local-worktree",
             token_optimizer_status="used",
+            token_optimizer_status_reason="Token optimizer used; runtime telemetry is available.",
             task_items=[
                 {
                     "task_id": "task-1",
@@ -52,6 +53,7 @@ class DevelopmentProgressTests(unittest.TestCase):
             objective="Build a CRM task.",
             workspace_strategy="project-local-worktree",
             token_optimizer_status="used",
+            token_optimizer_status_reason="Token optimizer used; runtime telemetry is available.",
             tasks=[
                 DevelopmentTaskProgress(
                     task_id="task-1",
@@ -76,6 +78,7 @@ class DevelopmentProgressTests(unittest.TestCase):
             objective="Build PipePilot MVP.",
             workspace_strategy="project-local-worktree",
             token_optimizer_status="used",
+            token_optimizer_status_reason="Token optimizer used; runtime telemetry is available.",
             skill_statuses={"development-lifecycle-harness": {"status": "applied"}},
             tasks=[
                 DevelopmentTaskProgress(
@@ -107,6 +110,7 @@ class DevelopmentProgressTests(unittest.TestCase):
         self.assertEqual(fields["next_task"], "task-2")
         self.assertEqual(fields["workspace_strategy"], "project-local-worktree")
         self.assertEqual(fields["token_optimizer_status"], "used")
+        self.assertEqual(fields["token_optimizer_status_reason"], "Token optimizer used; runtime telemetry is available.")
         self.assertIn("skill_statuses", fields)
 
     def test_reviewer_with_fixes_requires_fix_and_re_review(self):
@@ -115,6 +119,7 @@ class DevelopmentProgressTests(unittest.TestCase):
             objective="Close a review finding.",
             workspace_strategy="project-local-worktree",
             token_optimizer_status="used",
+            token_optimizer_status_reason="Token optimizer used; runtime telemetry is available.",
             tasks=[
                 DevelopmentTaskProgress(
                     task_id="task-1",
@@ -152,6 +157,26 @@ class DevelopmentProgressTests(unittest.TestCase):
 
         self.assertFalse(validation["valid"])
         self.assertIn("token_optimizer_status", validation["missing"])
+
+    def test_token_optimizer_status_reason_is_required_for_progress_state(self):
+        progress = DevelopmentRunProgress(
+            run_id="run-006",
+            objective="Track a token decision.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="considered_not_needed",
+            tasks=[
+                DevelopmentTaskProgress(
+                    task_id="task-1",
+                    title="Start task",
+                    status="in_progress",
+                )
+            ],
+        )
+
+        validation = validate_development_progress(progress)
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("token_optimizer_status_reason", validation["missing"])
 
 
 if __name__ == "__main__":

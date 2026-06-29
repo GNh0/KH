@@ -105,6 +105,14 @@ def _require_token_gate(
         ))
         required_next_skills.append("token-optimizer")
         return
+    if not bundle.token_optimizer_status_reason.strip():
+        issues.append(SkillTransitionIssue(
+            rule="large_work_requires_token_optimizer_status_reason",
+            source_skill="development-lifecycle-harness",
+            required_skill="token-optimizer",
+            reason="large work must record why token optimizer was used, skipped, passed through, or blocked",
+        ))
+        required_next_skills.append("token-optimizer")
     if token_status.status == "considered_not_needed" and bundle.token_optimizer_status == "used":
         issues.append(SkillTransitionIssue(
             rule="token_status_mismatch",

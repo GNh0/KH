@@ -56,6 +56,7 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             workspace_strategy="project-local-worktree",
             workspace_path=".worktrees/run-usability",
             token_optimizer_status="used",
+            token_optimizer_status_reason="Token optimizer used; runtime telemetry is available.",
             tasks=[
                 DevelopmentTaskProgress(
                     task_id="task-1",
@@ -338,6 +339,7 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             active_task="task-2",
             next_task="task-2",
             token_optimizer_status="used",
+            token_optimizer_status_reason="Token optimizer used; runtime telemetry is available.",
             tasks=[
                 DevelopmentTaskProgress(
                     task_id="task-1",
@@ -518,6 +520,7 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertIn("host_progress_panel", result.evidence)
             self.assertEqual(result.token_optimizer_provider["provider"], "kh")
             self.assertEqual(result.token_optimization["status"], "used")
+            self.assertIn("Token optimizer used", result.token_optimization["token_optimizer_status_reason"])
             self.assertGreater(result.token_optimization["summary"]["actual_tokens_saved"], 0)
             self.assertEqual(
                 result.token_optimization["summary"]["actual_usage_scope"],
@@ -534,6 +537,9 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             progress = read_development_progress(result.progress_path)
             self.assertTrue(validate_development_progress(progress)["valid"])
             self.assertEqual(progress.token_optimizer_status, "used")
+            self.assertIn("Token optimizer used", progress.token_optimizer_status_reason)
+            self.assertIn("Token reason:", result.progress_panel)
+            self.assertIn("token_optimizer_status_reason", result.host_progress_panel["summary"])
             task_optimizer = progress.tasks[0].metadata["workflow_task_result"]["metadata"]["token_optimizer"]
             self.assertEqual(task_optimizer["status"], "used")
             self.assertGreater(task_optimizer["summary"]["actual_tokens_saved"], 0)

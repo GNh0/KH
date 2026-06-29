@@ -81,6 +81,8 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertEqual(audit.total_skills, 41)
         self.assertEqual(audit.coverage["total_skills"], 41)
         self.assertTrue(rows["token-optimizer"]["required"])
+        self.assertEqual(rows["token-optimizer"]["token_optimizer_status"], "blocked")
+        self.assertIn("no runtime optimizer", rows["token-optimizer"]["token_optimizer_status_reason"])
         self.assertTrue(rows["goal-state-harness"]["required"])
         self.assertIn("token-optimizer", audit.coverage["required_missing_skill_names"])
         self.assertTrue(any(issue["skill"] == "token-optimizer" for issue in audit.issues))
