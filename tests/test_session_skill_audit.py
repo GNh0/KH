@@ -1086,7 +1086,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_explicit_session_id_allows_prior_context_lookup(self):
+    def test_explicit_session_id_does_not_approve_global_memory_lookup(self):
         path = self.write_session(
             [
                 {
@@ -1111,7 +1111,372 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
 
+        self.assertIn(("memory-state-harness", "global_memory_lookup_without_scope_approval"), issues)
+
+    def test_explicit_session_id_allows_session_log_lookup_not_memory_index(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "019e8078-4bde-7813-a1db-5025a3881511 session id logs read and analyze.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\sessions\\2026\\05\\27\\"
+                            "rollout-2026-05-27T15-15-52-019e6813-407c-77e1-9975-a6246025d57e.jsonl' "
+                            "-Pattern '019e8078'"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
         self.assertNotIn(("memory-state-harness", "global_memory_lookup_without_scope_approval"), issues)
+
+    def test_memory_scope_decision_does_not_approve_global_memory_lookup(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "skill": "memory-state-harness",
+                                "status": "applied",
+                                "memory_scope_decision": {
+                                    "scope": "project/chat",
+                                    "host_global_codex_memory": "external",
+                                },
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' -Pattern 'MaxWidth'",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(("memory-state-harness", "global_memory_lookup_without_scope_approval"), issues)
+
+    def test_false_memory_import_approval_does_not_approve_global_memory_lookup(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "skill": "memory-state-harness",
+                                "status": "applied",
+                                "memory_import_approved": False,
+                                "parent_memory_access_approved": False,
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' -Pattern 'MaxWidth'",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(("memory-state-harness", "global_memory_lookup_without_scope_approval"), issues)
+
+    def test_plain_approval_marker_explanation_does_not_approve_global_memory_lookup(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "The field memory_import_approved must be true before using global memory.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' -Pattern 'MaxWidth'",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(("memory-state-harness", "global_memory_lookup_without_scope_approval"), issues)
+
+    def test_later_global_memory_request_does_not_retroactively_approve_prior_lookup(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' -Pattern 'MaxWidth'",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Now read and reuse my Codex MEMORY.md notes.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(("memory-state-harness", "global_memory_lookup_without_scope_approval"), issues)
+
+    def test_prior_global_memory_request_allows_later_lookup(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Read and reuse my Codex MEMORY.md notes for this diagnosis.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Select-String -Path 'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md' -Pattern 'MaxWidth'",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertNotIn(("memory-state-harness", "global_memory_lookup_without_scope_approval"), issues)
+
+    def test_global_memory_citation_requires_explicit_scope_request(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "Done.\n\n"
+                            "<oai-mem-citation>\n"
+                            "<citation_entries>\n"
+                            "MEMORY.md:51-81|note=[old PR300500 context]\n"
+                            "</citation_entries>\n"
+                            "<rollout_ids>\n"
+                            "019efc9e-7b19-7573-8618-94d5829f5696\n"
+                            "</rollout_ids>\n"
+                            "</oai-mem-citation>"
+                        ),
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(("memory-state-harness", "global_memory_citation_without_scope_approval"), issues)
+
+    def test_developer_memory_citation_example_is_not_global_memory_leak(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": (
+                            "Citation format example:\n"
+                            "<oai-mem-citation>\n"
+                            "<citation_entries>\n"
+                            "MEMORY.md:51-81|note=[example only]\n"
+                            "</citation_entries>\n"
+                            "<rollout_ids>\n"
+                            "</rollout_ids>\n"
+                            "</oai-mem-citation>"
+                        ),
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertNotIn(("memory-state-harness", "global_memory_citation_without_scope_approval"), issues)
+
+    def test_passive_tool_output_memory_citation_example_is_not_global_memory_leak(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-Content -Path 'C:\\kh\\skills\\memory_state_harness\\SKILL.md'",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "Example only:\n"
+                            "<oai-mem-citation>\n"
+                            "<citation_entries>\n"
+                            "MEMORY.md:51-81|note=[example only]\n"
+                            "</citation_entries>\n"
+                            "<rollout_ids>\n"
+                            "</rollout_ids>\n"
+                            "</oai-mem-citation>"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertNotIn(("memory-state-harness", "global_memory_citation_without_scope_approval"), issues)
+
+    def test_structured_memory_citation_requires_explicit_scope_request(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": "Done.",
+                        "phase": "final_answer",
+                        "memory_citation": {
+                            "entries": [
+                                {
+                                    "path": "MEMORY.md",
+                                    "lineStart": 51,
+                                    "lineEnd": 81,
+                                    "note": "old PR300500 context",
+                                }
+                            ],
+                            "rolloutIds": ["019efc9e-7b19-7573-8618-94d5829f5696"],
+                        },
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(("memory-state-harness", "global_memory_citation_without_scope_approval"), issues)
+
+    def test_task_complete_memory_citation_requires_explicit_scope_request(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": (
+                            "Done.\n\n"
+                            "<oai-mem-citation>\n"
+                            "<citation_entries>\n"
+                            "MEMORY.md:51-81|note=[old PR300500 context]\n"
+                            "</citation_entries>\n"
+                            "<rollout_ids>\n"
+                            "</rollout_ids>\n"
+                            "</oai-mem-citation>"
+                        ),
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(("memory-state-harness", "global_memory_citation_without_scope_approval"), issues)
+
+    def test_explicit_memory_md_request_allows_global_memory_citation(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Read and reuse my Codex MEMORY.md notes for this diagnosis.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "Done.\n\n"
+                            "<oai-mem-citation>\n"
+                            "<citation_entries>\n"
+                            "MEMORY.md:51-81|note=[requested memory]\n"
+                            "</citation_entries>\n"
+                            "<rollout_ids>\n"
+                            "</rollout_ids>\n"
+                            "</oai-mem-citation>"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertNotIn(("memory-state-harness", "global_memory_citation_without_scope_approval"), issues)
 
     def test_new_project_global_static_memory_shortcut_is_flagged_even_if_front_door_misroutes(self):
         front_door_output = {

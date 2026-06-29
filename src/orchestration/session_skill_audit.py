@@ -1448,26 +1448,55 @@ def _target_substitution_issues(path: Path) -> List[Dict[str, Any]]:
 def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
     front_door_brainstorm_gate = _front_door_selected_skill(path, "brainstorming-harness") or _front_door_blocks_execution(path)
     new_project_context = _session_has_new_project_discovery_request(path)
-    explicit_import = _session_has_explicit_memory_import_request(path) or _session_has_scoped_memory_import_evidence(path)
-    if explicit_import:
-        return []
-    samples: List[str] = []
+    explicit_import_active = False
+    read_samples: List[str] = []
+    citation_samples: List[str] = []
     for event in _session_payload_events(path):
         payload = event.get("payload", {})
         if not isinstance(payload, dict):
             continue
         payload_type = str(payload.get("type", ""))
-        if payload_type not in {"function_call", "custom_tool_call"}:
+        if payload_type == "message" and str(payload.get("role", "")).lower() in {"developer", "system"}:
             continue
-        text = _payload_text(payload)
-        if _global_codex_memory_sample(text):
-            samples.append(_global_codex_memory_sample(text))
-            if len(samples) >= 3:
-                break
-    if not samples:
-        return []
+        if _payload_is_explicit_global_memory_import_request(payload) or _payload_has_scoped_memory_import_approval(payload):
+            explicit_import_active = True
+        if payload_type in {"function_call", "custom_tool_call"}:
+            text = _payload_text(payload)
+            sample = _global_codex_memory_sample(text)
+            if sample and not explicit_import_active:
+                read_samples.append(sample)
+        sample = _global_codex_memory_citation_sample(payload)
+        if sample and not explicit_import_active:
+            citation_samples.append(sample)
+        if len(read_samples) >= 3 and len(citation_samples) >= 3:
+            break
+
+    issues: List[Dict[str, Any]] = []
+    if citation_samples:
+        issues.append(
+            {
+                "skill": "memory-state-harness",
+                "status": "global_memory_citation_without_scope_approval",
+                "severity": "P1",
+                "reason": (
+                    "The session cited host-global Codex memory in its final/user-facing output without an "
+                    "explicit global memory reuse request or approved cross-scope import. A citation proves "
+                    "that global memory affected the answer, so it cannot be treated as project/chat-scoped KH memory."
+                ),
+                "action": (
+                    "Do not use or cite `%CODEX_HOME%/memories/MEMORY.md` or `%CODEX_HOME%/memories/skills/...` "
+                    "unless the user explicitly asks to reuse/import global memory. A session id authorizes reading "
+                    "that session log, not broad MEMORY.md application."
+                ),
+                "samples": citation_samples[:3],
+            }
+        )
+
+    if not read_samples:
+        return issues
+
     if not front_door_brainstorm_gate and new_project_context:
-        return [
+        issues.append(
             {
                 "skill": "memory-state-harness",
                 "status": "global_memory_shortcut_without_brainstorm_gate",
@@ -1483,11 +1512,12 @@ def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
                     "If front-door fails to select brainstorming, stop and record router_failure instead of "
                     "using memory-derived implementation shortcuts."
                 ),
-                "samples": samples,
+                "samples": read_samples[:3],
             }
-        ]
-    if not front_door_brainstorm_gate and not new_project_context:
-        return [
+        )
+        return issues
+    if not front_door_brainstorm_gate:
+        issues.append(
             {
                 "skill": "memory-state-harness",
                 "status": "global_memory_lookup_without_scope_approval",
@@ -1502,10 +1532,11 @@ def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
                     "the user explicitly requests prior context or when memory-state-harness records "
                     "explicit_cross_scope_memory_import, parent_memory_access, or global_memory_candidate approval evidence."
                 ),
-                "samples": samples,
+                "samples": read_samples[:3],
             }
-        ]
-    return [
+        )
+        return issues
+    issues.append(
         {
             "skill": "memory-state-harness",
             "status": "cross_chat_memory_leak",
@@ -1520,9 +1551,10 @@ def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
                 "while `execution_gate.can_execute=false` unless the user explicitly asks for prior-context reuse. "
                 "Use only current project/chat-scoped KH memory after scope resolution, or record memory_provider=blocked."
             ),
-            "samples": samples,
+            "samples": read_samples[:3],
         }
-    ]
+    )
+    return issues
 
 
 def _session_has_new_project_discovery_request(path: Path) -> bool:
@@ -2847,6 +2879,45 @@ def _global_codex_memory_sample(text: str) -> str:
     return ""
 
 
+def _global_codex_memory_citation_sample(payload: Dict[str, Any]) -> str:
+    if not _is_user_facing_memory_citation_payload(payload):
+        return ""
+    citation = payload.get("memory_citation")
+    if isinstance(citation, dict):
+        entries = citation.get("entries") or []
+        cited_paths = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            cited_path = str(entry.get("path", ""))
+            normalized = cited_path.replace("\\", "/").lower()
+            if normalized == "memory.md" or normalized.startswith("memories/"):
+                cited_paths.append(cited_path)
+        if cited_paths:
+            return _short(f"global Codex memory citation: {', '.join(cited_paths)}")
+
+    text = _payload_text(payload)
+    lowered = text.lower()
+    if "<oai-mem-citation>" not in lowered:
+        return ""
+    if re.search(r"(?:^|\n)\s*(?:memory\.md|memories[/\\][^:\n]+):\d+", lowered):
+        return _short(f"global Codex memory citation: {text}")
+    return ""
+
+
+def _is_user_facing_memory_citation_payload(payload: Dict[str, Any]) -> bool:
+    payload_type = str(payload.get("type", ""))
+    role = str(payload.get("role", "")).lower()
+    if payload_type == "message":
+        return role == "assistant"
+    if payload_type == "agent_message":
+        phase = str(payload.get("phase", "")).lower()
+        return phase == "final_answer"
+    if payload_type == "task_complete":
+        return True
+    return False
+
+
 def _extract_windows_paths(text: str) -> List[str]:
     paths = []
     for match in re.finditer(r"[A-Za-z]:\\[^\s\"'`<>|]+", text):
@@ -2876,39 +2947,45 @@ def _shares_run_prefix(left: str, right: str) -> bool:
     return left_parts[:-1] == right_parts[:-1]
 
 
-def _session_has_explicit_memory_import_request(path: Path) -> bool:
+def _payload_is_explicit_global_memory_import_request(payload: Dict[str, Any]) -> bool:
+    if str(payload.get("type", "")) != "message":
+        return False
+    if str(payload.get("role", "")).lower() != "user":
+        return False
+    return _text_is_explicit_global_memory_import_request(_payload_text(payload))
+
+
+def _text_is_explicit_global_memory_import_request(text: str) -> bool:
     scope_markers = [
-        "memory",
-        "memories",
+        "global memory",
+        "host global memory",
+        "codex memory",
         "memory.md",
-        "prior context",
-        "previous conversation",
-        "previous chat",
-        "old session",
-        "rollout",
-        "session id",
-        "\uc138\uc158",
-        "\ub300\ud654",
-        "\uc774\uc804",
-        "\uba54\ubaa8\ub9ac",
-        "\uae30\uc5b5",
-        "\ub85c\uadf8",
+        ".codex\\memories",
+        ".codex/memories",
+        "\uc804\uc5ed \uba54\ubaa8\ub9ac",
+        "\uc804\uc5ed \uae30\uc5b5",
+        "\uc2dc\uc2a4\ud15c \uba54\ubaa8\ub9ac",
+        "\uc2dc\uc2a4\ud15c \uae30\uc5b5",
+        "\ucf54\ub371\uc2a4 \uba54\ubaa8\ub9ac",
+        "\ucf54\ub371\uc2a4 \uae30\uc5b5",
+        "\uae00\ub85c\ubc8c \uba54\ubaa8\ub9ac",
     ]
     cross_scope_markers = [
-        "prior context",
-        "previous conversation",
-        "previous chat",
-        "old session",
-        "session id",
-        "rollout",
+        "global memory",
+        "host global memory",
+        "codex memory",
         "memory.md",
         "memories",
-        "\uc774\uc804 \uc138\uc158",
-        "\uc774\uc804 \ub300\ud654",
-        "\uc9c0\ub09c \uc138\uc158",
-        "\uc138\uc158 id",
-        "\ub300\ud654 \uae30\ub85d",
-        "\ub85c\uadf8",
+        ".codex\\memories",
+        ".codex/memories",
+        "\uc804\uc5ed \uba54\ubaa8\ub9ac",
+        "\uc804\uc5ed \uae30\uc5b5",
+        "\uc2dc\uc2a4\ud15c \uba54\ubaa8\ub9ac",
+        "\uc2dc\uc2a4\ud15c \uae30\uc5b5",
+        "\ucf54\ub371\uc2a4 \uba54\ubaa8\ub9ac",
+        "\ucf54\ub371\uc2a4 \uae30\uc5b5",
+        "\uae00\ub85c\ubc8c \uba54\ubaa8\ub9ac",
     ]
     action_markers = [
         "read",
@@ -2949,39 +3026,66 @@ def _session_has_explicit_memory_import_request(path: Path) -> bool:
         "\ucc38\uc870\ud558\uc9c0\ub9c8",
         "\uba54\ubaa8\ub9ac \uc5c6\uc774",
     ]
+    lowered = text.lower()
+    if any(marker in lowered for marker in negation_markers):
+        return False
+    has_scope_topic = any(marker in lowered for marker in scope_markers)
+    has_cross_scope = any(marker in lowered for marker in cross_scope_markers)
+    has_action = any(marker in lowered for marker in action_markers)
+    if has_cross_scope and has_action:
+        return True
+    if "memory.md" in lowered and has_action:
+        return True
+    if has_scope_topic and has_action:
+        return True
+    return False
+
+
+def _session_has_explicit_global_memory_import_request(path: Path) -> bool:
+    return any(
+        _payload_is_explicit_global_memory_import_request(event.get("payload", {}))
+        for event in _session_payload_events(path)
+        if isinstance(event.get("payload"), dict)
+    )
+
+
+def _payload_has_scoped_memory_import_approval(payload: Dict[str, Any]) -> bool:
+    return _text_has_scoped_memory_import_approval(_payload_text(payload))
+
+
+def _session_has_scoped_memory_import_evidence(path: Path) -> bool:
     for record in _session_text_records(path):
-        if record.role != "user":
+        if _is_passive_text(record.text):
             continue
-        lowered = record.text.lower()
-        if any(marker in lowered for marker in negation_markers):
-            continue
-        if re.search(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", lowered):
-            return True
-        has_scope_topic = any(marker in lowered for marker in scope_markers)
-        has_cross_scope = any(marker in lowered for marker in cross_scope_markers)
-        has_action = any(marker in lowered for marker in action_markers)
-        if has_cross_scope and has_action:
-            return True
-        if "memory.md" in lowered and has_action:
-            return True
-        if has_scope_topic and has_action and any(marker in lowered for marker in ["previous", "prior", "\uc774\uc804", "\uc9c0\ub09c"]):
+        if _text_has_scoped_memory_import_approval(record.text):
             return True
     return False
 
 
-def _session_has_scoped_memory_import_evidence(path: Path) -> bool:
-    markers = [
-        "explicit_cross_scope_memory_import",
-        "memory_import_approved",
-        "parent_memory_access",
-        "parent_memory_access_approved",
-        "global_memory_candidate",
-        "memory_scope_decision",
+def _text_has_scoped_memory_import_approval(text: str) -> bool:
+    lowered = text.lower()
+    truthy_patterns = [
+        r"\bmemory_import_approved\b\s*[:=]\s*(?:true|yes|approved|1)\b",
+        r'"memory_import_approved"\s*:\s*true\b',
+        r"'memory_import_approved'\s*:\s*true\b",
+        r"\bparent_memory_access_approved\b\s*[:=]\s*(?:true|yes|approved|1)\b",
+        r'"parent_memory_access_approved"\s*:\s*true\b',
+        r"'parent_memory_access_approved'\s*:\s*true\b",
     ]
-    for record in _session_text_records(path):
-        lowered = record.text.lower()
-        if any(marker in lowered for marker in markers):
-            return True
+    if any(re.search(pattern, lowered) for pattern in truthy_patterns):
+        return True
+    if "explicit_cross_scope_memory_import" in lowered and any(
+        marker in lowered
+        for marker in [
+            "approval_state=approved",
+            '"approval_state": "approved"',
+            "'approval_state': 'approved'",
+            "application_status=applied",
+            '"application_status": "applied"',
+            "'application_status': 'applied'",
+        ]
+    ):
+        return True
     return False
 
 
