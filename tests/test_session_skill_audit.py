@@ -372,6 +372,85 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertNotIn("parallel-orchestration-harness", audit.coverage["required_missing_skill_names"])
         self.assertNotIn("subagent-review-pipeline", audit.coverage["required_missing_skill_names"])
 
+    def test_front_door_json_sql_words_do_not_require_sql_style_harness(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "immediate_next_skills": ["brainstorming-harness"],
+            "selected_not_executed_skills": ["brainstorming-harness"],
+            "execution_gate": {
+                "can_execute": False,
+                "blocked_actions": [
+                    "Get-Content",
+                    "source_reads",
+                    "implementation",
+                    "analysis_output",
+                    "verification",
+                ],
+                "reason": "brainstorming-harness was selected before execution.",
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            r"C:\Users\KONEIT\Desktop\Jang\SKillsTest\UpgradeBlind_20260630_B "
+                            "\ud3f4\ub354\uc5d0 \uc2e0\uaddc \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
+                            "\ub300\uc2dc\ubcf4\ub4dc \uac1c\ubc1c\ud574\uc918."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "function_call_output", "output": json.dumps(front_door_output)},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "\uba3c\uc800 \uc6b4\uc601 \ubaa8\ub378\uc744 \ud655\uc815\ud574\uc57c \ud569\ub2c8\ub2e4. "
+                            "\ud604\uc7ac\ub294 \ubc94\uc704 \ud655\uc815 \uc804\uc774\ub77c \ub300\uc0c1 \ud3f4\ub354\ub098 "
+                            "\ud30c\uc77c\uc740 \uc544\uc9c1 \ud655\uc778/\uc218\uc815\ud558\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.\n\n"
+                            "**\ubaa9\ud45c/\uc6b4\uc601\uc790**\n"
+                            "\uc7ac\uace0 \ub2f4\ub2f9\uc790\uac00 \uc785\uace0, \ucd9c\uace0, \ud604\uc7ac\uace0\ub97c \ubcf4\ub294 \ub300\uc2dc\ubcf4\ub4dc\uc785\ub2c8\ub2e4.\n\n"
+                            "**\uc5c5\ubb34 \ubc94\uc704**\n"
+                            "\uc785\uace0 \ub4f1\ub85d, \ucd9c\uace0 \ub4f1\ub85d, \uc7ac\uace0 \ud604\ud669, \uc548\uc804\uc7ac\uace0 \uc54c\ub9bc\uc774 \uae30\ubcf8\uc785\ub2c8\ub2e4.\n\n"
+                            "**\uc6b4\uc601 \ubaa8\ub378 \uc120\ud0dd\uc9c0**\n"
+                            "1. \ub2e8\uc21c \uc785\ucd9c\uace0 \uc6d0\uc7a5\ud615\n"
+                            "2. \ucc3d\uace0/\uc704\uce58 \uad00\ub9ac\ud615\n"
+                            "3. LOT/\uc2dc\ub9ac\uc5bc \uad00\ub9ac\ud615\n\n"
+                            "\uc5b4\ub290 \uc6b4\uc601 \ubaa8\ub378\ub85c \uac08\uae4c\uc694?"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertFalse(rows["sql-formatting-style-harness"]["required"])
+        self.assertNotIn("sql-formatting-style-harness", audit.coverage["required_missing_skill_names"])
+        self.assertFalse(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            )
+        )
+
     def test_stored_procedure_generation_before_sql_formatting_is_flagged(self):
         path = self.write_session(
             [

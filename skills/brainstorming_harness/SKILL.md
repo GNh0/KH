@@ -13,6 +13,23 @@ description: Use when kh-uaf:always-on-front-door has already run and selected t
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
+## First Visible Response Contract
+
+For a new or vague app, dashboard, product, workflow, operations, manufacturing, document, drawing/design, analysis, investment, or process request, stop before implementation and make the first user-facing response a real brainstorm. Do not inspect the target folder, create files, verify, or ask for implementation approval yet.
+
+The first response must visibly cover:
+
+1. Objective and operator/audience.
+2. Workflow boundary and unknowns.
+3. Success criteria, constraints, and non-goals.
+4. Two or three domain operating-model options with tradeoffs.
+5. Required records, data, artifact, drawing, or output shape.
+6. Open questions that can change scope.
+7. One recommendation framed as advice, not a final agent decision.
+8. One approval or clarification question about the domain direction, not file creation.
+
+If the user only chooses an option, record that as direction evidence and ask the next scoped design/spec question. Do not start planning, file generation, QA, browser checks, or implementation until a separate handoff/spec review and execution approval exist.
+
 This harness adapts the Superpowers brainstorming pattern into KH UAF. It is the lightweight front door before `architect-pipeline`, `domain-orchestration-harness`, or `development-lifecycle-harness`: clarify the user's intent, explore alternatives, capture decisions, and hand off only after the product, process, analysis, document, specification, operations, manufacturing, investment, drawing, or design direction is approved.
 
 Source label: Superpowers brainstorming adapted for KH UAF.

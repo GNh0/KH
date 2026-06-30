@@ -415,10 +415,20 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     text_records = _session_text_records(path)
     texts = [record.text for record in text_records]
     active_texts = [_strip_passive_prefix(text) for text in texts if not _is_passive_text(text)]
+    sql_scope_texts = [
+        _strip_passive_prefix(record.text)
+        for record in text_records
+        if _is_sql_requirement_record(record)
+    ]
     combined_text = "\n".join(active_texts)
     catalog = collect_packaged_skills()
     skills = catalog.get("skills", [])
-    required = _required_skills(postmortem.to_dict(), combined_text, active_texts)
+    required = _required_skills(
+        postmortem.to_dict(),
+        combined_text,
+        active_texts,
+        sql_scope_texts=sql_scope_texts,
+    )
     skill_rows = []
     issues = []
 
@@ -965,6 +975,12 @@ def _immediate_skill_event_status(
     if skill_name == "goal-state-harness" and payload_type == "thread_goal_updated":
         return "applied"
     structured_payload = _is_immediate_structured_runtime_payload(payload_type, lowered)
+    if (
+        skill_name == "brainstorming-harness"
+        and payload_type in {"message", "agent_message", "task_complete"}
+        and _looks_like_visible_brainstorming_application(lowered)
+    ):
+        return "applied"
     if payload_type in {"message", "agent_message", "task_complete"}:
         return ""
     aliases = {skill_name, skill_name.replace("-", "_")}
@@ -1007,6 +1023,56 @@ def _is_immediate_structured_runtime_payload(payload_type: str, lowered: str) ->
     if payload_type in {"function_call_output", "custom_tool_call_output", "thread_goal_updated"}:
         return True
     return False
+
+
+def _looks_like_visible_brainstorming_application(lowered: str) -> bool:
+    option_shape = (
+        ("1." in lowered and "2." in lowered)
+        or any(marker in lowered for marker in ["option", "options", "alternatives", "\uc120\ud0dd\uc9c0", "\ub300\uc548"])
+    )
+    scope_shape = any(
+        marker in lowered
+        for marker in [
+            "objective",
+            "operator",
+            "target user",
+            "audience",
+            "scope",
+            "business scope",
+            "\ubaa9\ud45c",
+            "\uc6b4\uc601\uc790",
+            "\uc5c5\ubb34 \ubc94\uc704",
+            "\ubc94\uc704",
+        ]
+    )
+    decision_question = any(
+        marker in lowered
+        for marker in [
+            "which",
+            "choose",
+            "confirm",
+            "approval",
+            "\uc5b4\ub290",
+            "\uc120\ud0dd",
+            "\ud655\uc815",
+            "\uc2b9\uc778",
+            "\uac08\uae4c\uc694",
+        ]
+    )
+    execution_deferred = any(
+        marker in lowered
+        for marker in [
+            "before implementation",
+            "not implemented",
+            "no files",
+            "\uad6c\ud604 \uc804",
+            "\ud655\uc815 \uc804",
+            "\ud30c\uc77c\uc740 \uc544\uc9c1",
+            "\uc218\uc815\ud558\uc9c0 \uc54a\uc558",
+            "\ud655\uc778/\uc218\uc815\ud558\uc9c0 \uc54a\uc558",
+        ]
+    )
+    return option_shape and scope_shape and decision_question and execution_deferred
 
 
 def _has_runtime_output_context(lowered: str) -> bool:
@@ -1705,7 +1771,12 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
                 "samples": implementation_samples[:3],
             }
         )
-    elif request_input_count <= 1 and has_options and not has_handoff:
+    elif (
+        request_input_count <= 1
+        and has_options
+        and not has_handoff
+        and _claims_brainstorming_complete_or_next_stage(lowered)
+    ):
         issues.append(
             {
                 "skill": "brainstorming-harness",
@@ -1937,6 +2008,27 @@ def _looks_like_sql_answer(lowered: str) -> bool:
     if "```sql" in lowered:
         return True
     return bool(SQL_ANSWER_PATTERN.search(lowered))
+
+
+def _is_sql_requirement_record(record: SessionTextRecord) -> bool:
+    if _is_passive_text(record.text):
+        return False
+    lowered = record.text.lower()
+    if _is_synthetic_context_message(record.text):
+        return False
+    if _looks_like_front_door_runtime_output(lowered):
+        return False
+    if record.payload_type == "message":
+        if record.role in {"developer", "system"}:
+            return False
+        if record.role == "user":
+            return looks_like_sql_output_request(lowered)
+        if record.role == "assistant":
+            return _looks_like_sql_answer(lowered)
+        return False
+    if record.payload_type in {"agent_message", "task_complete"}:
+        return _looks_like_sql_answer(lowered)
+    return False
 
 
 def _brainstorming_target_inspection_issues(path: Path) -> List[Dict[str, Any]]:
@@ -2738,6 +2830,8 @@ def _implementation_tool_samples(path: Path) -> List[str]:
         name = str(payload.get("name", ""))
         text = _payload_text(payload)
         lowered = text.lower()
+        if name == "shell_command" and _looks_like_front_door_prompt_bootstrap(lowered):
+            continue
         if name in {"apply_patch", "imagegen"} or "apply_patch" in lowered:
             samples.append(_short(text))
         elif name == "shell_command" and any(
@@ -2756,6 +2850,29 @@ def _implementation_tool_samples(path: Path) -> List[str]:
         if len(samples) >= 5:
             break
     return samples
+
+
+def _claims_brainstorming_complete_or_next_stage(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in [
+            "brainstorming complete",
+            "brainstorming is complete",
+            "handoff complete",
+            "ready for planning",
+            "ready to implement",
+            "implementation scope",
+            "next step is implementation",
+            "i will implement",
+            "i will create",
+            "\ube0c\ub808\uc778\uc2a4\ud1a0\ubc0d \uc644\ub8cc",
+            "\ud578\ub4dc\uc624\ud504 \uc644\ub8cc",
+            "\uacc4\ud68d\uc73c\ub85c \ub118\uc5b4",
+            "\uad6c\ud604 \ubc94\uc704",
+            "\uad6c\ud604\ud558\uaca0\uc2b5\ub2c8\ub2e4",
+            "\ud30c\uc77c\uc744 \uc0dd\uc131",
+        ]
+    )
 
 
 def _is_subagent_session(path: Path) -> bool:
@@ -4403,13 +4520,19 @@ def _strip_passive_prefix(text: str) -> str:
     return text
 
 
-def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[str] | None = None) -> Dict[str, str]:
+def _required_skills(
+    postmortem: Dict[str, Any],
+    text: str,
+    active_texts: List[str] | None = None,
+    sql_scope_texts: List[str] | None = None,
+) -> Dict[str, str]:
     required: Dict[str, str] = {}
     lowered = text.lower()
+    sql_lowered = "\n".join(sql_scope_texts if sql_scope_texts is not None else (active_texts or [text])).lower()
     token_gate = postmortem.get("token_gate", {}) or {}
     subagents = postmortem.get("subagent_summary", {}) or {}
     verification_commands = postmortem.get("verification_commands", []) or []
-    sql_specialist_scope = _is_sql_specialist_answer_scope(postmortem, lowered, active_texts)
+    sql_specialist_scope = _is_sql_specialist_answer_scope(postmortem, sql_lowered, sql_scope_texts)
 
     if sql_specialist_scope:
         _add(
@@ -4425,7 +4548,7 @@ def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[s
         _add(required, "plugin-composition-policy", "automatic intake should choose direct, single-provider, hybrid, or clarify route")
         _add(required, "request-complexity-router", "automatic intake should classify request complexity before work")
         _add(required, "skill-catalog", "automatic intake should resolve the packaged skill source before claiming skill use")
-    if looks_like_sql_output_request(lowered):
+    if looks_like_sql_output_request(sql_lowered):
         _add(
             required,
             "sql-formatting-style-harness",
@@ -4489,7 +4612,7 @@ def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[s
         _add(required, "plugin-composition-policy", "multiple plugins or providers may apply")
     if any(marker in lowered for marker in ["delete ", "remove-item", "drop table", "secret", "api_key", "token=", "permission denied", "destructive", "requires approval"]):
         _add(required, "guard-policy-harness", "permission, secret, or destructive-action risk appeared")
-    if _early_domain_discovery_text(lowered) and not looks_like_sql_output_request(lowered):
+    if _early_domain_discovery_text(lowered) and not looks_like_sql_output_request(sql_lowered):
         _add(required, "brainstorming-harness", "early domain discovery appeared")
     if _mentions_architecture_workflow(lowered):
         _add(required, "architect-pipeline", "design or architecture planning appeared")

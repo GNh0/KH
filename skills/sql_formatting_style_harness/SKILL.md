@@ -1,13 +1,13 @@
 ---
 name: sql-formatting-style-harness
-description: Use when KH must verify SQL/T-SQL formatting output against the host-local sql-formatting style contract without replacing that host-local skill.
+description: Use when formatting, cleaning, standardizing, refactoring, or generating SQL/T-SQL may use the host-local sql-formatting skill and KH must verify the output against that style contract without replacing the host-local formatter.
 ---
 
 # SQL Formatting Style Harness
 
 ## KH Entry Contract
 
-- Start through `always-on-front-door` for work-bearing requests before this harness is selected.
+- Start through `always-on-front-door` for work-bearing KH requests before this harness is selected. When a direct SQL formatting request triggers the host-local `sql-formatting` skill first, this harness may run as the verification companion without taking over formatting.
 - If `kh_active_directive=active` was set by an earlier user instruction, keep KH-routed setup active for this work-bearing request.
 - Use the host-local `sql-formatting` skill as the primary formatting standard when it exists.
 - Do not replace, suppress, or reinterpret the host-local skill. This harness verifies outputs from that skill or from an agent that claims to follow it.
@@ -15,6 +15,18 @@ description: Use when KH must verify SQL/T-SQL formatting output against the hos
 - Treat unknown scalar functions as contract-sensitive text unless DB/MCP metadata, project source, or the host-local style contract proves an equivalent lookup join. `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is a verified BA011T lookup contract when the host-local `sql-formatting` skill is available.
 - Report this skill as applied only when `src.skills.sql_formatting_style.verify_sql_formatting_style` or the module CLI produced a `HarnessResult`-shaped result.
 - A `selected_not_executed_skills` entry, a skill-file read, or a style-standard mention is not execution evidence.
+
+## Direct SQL Companion Rule
+
+When this skill triggers alongside `sql-formatting`, use this order:
+
+1. Read and apply the host-local `sql-formatting` skill.
+2. Keep the user's original SQL unchanged in memory for comparison.
+3. Format the SQL according to the host-local style.
+4. Run `python -m src.skills.sql_formatting_style --original-file <path> --formatted-file <path>` or call `verify_sql_formatting_style(...)`.
+5. Emit final SQL only after the verifier passes, or state that KH verification is blocked and why.
+
+If a host cannot create temporary comparison files, record `sql_formatting_style_harness=blocked` with the reason. Do not claim KH verification ran.
 
 ## Support files
 
