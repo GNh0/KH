@@ -140,6 +140,8 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["plugin_route"]["controller"]["capability"], "sql_formatting")
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", payload["plugin_route"]["reasons"])
         self.assertIn("sql-formatting-style-harness", payload["recommended_skills"])
+        self.assertEqual(payload["immediate_next_skills"], ["sql-formatting-style-harness"])
+        self.assertNotIn("sql-formatting-style-harness", summary["selected_not_executed_skills"])
         self.assertTrue(
             any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
         )
@@ -175,6 +177,35 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertFalse(
             any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
         )
+
+    def test_front_door_does_not_route_sql_meta_review_to_sql_formatting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "Review this KH routing patch. It should not treat the phrase SQL output or "
+                    "sql-formatting-style-harness as an actual request to format SQL. Check whether "
+                    "the front-door over-routes meta audit prompts.",
+                    project=Path(tmp),
+                    host="codex",
+                )
+        payload = result.to_dict()
+
+        self.assertNotEqual(payload["plugin_route"]["controller"]["provider_id"], "sql-formatting")
+        self.assertNotIn(
+            "sql-formatting",
+            {assistant["provider_id"] for assistant in payload["plugin_route"]["assistants"]},
+        )
+        self.assertNotIn("sql-formatting-style-harness", payload["immediate_next_skills"])
 
     def test_heavy_non_kh_provider_route_still_requires_preflight_immediate_skills(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -315,6 +346,10 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["token_optimizer_decision"]["estimated_tokens_saved"], 0)
         self.assertEqual(payload["token_optimizer_decision"]["token_savings_ratio"], 0.0)
         self.assertIn("not_used_reason", payload["token_optimizer_decision"])
+        self.assertEqual(payload["token_optimizer_decision"]["token_optimizer_gate_status"], "checked")
+        self.assertFalse(payload["token_optimizer_decision"]["optimization_applied"])
+        self.assertEqual(payload["token_optimizer_decision"]["actual_optimization_status"], "considered_not_needed")
+        self.assertIn("Token Optimizer not used", payload["token_optimizer_decision"]["actual_optimization_summary"])
         self.assertTrue(payload["large_work_bundle_validation"]["valid"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertEqual(
@@ -396,6 +431,9 @@ class KhFrontDoorTests(unittest.TestCase):
             payload["skill_status_summary"]["token-optimizer"]["status"],
             "applied",
         )
+        self.assertEqual(payload["token_optimizer_gate"]["gate_status"], "checked")
+        self.assertFalse(payload["token_optimizer_gate"]["optimization_applied"])
+        self.assertIn("not used", payload["token_optimizer_gate"]["summary"])
         self.assertIn("without_token_optimizer", payload["token_optimizer_decision"])
         self.assertNotIn("token-optimizer", payload["selected_not_executed_skills"])
 

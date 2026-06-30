@@ -144,6 +144,7 @@ class KhFrontDoorResult:
             "runtime_applied_skills": runtime_applied_skills,
             "selected_not_executed_skills": selected_not_executed_skills,
             "token_optimizer_decision": dict(self.token_optimizer_decision),
+            "token_optimizer_gate": _token_optimizer_gate_summary(self.token_optimizer_decision),
             "memory_policy": dict(self.memory_policy),
             "skill_status_summary": {
                 name: {
@@ -677,6 +678,9 @@ def _immediate_next_skills(
         ]
         return [skill for skill in ordered if skill in recommended][:4]
 
+    if _needs_sql_formatting_style_harness(classification, plugin_route):
+        return ["sql-formatting-style-harness"] if "sql-formatting-style-harness" in recommended else []
+
     if controller_id and controller_id not in {"kh", "none"}:
         return []
 
@@ -811,6 +815,10 @@ def _front_door_token_optimizer_decision(prompt: str, classification: Dict[str, 
         "token_optimizer_provider": "kh",
         "token_optimizer_status": status,
         "token_optimizer_status_reason": reason,
+        "token_optimizer_gate_status": "checked",
+        "optimization_applied": status == "used",
+        "actual_optimization_status": status,
+        "actual_optimization_summary": _token_optimizer_actual_summary(status, usage, reason),
         "not_used_reason": reason if status != "used" else "",
         "records_count": 0,
         "optimized_payload_count": 0,
@@ -836,11 +844,44 @@ def _apply_front_door_token_optimizer_gate(
     updated["token-optimizer"] = _status(
         "applied",
         "runtime",
-        f"Front-door executed the Token Optimizer decision gate; token_optimizer_status={status}. {reason}",
+        f"Front-door checked the Token Optimizer decision gate; actual optimization status={status}. {reason}",
         ["token_optimizer_decision", "token_optimizer_status", "token_optimizer_status_reason"],
     )
     updated["token-optimizer"]["metadata"] = {"token_optimizer_decision": dict(decision)}
     return updated
+
+
+def _token_optimizer_actual_summary(status: str, usage: Dict[str, Any], reason: str) -> str:
+    without_optimizer = int(usage.get("without_token_optimizer") or 0)
+    with_optimizer = int(usage.get("with_token_optimizer") or 0)
+    saved = int(usage.get("estimated_tokens_saved") or 0)
+    ratio = float(usage.get("token_savings_ratio") or 0.0)
+    if status == "used":
+        return (
+            f"Token Optimizer used; before={without_optimizer}, after={with_optimizer}, "
+            f"saved={saved}, savings_ratio={ratio:.3f}."
+        )
+    return (
+        f"Token Optimizer not used for payload compression at this stage; before={without_optimizer}, "
+        f"after={with_optimizer}, saved={saved}, savings_ratio={ratio:.3f}. Reason: {reason}"
+    )
+
+
+def _token_optimizer_gate_summary(decision: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(decision.get("token_optimizer_status") or "unknown")
+    return {
+        "gate_status": str(decision.get("token_optimizer_gate_status") or "checked"),
+        "provider": str(decision.get("token_optimizer_provider") or decision.get("provider") or ""),
+        "actual_optimization_status": str(decision.get("actual_optimization_status") or status),
+        "optimization_applied": bool(decision.get("optimization_applied")),
+        "reason": str(decision.get("token_optimizer_status_reason") or decision.get("not_used_reason") or ""),
+        "without_token_optimizer": int(decision.get("without_token_optimizer") or 0),
+        "with_token_optimizer": int(decision.get("with_token_optimizer") or 0),
+        "estimated_tokens_saved": int(decision.get("estimated_tokens_saved") or 0),
+        "token_savings_ratio": float(decision.get("token_savings_ratio") or 0.0),
+        "actual_usage_scope": str(decision.get("actual_usage_scope") or ""),
+        "summary": str(decision.get("actual_optimization_summary") or ""),
+    }
 
 
 def _local_token_estimate(text: str) -> int:
@@ -908,10 +949,16 @@ def _required_next_actions(
     ]
     if immediate_next_skills:
         immediate = ", ".join(f"`{skill}`" for skill in immediate_next_skills)
-        actions.insert(
-            0,
-            f"NEXT SKILL EXECUTION: apply {immediate} now. Everything else in `selected_not_executed_skills` is deferred until these are applied, skipped with rationale, or blocked.",
-        )
+        if list(immediate_next_skills) == ["sql-formatting-style-harness"]:
+            actions.insert(
+                0,
+                "NEXT SKILL EXECUTION: apply the selected SQL formatting provider first, then run `sql-formatting-style-harness` verifier or record a blocked reason before SQL output, DB writes, or final claims.",
+            )
+        else:
+            actions.insert(
+                0,
+                f"NEXT SKILL EXECUTION: apply {immediate} now. Everything else in `selected_not_executed_skills` is deferred until these are applied, skipped with rationale, or blocked.",
+            )
     controller = plugin_route.get("controller", {}) or {}
     controller_id = str(controller.get("provider_id") or "")
     selected_roles = [controller]

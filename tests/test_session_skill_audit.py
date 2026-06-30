@@ -786,10 +786,15 @@ class SessionSkillAuditTests(unittest.TestCase):
         )
 
         audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
 
         self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
         self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
+        self.assertEqual(
+            rows["sql-formatting-style-harness"]["acceptance"]["status"],
+            "missing_application",
+        )
 
 
     def test_sql_formatting_route_passes_when_style_verifier_runs_before_output(self):
@@ -917,9 +922,89 @@ class SessionSkillAuditTests(unittest.TestCase):
         )
 
         audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
 
         self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
+        self.assertEqual(
+            rows["sql-formatting-style-harness"]["acceptance"]["status"],
+            "missing_outputs",
+        )
+        self.assertIn(
+            "sql_passthrough",
+            rows["sql-formatting-style-harness"]["acceptance"]["missing_outputs"],
+        )
+
+    def test_sql_formatting_route_requires_style_verifier_before_db_write(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["sql-formatting-style-harness"],
+            "plugin_route": {
+                "route": "single",
+                "controller": {
+                    "provider_id": "sql-formatting",
+                    "capability": "sql_formatting",
+                },
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "CREATE PROC [dbo].[UP_SYS_TEST_SAVE]\n"
+                            "    @p_WorkType VARCHAR(20) = NULL\n"
+                            "AS\n"
+                            "BEGIN\n"
+                            "    SELECT 1\n"
+                            "END\n"
+                            "정리해서 적용해줘"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "mssql_run_sql_query",
+                        "arguments": json.dumps(
+                            {
+                                "query": (
+                                    "CREATE OR ALTER PROCEDURE [dbo].[UP_SYS_TEST_SAVE]\n"
+                                    "    @p_WorkType VARCHAR(20) = NULL\n"
+                                    "AS\n"
+                                    "BEGIN\n"
+                                    "    SELECT 1\n"
+                                    "END\n"
+                                )
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
         self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
 
     def test_failed_sql_formatting_style_verifier_before_output_is_flagged(self):

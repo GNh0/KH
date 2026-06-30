@@ -639,6 +639,65 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertNotEqual(result.complexity, "ambiguous")
         self.assertNotIn("ambiguous_visual_query_order_request", result.reasons)
 
+    def test_tsql_stored_procedure_payload_does_not_route_as_travel(self):
+        result = classify_request(
+            "USE [C_KONE060_20260630_00]\n"
+            "GO\n"
+            "/****** Object: StoredProcedure [dbo].[sp_DE000700_SELECT] ******/\n"
+            "SET ANSI_NULLS ON\n"
+            "GO\n"
+            "CREATE OR ALTER PROCEDURE [dbo].[sp_DE000700_SELECT]\n"
+            "    @WORKTYPE VARCHAR(20) = NULL\n"
+            "AS\n"
+            "BEGIN\n"
+            "    SELECT A.ITEMCD\n"
+            "    FROM BA030T A\n"
+            "    WHERE A.USEYN = 'Y'\n"
+            "END\n"
+        )
+
+        self.assertEqual(result.domain, "software")
+        self.assertNotEqual(result.domain, "travel")
+
+    def test_short_exec_tsql_payload_routes_to_software(self):
+        result = classify_request(
+            "BEGIN TRAN\n"
+            "EXEC UP_SYS_SYSTEMCHECKLIST_SAVE @p_WorkType = 'LIST', @XML_DATA = '<ROOT />'\n"
+            "ROLLBACK\n"
+        )
+
+        self.assertEqual(result.domain, "software")
+        self.assertNotIn(result.domain, {"devops", "general", "travel"})
+
+    def test_create_proc_tsql_payload_routes_to_software(self):
+        result = classify_request(
+            "CREATE PROC [dbo].[UP_SYS_TEST_SAVE]\n"
+            "    @p_WorkType VARCHAR(20) = NULL\n"
+            "AS\n"
+            "BEGIN\n"
+            "    IF EXISTS (SELECT 1 FROM DEV000T A WHERE A.ID = @p_ID)\n"
+            "        RAISERROR('이미 등록된 항목입니다.', 16, 1)\n"
+            "END\n"
+        )
+
+        self.assertEqual(result.domain, "software")
+
+    def test_select_where_ordinary_language_does_not_route_to_software(self):
+        result = classify_request("Can you help me select where to travel next?")
+
+        self.assertNotEqual(result.domain, "software")
+        self.assertEqual(result.domain, "travel")
+
+    def test_token_optimizer_gate_text_does_not_route_to_travel(self):
+        result = classify_request("Review token_optimizer_gate telemetry and ship/no-ship routing evidence.")
+
+        self.assertNotEqual(result.domain, "travel")
+
+    def test_flight_gate_text_still_routes_to_travel(self):
+        result = classify_request("Which flight gate should I use for my trip?")
+
+        self.assertIn(result.domain, {"booking", "travel"})
+
     def test_substring_matches_do_not_over_escalate(self):
         earnings = classify_request("Summarize Nvidia's latest earnings and key risks.")
         contest = classify_request("Summarize the contest results for the robotics team.")

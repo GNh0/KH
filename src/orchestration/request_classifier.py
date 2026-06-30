@@ -1462,7 +1462,9 @@ TRAVEL_TERMS = {
     "itinerary",
     "family trip",
     "flight",
-    "gate",
+    "airport gate",
+    "boarding gate",
+    "flight gate",
     "restaurant",
     "table",
     "travel",
@@ -2761,6 +2763,8 @@ def _detect_domain(normalized: str, context: dict) -> str:
 
 
 def _domain_override_from_text(normalized: str) -> str:
+    if _looks_like_sql_or_tsql_payload(normalized):
+        return "software"
     if _contains_any(
         normalized,
         {
@@ -2838,6 +2842,69 @@ def _domain_override_from_text(normalized: str) -> str:
     if _contains_any(normalized, EXTRA_SECURITY_HIGH_RISK_TERMS | SECURITY_HIGH_RISK_TERMS):
         return "security"
     return ""
+
+
+def _looks_like_sql_or_tsql_payload(normalized: str) -> bool:
+    markers = 0
+    has_strong_anchor = False
+    marker_terms = [
+        "use [",
+        "set ansi_nulls",
+        "set quoted_identifier",
+        "begin tran",
+        "begin transaction",
+        "commit tran",
+        "commit transaction",
+        "rollback tran",
+        "rollback transaction",
+        "create procedure",
+        "create or alter procedure",
+        "alter procedure",
+        "create proc",
+        "create or alter proc",
+        "alter proc",
+        "storedprocedure",
+        "stored procedure",
+        "object: storedprocedure",
+        "exec [",
+        "execute [",
+        "from sys.",
+        "inner join",
+        "where ",
+        "select ",
+        "insert into",
+        "update ",
+        "delete ",
+        "raiserror",
+        "throw ",
+        "if exists",
+        "openxml",
+    ]
+    weak_terms = {"where ", "select "}
+    for term in marker_terms:
+        if term in normalized:
+            markers += 1
+            if term not in weak_terms:
+                has_strong_anchor = True
+    if re.search(r"(?m)^\s*go\s*$", normalized):
+        markers += 1
+        has_strong_anchor = True
+    if re.search(r"\bsp_[a-z0-9_]+\b", normalized):
+        markers += 1
+        has_strong_anchor = True
+    if re.search(r"(?m)^\s*exec(?:ute)?\s+[\[\]a-z0-9_.]+", normalized):
+        markers += 1
+        has_strong_anchor = True
+    if re.search(r"@[a-z0-9_]+\b", normalized):
+        markers += 1
+        has_strong_anchor = True
+    if re.search(r"@p_[a-z0-9_]+\b", normalized):
+        markers += 1
+        has_strong_anchor = True
+    if re.search(r"\bfrom\s+[a-z0-9_\[\].]+\b", normalized) and re.search(r"\bselect\b", normalized):
+        markers += 1
+        has_strong_anchor = True
+    return has_strong_anchor and markers >= 2
 
 
 def _is_high_risk(normalized: str, domain: str, context: dict) -> bool:

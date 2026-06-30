@@ -1817,23 +1817,29 @@ def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
     if request_index < 0:
         return []
 
-    first_sql_answer_index = -1
+    first_sql_action_index = -1
+    first_sql_action_kind = ""
     first_sql_skill_index = -1
     for index, record in enumerate(records[request_index + 1 :], request_index + 1):
         lowered = record.text.lower()
         if first_sql_skill_index < 0 and _looks_like_sql_formatting_application(record):
             first_sql_skill_index = index
         if record.role == "assistant" and _looks_like_sql_answer(lowered):
-            first_sql_answer_index = index
+            first_sql_action_index = index
+            first_sql_action_kind = "sql_output"
+            break
+        if _looks_like_sql_db_write(record):
+            first_sql_action_index = index
+            first_sql_action_kind = "db_write"
             break
 
-    if first_sql_answer_index < 0:
+    if first_sql_action_index < 0:
         return []
-    if first_sql_skill_index >= 0 and first_sql_skill_index < first_sql_answer_index:
+    if first_sql_skill_index >= 0 and first_sql_skill_index < first_sql_action_index:
         first_verifier_index = -1
         first_failed_verifier_index = -1
         first_blocked_index = -1
-        for index, record in enumerate(records[first_sql_skill_index + 1 : first_sql_answer_index], first_sql_skill_index + 1):
+        for index, record in enumerate(records[first_sql_skill_index + 1 : first_sql_action_index], first_sql_skill_index + 1):
             if first_verifier_index < 0 and _looks_like_sql_formatting_style_verifier(record):
                 first_verifier_index = index
             if first_failed_verifier_index < 0 and _looks_like_sql_formatting_style_verifier_failed(record):
@@ -1854,17 +1860,18 @@ def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
                         "with a blocked/needs-review explanation instead of presenting failed formatted SQL as final."
                     ),
                     "verifier": _short(records[first_failed_verifier_index].text),
-                    "samples": [_short(records[first_sql_answer_index].text)],
+                    "samples": [_short(records[first_sql_action_index].text)],
                 }
             ]
+        action_phrase = "DB write" if first_sql_action_kind == "db_write" else "SQL output"
         return [
             {
                 "skill": "sql-formatting-style-harness",
                 "status": "missing_sql_formatting_style_verifier",
                 "severity": "P1",
-                "reason": "SQL formatting routed through the host-local skill, but KH did not record verifier evidence before SQL output.",
-                "action": "Run or record `verify_sql_formatting_style` / `src.skills.sql_formatting_style` evidence before emitting final SQL, or record a blocked reason before output.",
-                "samples": [_short(records[first_sql_answer_index].text)],
+                "reason": f"SQL formatting routed through the host-local skill, but KH did not record verifier evidence before {action_phrase}.",
+                "action": "Run or record `verify_sql_formatting_style` / `src.skills.sql_formatting_style` evidence before emitting final SQL, DB writes, or final claims; otherwise record a blocked reason first.",
+                "samples": [_short(records[first_sql_action_index].text)],
             }
         ]
 
@@ -1881,7 +1888,7 @@ def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
                 "Route actionable SQL output through the host-local sql-formatting skill first, "
                 "then use sql-formatting-style-harness when KH verification evidence is required."
             ),
-            "samples": [_short(records[first_sql_answer_index].text)],
+            "samples": [_short(records[first_sql_action_index].text)],
         }
     ]
 
@@ -2010,6 +2017,25 @@ def _looks_like_sql_answer(lowered: str) -> bool:
     if "```sql" in lowered:
         return True
     return bool(SQL_ANSWER_PATTERN.search(lowered))
+
+
+def _looks_like_sql_db_write(record: SessionTextRecord) -> bool:
+    if record.payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    lowered = record.text.lower()
+    if not any(marker in lowered for marker in ["mssql_run_sql_query", "run_sql_query", "execute_sql", "sql_query"]):
+        return False
+    write_patterns = [
+        r"\bcreate\s+(?:or\s+alter\s+)?(?:procedure|proc|function|table|view|trigger)\b",
+        r"\balter\s+(?:procedure|proc|function|table|view|trigger)\b",
+        r"\bdrop\s+(?:procedure|proc|function|table|view|trigger|index|database)\b",
+        r"\btruncate\s+table\b",
+        r"\binsert\s+into\b",
+        r"\bupdate\s+[\[\]a-z0-9_.#]+\s+set\b",
+        r"\bdelete\s+from\b",
+        r"\bmerge\s+[\[\]a-z0-9_.#]+\b",
+    ]
+    return any(re.search(pattern, lowered) for pattern in write_patterns)
 
 
 def _is_sql_requirement_record(record: SessionTextRecord) -> bool:
@@ -4240,7 +4266,7 @@ def _acceptance_for_skill(
             "missing_outputs": required_outputs,
         }
 
-    if status in {"considered", "procedural"} and _has_resolution_rationale(observations):
+    if status in {"considered", "procedural"} and not required_outputs and _has_resolution_rationale(observations):
         return {
             "status": "resolved_by_rationale",
             "required_outputs": required_outputs,

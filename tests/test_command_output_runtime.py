@@ -210,6 +210,110 @@ class CommandOutputRuntimeTests(unittest.TestCase):
         self.assertIn("token optimized", completed.stdout)
         self.assertIn("line-49", completed.stdout)
 
+    def test_module_cli_accepts_powershell_utf16_log_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "powershell-log.txt"
+            lines = [f"PASSED tests/test_bulk.py::test_{index}" for index in range(20)]
+            lines.extend(
+                [
+                    "FAILED tests/test_invoice.py::test_total_rounding",
+                    "  File \"tests/test_invoice.py\", line 87",
+                    "AssertionError: 119999 == 120000",
+                    "exit code: 1",
+                ]
+            )
+            log_path.write_text("\n".join(lines), encoding="utf-16")
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.skills.token_optimizer",
+                    "--log-file",
+                    str(log_path),
+                    "--command",
+                    "python -m unittest",
+                    "--exit-code",
+                    "1",
+                    "--max-lines",
+                    "8",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("FAILED tests/test_invoice.py::test_total_rounding", completed.stdout)
+        self.assertIn("tests/test_invoice.py\", line 87", completed.stdout)
+        self.assertIn("119999 == 120000", completed.stdout)
+        self.assertIn("exit code: 1", completed.stdout)
+
+    def test_module_cli_report_json_includes_token_usage_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "build-log.txt"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        *[f"Copying file {index}" for index in range(40)],
+                        "OrderService.cs(421,17): error CS0103: The name 'TOTALAMT' does not exist",
+                        "Build FAILED",
+                        "exit code: 1",
+                    ]
+                ),
+                encoding="utf-16",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.skills.token_optimizer",
+                    "--log-file",
+                    str(log_path),
+                    "--command",
+                    "msbuild App.sln",
+                    "--exit-code",
+                    "1",
+                    "--max-lines",
+                    "8",
+                    "--report-json",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertIn("OrderService.cs(421,17)", payload["stdout"])
+        token_usage = payload["metadata"]["token_usage"]
+        self.assertGreater(token_usage["without_token_optimizer"], token_usage["with_token_optimizer"])
+        self.assertGreater(token_usage["actual_tokens_saved"], 0)
+        self.assertGreater(token_usage["actual_token_savings_ratio"], 0)
+
+    def test_command_output_filter_preserves_success_test_summary(self):
+        log = "\n".join(
+            [
+                *[f"[Worker] task-{index} completed." for index in range(80)],
+                "Ran 748 tests in 330.860s",
+                "OK",
+                *[f"[Master] async workflow completed {index}" for index in range(80)],
+            ]
+        )
+
+        result = summarize_command_output(
+            "python -m unittest discover -s tests",
+            stdout=log,
+            stderr="",
+            exit_code=0,
+            max_lines=10,
+        )
+
+        self.assertIn("Ran 748 tests in 330.860s", result.stdout)
+        self.assertIn("OK", result.stdout)
+        self.assertGreater(result.metadata["token_savings_ratio"], 0.5)
+
     def test_session_jsonl_summary_drops_huge_prompt_payloads_but_keeps_goal_and_final(self):
         lines = [
             {

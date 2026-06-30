@@ -475,9 +475,10 @@ def compose_plugin_route(
         )
 
     specialist_controller = _single_specialist_controller(lowered, available)
-    if specialist_controller and (
-        classification.complexity in {"light", "medium"}
-        or _allow_single_sql_specialist_for_one_off_request(lowered, specialist_controller)
+    if specialist_controller and _allow_single_specialist_controller(
+        lowered,
+        specialist_controller,
+        classification.complexity,
     ):
         reasons.append(f"specialist_trigger:{specialist_controller.provider_id}:{specialist_controller.capability}")
         assistants = _assistant_roles(lowered, available, {specialist_controller.provider_id})
@@ -786,7 +787,7 @@ def _single_specialist_controller(
 
 
 def _allow_single_sql_specialist_for_one_off_request(text: str, role: ProviderRole) -> bool:
-    if role.capability != "sql_formatting" or not looks_like_sql_output_request(text):
+    if role.capability != "sql_formatting":
         return False
     broad_markers = (
         " every ",
@@ -812,7 +813,41 @@ def _allow_single_sql_specialist_for_one_off_request(text: str, role: ProviderRo
         "\uc99d\uac70",
         "\ucee4\ubc0b",
     )
-    return not any(marker in f" {text} " for marker in broad_markers)
+    if any(marker in f" {text} " for marker in broad_markers):
+        return False
+    if looks_like_sql_output_request(text):
+        return True
+    return _looks_like_one_off_sql_style_request(text)
+
+
+def _looks_like_one_off_sql_style_request(text: str) -> bool:
+    normalized = f" {text.lower()} "
+    return any(
+        action in normalized
+        for action in [
+            " format ",
+            " clean ",
+            " cleanup ",
+            " standardize ",
+            " refactor ",
+            " readability ",
+            " align ",
+        ]
+    ) and any(
+        marker in normalized
+        for marker in [
+            " sql ",
+            " t-sql ",
+            " tsql ",
+            " query ",
+        ]
+    )
+
+
+def _allow_single_specialist_controller(text: str, role: ProviderRole, complexity: str) -> bool:
+    if role.capability == "sql_formatting":
+        return _allow_single_sql_specialist_for_one_off_request(text, role)
+    return complexity in {"light", "medium"}
 
 
 def _unavailable_specialists(
@@ -905,6 +940,8 @@ def _contains_any(text: str, needles: Iterable[str]) -> bool:
 
 
 def _contains_specialist_trigger(text: str, capability: str, needles: Iterable[str]) -> bool:
+    if capability == "sql_formatting" and _has_sql_meta_review_context(text):
+        return False
     if capability == "sql_formatting" and looks_like_sql_output_request(text):
         return True
     for needle in needles:
@@ -936,6 +973,8 @@ def _contains_specialist_trigger(text: str, capability: str, needles: Iterable[s
 def looks_like_sql_output_request(text: str) -> bool:
     """Detect actionable SQL/T-SQL output requests without requiring the user to name a skill."""
     lowered = str(text or "").lower()
+    if _has_sql_meta_review_context(lowered):
+        return False
     if not SQL_STATEMENT_PATTERN.search(lowered) or not SQL_CONTEXT_PATTERN.search(lowered):
         return False
     if _has_sql_equivalence_question_without_output_request(lowered):
@@ -943,6 +982,38 @@ def looks_like_sql_output_request(text: str) -> bool:
     if _has_sql_diagnostic_question_without_output_request(lowered):
         return False
     return any(marker in lowered for marker in SQL_OUTPUT_REQUEST_MARKERS)
+
+
+def _has_sql_meta_review_context(lowered: str) -> bool:
+    meta_markers = (
+        "review",
+        "audit",
+        "evaluate",
+        "evaluation",
+        "feedback",
+        "risk",
+        "complaint",
+        "routing",
+        "route",
+        "classifier",
+        "front-door",
+        "front door",
+        "session",
+        "telemetry",
+        "did not use",
+        "unused",
+        "\uac80\ud1a0",
+        "\uac10\uc0ac",
+        "\ud3c9\uac00",
+        "\ub9ac\ubdf0",
+        "\ub77c\uc6b0\ud305",
+        "\ubd84\ub958",
+        "\uc138\uc158",
+    )
+    provider_markers = ("sql-formatting", "sql formatting", "sql output", "sql verifier")
+    if not any(marker in lowered for marker in meta_markers):
+        return False
+    return any(marker in lowered for marker in provider_markers)
 
 
 def _has_sql_equivalence_question_without_output_request(lowered: str) -> bool:

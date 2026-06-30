@@ -33,6 +33,8 @@ IMPORTANT_LOG_PATTERNS = tuple(
         r"^\s*E\s+[-+]\s+",
         r"\b(expected|actual)\s*:",
         r"\b\d+\s*==\s*\d+\b",
+        r"^\s*Ran\s+\d+\s+tests?\s+in\s+",
+        r"^\s*OK\s*$",
         r"\bexit code\s*:\s*\d+",
         r"\breturncode\s*[:=]\s*\d+",
         r"\bline\s+\d+\b",
@@ -903,6 +905,10 @@ def _line_priority(line: str) -> int:
         return 90
     if re.search(r"\b(exit code|returncode)\s*[:=]\s*\d+\b", lowered):
         return 85
+    if re.search(r"^\s*ran\s+\d+\s+tests?\s+in\s+", lowered):
+        return 82
+    if lowered.strip() in {"ok", "success"}:
+        return 80
     if re.search(r"\btraceback\b", lowered):
         return 80
     if re.search(r"\b(user_constraint|decision|evidence|blocker|p[0-2])\b", lowered):
@@ -1197,6 +1203,24 @@ def _safe_stdout_write(text: str) -> None:
     sys.stdout.write(output)
 
 
+def _write_cli_result(result: HarnessResult, report_json: bool) -> None:
+    if report_json:
+        _safe_stdout_write(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
+        return
+    _safe_stdout_write(result.stdout)
+
+
+def _read_cli_text_file(path: str) -> str:
+    with open(path, "rb") as handle:
+        data = handle.read()
+    for encoding in ("utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "cp949", "mbcs"):
+        try:
+            return data.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compress logs, command output, or Python source for UAF workflows.")
     parser.add_argument("--log-file", help="Read terminal output from a file and print a compact version.")
@@ -1204,6 +1228,7 @@ def main() -> int:
     parser.add_argument("--max-lines", type=int, default=30, help="Maximum approximate lines to keep for logs.")
     parser.add_argument("--command", default="", help="Original command, used to select a family-specific output filter.")
     parser.add_argument("--exit-code", type=int, default=0, help="Original command exit code for preservation checks.")
+    parser.add_argument("--report-json", action="store_true", help="Print HarnessResult JSON with token usage metadata instead of compact text only.")
     parser.add_argument(
         "--kind",
         choices=["auto", "log", "python-code", "contract-sensitive", "text"],
@@ -1213,19 +1238,35 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.log_file:
-        with open(args.log_file, "r", encoding="utf-8") as handle:
-            result = optimize_context_content(
-                handle.read(),
-                content_kind=args.kind if args.kind != "auto" else "log",
-                command=args.command,
-                exit_code=args.exit_code,
-                max_lines=args.max_lines,
-            )
-            _safe_stdout_write(result.stdout)
+        result = optimize_context_content(
+            _read_cli_text_file(args.log_file),
+            content_kind=args.kind if args.kind != "auto" else "log",
+            command=args.command,
+            exit_code=args.exit_code,
+            max_lines=args.max_lines,
+        )
+        _write_cli_result(result, args.report_json)
         return 0
     if args.code_file:
-        with open(args.code_file, "r", encoding="utf-8") as handle:
-            _safe_stdout_write(minify_code(handle.read()))
+        source = _read_cli_text_file(args.code_file)
+        minified = minify_code(source)
+        if args.report_json:
+            result = HarnessResult(
+                success=True,
+                stdout=minified,
+                metadata={
+                    "strategy": "minify-code",
+                    "token_usage": compare_token_usage(
+                        source,
+                        minified,
+                        strategy="minify-code",
+                        label="python-code",
+                    ),
+                },
+            )
+            _write_cli_result(result, True)
+        else:
+            _safe_stdout_write(minified)
         return 0
     parser.print_help()
     return 0
