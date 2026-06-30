@@ -1,6 +1,6 @@
 ---
 name: token-optimizer
-description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when large or long-running development workflows, subagent transcripts, terminal logs, command output, or Python code risk wasting LLM context.
+description: Use when kh-uaf:always-on-front-door has already run; run it as an explicit decision gate for every non-trivial KH turn, then record used, considered_not_needed, passthrough, or blocked with before/after token telemetry and not-used rationale.
 ---
 # Token Optimizer Skill
 
@@ -12,14 +12,14 @@ description: Use when kh-uaf:always-on-front-door has already run and selected t
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
-This skill is the UAF context budget gate. It prevents token exhaustion during large or long-running development workflows, complex debugging, subagent review loops, command validation, or code reading loops.
+This skill is the UAF context budget gate. Every non-trivial KH turn must pass through its decision gate, even when no compression is eventually applied. It prevents token exhaustion during large or long-running development workflows, complex debugging, subagent review loops, command validation, or code reading loops.
 
 Default behavior is quality-first: the host may route any large or uncertain content through `optimize_context_content`, but the skill only compresses when required facts can be preserved. Token optimization must never reduce answer quality. Contract-sensitive text such as SQL, stored procedures, license headers, security comments, business rules, exact source-of-truth prose, and ordinary text that cannot be classified safely must pass through unchanged.
 Large arbitrary prose also passes through by default; this is intentional because a generic summary can silently change meaning. Use command-family log filtering or explicit user-approved summarization when reduction is more important than exact wording.
 
 ## Context budget gate
 
-Use this as an early gate for large work, not only as a rescue step after logs get too long. During heavy UAF development, design, review, QA, or subagent workflows, or whenever `estimated_context_tokens` is expected to cross the context budget threshold, the controller must decide whether the run needs optimization and record `token_optimizer_status`:
+Use this as an early decision gate for every non-trivial KH turn, not only as a rescue step after logs get too long. During heavy UAF development, design, review, QA, or subagent workflows, or whenever `estimated_context_tokens` is expected to cross the context budget threshold, the controller must decide whether the run needs optimization and record `token_optimizer_status`:
 
 - `used`: content was compressed, filtered, minified, or summarized with before/after statistics.
 - `considered_not_needed`: the workflow stayed small enough, but the gate was explicitly checked.
@@ -47,7 +47,7 @@ If any of those facts would be lost, do not compress that item; use `passthrough
 - Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success/blocked mini-demo and verify contract-shaped JSON plus any demo artifacts.
 
 ## Instructions
-1. At the start of large or long-running development workflows, decide whether command output, file reads, task plans, or subagent transcripts are likely to exceed the useful context budget. Use host metadata such as `estimated_context_tokens`, largest output size, expected tool calls, broad file reads, subagent count, task-packet size, or transcript size when available.
+1. At the start of every non-trivial KH-routed turn, record the token optimizer decision gate before broad reads, subagent dispatch, long command output, or implementation. If nothing is compressible yet, use `considered_not_needed`; if exact content must be preserved, use `passthrough`; if safe preservation cannot be proven, use `blocked`.
 2. For mixed content, call `src.skills.token_optimizer.optimize_context_content`; it classifies logs, Python code, and contract-sensitive text before deciding whether compression is safe.
 3. For long agent transcripts or subagent transcripts, call `src.skills.token_optimizer.summarize_agent_transcript` so lifecycle quality evidence is preserved while chatter is removed. Do not assume every subagent transcript should be compressed; short, exact, or contract-sensitive reviewer output may be `considered_not_needed` or `passthrough`.
 4. If you run a command and it produces an extremely long error log (hundreds of lines) that clutters your context, you can run the python script directly to truncate it:

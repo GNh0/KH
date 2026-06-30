@@ -207,8 +207,8 @@ class KhFrontDoorTests(unittest.TestCase):
             [
                 "goal-state-harness",
                 "workflow-usability-harness",
-                "token-optimizer",
                 "host-agent-orchestration",
+                "parallel-orchestration-harness",
             ],
         )
         self.assertTrue(
@@ -300,16 +300,21 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         self.assertEqual(
             payload["skill_statuses"]["token-optimizer"]["status"],
-            "pending_immediate_execution",
+            "applied",
         )
         self.assertEqual(
             payload["large_work_orchestration_bundle"]["token_optimizer_status"],
-            "blocked",
+            "considered_not_needed",
         )
         self.assertIn(
-            "immediate next gate",
+            "no command output",
             payload["large_work_orchestration_bundle"]["token_optimizer_status_reason"],
         )
+        self.assertEqual(payload["token_optimizer_decision"]["without_token_optimizer"], 15)
+        self.assertEqual(payload["token_optimizer_decision"]["with_token_optimizer"], 15)
+        self.assertEqual(payload["token_optimizer_decision"]["estimated_tokens_saved"], 0)
+        self.assertEqual(payload["token_optimizer_decision"]["token_savings_ratio"], 0.0)
+        self.assertIn("not_used_reason", payload["token_optimizer_decision"])
         self.assertTrue(payload["large_work_bundle_validation"]["valid"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertEqual(
@@ -321,8 +326,8 @@ class KhFrontDoorTests(unittest.TestCase):
             [
                 "goal-state-harness",
                 "workflow-usability-harness",
-                "token-optimizer",
                 "host-agent-orchestration",
+                "parallel-orchestration-harness",
             ],
         )
         self.assertTrue(
@@ -380,13 +385,19 @@ class KhFrontDoorTests(unittest.TestCase):
                 "plugin-composition-policy",
                 "request-complexity-router",
                 "skill-catalog",
+                "token-optimizer",
             ],
         )
         self.assertEqual(
             payload["skill_status_summary"]["skill-catalog"]["status"],
             "applied",
         )
-        self.assertIn("token-optimizer", payload["selected_not_executed_skills"])
+        self.assertEqual(
+            payload["skill_status_summary"]["token-optimizer"]["status"],
+            "applied",
+        )
+        self.assertIn("without_token_optimizer", payload["token_optimizer_decision"])
+        self.assertNotIn("token-optimizer", payload["selected_not_executed_skills"])
 
     def test_cli_prompt_file_preserves_korean_request_for_brainstorming_gate(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -481,6 +492,7 @@ class KhFrontDoorTests(unittest.TestCase):
                 "plugin-composition-policy",
                 "request-complexity-router",
                 "skill-catalog",
+                "token-optimizer",
             ],
         )
         self.assertIn("verification-before-completion-harness", payload["selected_not_executed_skills"])

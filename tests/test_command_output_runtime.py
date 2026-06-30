@@ -560,8 +560,24 @@ SELECT @CUSTCD, @CUSTNM
         self.assertEqual(report["status"], "considered_not_needed")
         self.assertIn("not used", report["not_used_reason"])
         self.assertIn("500 tokens", report["token_optimizer_status_reason"])
-        self.assertEqual(report["summary"]["case_count"], 0)
-        self.assertNotIn("token_optimizer", optimized_results[0].metadata)
+        self.assertEqual(report["summary"]["case_count"], 1)
+        self.assertGreater(report["summary"]["without_token_optimizer"], 0)
+        self.assertEqual(
+            report["summary"]["without_token_optimizer"],
+            report["summary"]["with_token_optimizer"],
+        )
+        self.assertEqual(report["summary"]["estimated_tokens_saved"], 0)
+        task_gate = optimized_results[0].metadata["token_optimizer"]
+        self.assertEqual(task_gate["status"], "considered_not_needed")
+        self.assertIn("not used", task_gate["not_used_reason"])
+        self.assertIn("500 tokens", task_gate["token_optimizer_status_reason"])
+        self.assertEqual(task_gate["summary"]["case_count"], 1)
+        self.assertGreater(task_gate["summary"]["without_token_optimizer"], 0)
+        self.assertEqual(
+            task_gate["summary"]["without_token_optimizer"],
+            task_gate["summary"]["with_token_optimizer"],
+        )
+        self.assertEqual(task_gate["skipped_small_output_count"], 1)
 
     def test_runtime_gate_reports_passthrough_reason_when_provider_preserves_content(self):
         task_result = WorkflowTaskResult(
@@ -591,7 +607,15 @@ SELECT @CUSTCD, @CUSTNM
         self.assertEqual(report["status"], "passthrough")
         self.assertIn("not used", report["not_used_reason"])
         self.assertIn("passed through unchanged", report["token_optimizer_status_reason"])
-        self.assertNotIn("token_optimizer", optimized_results[0].metadata)
+        self.assertEqual(report["summary"]["case_count"], 1)
+        self.assertGreater(report["summary"]["without_token_optimizer"], 0)
+        self.assertEqual(report["summary"]["estimated_tokens_saved"], 0)
+        task_gate = optimized_results[0].metadata["token_optimizer"]
+        self.assertEqual(task_gate["status"], "passthrough")
+        self.assertIn("not used", task_gate["not_used_reason"])
+        self.assertIn("passed through unchanged", task_gate["token_optimizer_status_reason"])
+        self.assertEqual(task_gate["records_count"], 1)
+        self.assertEqual(task_gate["summary"]["case_count"], 1)
 
     def test_runtime_gate_reports_blocked_reason_when_provider_blocks(self):
         _, report = optimize_workflow_task_results(
@@ -606,6 +630,42 @@ SELECT @CUSTCD, @CUSTNM
         self.assertEqual(report["status"], "blocked")
         self.assertIn("not used", report["not_used_reason"])
         self.assertIn("blocked", report["token_optimizer_status_reason"])
+
+    def test_runtime_gate_attaches_blocked_reason_to_task_metadata(self):
+        task_result = WorkflowTaskResult(
+            task_id="task-1",
+            file_name="build.log",
+            role="implementer",
+            status="failed",
+            message="provider unavailable",
+            metadata={
+                "command_output": {
+                    "command": "python -m pytest",
+                    "stdout": _pytest_bulk_log(),
+                    "stderr": "",
+                    "exit_code": 1,
+                }
+            },
+        )
+
+        optimized_results, report = optimize_workflow_task_results(
+            [task_result],
+            metadata={
+                "token_optimizer_provider": "rtk",
+                "token_optimizer_strict": True,
+                "rtk_available": False,
+            },
+        )
+
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["summary"]["case_count"], 1)
+        self.assertGreater(report["summary"]["without_token_optimizer"], 0)
+        task_gate = optimized_results[0].metadata["token_optimizer"]
+        self.assertEqual(task_gate["status"], "blocked")
+        self.assertIn("not used", task_gate["not_used_reason"])
+        self.assertIn("blocked", task_gate["token_optimizer_status_reason"])
+        self.assertEqual(task_gate["records_count"], 1)
+        self.assertEqual(task_gate["summary"]["case_count"], 1)
 
 
 def _pytest_bulk_log() -> str:

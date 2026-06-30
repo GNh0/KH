@@ -4,11 +4,11 @@ This reference expands the portable operating contract for `token-optimizer`. Re
 
 ## When to use
 
-Use when large or long-running development workflows, subagent transcripts, terminal logs, command output, or Python code risk wasting LLM context.
+Use as a decision gate for every non-trivial KH-routed turn after `always-on-front-door` has run. Actual compression is still quality-gated: use it only for large or compressible command output, transcripts, logs, or code where required facts can be preserved.
 
-Context summary: This skill is the UAF context budget gate. It prevents token exhaustion during large development, debugging, review, QA, subagent, command-validation, or code-reading loops.
+Context summary: This skill is the UAF context budget gate. It must produce an explicit used, considered_not_needed, passthrough, or blocked decision for non-trivial KH work. It prevents token exhaustion during large development, debugging, review, QA, subagent, command-validation, or code-reading loops.
 
-Do not use this skill only because it is available. Use it when the current task needs the behavior named by the trigger, and state whether the skill was actually executed, applied procedurally, or only considered.
+Do not claim compression only because the skill is available. The decision gate is always executed for non-trivial KH work, but compression is applied only when it preserves required facts. State whether the skill was used, considered_not_needed, passthrough, or blocked.
 
 Quality rule: token savings must never hide source-of-truth details and must never reduce answer quality. Treat `optimize_context_content` as the universal entrypoint for large or uncertain content, but allow it to return passthrough. For SQL, stored procedures, license headers, security comments, business rules, exact contract prose, or ordinary text that cannot be safely classified as compressible output, use passthrough and record why compression was skipped.
 
@@ -39,7 +39,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `token-optimizer`.
-3. For heavy work, decide the `token_optimizer_status` before the first broad file read, long-running command, or subagent dispatch.
+3. For every non-trivial KH turn, decide the `token_optimizer_status` before the first broad file read, long-running command, implementation, or subagent dispatch.
 4. Prefer `optimize_context_content` as the default entrypoint. It passes through contract-sensitive text, minifies safe Python code, and uses command-family filters for logs.
 5. For long agent or subagent transcripts, use `summarize_agent_transcript` so task, review, verification, and commit evidence survive compression. For short, exact, or contract-sensitive subagent output, record `considered_not_needed` or `passthrough` instead of compressing.
 6. For workflow dispatch results, use `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results(...)` so command output and subagent transcripts are optimized as runtime evidence under `WorkflowTaskResult.metadata.token_optimizer` without deleting raw metadata.

@@ -58,8 +58,11 @@ class AlwaysOnFrontDoorTests(unittest.TestCase):
                 "plugin-composition-policy",
                 "request-complexity-router",
                 "skill-catalog",
+                "token-optimizer",
             ],
         )
+        self.assertEqual(summary["skill_status_summary"]["token-optimizer"]["status"], "applied")
+        self.assertIn("without_token_optimizer", summary["token_optimizer_decision"])
         self.assertIn("verification-before-completion-harness", summary["selected_not_executed_skills"])
 
     def test_new_korean_web_product_request_blocks_until_brainstorming(self):

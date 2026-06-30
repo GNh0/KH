@@ -6,6 +6,7 @@ from src.contracts import WorkflowTaskResult
 from src.orchestration.token_optimizer_provider import resolve_token_optimizer_provider
 from src.skills.token_optimizer import (
     aggregate_token_usage_stats,
+    compare_token_usage,
     estimate_token_count,
     summarize_agent_transcript,
     summarize_command_output,
@@ -31,18 +32,54 @@ def optimize_workflow_task_results(
     )
     provider_dict = provider.to_dict()
     if provider.status == "blocked":
-        return list(task_results), _report(
+        all_records: List[Dict[str, Any]] = []
+        optimized_results: List[WorkflowTaskResult] = []
+        for result in task_results:
+            task_records = _considered_payload_records(
+                result,
+                status="blocked",
+                reason=provider.rationale,
+            )
+            all_records.extend(task_records)
+            optimized_results.append(
+                _with_token_optimizer_metadata(
+                    result,
+                    provider_dict,
+                    task_records,
+                    status="blocked",
+                    blocked_reason=provider.rationale,
+                )
+            )
+        return optimized_results, _report(
             status="blocked",
             provider=provider_dict,
-            records=[],
+            records=all_records,
             skipped_count=0,
             blocked_reason=provider.rationale,
         )
     if provider.provider == "passthrough":
-        return list(task_results), _report(
+        all_records: List[Dict[str, Any]] = []
+        optimized_results: List[WorkflowTaskResult] = []
+        for result in task_results:
+            task_records = _considered_payload_records(
+                result,
+                status="passthrough",
+                reason=provider.rationale,
+            )
+            all_records.extend(task_records)
+            optimized_results.append(
+                _with_token_optimizer_metadata(
+                    result,
+                    provider_dict,
+                    task_records,
+                    status="passthrough",
+                    passthrough_reason=provider.rationale,
+                )
+            )
+        return optimized_results, _report(
             status="passthrough",
             provider=provider_dict,
-            records=[],
+            records=all_records,
             skipped_count=0,
             passthrough_reason=provider.rationale,
         )
@@ -50,19 +87,37 @@ def optimize_workflow_task_results(
     min_tokens = _int_metadata(metadata, "token_optimizer_min_tokens", 1_000)
     max_lines = _int_metadata(metadata, "token_optimizer_max_lines", 40)
     transcript_max_lines = _int_metadata(metadata, "token_optimizer_transcript_max_lines", 160)
+    provider_metadata = {**provider_dict, "token_optimizer_min_tokens": min_tokens}
     optimized_results: List[WorkflowTaskResult] = []
     all_records: List[Dict[str, Any]] = []
     skipped_count = 0
 
     for result in task_results:
         task_records: List[Dict[str, Any]] = []
+        task_skipped_count = 0
         for source, command_output in _iter_command_outputs(result.metadata):
             raw_text = _join_channels(
                 str(command_output.get("stdout", "")),
                 str(command_output.get("stderr", "")),
             )
             if estimate_token_count(raw_text) < min_tokens:
+                record = _considered_command_record(
+                    result,
+                    source=source,
+                    command_output=command_output,
+                    raw_text=raw_text,
+                    status="considered_not_needed",
+                    reason=_status_reason(
+                        status="considered_not_needed",
+                        provider=provider_metadata,
+                        records=[],
+                        skipped_count=1,
+                    ),
+                )
+                task_records.append(record)
+                all_records.append(record)
                 skipped_count += 1
+                task_skipped_count += 1
                 continue
             summary = summarize_command_output(
                 command=str(command_output.get("command", "")),
@@ -96,7 +151,22 @@ def optimize_workflow_task_results(
 
         for source, transcript in _iter_transcripts(result.metadata):
             if estimate_token_count(transcript) < min_tokens:
+                record = _considered_transcript_record(
+                    result,
+                    source=source,
+                    transcript=transcript,
+                    status="considered_not_needed",
+                    reason=_status_reason(
+                        status="considered_not_needed",
+                        provider=provider_metadata,
+                        records=[],
+                        skipped_count=1,
+                    ),
+                )
+                task_records.append(record)
+                all_records.append(record)
                 skipped_count += 1
+                task_skipped_count += 1
                 continue
             summary = summarize_agent_transcript(
                 transcript,
@@ -121,14 +191,28 @@ def optimize_workflow_task_results(
             task_records.append(record)
             all_records.append(record)
 
-        if task_records:
-            optimized_results.append(_with_token_optimizer_metadata(result, provider_dict, task_records))
+        if task_records or task_skipped_count:
+            optimized_results.append(
+                _with_token_optimizer_metadata(
+                    result,
+                    provider_metadata,
+                    task_records,
+                    skipped_count=task_skipped_count,
+                )
+            )
         else:
-            optimized_results.append(result)
+            optimized_results.append(
+                _with_token_optimizer_metadata(
+                    result,
+                    provider_metadata,
+                    [],
+                    status="considered_not_needed",
+                )
+            )
 
     return optimized_results, _report(
         status=_workflow_status(all_records, skipped_count),
-        provider={**provider_dict, "token_optimizer_min_tokens": min_tokens},
+        provider=provider_metadata,
         records=all_records,
         skipped_count=skipped_count,
     )
@@ -138,21 +222,41 @@ def _with_token_optimizer_metadata(
     result: WorkflowTaskResult,
     provider: Dict[str, Any],
     records: List[Dict[str, Any]],
+    skipped_count: int = 0,
+    status: str = "",
+    blocked_reason: str = "",
+    passthrough_reason: str = "",
 ) -> WorkflowTaskResult:
     metadata = dict(result.metadata)
-    status = _workflow_status(records, skipped_count=0)
-    reason = _status_reason(status=status, provider=provider, records=records, skipped_count=0)
+    status = status or _workflow_status(records, skipped_count=skipped_count)
+    reason = _status_reason(
+        status=status,
+        provider=provider,
+        records=records,
+        skipped_count=skipped_count,
+        blocked_reason=blocked_reason,
+        passthrough_reason=passthrough_reason,
+    )
     metadata["token_optimizer"] = {
         "status": status,
+        "token_optimizer_status": status,
         "token_optimizer_status_reason": reason,
         "provider": provider,
+        "token_optimizer_provider": str(provider.get("provider", "kh")),
         "summary": aggregate_token_usage_stats([record.get("token_usage", {}) for record in records]),
         "rtk_style_stats": _rtk_style_stats(records),
         "records": records,
-        "evidence": ["runtime_token_optimization"],
+        "records_count": len(records),
+        "optimized_payload_count": sum(1 for record in records if record.get("status") == "used"),
+        "skipped_small_output_count": skipped_count,
+        "blocked_reason": blocked_reason,
+        "passthrough_reason": passthrough_reason,
+        "evidence": ["runtime_token_optimization", "token_optimizer_decision"],
     }
     if status != "used":
         metadata["token_optimizer"]["not_used_reason"] = reason
+    else:
+        metadata["token_optimizer"]["evidence"].append("token_usage_stats")
     return WorkflowTaskResult(
         task_id=result.task_id,
         file_name=result.file_name,
@@ -187,10 +291,12 @@ def _report(
         "summary": aggregate_token_usage_stats([record.get("token_usage", {}) for record in records]),
         "rtk_style_stats": _rtk_style_stats(records),
         "records": public_records,
+        "records_count": len(public_records),
+        "optimized_payload_count": sum(1 for record in records if record.get("status") == "used"),
         "skipped_small_output_count": skipped_count,
         "blocked_reason": blocked_reason,
         "passthrough_reason": passthrough_reason,
-        "evidence": ["runtime_token_optimization"] if status in {"used", "passthrough", "blocked"} else [],
+        "evidence": ["runtime_token_optimization", "token_optimizer_decision"],
     }
     if status != "used":
         report["not_used_reason"] = reason
@@ -232,10 +338,139 @@ def _status_reason(
 
 def _first_record_reason(records: List[Dict[str, Any]]) -> str:
     for record in records:
-        reason = str(record.get("passthrough_reason") or record.get("fallback_reason") or "")
+        reason = str(
+            record.get("passthrough_reason")
+            or record.get("blocked_reason")
+            or record.get("not_used_reason")
+            or record.get("fallback_reason")
+            or ""
+        )
         if reason:
             return reason
     return ""
+
+
+def _considered_payload_records(
+    result: WorkflowTaskResult,
+    *,
+    status: str,
+    reason: str,
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for source, command_output in _iter_command_outputs(result.metadata):
+        raw_text = _join_channels(
+            str(command_output.get("stdout", "")),
+            str(command_output.get("stderr", "")),
+        )
+        records.append(
+            _considered_command_record(
+                result,
+                source=source,
+                command_output=command_output,
+                raw_text=raw_text,
+                status=status,
+                reason=reason,
+            )
+        )
+    for source, transcript in _iter_transcripts(result.metadata):
+        records.append(
+            _considered_transcript_record(
+                result,
+                source=source,
+                transcript=transcript,
+                status=status,
+                reason=reason,
+            )
+        )
+    return records
+
+
+def _considered_command_record(
+    result: WorkflowTaskResult,
+    *,
+    source: str,
+    command_output: Dict[str, Any],
+    raw_text: str,
+    status: str,
+    reason: str,
+) -> Dict[str, Any]:
+    command = str(command_output.get("command", ""))
+    record = {
+        "kind": "command-output",
+        "source": source,
+        "task_id": result.task_id,
+        "file_name": result.file_name,
+        "role": result.role,
+        "status": status,
+        "command": command,
+        "command_family": _runtime_command_family(command),
+        "exit_code": _int_value(command_output.get("exit_code", command_output.get("returncode", 0))),
+        "raw_bytes": len(raw_text.encode("utf-8")),
+        "filtered_bytes": len(raw_text.encode("utf-8")),
+        "raw_lines": len(raw_text.splitlines()),
+        "filtered_lines": len(raw_text.splitlines()),
+        "fallback_reason": reason,
+        "not_used_reason": reason,
+        "token_usage": compare_token_usage(
+            raw_text,
+            raw_text,
+            strategy=f"command-output-{status}",
+            label=command or source,
+        ),
+    }
+    if status == "passthrough":
+        record["passthrough_reason"] = reason
+    if status == "blocked":
+        record["blocked_reason"] = reason
+    return record
+
+
+def _considered_transcript_record(
+    result: WorkflowTaskResult,
+    *,
+    source: str,
+    transcript: str,
+    status: str,
+    reason: str,
+) -> Dict[str, Any]:
+    record = {
+        "kind": "agent-transcript",
+        "source": source,
+        "task_id": result.task_id,
+        "file_name": result.file_name,
+        "role": result.role,
+        "status": status,
+        "raw_bytes": len(transcript.encode("utf-8")),
+        "filtered_bytes": len(transcript.encode("utf-8")),
+        "raw_lines": len(transcript.splitlines()),
+        "filtered_lines": len(transcript.splitlines()),
+        "fallback_reason": reason,
+        "not_used_reason": reason,
+        "token_usage": compare_token_usage(
+            transcript,
+            transcript,
+            strategy=f"agent-transcript-{status}",
+            label=f"{result.role}:{source}",
+        ),
+    }
+    if status == "passthrough":
+        record["passthrough_reason"] = reason
+    if status == "blocked":
+        record["blocked_reason"] = reason
+    return record
+
+
+def _runtime_command_family(command: str) -> str:
+    lowered = str(command or "").lower()
+    if any(token in lowered for token in ["pytest", "unittest", "npm test", "cargo test", "go test", "dotnet test", "jest", "vitest"]):
+        return "test"
+    if any(token in lowered for token in ["msbuild", "dotnet build", "npm run build", "cargo build", "go build", "tsc", "build "]):
+        return "build"
+    if any(token in lowered for token in ["git status", "git diff", "git show"]):
+        return "git-read"
+    if "python -m" in lowered or "python " in lowered:
+        return "python"
+    return "generic"
 
 
 def _join_reason(prefix: str, reason: str) -> str:
@@ -319,7 +554,9 @@ def _rtk_style_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
 def _workflow_status(records: List[Dict[str, Any]], skipped_count: int) -> str:
     if any(record.get("status") == "used" for record in records):
         return "used"
-    if records:
+    if any(record.get("status") == "blocked" for record in records):
+        return "blocked"
+    if any(record.get("status") == "passthrough" for record in records):
         return "passthrough"
     if skipped_count:
         return "considered_not_needed"

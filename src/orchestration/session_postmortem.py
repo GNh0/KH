@@ -650,10 +650,10 @@ def _token_optimizer_status(token_gate: Dict[str, Any], evidence: Dict[str, Any]
         return "passthrough"
     if evidence.get("blocked_reason_records"):
         return "blocked"
-    if evidence.get("runtime_calls"):
-        return "used"
     if evidence.get("considered_not_needed_records"):
         return "considered_not_needed"
+    if evidence.get("runtime_calls"):
+        return "blocked"
     if token_gate.get("required"):
         return "blocked"
     return "considered_not_needed"
@@ -669,6 +669,21 @@ def _token_optimizer_status_reason(
     if status == "passthrough":
         return "Token optimizer not used because explicit passthrough evidence was recorded for quality-sensitive content."
     if status == "blocked":
+        if evidence.get("runtime_calls") and not any(
+            evidence.get(key)
+            for key in [
+                "structured_used_records",
+                "explicit_usage_records",
+                "explicit_passthrough_records",
+                "blocked_reason_records",
+                "considered_not_needed_records",
+            ]
+        ):
+            return (
+                "Token optimizer not used because a runtime optimizer call was observed, "
+                "but no structured used/passthrough/blocked/considered_not_needed record "
+                "with token telemetry or not-used rationale was recorded."
+            )
         if evidence.get("skill_doc_reads") and not evidence.get("runtime_calls"):
             return "Token optimizer not used because only the skill documentation was read; no runtime optimizer or passthrough evidence was recorded."
         if evidence.get("blocked_reason_records"):
@@ -688,6 +703,11 @@ def _token_optimizer_status_reason(
         return "Token optimizer not used because no valid runtime optimizer or passthrough evidence was recorded."
     if evidence.get("considered_not_needed_records"):
         return "Token optimizer not used because explicit considered_not_needed evidence and not-used rationale were recorded."
+    if evidence.get("runtime_calls"):
+        return (
+            "Token optimizer runtime was observed, but it did not include structured usage telemetry; "
+            "treated as considered_not_needed because the token gate was not required."
+        )
     return "Token optimizer not used because the token gate was checked and optimization was not needed for this session."
 
 

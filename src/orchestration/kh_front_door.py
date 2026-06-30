@@ -24,6 +24,7 @@ FRONT_DOOR_SKILLS = [
     "plugin-composition-policy",
     "request-complexity-router",
     "skill-catalog",
+    "token-optimizer",
 ]
 
 
@@ -71,6 +72,7 @@ class KhFrontDoorResult:
     catalog_summary: Dict[str, Any] = field(default_factory=dict)
     large_work_orchestration_bundle: Dict[str, Any] | None = None
     large_work_bundle_validation: Dict[str, Any] | None = None
+    token_optimizer_decision: Dict[str, Any] = field(default_factory=dict)
     memory_policy: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
 
@@ -93,6 +95,7 @@ class KhFrontDoorResult:
             "catalog_summary": dict(self.catalog_summary),
             "large_work_orchestration_bundle": self.large_work_orchestration_bundle,
             "large_work_bundle_validation": self.large_work_bundle_validation,
+            "token_optimizer_decision": dict(self.token_optimizer_decision),
             "memory_policy": dict(self.memory_policy),
             "warnings": list(self.warnings),
         }
@@ -140,6 +143,7 @@ class KhFrontDoorResult:
             "execution_gate": dict(self.execution_gate),
             "runtime_applied_skills": runtime_applied_skills,
             "selected_not_executed_skills": selected_not_executed_skills,
+            "token_optimizer_decision": dict(self.token_optimizer_decision),
             "memory_policy": dict(self.memory_policy),
             "skill_status_summary": {
                 name: {
@@ -206,6 +210,8 @@ def build_kh_front_door(
     plugin_route = compose_plugin_route(prompt, providers=provider_snapshot, context=context).to_dict()
     recommended_skills = _recommended_skills(classification, plugin_route)
     skill_statuses = _front_door_skill_statuses(recommended_skills, classification, skill_source)
+    token_optimizer_decision = _front_door_token_optimizer_decision(prompt, classification)
+    skill_statuses = _apply_front_door_token_optimizer_gate(skill_statuses, token_optimizer_decision)
     execution_gate = _execution_gate(classification, plugin_route, recommended_skills)
     immediate_next_skills = _immediate_next_skills(classification, plugin_route, recommended_skills, execution_gate)
     skill_statuses = _mark_immediate_next_skill_statuses(skill_statuses, immediate_next_skills)
@@ -247,6 +253,7 @@ def build_kh_front_door(
         catalog_summary=catalog_summary,
         large_work_orchestration_bundle=large_work_bundle,
         large_work_bundle_validation=large_work_validation,
+        token_optimizer_decision=token_optimizer_decision,
         memory_policy=_memory_policy(project_path, host),
         warnings=warnings,
     )
@@ -663,7 +670,6 @@ def _immediate_next_skills(
         ordered = [
             "goal-state-harness",
             "workflow-usability-harness",
-            "token-optimizer",
             "host-agent-orchestration",
             "parallel-orchestration-harness",
             "role-execution-audit-harness",
@@ -743,6 +749,12 @@ def _front_door_token_optimizer_contract(
 ) -> tuple[str, str]:
     """Return token optimizer usage status, separate from skill application status."""
     skill_status = str(front_door_statuses.get("token-optimizer", {}).get("status") or "")
+    decision = front_door_statuses.get("token-optimizer", {}).get("metadata", {}).get("token_optimizer_decision")
+    if isinstance(decision, dict) and decision.get("token_optimizer_status"):
+        return (
+            str(decision.get("token_optimizer_status") or ""),
+            str(decision.get("token_optimizer_status_reason") or ""),
+        )
     evidence_required = set(classification.get("evidence_required", []) or [])
     needs_token_gate = bool(
         {"token_optimization", "token_optimizer_status"} & evidence_required
@@ -767,6 +779,119 @@ def _front_door_token_optimizer_contract(
         "considered_not_needed",
         "No large/log-like content crossed the token optimization threshold during front-door intake.",
     )
+
+
+def _front_door_token_optimizer_decision(prompt: str, classification: Dict[str, Any]) -> Dict[str, Any]:
+    prompt_tokens = _local_token_estimate(prompt)
+    prompt_lines = len((prompt or "").splitlines())
+    usage = _front_door_token_usage(prompt or "")
+    evidence_required = set(classification.get("evidence_required", []) or [])
+    reasons = list(classification.get("reasons", []) or [])
+    token_required = bool(
+        {"token_optimization", "token_optimizer_status"} & evidence_required
+        or "token-optimizer" in (classification.get("cross_cutting", []) or [])
+    )
+    if not token_required:
+        status = "considered_not_needed"
+        reason = "Token optimizer gate checked; request did not require optimization evidence."
+    elif "token_optimization" in evidence_required or prompt_tokens >= 500 or prompt_lines > 50:
+        status = "passthrough"
+        reason = (
+            "Token optimizer gate checked; the front-door preserved the exact user prompt and requires downstream "
+            "command output, transcript, or artifact optimization before broad context growth."
+        )
+    else:
+        status = "considered_not_needed"
+        reason = (
+            "Token optimizer gate checked; no command output, subagent transcript, or compressible artifact has been "
+            "processed yet."
+        )
+    decision = {
+        "provider": "kh",
+        "token_optimizer_provider": "kh",
+        "token_optimizer_status": status,
+        "token_optimizer_status_reason": reason,
+        "not_used_reason": reason if status != "used" else "",
+        "records_count": 0,
+        "optimized_payload_count": 0,
+        **usage,
+        "estimated_prompt_tokens": prompt_tokens,
+        "prompt_line_count": prompt_lines,
+        "front_door_gate": True,
+        "evidence": ["front_door_token_optimizer_gate"],
+        "classification_reasons": reasons,
+    }
+    return decision
+
+
+def _apply_front_door_token_optimizer_gate(
+    statuses: Dict[str, Dict[str, Any]],
+    decision: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    if "token-optimizer" not in statuses:
+        return statuses
+    updated = {name: dict(status) for name, status in statuses.items()}
+    status = str(decision.get("token_optimizer_status") or "considered_not_needed")
+    reason = str(decision.get("token_optimizer_status_reason") or "")
+    updated["token-optimizer"] = _status(
+        "applied",
+        "runtime",
+        f"Front-door executed the Token Optimizer decision gate; token_optimizer_status={status}. {reason}",
+        ["token_optimizer_decision", "token_optimizer_status", "token_optimizer_status_reason"],
+    )
+    updated["token-optimizer"]["metadata"] = {"token_optimizer_decision": dict(decision)}
+    return updated
+
+
+def _local_token_estimate(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, (len(text) + 3) // 4)
+
+
+def _front_door_token_usage(prompt: str) -> Dict[str, Any]:
+    without_optimizer = _local_token_estimate(prompt)
+    with_optimizer = without_optimizer
+    raw_bytes = len(prompt.encode("utf-8"))
+    raw_chars = len(prompt)
+    usage = {
+        "without_token_optimizer": without_optimizer,
+        "with_token_optimizer": with_optimizer,
+        "estimated_tokens_saved": 0,
+        "token_savings_ratio": 0.0,
+        "actual_usage_scope": "front_door_prompt_passthrough_payload",
+        "token_count_method": "deterministic_local_estimate_chars_div_4",
+        "token_count_is_estimate": True,
+        "billing_tokens_available": False,
+        "actual_without_token_optimizer": without_optimizer,
+        "actual_with_token_optimizer": with_optimizer,
+        "actual_tokens_saved": 0,
+        "actual_token_savings_ratio": 0.0,
+        "actual_without_token_optimizer_bytes": raw_bytes,
+        "actual_with_token_optimizer_bytes": raw_bytes,
+        "actual_bytes_saved": 0,
+        "actual_byte_savings_ratio": 0.0,
+        "actual_without_token_optimizer_chars": raw_chars,
+        "actual_with_token_optimizer_chars": raw_chars,
+        "actual_chars_saved": 0,
+        "actual_char_savings_ratio": 0.0,
+    }
+    usage["actual_usage"] = {
+        "scope": usage["actual_usage_scope"],
+        "without_token_optimizer": without_optimizer,
+        "with_token_optimizer": with_optimizer,
+        "tokens_saved": 0,
+        "token_savings_ratio": 0.0,
+        "without_token_optimizer_bytes": raw_bytes,
+        "with_token_optimizer_bytes": raw_bytes,
+        "bytes_saved": 0,
+        "byte_savings_ratio": 0.0,
+        "without_token_optimizer_chars": raw_chars,
+        "with_token_optimizer_chars": raw_chars,
+        "chars_saved": 0,
+        "char_savings_ratio": 0.0,
+    }
+    return usage
 
 
 def _required_next_actions(

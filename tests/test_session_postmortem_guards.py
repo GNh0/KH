@@ -628,7 +628,7 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         self.assertEqual(postmortem.token_optimizer_status, "blocked")
         self.assertEqual(postmortem.token_optimizer_evidence["explicit_passthrough_records"], 0)
 
-    def test_token_optimizer_runtime_call_counts_as_usage(self):
+    def test_token_optimizer_runtime_call_without_structured_output_does_not_count_as_usage(self):
         path = self.write_session(
             [
                 {
@@ -662,7 +662,8 @@ class SessionPostmortemGuardTests(unittest.TestCase):
 
         postmortem = analyze_codex_session_jsonl(path)
 
-        self.assertEqual(postmortem.token_optimizer_status, "used")
+        self.assertEqual(postmortem.token_optimizer_status, "blocked")
+        self.assertIn("no structured", postmortem.token_optimizer_status_reason)
         self.assertEqual(postmortem.token_optimizer_evidence["runtime_calls"], 1)
 
     def test_runtime_token_optimizer_workflow_evidence_counts_as_usage(self):
