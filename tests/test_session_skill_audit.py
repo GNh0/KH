@@ -1879,6 +1879,112 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertEqual(summary["session_count"], 1)
         self.assertGreater(summary["aggregate"]["issue_count"], 0)
         self.assertIn("token-optimizer", summary["aggregate"]["issues_by_skill"])
+        self.assertIn("skill_status_counts", summary["aggregate"])
+        self.assertIn("verdict_counts", summary["aggregate"])
+
+    def test_summary_exposes_user_readable_skill_usage_accounting(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 250_000},
+                            "last_token_usage": {"input_tokens": 140_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "Large implementation continued after reading token-optimizer docs but no runtime token evidence was recorded.",
+                    },
+                },
+            ]
+        )
+
+        summary = summarize_session_skill_audits([path])
+        usage = summary["audits"][0]["usage_summary"]
+
+        self.assertIn(usage["verdict"], {"failed_p0", "failed_p1", "issues_found"})
+        self.assertIn("runtime_applied_skills", usage)
+        self.assertIn("selected_not_executed_skills", usage)
+        self.assertIn("inspected_only_skills", usage)
+        self.assertIn("required_missing_or_unaccepted", usage)
+        self.assertEqual(usage["token_optimizer"]["runtime_status"], "blocked")
+        self.assertIn("no runtime optimizer", usage["token_optimizer"]["runtime_status_reason"])
+        self.assertIn(
+            "token-optimizer",
+            {row["name"] for row in usage["required_missing_or_unaccepted"]},
+        )
+
+    def test_summary_dedupes_immediate_next_failures_with_occurrence_count(self):
+        front_door = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+            "skill_status_summary": {
+                "workflow-usability-harness": {
+                    "status": "pending_immediate_execution",
+                }
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "functions.shell_command",
+                        "arguments": json.dumps({"command": "Get-ChildItem"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "functions.shell_command",
+                        "arguments": json.dumps({"command": "Get-ChildItem"}),
+                    },
+                },
+            ]
+        )
+
+        usage = summarize_session_skill_audits([path])["audits"][0]["usage_summary"]
+        misses = [
+            item
+            for item in usage["immediate_next_not_applied"]
+            if item["skill"] == "workflow-usability-harness"
+            and item["expected_order"] == ["workflow-usability-harness"]
+        ]
+
+        self.assertEqual(len(misses), 1)
+        self.assertEqual(misses[0]["occurrences"], 2)
 
     def test_postmortem_guard_failures_are_skill_audit_issues(self):
         path = self.write_session(

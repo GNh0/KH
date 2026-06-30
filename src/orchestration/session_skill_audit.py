@@ -400,6 +400,7 @@ class SessionSkillAudit:
     path: str
     total_skills: int
     coverage: Dict[str, Any]
+    usage_summary: Dict[str, Any] = field(default_factory=dict)
     skills: List[Dict[str, Any]] = field(default_factory=list)
     issues: List[Dict[str, Any]] = field(default_factory=list)
     postmortem: Dict[str, Any] = field(default_factory=dict)
@@ -491,11 +492,13 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
     issues.extend(_goal_state_completion_absence_issues(path, skill_rows, postmortem.to_dict()))
     coverage = _coverage(skill_rows)
+    usage_summary = _skill_usage_summary(skill_rows, issues, postmortem.to_dict())
     return SessionSkillAudit(
         session_id=postmortem.session_id,
         path=str(path),
         total_skills=len(skill_rows),
         coverage=coverage,
+        usage_summary=usage_summary,
         skills=skill_rows,
         issues=issues,
         postmortem={
@@ -3468,7 +3471,15 @@ def _is_non_bootstrap_kh_skill_read(payload: Dict[str, Any], lowered: str) -> bo
 def summarize_session_skill_audits(paths: Iterable[str | Path]) -> Dict[str, Any]:
     audits = [analyze_session_skills(path).to_dict() for path in paths]
     aggregate_issues: Dict[str, int] = {}
+    aggregate_statuses: Dict[str, int] = {}
+    aggregate_verdicts: Dict[str, int] = {}
     for audit in audits:
+        usage_summary = audit.get("usage_summary", {}) or {}
+        verdict = str(usage_summary.get("verdict", "unknown"))
+        aggregate_verdicts[verdict] = aggregate_verdicts.get(verdict, 0) + 1
+        for status, count in (usage_summary.get("status_counts", {}) or {}).items():
+            status = str(status)
+            aggregate_statuses[status] = aggregate_statuses.get(status, 0) + int(count or 0)
         for issue in audit.get("issues", []):
             skill = str(issue.get("skill", ""))
             aggregate_issues[skill] = aggregate_issues.get(skill, 0) + 1
@@ -3478,8 +3489,132 @@ def summarize_session_skill_audits(paths: Iterable[str | Path]) -> Dict[str, Any
         "aggregate": {
             "issue_count": sum(len(audit.get("issues", [])) for audit in audits),
             "issues_by_skill": dict(sorted(aggregate_issues.items())),
+            "skill_status_counts": dict(sorted(aggregate_statuses.items())),
+            "verdict_counts": dict(sorted(aggregate_verdicts.items())),
         },
     }
+
+
+def _skill_usage_summary(
+    skill_rows: List[Dict[str, Any]],
+    issues: List[Dict[str, Any]],
+    postmortem: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Return a compact, user-readable execution accounting table.
+
+    This is intentionally derived from generic audit rows and issues, not from
+    one-off session ids. It separates execution from inspection so downstream
+    reports cannot turn "read the SKILL.md" into "used the harness".
+    """
+
+    status_counts: Dict[str, int] = {}
+    acceptance_counts: Dict[str, int] = {}
+    for row in skill_rows:
+        status = str(row.get("status", "unknown"))
+        status_counts[status] = status_counts.get(status, 0) + 1
+        acceptance_status = str((row.get("acceptance", {}) or {}).get("status", "unknown"))
+        acceptance_counts[acceptance_status] = acceptance_counts.get(acceptance_status, 0) + 1
+
+    issue_rows = _issues_by_skill(issues)
+    runtime_applied = _skill_names_with_status(skill_rows, {"applied"})
+    selected_not_executed = _skill_names_with_status(skill_rows, {"considered", "procedural"})
+    inspected_only = _skill_names_with_status(skill_rows, {"inspected"})
+    mentioned_only = _skill_names_with_status(skill_rows, {"mentioned"})
+    required_missing_or_unaccepted = [
+        {
+            "name": str(row.get("name", "")),
+            "status": str(row.get("status", "")),
+            "acceptance_status": str((row.get("acceptance", {}) or {}).get("status", "")),
+            "required_reason": str(row.get("required_reason", "")),
+            "issues": issue_rows.get(str(row.get("name", "")), [])[:5],
+        }
+        for row in skill_rows
+        if row.get("required")
+        and (
+            STATUS_RANK.get(str(row.get("status", "")), 0) < STATUS_RANK["considered"]
+            or str((row.get("acceptance", {}) or {}).get("status", ""))
+            in {"missing_application", "missing_outputs", "blocked"}
+            or issue_rows.get(str(row.get("name", "")))
+        )
+    ]
+    immediate_next_not_applied = _dedupe_immediate_next_issues(issues)
+    token_row = next((row for row in skill_rows if row.get("name") == "token-optimizer"), {})
+    token_optimizer = {
+        "skill_row_status": str(token_row.get("status", "absent") or "absent"),
+        "required": bool(token_row.get("required")),
+        "acceptance_status": str((token_row.get("acceptance", {}) or {}).get("status", "")),
+        "runtime_status": str(postmortem.get("token_optimizer_status", "")),
+        "runtime_status_reason": str(postmortem.get("token_optimizer_status_reason", "")),
+        "token_gate": postmortem.get("token_gate", {}) or {},
+    }
+    issue_severities = {str(issue.get("severity", "")) for issue in issues}
+    if "P0" in issue_severities:
+        verdict = "failed_p0"
+    elif "P1" in issue_severities:
+        verdict = "failed_p1"
+    elif issues:
+        verdict = "issues_found"
+    else:
+        verdict = "passed"
+    return {
+        "verdict": verdict,
+        "status_counts": dict(sorted(status_counts.items())),
+        "acceptance_counts": dict(sorted(acceptance_counts.items())),
+        "runtime_applied_skills": runtime_applied,
+        "selected_not_executed_skills": selected_not_executed,
+        "inspected_only_skills": inspected_only,
+        "mentioned_only_skills": mentioned_only,
+        "required_missing_or_unaccepted": required_missing_or_unaccepted,
+        "immediate_next_not_applied": immediate_next_not_applied,
+        "token_optimizer": token_optimizer,
+        "subagent_summary": postmortem.get("subagent_summary", {}) or {},
+        "recommended_actions": list(postmortem.get("recommended_actions", []) or []),
+    }
+
+
+def _skill_names_with_status(skill_rows: List[Dict[str, Any]], statuses: Set[str]) -> List[str]:
+    return [
+        str(row.get("name", ""))
+        for row in skill_rows
+        if str(row.get("status", "")) in statuses
+    ]
+
+
+def _issues_by_skill(issues: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, str]]]:
+    grouped: Dict[str, List[Dict[str, str]]] = {}
+    for issue in issues:
+        skill = str(issue.get("skill", ""))
+        grouped.setdefault(skill, []).append(
+            {
+                "status": str(issue.get("status", "")),
+                "severity": str(issue.get("severity", "")),
+                "reason": _short(str(issue.get("reason", "")), 180),
+            }
+        )
+    return grouped
+
+
+def _dedupe_immediate_next_issues(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+    for issue in issues:
+        status = str(issue.get("status", ""))
+        if not status.startswith("immediate_next_skill"):
+            continue
+        skill = str(issue.get("skill", ""))
+        reason = str(issue.get("reason", ""))
+        expected_order = [str(item) for item in issue.get("expected_order", []) or []]
+        key = (skill, status, "|".join(expected_order))
+        if key not in grouped:
+            grouped[key] = {
+                "skill": skill,
+                "status": status,
+                "severity": str(issue.get("severity", "")),
+                "reason": reason,
+                "expected_order": expected_order,
+                "occurrences": 0,
+            }
+        grouped[key]["occurrences"] += 1
+    return list(grouped.values())
 
 
 def _session_texts(path: Path) -> List[str]:
@@ -4469,6 +4604,7 @@ def main() -> int:
                 {
                     "session_id": audit["session_id"],
                     "coverage": audit["coverage"],
+                    "usage_summary": audit.get("usage_summary", {}),
                     "postmortem": audit["postmortem"],
                     "issues": audit["issues"][:12],
                 }
