@@ -1072,7 +1072,9 @@ def _looks_like_visible_brainstorming_application(lowered: str) -> bool:
             "\ud655\uc778/\uc218\uc815\ud558\uc9c0 \uc54a\uc558",
         ]
     )
-    return option_shape and scope_shape and decision_question and execution_deferred
+    if not (option_shape and scope_shape and decision_question and execution_deferred):
+        return False
+    return not _brainstorm_response_missing_markers(lowered)
 
 
 def _has_runtime_output_context(lowered: str) -> bool:
@@ -2383,7 +2385,22 @@ def _first_visible_brainstorm_response(path: Path) -> str:
             ("1." in text and "2." in text)
             or any(marker in lowered for marker in ["option", "options", "alternatives", "\uc120\ud0dd\uc9c0", "\ub300\uc548"])
         )
-        has_decision_shape = any(marker in lowered for marker in ["recommend", "\ucd94\ucc9c", "approval", "\uc2b9\uc778"])
+        has_decision_shape = any(
+            marker in lowered
+            for marker in [
+                "recommend",
+                "\ucd94\ucc9c",
+                "approval",
+                "\uc2b9\uc778",
+                "which",
+                "choose",
+                "confirm",
+                "\uc5b4\ub290",
+                "\uc120\ud0dd",
+                "\ud655\uc815",
+                "\uac08\uae4c\uc694",
+            ]
+        )
         if has_option_shape and has_decision_shape:
             return text
     return ""
@@ -2480,9 +2497,7 @@ def _brainstorm_response_missing_markers(text: str) -> List[str]:
         for name, markers in marker_groups.items()
         if not any(marker in lowered for marker in markers)
     ]
-    if "required_records_data" in missing or "open_questions" in missing or len(missing) >= 2:
-        return missing
-    return []
+    return missing
 
 
 def _brainstorm_unilateral_decision_markers(text: str) -> List[str]:

@@ -420,18 +420,28 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "type": "message",
                         "role": "assistant",
                         "content": (
-                            "\uba3c\uc800 \uc6b4\uc601 \ubaa8\ub378\uc744 \ud655\uc815\ud574\uc57c \ud569\ub2c8\ub2e4. "
-                            "\ud604\uc7ac\ub294 \ubc94\uc704 \ud655\uc815 \uc804\uc774\ub77c \ub300\uc0c1 \ud3f4\ub354\ub098 "
-                            "\ud30c\uc77c\uc740 \uc544\uc9c1 \ud655\uc778/\uc218\uc815\ud558\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.\n\n"
-                            "**\ubaa9\ud45c/\uc6b4\uc601\uc790**\n"
-                            "\uc7ac\uace0 \ub2f4\ub2f9\uc790\uac00 \uc785\uace0, \ucd9c\uace0, \ud604\uc7ac\uace0\ub97c \ubcf4\ub294 \ub300\uc2dc\ubcf4\ub4dc\uc785\ub2c8\ub2e4.\n\n"
-                            "**\uc5c5\ubb34 \ubc94\uc704**\n"
-                            "\uc785\uace0 \ub4f1\ub85d, \ucd9c\uace0 \ub4f1\ub85d, \uc7ac\uace0 \ud604\ud669, \uc548\uc804\uc7ac\uace0 \uc54c\ub9bc\uc774 \uae30\ubcf8\uc785\ub2c8\ub2e4.\n\n"
-                            "**\uc6b4\uc601 \ubaa8\ub378 \uc120\ud0dd\uc9c0**\n"
-                            "1. \ub2e8\uc21c \uc785\ucd9c\uace0 \uc6d0\uc7a5\ud615\n"
-                            "2. \ucc3d\uace0/\uc704\uce58 \uad00\ub9ac\ud615\n"
-                            "3. LOT/\uc2dc\ub9ac\uc5bc \uad00\ub9ac\ud615\n\n"
-                            "\uc5b4\ub290 \uc6b4\uc601 \ubaa8\ub378\ub85c \uac08\uae4c\uc694?"
+                            "Before implementation, I have not inspected or modified target files.\n\n"
+                            "**Objective/operator**\n"
+                            "The inventory operator needs a dashboard for inbound, outbound, and on-hand stock.\n\n"
+                            "**Workflow boundary**\n"
+                            "The first workflow covers inbound registration, outbound registration, stock status, "
+                            "and safety-stock alerts; ERP sync and approval workflow are non-goals.\n\n"
+                            "**Success criteria / constraints**\n"
+                            "The result should make shortages visible, keep transaction history traceable, and stay "
+                            "local until storage requirements are approved.\n\n"
+                            "**Operating options with tradeoffs**\n"
+                            "1. Ledger-only option: fastest, but weak for warehouse/location control.\n"
+                            "2. Location-stock option: better operating visibility, but needs warehouse data.\n"
+                            "3. Lot/serial option: strongest traceability, but too heavy for a first cut.\n\n"
+                            "**Required records/data**\n"
+                            "Required data includes item code, item name, warehouse, quantity, transaction type, "
+                            "transaction date, operator, reason, and safety stock.\n\n"
+                            "**Recommendation**\n"
+                            "I recommend choosing the location-stock option only if warehouse/location data is "
+                            "actually available; otherwise start with ledger-only.\n\n"
+                            "**Open questions**\n"
+                            "Which stock level must be controlled first, and should returns or adjustments be in scope?\n\n"
+                            "Please approve or confirm the direction before I implement."
                         ),
                     },
                 },
@@ -449,6 +459,153 @@ class SessionSkillAuditTests(unittest.TestCase):
                 and issue["status"] == "immediate_next_skill_not_applied"
                 for issue in audit.issues
             )
+        )
+
+    def test_thin_visible_brainstorming_is_flagged_even_if_it_has_options(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "immediate_next_skills": ["brainstorming-harness"],
+            "selected_not_executed_skills": ["brainstorming-harness"],
+            "execution_gate": {
+                "can_execute": False,
+                "reason": "brainstorming-harness was selected before execution.",
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            r"C:\Users\KONEIT\Desktop\Jang\SKillsTest\UpgradeBlind_20260630_B "
+                            "folder needs a new inventory dashboard."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "function_call_output", "output": json.dumps(front_door_output)},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "I have not modified files yet.\n\n"
+                            "Objective/operator: inventory operator dashboard.\n"
+                            "Workflow boundary: inbound, outbound, and stock status.\n"
+                            "Options:\n"
+                            "1. Ledger-only.\n"
+                            "2. Location stock.\n"
+                            "Which option should I use?"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "shallow_visible_brainstorming"
+                and "required_records_data" in issue.get("missing_markers", [])
+                for issue in audit.issues
+            ),
+            audit.issues,
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            ),
+            audit.issues,
+        )
+
+    def test_korean_thin_visible_brainstorming_is_flagged(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "immediate_next_skills": ["brainstorming-harness"],
+            "selected_not_executed_skills": ["brainstorming-harness"],
+            "execution_gate": {
+                "can_execute": False,
+                "reason": "brainstorming-harness was selected before execution.",
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            r"C:\Users\KONEIT\Desktop\Jang\SKillsTest\UpgradeBlind_20260630_B "
+                            "\ud3f4\ub354\uc5d0 \uc2e0\uaddc \uc7ac\uace0 \uc785\ucd9c\uace0 \uad00\ub9ac "
+                            "\ub300\uc2dc\ubcf4\ub4dc \uac1c\ubc1c\ud574\uc918."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "function_call_output", "output": json.dumps(front_door_output)},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "\uad6c\ud604 \uc804\uc5d0 \ubc29\ud5a5\uc744 \uba3c\uc800 \uc815\ud558\uaca0\uc2b5\ub2c8\ub2e4.\n\n"
+                            "\ubaa9\ud45c/\uc6b4\uc601\uc790: \uc7ac\uace0 \ub2f4\ub2f9\uc790\uc6a9 \ub300\uc2dc\ubcf4\ub4dc.\n"
+                            "\uc5c5\ubb34 \ubc94\uc704: \uc785\uace0, \ucd9c\uace0, \ud604\uc7ac\uace0 \uc870\ud68c.\n"
+                            "\uc120\ud0dd\uc9c0:\n"
+                            "1. \ub2e8\uc21c \uc218\ubd88\uc7a5\ud615\n"
+                            "2. \ucc3d\uace0/\uc704\uce58 \uad00\ub9ac\ud615\n\n"
+                            "\uc5b4\ub290 \ubc29\ud5a5\uc73c\ub85c \uac08\uae4c\uc694?"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "shallow_visible_brainstorming"
+                and "required_records_data" in issue.get("missing_markers", [])
+                for issue in audit.issues
+            ),
+            audit.issues,
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            ),
+            audit.issues,
         )
 
     def test_stored_procedure_generation_before_sql_formatting_is_flagged(self):
