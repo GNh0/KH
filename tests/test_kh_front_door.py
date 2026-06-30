@@ -505,6 +505,8 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertEqual(payload["execution_gate"]["status"], "blocked_until_brainstorming_handoff")
         self.assertIn("implementation", payload["execution_gate"]["blocked_actions"])
+        self.assertIn("target_folder_inspection", payload["execution_gate"]["blocked_actions"])
+        self.assertIn("target_folder_existence_check", payload["execution_gate"]["blocked_actions"])
         self.assertEqual(
             payload["skill_status_summary"]["brainstorming-harness"]["status"],
             "pending_immediate_execution",
@@ -533,6 +535,12 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertTrue(
             any("separately asks to implement" in action for action in payload["required_next_actions"])
         )
+        self.assertTrue(
+            any("target folder existence checks" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
+            any("Test-Path" in action and "Get-ChildItem" in action for action in payload["required_next_actions"])
+        )
 
     def test_vague_inventory_dashboard_development_selects_brainstorming(self):
         result = build_kh_front_door(
@@ -552,8 +560,12 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertNotIn("brainstorming-harness", payload["selected_not_executed_skills"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertIn("MEMORY.md_lookup", payload["execution_gate"]["blocked_actions"])
+        self.assertIn("target_folder_inspection", payload["execution_gate"]["blocked_actions"])
         self.assertTrue(
             any("do not implement" in action for action in payload["required_next_actions"])
+        )
+        self.assertTrue(
+            any("target folder existence checks" in action for action in payload["required_next_actions"])
         )
 
     def test_brainstorm_followup_without_handoff_keeps_execution_closed(self):

@@ -686,6 +686,87 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
         self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
 
+    def test_failed_sql_formatting_style_verifier_before_output_is_flagged(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["sql-formatting-style-harness"],
+            "plugin_route": {
+                "route": "single",
+                "controller": {
+                    "provider_id": "sql-formatting",
+                    "capability": "sql_formatting",
+                },
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "skill": "sql-formatting-style-harness",
+                                "status": "failed",
+                                "source": "src.skills.sql_formatting_style.verify_sql_formatting_style",
+                                "mechanical_checks": {
+                                    "status": "blocked",
+                                    "style_issues": [{"code": "join_condition_indentation"}],
+                                },
+                                "style_contract_source": "host-local sql-formatting",
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T A;\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertIn(
+            ("sql-formatting-style-harness", "sql_formatting_style_verifier_failed_before_output"),
+            issues,
+        )
+
     def test_sql_formatting_provider_snapshot_only_does_not_suppress_missing_before_sql_output(self):
         front_door_output = {
             "front_door_status": "ok",
@@ -747,6 +828,74 @@ class SessionSkillAuditTests(unittest.TestCase):
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
 
         self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+
+    def test_direct_sql_formatting_uses_host_skill_without_front_door_overclassification(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "<environment_context>\n"
+                            "  <cwd>C:\\Users\\KONEIT\\Documents\\Codex</cwd>\n"
+                            "  <shell>powershell</shell>\n"
+                            "</environment_context>"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Below SQL should only be formatted; do not change logic.\n"
+                            "IF EXISTS (SELECT 1 FROM DE000T A INNER JOIN @TMP B ON A.ID=B.ID AND A.QCCODE=B.QCCODE)\n"
+                            "BEGIN RAISERROR('이미 확인완료된 프로그램입니다.', 16, 1); RETURN; END"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "```sql\n"
+                            "IF EXISTS (\n"
+                            "             SELECT 1\n"
+                            "             FROM DE000T A\n"
+                            "                    INNER JOIN @TMP B\n"
+                            "                            ON A.ID = B.ID\n"
+                            "                            AND A.QCCODE = B.QCCODE\n"
+                            "            )\n"
+                            "BEGIN\n"
+                            "    RAISERROR('이미 확인완료된 프로그램입니다.', 16, 1);\n"
+                            "    RETURN;\n"
+                            "END\n"
+                            "```"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertNotIn(("always-on-front-door", "missing_front_door"), issues)
+        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
 
     def test_front_door_prompt_set_content_is_not_implementation_activity(self):
         path = self.write_session(
@@ -4147,6 +4296,23 @@ class SessionSkillAuditTests(unittest.TestCase):
         )
 
     def test_exact_target_read_is_not_cross_scope_context_leak(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "immediate_next_skills": ["brainstorming-harness"],
+            "recommended_skills": ["always-on-front-door", "brainstorming-harness"],
+            "selected_not_executed_skills": [],
+            "execution_gate": {
+                "status": "blocked_until_brainstorming_handoff",
+                "can_execute": False,
+            },
+        }
         path = self.write_session(
             [
                 {
@@ -4163,12 +4329,8 @@ class SessionSkillAuditTests(unittest.TestCase):
                 {
                     "type": "response_item",
                     "payload": {
-                        "type": "function_call",
-                        "name": "shell_command",
-                        "arguments": (
-                            "python -m src.orchestration.kh_front_door "
-                            "--prompt \"independent brainstorming\" --summary"
-                        ),
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
                     },
                 },
                 {
@@ -4191,6 +4353,13 @@ class SessionSkillAuditTests(unittest.TestCase):
             any(
                 issue["skill"] == "guard-policy-harness"
                 and issue["status"] == "cross_scope_context_leak"
+                for issue in audit.issues
+            )
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "brainstorming-harness"
+                and issue["status"] == "target_folder_inspection_before_brainstorm_handoff"
                 for issue in audit.issues
             )
         )

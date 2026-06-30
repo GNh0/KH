@@ -485,6 +485,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_global_memory_scope_issues(path))
     issues.extend(_target_substitution_issues(path))
     issues.extend(_host_local_sql_formatting_issues(path))
+    issues.extend(_brainstorming_target_inspection_issues(path))
     issues.extend(_brainstorm_option_choice_execution_issues(path))
     issues.extend(_brainstorming_depth_issues(path))
     issues.extend(_subagent_strategy_issues(path, postmortem.to_dict()))
@@ -731,6 +732,8 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         lowered = text.lower()
 
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+            if _is_environment_context_message(text):
+                continue
             active_directive = _is_kh_active_directive(text)
             if active_directive:
                 kh_active_directive_seen = True
@@ -1725,7 +1728,13 @@ def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
     records = [
         record
         for record in _session_text_records(path)
-        if not _is_passive_text(record.text)
+        if (
+            not _is_passive_text(record.text)
+            or _looks_like_sql_formatting_application(record)
+            or _looks_like_sql_formatting_style_verifier(record)
+            or _looks_like_sql_formatting_style_verifier_failed(record)
+            or _looks_like_sql_style_verifier_blocked(record)
+        )
     ]
     request_index = -1
     for index, record in enumerate(records):
@@ -1749,14 +1758,32 @@ def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
         return []
     if first_sql_skill_index >= 0 and first_sql_skill_index < first_sql_answer_index:
         first_verifier_index = -1
+        first_failed_verifier_index = -1
         first_blocked_index = -1
         for index, record in enumerate(records[first_sql_skill_index + 1 : first_sql_answer_index], first_sql_skill_index + 1):
             if first_verifier_index < 0 and _looks_like_sql_formatting_style_verifier(record):
                 first_verifier_index = index
+            if first_failed_verifier_index < 0 and _looks_like_sql_formatting_style_verifier_failed(record):
+                first_failed_verifier_index = index
             if first_blocked_index < 0 and _looks_like_sql_style_verifier_blocked(record):
                 first_blocked_index = index
         if first_verifier_index >= 0 or first_blocked_index >= 0:
             return []
+        if first_failed_verifier_index >= 0:
+            return [
+                {
+                    "skill": "sql-formatting-style-harness",
+                    "status": "sql_formatting_style_verifier_failed_before_output",
+                    "severity": "P1",
+                    "reason": "SQL formatting verifier failed or blocked mechanically, but SQL output was still emitted.",
+                    "action": (
+                        "Fix the SQL formatting until `verify_sql_formatting_style` passes, or return the original SQL "
+                        "with a blocked/needs-review explanation instead of presenting failed formatted SQL as final."
+                    ),
+                    "verifier": _short(records[first_failed_verifier_index].text),
+                    "samples": [_short(records[first_sql_answer_index].text)],
+                }
+            ]
         return [
             {
                 "skill": "sql-formatting-style-harness",
@@ -1798,9 +1825,17 @@ def _looks_like_sql_formatting_application(record: SessionTextRecord) -> bool:
     return _has_sql_formatting_route_evidence(lowered)
 
 def _looks_like_sql_formatting_style_verifier(record: SessionTextRecord) -> bool:
+    return _sql_formatting_style_verifier_status(record) == "passed"
+
+
+def _looks_like_sql_formatting_style_verifier_failed(record: SessionTextRecord) -> bool:
+    return _sql_formatting_style_verifier_status(record) == "failed"
+
+
+def _sql_formatting_style_verifier_status(record: SessionTextRecord) -> str:
     lowered = record.text.lower()
     if record.payload_type not in {"function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"}:
-        return False
+        return ""
     if not any(
         marker in lowered
         for marker in [
@@ -1812,12 +1847,44 @@ def _looks_like_sql_formatting_style_verifier(record: SessionTextRecord) -> bool
             "style_contract_source",
         ]
     ):
-        return False
+        return ""
     if record.payload_type in {"function_call", "custom_tool_call"}:
-        return False
+        return ""
     if _looks_like_sql_style_verifier_blocked(record):
-        return False
-    return any(marker in lowered for marker in ["passed", "issues", "mechanical_checks", "style_contract_source", "token_optimizer_status"])
+        return "blocked"
+
+    data = _json_object_from_text(record.text)
+    if data:
+        metadata = data.get("metadata", {}) if isinstance(data.get("metadata"), dict) else {}
+        mechanical = data.get("mechanical_checks", {})
+        if not isinstance(mechanical, dict):
+            mechanical = metadata.get("mechanical_checks", {}) if isinstance(metadata.get("mechanical_checks"), dict) else {}
+        status = str(data.get("status", "") or metadata.get("status", "")).strip().lower()
+        mechanical_status = str(mechanical.get("status", "")).strip().lower()
+        success = data.get("success")
+        exit_code = data.get("exit_code")
+        error_count = data.get("error_count")
+        if not isinstance(error_count, int):
+            stdout_data = _json_object_from_text(str(data.get("stdout", "")))
+            error_count = stdout_data.get("error_count") if isinstance(stdout_data.get("error_count"), int) else None
+            if not status:
+                status = str(stdout_data.get("status", "")).strip().lower()
+        if success is False or status in {"failed", "failure", "blocked", "error"} or mechanical_status in {"failed", "failure", "blocked", "error"}:
+            return "failed"
+        if isinstance(error_count, int) and error_count > 0:
+            return "failed"
+        if isinstance(exit_code, int) and exit_code != 0:
+            return "failed"
+        if success is True or status in {"passed", "pass", "ok", "success"} or mechanical_status in {"passed", "pass", "ok", "success"}:
+            return "passed"
+
+    if any(marker in lowered for marker in ['"success": false', "'success': false", "status=failed", "status: failed"]):
+        return "failed"
+    if any(marker in lowered for marker in ['"status": "failed"', "'status': 'failed'", '"status": "blocked"', "'status': 'blocked'"]):
+        return "failed"
+    if any(marker in lowered for marker in ['"error_count": 0', "'error_count': 0", '"status": "passed"', "'status': 'passed'", "status=passed"]):
+        return "passed"
+    return ""
 
 
 def _looks_like_sql_style_verifier_blocked(record: SessionTextRecord) -> bool:
@@ -1870,6 +1937,123 @@ def _looks_like_sql_answer(lowered: str) -> bool:
     if "```sql" in lowered:
         return True
     return bool(SQL_ANSWER_PATTERN.search(lowered))
+
+
+def _brainstorming_target_inspection_issues(path: Path) -> List[Dict[str, Any]]:
+    events = list(_session_payload_events(path))
+    active_target: Path | None = None
+    gate_active = False
+    samples: List[str] = []
+
+    for event in events:
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        text = _payload_text(payload)
+        lowered = text.lower()
+
+        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+            if _is_synthetic_context_message(text):
+                continue
+            paths = _extract_windows_paths(text)
+            if paths:
+                active_target = Path(paths[0])
+            continue
+
+        data = _front_door_json(_strip_passive_prefix(text))
+        if data:
+            gate = data.get("execution_gate", {}) or {}
+            gate_status = str(gate.get("status", ""))
+            immediate = {str(item) for item in data.get("immediate_next_skills", []) or []}
+            recommended = {str(item) for item in data.get("recommended_skills", []) or []}
+            selected = {str(item) for item in data.get("selected_not_executed_skills", []) or []}
+            if (
+                gate_status == "blocked_until_brainstorming_handoff"
+                or (
+                    gate.get("can_execute") is False
+                    and "brainstorming-harness" in immediate | recommended | selected
+                )
+            ):
+                gate_active = True
+            continue
+
+        if not gate_active:
+            continue
+        if not _passive_reference(lowered) and _has_brainstorm_handoff_evidence(lowered):
+            gate_active = False
+            continue
+        if payload_type not in {"function_call", "custom_tool_call"}:
+            continue
+        sample = (
+            _target_folder_inspection_during_brainstorm_sample(active_target, text)
+            if active_target is not None
+            else _blocked_path_inspection_during_brainstorm_sample(text)
+        )
+        if sample:
+            samples.append(sample)
+            if len(samples) >= 3:
+                break
+
+    if not samples:
+        return []
+    return [
+        {
+            "skill": "brainstorming-harness",
+            "status": "target_folder_inspection_before_brainstorm_handoff",
+            "severity": "P1",
+            "reason": (
+                "Front-door selected brainstorming and kept execution closed, but the session inspected a target "
+                "or filesystem path before BrainstormSession/handoff evidence existed."
+            ),
+            "action": (
+                "For `blocked_until_brainstorming_handoff`, produce the visible domain-first brainstorm first. "
+                "Do not run Test-Path, Get-ChildItem, rg, Get-Content, target write preflight, or source reads "
+                "against the target path until the brainstorm handoff/spec and separate execution approval exist."
+            ),
+            "samples": samples,
+        }
+    ]
+
+
+def _has_brainstorm_handoff_evidence(lowered: str) -> bool:
+    return any(
+        marker in lowered
+        for marker in [
+            "brainstorm_handoff",
+            "brainstormsession",
+            "validate_brainstorm_session",
+            "build_architect_handoff",
+            ".kh/brainstorm",
+            "docs/kh/handoffs",
+        ]
+    )
+
+
+def _target_folder_inspection_during_brainstorm_sample(target: Path, text: str) -> str:
+    lowered = text.lower()
+    if not any(marker in lowered for marker in ["get-childitem", "test-path", "get-content", "select-string", "rg "]):
+        return ""
+    target = _normalize_path(target)
+    for raw_path in _extract_windows_paths(text):
+        candidate = _normalize_path(Path(raw_path))
+        if candidate == target or _path_is_relative_to(candidate, target):
+            return _short(f"target folder inspection before brainstorm handoff: {raw_path}")
+    return ""
+
+
+def _blocked_path_inspection_during_brainstorm_sample(text: str) -> str:
+    lowered = text.lower()
+    if not any(marker in lowered for marker in ["get-childitem", "test-path", "get-content", "select-string", "rg "]):
+        return ""
+    for raw_path in _extract_windows_paths(text):
+        normalized = raw_path.lower()
+        if "\\skills\\" in normalized or "\\.codex\\plugins\\cache\\" in normalized:
+            continue
+        return _short(f"path inspection before brainstorm handoff: {raw_path}")
+    if any(marker in lowered for marker in ["get-childitem", "test-path"]):
+        return _short(f"path inspection before brainstorm handoff: {text}")
+    return ""
 
 
 def _brainstorm_option_choice_execution_issues(path: Path) -> List[Dict[str, Any]]:
@@ -3286,6 +3470,8 @@ def _is_automatic_intake_request(text: str) -> bool:
     lowered = text.lower()
     if _is_kh_front_door_evidence(lowered):
         return False
+    if looks_like_sql_output_request(lowered):
+        return False
     if _looks_like_external_specialist_direct_question(lowered):
         return False
     try:
@@ -3323,6 +3509,10 @@ def _is_automatic_intake_request(text: str) -> bool:
             ]
         )
     return False
+
+
+def _is_environment_context_message(text: str) -> bool:
+    return str(text or "").lstrip().lower().startswith("<environment_context>")
 
 
 def _fallback_nontrivial_user_request(lowered: str) -> bool:
@@ -4221,6 +4411,14 @@ def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[s
     verification_commands = postmortem.get("verification_commands", []) or []
     sql_specialist_scope = _is_sql_specialist_answer_scope(postmortem, lowered, active_texts)
 
+    if sql_specialist_scope:
+        _add(
+            required,
+            "sql-formatting-style-harness",
+            "actionable SQL output should be checked against the host-local sql-formatting style contract",
+        )
+        return required
+
     if _has_nontrivial_work_signals(postmortem, lowered):
         _add(required, "always-on-front-door", "non-trivial KH-capable session should enter KH front-door before any other work")
         _add(required, "automatic-intake-harness", "non-trivial KH-capable session should start with automatic intake")
@@ -4233,8 +4431,6 @@ def _required_skills(postmortem: Dict[str, Any], text: str, active_texts: List[s
             "sql-formatting-style-harness",
             "actionable SQL output should be checked against the host-local sql-formatting style contract",
         )
-    if sql_specialist_scope:
-        return required
     if token_gate.get("required") or _large_session(postmortem):
         token_reason = "large or token-heavy session"
         if "subagent_transcripts_require_token_decision" in {

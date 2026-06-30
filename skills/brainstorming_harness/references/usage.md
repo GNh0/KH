@@ -44,9 +44,9 @@ Do not use this skill only because it is available. Use it when the current task
 ## Execution pattern
 
 1. Read `SKILL.md` first and confirm the trigger applies.
-2. Inspect only the explicit target project/folder if it exists. If the target folder is new, do not scan its parent or read sibling folders from earlier tests/runs.
-   - If the exact target folder exists and is empty, do not read `MEMORY.md`, memory summaries, parent directories, sibling folders, previous test outputs, or older brainstorm folders unless the user explicitly asks for reuse, comparison, migration, or prior context.
-   - For this empty-target fast path, do not export files, create GoalState, run role DAG, or start QA/review gates before approval.
+2. Before the first visible brainstorm, do not inspect even the explicit target project/folder. Do not run `Test-Path`, `Get-ChildItem`, `rg`, `Get-Content`, target-folder existence checks, target write preflight, parent scans, sibling scans, or source reads. Treat the named target path as user context only.
+   - If the exact target folder is new or empty, do not read `MEMORY.md`, memory summaries, parent directories, sibling folders, previous test outputs, older brainstorm folders, or the target folder itself unless the user explicitly asks for reuse, comparison, migration, prior context, or implementation preflight.
+   - For this empty-target fast path, do not export files, create GoalState, run role DAG, start QA/review gates, or perform write preflight before approval.
 3. Ask one question at a time. Prefer multiple-choice options when that reduces friction.
 4. Offer visual companion only when seeing a layout, diagram, or comparison is better than reading text.
 5. Present 2-3 approaches with tradeoffs and a recommendation.
@@ -78,7 +78,7 @@ If a broad domain request receives only one direction question and then jumps in
 
 For "simple" product or workflow requests, do not skip brainstorming. Use a compact domain-first form: objective/operator, workflow boundary, 2-3 operating models, required records, recommendation, and one approval question.
 
-The first visible response must not be only an option picker. For a vague or new app, dashboard, product, operations, manufacturing, document, drawing/design, analysis, investment, or workflow request, include these user-visible sections, translated to the user's apparent language when helpful: objective/operator, workflow boundary, success criteria/constraints/non-goals, operating model options and tradeoffs, required records/data/artifact shape, open questions, recommendation, and approval question. If the exact target folder is missing or empty, state that briefly, but still provide the full domain-first brainstorm and stop before implementation.
+The first visible response must not be only an option picker. For a vague or new app, dashboard, product, operations, manufacturing, document, drawing/design, analysis, investment, or workflow request, include these user-visible sections, translated to the user's apparent language when helpful: objective/operator, workflow boundary, success criteria/constraints/non-goals, operating model options and tradeoffs, required records/data/artifact shape, open questions, recommendation, and approval question. Do not check whether the exact target folder is missing or empty before this first brainstorm; folder existence belongs to the later implementation/write-preflight gate.
 
 Keep recommendation language advisory. The agent should not decide the user's operating model or stack on its own. Avoid final-decision phrases such as "I will go with option 2", "we will use this as the basis", or "we will use React" before approval. If implementation technology is not the user's decision target, keep it secondary and do not include it in the approval question.
 

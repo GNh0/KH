@@ -827,7 +827,7 @@ def _required_next_actions(
             )
     if "brainstorming-harness" in recommended_skills:
         actions.append(
-            "Apply `brainstorming-harness` before execution: progress through intent_frame, problem_frame, option_frame, design/spec review, approval_frame, and handoff_frame for product, process, analysis, design, document, operations, manufacturing/specification, investment, or other domain work; preserve `BrainstormSession`, `decision_log`, `validate_brainstorm_session`, and `brainstorm_handoff` or blocked rationale. A user option choice is direction approval only; do not implement, lock implementation scope, list final KPI/form/table/storage scope, create analysis output, user deliverables, or domain artifacts until the reviewed handoff/spec exists and the user separately asks to implement, start work, create files, or generate deliverables. After option choice, ask the next focused design/spec question instead of saying `implementation scope is` or `I will set the implementation scope as follows`. For domain workflows, make the compact brainstorm domain-first: objective/operator, workflow boundary, 2-3 operating model choices, required records/data, one recommendation, and one approval question; do not offer only technology-stack choices such as HTML/React/WinForms."
+            "Apply `brainstorming-harness` before execution: progress through intent_frame, problem_frame, option_frame, design/spec review, approval_frame, and handoff_frame for product, process, analysis, design, document, operations, manufacturing/specification, investment, or other domain work; preserve `BrainstormSession`, `decision_log`, `validate_brainstorm_session`, and `brainstorm_handoff` or blocked rationale. Do not run `Test-Path`, `Get-ChildItem`, `rg`, `Get-Content`, target folder existence checks, parent/sibling scans, source reads, or target write preflight before the first visible brainstorm/handoff gate; mention the named target path only as user context. A user option choice is direction approval only; do not implement, lock implementation scope, list final KPI/form/table/storage scope, create analysis output, user deliverables, or domain artifacts until the reviewed handoff/spec exists and the user separately asks to implement, start work, create files, or generate deliverables. After option choice, ask the next focused design/spec question instead of saying `implementation scope is` or `I will set the implementation scope as follows`. For domain workflows, make the compact brainstorm domain-first: objective/operator, workflow boundary, 2-3 operating model choices, required records/data, one recommendation, and one approval question; do not offer only technology-stack choices such as HTML/React/WinForms."
         )
     if "memory-state-harness" in recommended_skills:
         actions.append(
@@ -942,6 +942,14 @@ def _execution_gate(
                 "cross_chat_or_subagent_memory",
                 "memory_derived_shortcuts",
                 "parent_or_sibling_run_reads",
+                "target_folder_existence_check",
+                "target_folder_inspection",
+                "target_write_preflight",
+                "Test-Path",
+                "Get-ChildItem",
+                "rg",
+                "Get-Content",
+                "source_reads",
                 "implementation",
                 "source_or_asset_scaffolding",
                 "analysis_output",
