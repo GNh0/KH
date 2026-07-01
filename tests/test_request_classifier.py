@@ -919,6 +919,8 @@ class RequestClassifierTests(unittest.TestCase):
             ("make this email less rude: I need this by Friday", "light", "general", "direct_answer", {}),
             ("make this sentence less rude: I need it by Friday", "light", "general", "direct_answer", {}),
             ("polish this message so it sounds more professional: send the file today", "light", "general", "direct_answer", {}),
+            ("rewrite this sentence: the report is ready for review", "light", "general", "direct_answer", {}),
+            ("rephrase this text: the update is ready for review", "light", "general", "direct_answer", {}),
             ("summarize this", "ambiguous", "general", "clarify", {}),
             (
                 "summarize this article in three bullets: apples are fruits and bananas are yellow",

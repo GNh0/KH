@@ -582,14 +582,9 @@ class KhFrontDoorTests(unittest.TestCase):
                 "token-optimizer",
             ],
         )
-        self.assertEqual(
-            payload["skill_status_summary"]["skill-catalog"]["status"],
-            "applied",
-        )
-        self.assertEqual(
-            payload["skill_status_summary"]["token-optimizer"]["status"],
-            "applied",
-        )
+        self.assertEqual(payload["summary_mode"], "compact")
+        self.assertEqual(payload["skill_status_summary"]["by_status"]["applied"], 6)
+        self.assertEqual(payload["skill_status_summary"]["by_application_mode"]["runtime"], 6)
         self.assertEqual(payload["token_optimizer_gate"]["gate_status"], "checked")
         self.assertFalse(payload["token_optimizer_gate"]["optimization_applied"])
         self.assertIn("not used", payload["token_optimizer_gate"]["summary"])

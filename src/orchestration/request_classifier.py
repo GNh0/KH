@@ -1940,6 +1940,17 @@ INLINE_TONE_TRANSFORM_INTENT_TERMS = {
     "polish this sentence",
     "polish this message",
 }
+INLINE_SIMPLE_TRANSFORM_INTENT_TERMS = {
+    "rewrite this sentence",
+    "rewrite this text",
+    "rewrite this message",
+    "rewrite this paragraph",
+    "rephrase this sentence",
+    "rephrase this text",
+    "edit this sentence",
+    "edit this text",
+    "clean up this sentence",
+}
 INLINE_TONE_TRANSFORM_QUALITY_TERMS = {
     "less rude",
     "less harsh",
@@ -3327,9 +3338,19 @@ def _is_conceptual_request(normalized: str) -> bool:
 def _is_light_direct_task(normalized: str) -> bool:
     if _contains_any(normalized, LIGHT_DIRECT_TASK_TERMS):
         return True
+    if _is_short_inline_simple_transform(normalized):
+        return True
     if _is_short_inline_tone_transform(normalized):
         return True
     return False
+
+
+def _is_short_inline_simple_transform(normalized: str) -> bool:
+    if not _has_inline_payload(normalized):
+        return False
+    if len(normalized.split()) > 36:
+        return False
+    return _contains_any(normalized, INLINE_SIMPLE_TRANSFORM_INTENT_TERMS)
 
 
 def _is_short_inline_tone_transform(normalized: str) -> bool:

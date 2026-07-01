@@ -163,6 +163,66 @@ class KhFrontDoorResult:
             "warnings": list(self.warnings),
         }
 
+    def to_compact_summary_dict(self) -> Dict[str, Any]:
+        route_controller = self.plugin_route.get("controller", {})
+        runtime_applied_skills = [
+            name
+            for name, status in self.skill_statuses.items()
+            if status.get("status") == "applied" and status.get("application_mode") == "runtime"
+        ]
+        immediate_next = set(self.immediate_next_skills)
+        selected_not_executed_skills = [
+            name
+            for name, status in self.skill_statuses.items()
+            if name not in runtime_applied_skills and name not in immediate_next
+        ]
+        return {
+            "summary_mode": "compact",
+            "front_door_status": self.front_door_status,
+            "host": self.host,
+            "project": self.project,
+            "skill_source": _compact_skill_source(self.skill_source),
+            "stale_or_missing_skill_paths": [
+                _compact_host_skill_path_check(check)
+                for check in self.host_skill_path_checks
+                if check.status != "ok"
+            ],
+            "classification": {
+                "complexity": self.classification.get("complexity"),
+                "domain": self.classification.get("domain"),
+                "recommended_execution": self.classification.get("recommended_execution"),
+                "confidence": self.classification.get("confidence"),
+            },
+            "plugin_route": {
+                "route": self.plugin_route.get("route"),
+                "controller": route_controller.get("provider_id"),
+                "assistants": [
+                    assistant.get("provider_id")
+                    for assistant in self.plugin_route.get("assistants", [])
+                ],
+                "ask_user": self.plugin_route.get("ask_user"),
+            },
+            "recommended_skills": list(self.recommended_skills),
+            "immediate_next_skills": list(self.immediate_next_skills),
+            "runtime_applied_skills": runtime_applied_skills,
+            "selected_not_executed_skills": selected_not_executed_skills,
+            "execution_gate": _compact_execution_gate(self.execution_gate),
+            "execution_authorization": _compact_execution_authorization(self.execution_authorization),
+            "required_next_actions": _compact_required_next_actions(
+                self.required_next_actions,
+                self.execution_authorization,
+                self.immediate_next_skills,
+                self.plugin_route,
+            ),
+            "required_next_actions_count": len(self.required_next_actions),
+            "token_optimizer_decision": _compact_token_optimizer_decision(self.token_optimizer_decision),
+            "token_optimizer_gate": _compact_token_optimizer_gate_summary(self.token_optimizer_decision),
+            "token_optimizer_lifecycle": _compact_token_optimizer_lifecycle_summary(self.token_optimizer_decision),
+            "memory_policy": _compact_memory_policy(self.memory_policy),
+            "skill_status_summary": _compact_skill_status_summary(self.skill_statuses),
+            "warnings": list(self.warnings),
+        }
+
 
 def build_kh_front_door(
     prompt: str,
@@ -924,6 +984,137 @@ def _token_optimizer_lifecycle_summary(decision: Dict[str, Any]) -> Dict[str, An
     }
 
 
+def _compact_skill_source(skill_source: SkillSource) -> Dict[str, Any]:
+    return {
+        "source_type": skill_source.source_type,
+        "version": skill_source.version,
+        "exists": skill_source.exists,
+        "skill_count": skill_source.skill_count,
+        "reason": skill_source.reason,
+    }
+
+
+def _compact_host_skill_path_check(check: HostSkillPathCheck) -> Dict[str, Any]:
+    return {
+        "path": check.path,
+        "status": check.status,
+        "exists": check.exists,
+        "reason": check.reason,
+    }
+
+
+def _compact_execution_gate(execution_gate: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "status": execution_gate.get("status"),
+        "can_execute": execution_gate.get("can_execute"),
+        "reason": execution_gate.get("reason"),
+        "required_before_execution": list(execution_gate.get("required_before_execution", []) or []),
+        "blocked_actions": list(execution_gate.get("blocked_actions", []) or []),
+    }
+
+
+def _compact_execution_authorization(authorization: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "status": authorization.get("status"),
+        "can_execute_now": authorization.get("can_execute_now"),
+        "can_start_task_work": authorization.get("can_start_task_work"),
+        "must_stop_before_execution": authorization.get("must_stop_before_execution"),
+        "pending_immediate_next_skills": list(authorization.get("pending_immediate_next_skills", []) or []),
+        "required_before_execution": list(authorization.get("required_before_execution", []) or []),
+        "forbidden_next_actions": list(authorization.get("forbidden_next_actions", []) or []),
+        "strict_exit_code_when_blocked": authorization.get("strict_exit_code_when_blocked"),
+    }
+
+
+def _compact_token_optimizer_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "provider": decision.get("provider") or decision.get("token_optimizer_provider"),
+        "token_optimizer_status": decision.get("token_optimizer_status"),
+        "not_used_reason": decision.get("not_used_reason"),
+        "optimization_applied": bool(decision.get("optimization_applied")),
+        "actual_optimization_claimed": bool(decision.get("actual_optimization_claimed")),
+        "usage_kind": decision.get("usage_kind"),
+        "without_token_optimizer": int(decision.get("without_token_optimizer") or 0),
+        "with_token_optimizer": int(decision.get("with_token_optimizer") or 0),
+        "estimated_tokens_saved": int(decision.get("estimated_tokens_saved") or 0),
+        "token_savings_ratio": float(decision.get("token_savings_ratio") or 0.0),
+        "billing_tokens_available": bool(decision.get("billing_tokens_available")),
+        "token_count_is_estimate": bool(decision.get("token_count_is_estimate", True)),
+    }
+
+
+def _compact_token_optimizer_gate_summary(decision: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(decision.get("token_optimizer_status") or "unknown")
+    summary = (
+        "used"
+        if bool(decision.get("optimization_applied"))
+        else f"not used; status={status}"
+    )
+    return {
+        "gate_status": str(decision.get("token_optimizer_gate_status") or "checked"),
+        "provider": str(decision.get("token_optimizer_provider") or decision.get("provider") or ""),
+        "status": status,
+        "optimization_applied": bool(decision.get("optimization_applied")),
+        "summary": summary,
+        "estimated_tokens_saved": int(decision.get("estimated_tokens_saved") or 0),
+        "token_savings_ratio": float(decision.get("token_savings_ratio") or 0.0),
+    }
+
+
+def _compact_token_optimizer_lifecycle_summary(decision: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(decision.get("token_optimizer_status") or "unknown")
+    actual_used = bool(decision.get("actual_optimization_used") or decision.get("optimization_applied"))
+    return {
+        "gate_status": str(decision.get("token_optimizer_gate_status") or "checked"),
+        "lifecycle_status": str(decision.get("token_optimizer_lifecycle_status") or "gate_checked"),
+        "decision_status": status,
+        "actual_optimization_claimed": bool(decision.get("actual_optimization_claimed") or actual_used),
+        "usage_kind": str(decision.get("usage_kind") or ("optimization" if actual_used else "gate_check_only")),
+    }
+
+
+def _compact_memory_policy(memory_policy: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "scope": memory_policy.get("scope"),
+        "global_codex_memory_allowed": memory_policy.get("global_codex_memory_allowed"),
+        "host_memory_lookup_before_front_door_allowed": memory_policy.get("host_memory_lookup_before_front_door_allowed"),
+        "subagent_scope": memory_policy.get("subagent_scope"),
+    }
+
+
+def _compact_required_next_actions(
+    required_next_actions: Sequence[str],
+    authorization: Dict[str, Any],
+    immediate_next_skills: Sequence[str],
+    plugin_route: Dict[str, Any],
+) -> List[str]:
+    controller = plugin_route.get("controller", {}) or {}
+    controller_id = str(controller.get("provider_id") or "")
+    should_show = bool(
+        authorization.get("must_stop_before_execution")
+        or immediate_next_skills
+        or controller_id not in {"", "none"}
+    )
+    if not should_show:
+        return []
+    return list(required_next_actions)[:3]
+
+
+def _compact_skill_status_summary(statuses: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    by_status: Dict[str, int] = {}
+    by_mode: Dict[str, int] = {}
+    for status in statuses.values():
+        status_name = str(status.get("status") or "unknown")
+        mode_name = str(status.get("application_mode") or "unknown")
+        by_status[status_name] = by_status.get(status_name, 0) + 1
+        by_mode[mode_name] = by_mode.get(mode_name, 0) + 1
+    return {
+        "total": len(statuses),
+        "by_status": by_status,
+        "by_application_mode": by_mode,
+    }
+
+
 def _execution_authorization(
     execution_gate: Dict[str, Any],
     immediate_next_skills: Sequence[str],
@@ -1350,6 +1541,7 @@ def main() -> int:
     parser.add_argument("--context-file", default="", help="Optional UTF-8 JSON file containing request context.")
     parser.add_argument("--prefer-cache", action="store_true", help="Prefer the latest installed kh-uaf cache over repo-local skills.")
     parser.add_argument("--summary", action="store_true", help="Print a compact front-door summary.")
+    parser.add_argument("--verbose-summary", action="store_true", help="Print the legacy detailed front-door summary.")
     parser.add_argument(
         "--strict-execution-gate",
         action="store_true",
@@ -1369,8 +1561,18 @@ def main() -> int:
         prefer_cache=args.prefer_cache,
         request_context=request_context,
     )
-    payload = result.to_summary_dict() if args.summary else result.to_dict()
-    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    if args.summary and args.verbose_summary:
+        raise SystemExit("choose only one of --summary or --verbose-summary")
+    if args.verbose_summary:
+        payload = result.to_summary_dict()
+    elif args.summary:
+        payload = result.to_compact_summary_dict()
+    else:
+        payload = result.to_dict()
+    if args.summary:
+        print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+    else:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     if result.front_door_status != "ok":
         return 2
     if args.strict_execution_gate and result.execution_authorization.get("must_stop_before_execution"):
