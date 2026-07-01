@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Set
+from typing import Any, Dict, Iterable, List, Sequence, Set
 
 from src.orchestration.plugin_composition import looks_like_sql_output_request
 from src.orchestration.request_classifier import classify_request
@@ -488,6 +488,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
 
     issues.extend(_kh_front_door_issues(path))
     issues.extend(_immediate_next_skill_issues(path, skill_rows))
+    issues.extend(_front_door_execution_gate_bypass_issues(path))
     issues.extend(_front_door_latency_issues(path))
     issues.extend(_large_output_latency_issues(path))
     issues.extend(_stale_skill_cache_issues(path))
@@ -961,6 +962,208 @@ def _immediate_skill_sequence_issues(
             }
         )
     return issues
+
+
+def _front_door_execution_gate_bypass_issues(path: Path) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    gate_active = False
+    gate_status = ""
+    front_door_sample = ""
+    required_before: List[str] = []
+    blocked_actions: List[str] = []
+    immediate: List[str] = []
+
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        text = _payload_text(payload)
+        clean_text = _strip_passive_prefix(text)
+        lowered = clean_text.lower()
+
+        data = _front_door_json(clean_text)
+        if data:
+            gate = data.get("execution_gate", {}) or {}
+            auth = data.get("execution_authorization", {}) or {}
+            gate_active = bool(
+                gate.get("can_execute") is False
+                or auth.get("must_stop_before_execution") is True
+            )
+            gate_status = str(gate.get("status") or auth.get("status") or "")
+            front_door_sample = _short(clean_text)
+            required_before = [
+                str(item)
+                for item in (
+                    auth.get("required_before_execution")
+                    or gate.get("required_before_execution")
+                    or []
+                )
+            ]
+            blocked_actions = [
+                str(item)
+                for item in (
+                    auth.get("forbidden_next_actions")
+                    or gate.get("blocked_actions")
+                    or []
+                )
+            ]
+            immediate = [str(item) for item in data.get("immediate_next_skills", []) or []]
+            continue
+
+        if not gate_active:
+            continue
+        if _execution_gate_release_evidence(lowered, required_before, immediate):
+            gate_active = False
+            continue
+        if not _blocked_execution_work_start(payload, lowered):
+            continue
+        issues.append(
+            {
+                "skill": "always-on-front-door",
+                "status": "front_door_execution_gate_bypassed",
+                "severity": "P0",
+                "reason": (
+                    "Front-door returned an execution stop gate, but the session started task work "
+                    "before required gate evidence or immediate-skill evidence existed."
+                ),
+                "action": (
+                    "When `execution_authorization.must_stop_before_execution=true` or "
+                    "`execution_gate.can_execute=false`, stop after intake. Only record the allowed "
+                    "setup evidence and immediate skill applied/skipped/blocked statuses before source "
+                    "exploration, implementation, DB/file writes, subagent dispatch, verification, or final claims."
+                ),
+                "gate_status": gate_status,
+                "front_door": front_door_sample,
+                "required_before_execution": required_before,
+                "immediate_next_skills": immediate,
+                "blocked_actions": blocked_actions,
+                "first_blocked_work": _short(clean_text),
+            }
+        )
+        gate_active = False
+    return issues
+
+
+def _execution_gate_release_evidence(
+    lowered: str,
+    required_before: Sequence[str],
+    immediate: Sequence[str],
+) -> bool:
+    if not lowered:
+        return False
+    if "execution_authorization" in lowered and '"can_execute_now": true' in lowered:
+        return True
+    if immediate and not all(skill.lower() in lowered for skill in immediate):
+        return False
+    required = {str(item).lower() for item in required_before if str(item)}
+    if not required:
+        return False
+    release_markers = [
+        "large_work_orchestration_bundle",
+        "workspace_strategy",
+        "token_optimizer_status",
+        "subagent_strategy",
+        "parallel_strategy_decision",
+        "verification_plan",
+    ]
+    if required & set(release_markers):
+        return all(marker in lowered for marker in release_markers[:4])
+    brainstorm_markers = [
+        "brainstormsession",
+        "decision_log",
+        "validate_brainstorm_session",
+        "brainstorm_handoff",
+        "separate_implementation_approval",
+    ]
+    if "brainstorming-harness" in required:
+        return all(marker in lowered for marker in brainstorm_markers)
+    return False
+
+
+def _blocked_execution_work_start(payload: Dict[str, Any], lowered: str) -> bool:
+    payload_type = str(payload.get("type", ""))
+    if payload_type == "task_complete":
+        return True
+    if payload_type in {"message", "agent_message"}:
+        return False
+    if payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    if _is_front_door_runtime_command(payload, lowered):
+        return False
+    if _is_gate_allowed_skill_doc_read(lowered):
+        return False
+    tool_name = str(payload.get("name", "")).lower()
+    if tool_name == "apply_patch":
+        return True
+    if "mssql" in tool_name or "run_sql_query" in tool_name:
+        return True
+    if "spawn_agent" in tool_name or "send_message_to_thread" in tool_name:
+        return True
+    if tool_name in {
+        "open",
+        "web.run",
+        "view_image",
+        "functions.view_image",
+        "browser",
+        "browser.open",
+        "read_file",
+        "computer-use",
+        "imagegen",
+    }:
+        return True
+    if tool_name not in {"shell_command", "functions.shell_command"}:
+        return False
+    if "src.skills.uaf_skill_catalog --read" in lowered:
+        return False
+    if "python -m src.orchestration.kh_front_door" in lowered or "front_door.py" in lowered:
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "get-childitem",
+            "test-path",
+            "select-string",
+            "rg ",
+            "rg --files",
+            "git ",
+            "git show",
+            "git diff",
+            "git grep",
+            "dir ",
+            "ls ",
+            "findstr",
+            "get-content",
+            "python ",
+            "msbuild",
+            "dotnet ",
+            "npm ",
+            "node ",
+            "copy-item",
+            "move-item",
+            "remove-item",
+            "set-content",
+            "add-content",
+        ]
+    )
+
+
+def _is_gate_allowed_skill_doc_read(lowered: str) -> bool:
+    if "\\skills\\" not in lowered and "/skills/" not in lowered:
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "skill.md",
+            "\\references\\",
+            "/references/",
+            "\\examples\\",
+            "/examples/",
+            "\\scripts\\smoke_check.py",
+            "/scripts/smoke_check.py",
+            "\\scripts\\demo.py",
+            "/scripts/demo.py",
+        ]
+    )
 
 
 def _immediate_skill_event_status(

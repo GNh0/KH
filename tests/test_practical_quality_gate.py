@@ -1,7 +1,10 @@
 import unittest
 
 from src.benchmarks.kh_bench_verified import load_verified_tasks
-from src.benchmarks.practical_quality_gate import build_practical_quality_report
+from src.benchmarks.practical_quality_gate import (
+    _installed_cache_front_door_smoke_message,
+    build_practical_quality_report,
+)
 
 
 def ok_install_audit():
@@ -128,6 +131,23 @@ class PracticalQualityGateTests(unittest.TestCase):
         self.assertTrue(report["release_ready"])
         self.assertEqual(report["blocking_findings"], [])
         self.assertGreaterEqual(report["practical_confidence_score"], 9.0)
+
+    def test_installed_cache_smoke_message_explains_version_mismatch(self):
+        message = _installed_cache_front_door_smoke_message(
+            {
+                "status": "ok",
+                "front_door_status": "ok",
+                "skill_source": {
+                    "source_type": "codex-plugin-cache",
+                    "version": "2.9.93",
+                },
+            },
+            {"expected_source_version": "2.9.94"},
+        )
+
+        self.assertIn("version mismatch", message)
+        self.assertIn("installed=2.9.93", message)
+        self.assertIn("expected=2.9.94", message)
 
 
 if __name__ == "__main__":

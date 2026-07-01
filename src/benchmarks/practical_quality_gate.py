@@ -229,6 +229,13 @@ def _installed_cache_front_door_smoke_message(cache_smoke: Dict[str, Any], insta
     if _installed_cache_front_door_smoke_ok(cache_smoke, install_audit):
         source = dict(cache_smoke.get("skill_source", {}) or {})
         return f"installed cache wrapper ran front-door from {source.get('source_type')} version {source.get('version')}"
+    source = dict(cache_smoke.get("skill_source", {}) or {})
+    expected = str(install_audit.get("expected_source_version") or "")
+    actual = str(source.get("version") or "")
+    if cache_smoke.get("status") == "ok" and expected and actual and expected != actual:
+        return f"installed cache front-door version mismatch: installed={actual}, expected={expected}"
+    if cache_smoke.get("status") == "ok" and source.get("source_type") != "codex-plugin-cache":
+        return f"installed cache front-door smoke used {source.get('source_type', '<missing>')} instead of codex-plugin-cache"
     return f"installed cache front-door smoke failed: status={cache_smoke.get('status', '<missing>')}"
 
 def _confidence_score(

@@ -68,6 +68,7 @@ class KhFrontDoorResult:
     immediate_next_skills: List[str]
     skill_statuses: Dict[str, Dict[str, Any]]
     execution_gate: Dict[str, Any]
+    execution_authorization: Dict[str, Any]
     required_next_actions: List[str]
     catalog_summary: Dict[str, Any] = field(default_factory=dict)
     large_work_orchestration_bundle: Dict[str, Any] | None = None
@@ -91,6 +92,7 @@ class KhFrontDoorResult:
             "immediate_next_skills": list(self.immediate_next_skills),
             "skill_statuses": {name: dict(status) for name, status in self.skill_statuses.items()},
             "execution_gate": dict(self.execution_gate),
+            "execution_authorization": dict(self.execution_authorization),
             "required_next_actions": list(self.required_next_actions),
             "catalog_summary": dict(self.catalog_summary),
             "large_work_orchestration_bundle": self.large_work_orchestration_bundle,
@@ -141,6 +143,7 @@ class KhFrontDoorResult:
             "recommended_skills": list(self.recommended_skills),
             "immediate_next_skills": list(self.immediate_next_skills),
             "execution_gate": dict(self.execution_gate),
+            "execution_authorization": dict(self.execution_authorization),
             "runtime_applied_skills": runtime_applied_skills,
             "selected_not_executed_skills": selected_not_executed_skills,
             "token_optimizer_decision": dict(self.token_optimizer_decision),
@@ -216,6 +219,18 @@ def build_kh_front_door(
     execution_gate = _execution_gate(classification, plugin_route, recommended_skills)
     immediate_next_skills = _immediate_next_skills(classification, plugin_route, recommended_skills, execution_gate)
     skill_statuses = _mark_immediate_next_skill_statuses(skill_statuses, immediate_next_skills)
+    required_next_actions = _required_next_actions(
+        classification,
+        plugin_route,
+        recommended_skills,
+        execution_gate,
+        immediate_next_skills,
+    )
+    execution_authorization = _execution_authorization(
+        execution_gate,
+        immediate_next_skills,
+        required_next_actions,
+    )
 
     large_work_bundle = None
     large_work_validation = None
@@ -244,13 +259,8 @@ def build_kh_front_door(
         immediate_next_skills=immediate_next_skills,
         skill_statuses=skill_statuses,
         execution_gate=execution_gate,
-        required_next_actions=_required_next_actions(
-            classification,
-            plugin_route,
-            recommended_skills,
-            execution_gate,
-            immediate_next_skills,
-        ),
+        execution_authorization=execution_authorization,
+        required_next_actions=required_next_actions,
         catalog_summary=catalog_summary,
         large_work_orchestration_bundle=large_work_bundle,
         large_work_bundle_validation=large_work_validation,
@@ -884,6 +894,81 @@ def _token_optimizer_gate_summary(decision: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _execution_authorization(
+    execution_gate: Dict[str, Any],
+    immediate_next_skills: Sequence[str],
+    required_next_actions: Sequence[str],
+) -> Dict[str, Any]:
+    gate_can_execute = bool(execution_gate.get("can_execute", True))
+    pending_immediate = [str(skill) for skill in immediate_next_skills if str(skill)]
+    blocked_actions = _dedupe(str(item) for item in execution_gate.get("blocked_actions", []) or [])
+    if pending_immediate:
+        blocked_actions = _dedupe(
+            [
+                *blocked_actions,
+                "source_exploration_before_immediate_skill_evidence",
+                "implementation_before_immediate_skill_evidence",
+                "file_or_db_write_before_immediate_skill_evidence",
+                "verification_or_completion_before_immediate_skill_evidence",
+            ]
+        )
+    required = _dedupe(
+        [
+            *[str(item) for item in execution_gate.get("required_before_execution", []) or []],
+            *(
+                [
+                    "immediate_next_skills_applied_skipped_or_blocked",
+                    "same_turn_immediate_skill_evidence",
+                ]
+                if pending_immediate
+                else []
+            ),
+        ]
+    )
+    if not gate_can_execute:
+        status = "blocked_by_execution_gate"
+    elif pending_immediate:
+        status = "blocked_by_pending_immediate_skill_gate"
+    else:
+        status = "allowed"
+    must_stop = status != "allowed"
+    allowed_setup = _dedupe(
+        [
+            *[str(item) for item in execution_gate.get("allowed_setup_actions", []) or []],
+            *(
+                [
+                    "read_immediate_skill_docs_only",
+                    "record_immediate_skill_applied_skipped_or_blocked_evidence",
+                ]
+                if pending_immediate
+                else []
+            ),
+        ]
+    )
+    if not allowed_setup and must_stop:
+        allowed_setup = ["satisfy_execution_gate_required_evidence"]
+    return {
+        "status": status,
+        "can_execute_now": not must_stop,
+        "can_start_task_work": not must_stop,
+        "must_stop_before_execution": must_stop,
+        "gate_can_execute": gate_can_execute,
+        "pending_immediate_next_skills": pending_immediate,
+        "required_before_execution": required,
+        "allowed_next_actions_only": allowed_setup,
+        "forbidden_next_actions": blocked_actions,
+        "completion_claim_allowed": not must_stop,
+        "strict_exit_code_when_blocked": 3 if must_stop else 0,
+        "hard_stop_message": (
+            "STOP: do not run source exploration, implementation, file writes, DB writes, "
+            "verification, subagent dispatch, or completion claims until required evidence exists."
+            if must_stop
+            else "Execution may continue after selected provider or skill setup."
+        ),
+        "required_next_action_preview": list(required_next_actions)[:3],
+    }
+
+
 def _local_token_estimate(text: str) -> int:
     if not text:
         return 0
@@ -959,6 +1044,11 @@ def _required_next_actions(
                 0,
                 f"NEXT SKILL EXECUTION: apply {immediate} now. Everything else in `selected_not_executed_skills` is deferred until these are applied, skipped with rationale, or blocked.",
             )
+    if execution_gate and not execution_gate.get("can_execute", True):
+        actions.insert(
+            0,
+            "BLOCKING FRONT-DOOR RESULT: `execution_authorization.must_stop_before_execution=true`. Only the gate's allowed setup actions may run next; source exploration, implementation, file writes, DB writes, verification, subagent dispatch, and completion claims are invalid until required evidence exists.",
+        )
     controller = plugin_route.get("controller", {}) or {}
     controller_id = str(controller.get("provider_id") or "")
     selected_roles = [controller]
@@ -1230,6 +1320,11 @@ def main() -> int:
     parser.add_argument("--context-file", default="", help="Optional UTF-8 JSON file containing request context.")
     parser.add_argument("--prefer-cache", action="store_true", help="Prefer the latest installed kh-uaf cache over repo-local skills.")
     parser.add_argument("--summary", action="store_true", help="Print a compact front-door summary.")
+    parser.add_argument(
+        "--strict-execution-gate",
+        action="store_true",
+        help="Return exit code 3 when the front-door result still blocks task work.",
+    )
     args = parser.parse_args()
     prompt = _resolve_prompt_arg(args.prompt, args.prompt_file, args.prompt_stdin)
 
@@ -1246,7 +1341,11 @@ def main() -> int:
     )
     payload = result.to_summary_dict() if args.summary else result.to_dict()
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if result.front_door_status == "ok" else 2
+    if result.front_door_status != "ok":
+        return 2
+    if args.strict_execution_gate and result.execution_authorization.get("must_stop_before_execution"):
+        return 3
+    return 0
 
 
 def _resolve_prompt_arg(prompt: str, prompt_file: str, prompt_stdin: bool) -> str:

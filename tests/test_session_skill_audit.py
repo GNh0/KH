@@ -4816,6 +4816,113 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertEqual(issue["severity"], "P0")
         self.assertIn("SKILL.md/support-file read", issue["action"])
 
+    def test_front_door_blocked_large_work_flags_db_write_after_skill_reads(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "classification": {
+                "complexity": "heavy",
+                "domain": "software",
+                "recommended_execution": "role_dag",
+            },
+            "plugin_route": {"route": "single", "controller": "kh"},
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+                "token-optimizer",
+            ],
+            "selected_not_executed_skills": ["verification-before-completion-harness"],
+            "immediate_next_skills": [
+                "goal-state-harness",
+                "workflow-usability-harness",
+                "host-agent-orchestration",
+                "parallel-orchestration-harness",
+            ],
+            "skill_status_summary": {
+                "goal-state-harness": {"status": "pending_immediate_execution"},
+                "workflow-usability-harness": {"status": "pending_immediate_execution"},
+                "host-agent-orchestration": {"status": "pending_immediate_execution"},
+                "parallel-orchestration-harness": {"status": "pending_immediate_execution"},
+            },
+            "execution_gate": {
+                "status": "blocked_until_large_work_preflight",
+                "can_execute": False,
+                "required_before_execution": [
+                    "goal-state-harness",
+                    "large_work_orchestration_bundle",
+                    "workspace_strategy",
+                    "token_optimizer_status",
+                    "subagent_strategy_with_rationale",
+                    "parallel_strategy_decision_with_rationale",
+                    "verification_plan",
+                ],
+                "blocked_actions": ["broad_source_exploration", "implementation", "db_writes"],
+            },
+            "execution_authorization": {
+                "status": "blocked_by_execution_gate",
+                "must_stop_before_execution": True,
+                "can_execute_now": False,
+                "pending_immediate_next_skills": [
+                    "goal-state-harness",
+                    "workflow-usability-harness",
+                    "host-agent-orchestration",
+                    "parallel-orchestration-harness",
+                ],
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": (
+                            r"Get-Content C:\Users\KONEIT\.codex\plugins\cache\kh-uaf-marketplace"
+                            r"\kh-uaf\2.9.93\skills\workflow_usability_harness\SKILL.md"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "mssql_run_sql_query",
+                        "arguments": json.dumps(
+                            {
+                                "query": (
+                                    "ALTER PROCEDURE [dbo].[UP_SYS_TEST_SAVE]\n"
+                                    "AS\nBEGIN\n    SELECT 1\nEND"
+                                )
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["skill"] == "always-on-front-door"
+            and issue["status"] == "front_door_execution_gate_bypassed"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertEqual(issue["gate_status"], "blocked_until_large_work_preflight")
+        self.assertIn("db_writes", issue["blocked_actions"])
+        self.assertIn("ALTER PROCEDURE", issue["first_blocked_work"])
+
     def test_immediate_next_skill_support_reference_output_is_not_runtime_evidence(self):
         front_door_output = {
             "front_door_status": "ok",

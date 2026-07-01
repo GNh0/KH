@@ -233,6 +233,20 @@ class KhFrontDoorTests(unittest.TestCase):
             payload["execution_gate"]["status"],
             "blocked_until_large_work_preflight",
         )
+        self.assertTrue(payload["execution_authorization"]["must_stop_before_execution"])
+        self.assertFalse(payload["execution_authorization"]["can_start_task_work"])
+        self.assertEqual(payload["execution_authorization"]["status"], "blocked_by_execution_gate")
+        self.assertIn(
+            "goal-state-harness",
+            payload["execution_authorization"]["pending_immediate_next_skills"],
+        )
+        self.assertIn(
+            "implementation_before_immediate_skill_evidence",
+            payload["execution_authorization"]["forbidden_next_actions"],
+        )
+        self.assertTrue(
+            payload["required_next_actions"][0].startswith("BLOCKING FRONT-DOOR RESULT")
+        )
         self.assertEqual(
             payload["immediate_next_skills"],
             [
@@ -243,7 +257,7 @@ class KhFrontDoorTests(unittest.TestCase):
             ],
         )
         self.assertTrue(
-            payload["required_next_actions"][0].startswith("NEXT SKILL EXECUTION")
+            any(action.startswith("NEXT SKILL EXECUTION") for action in payload["required_next_actions"])
         )
 
     def test_ambiguous_visual_query_order_blocks_execution_until_clarified(self):
@@ -366,7 +380,7 @@ class KhFrontDoorTests(unittest.TestCase):
             ],
         )
         self.assertTrue(
-            payload["required_next_actions"][0].startswith("NEXT SKILL EXECUTION")
+            any(action.startswith("NEXT SKILL EXECUTION") for action in payload["required_next_actions"])
         )
         for required in [
             "large_work_orchestration_bundle",
@@ -384,6 +398,35 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertTrue(
             any("HARD PRE-FLIGHT STOP" in action for action in payload["required_next_actions"])
         )
+
+    def test_cli_strict_execution_gate_returns_nonzero_when_work_is_blocked(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "src.orchestration.kh_front_door",
+                "--prompt",
+                "Build a small HTML todo tool and verify it.",
+                "--project",
+                ".",
+                "--host",
+                "codex",
+                "--summary",
+                "--strict-execution-gate",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        payload = json.loads(completed.stdout)
+
+        self.assertEqual(completed.returncode, 3)
+        self.assertTrue(payload["execution_authorization"]["must_stop_before_execution"])
+        self.assertFalse(payload["execution_authorization"]["can_execute_now"])
+        self.assertIn("BLOCKING FRONT-DOOR RESULT", payload["required_next_actions"][0])
 
     def test_cli_summary_outputs_machine_readable_front_door_json(self):
         completed = subprocess.run(

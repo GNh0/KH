@@ -17,10 +17,10 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 Users should not need to name KH, UAF, or any individual skill/harness for non-trivial work. If KH is installed and the request involves project files, code changes, deliverables, substantial documents, long command output, review, QA, verification, branch finishing, subagents, persistent state, or high-risk actions, the host should select only `kh-uaf:always-on-front-door` first and make the first standalone work-bearing tool call the KH front door before opening other skill files, source exploration, memory lookup, target-folder checks, or edits:
 
 ```bash
-python skills/always_on_front_door/scripts/front_door.py --prompt "<user request>" --project "<target project>" --host codex --summary
+python skills/always_on_front_door/scripts/front_door.py --prompt "<user request>" --project "<target project>" --host codex --summary --strict-execution-gate
 ```
 
-When already running from the KH repository root, the equivalent module entrypoint is `python -m src.orchestration.kh_front_door ...`; both paths execute `src.orchestration.kh_front_door.build_kh_front_door`.
+When already running from the KH repository root, the equivalent module entrypoint is `python -m src.orchestration.kh_front_door ...`; both paths execute `src.orchestration.kh_front_door.build_kh_front_door`. With `--strict-execution-gate`, exit code 3 means front-door succeeded but `execution_authorization.must_stop_before_execution=true`; only the reported setup evidence may run next.
 
 1. Apply `always-on-front-door` and `automatic-intake-harness` to decide whether ordinary user wording needs KH intake.
 2. Inspect the KH root guide or packaged skill catalog.

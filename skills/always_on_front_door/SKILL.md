@@ -20,10 +20,10 @@ $promptPath = Join-Path $env:TEMP "kh-front-door-prompt.txt"
 Set-Content -LiteralPath $promptPath -Value @'
 <exact user request>
 '@ -Encoding UTF8
-python "<this skill folder>\scripts\front_door.py" --prompt-file $promptPath --project "<cwd or target project>" --host codex --summary
+python "<this skill folder>\scripts\front_door.py" --prompt-file $promptPath --project "<cwd or target project>" --host codex --summary --strict-execution-gate
 ```
 
-For short ASCII-only prompts, `--prompt "<user request>"` is accepted. If running from the KH repository root, `python -m src.orchestration.kh_front_door ...` is also valid.
+For short ASCII-only prompts, `--prompt "<user request>"` is accepted. If running from the KH repository root, `python -m src.orchestration.kh_front_door ...` is also valid. Keep `--strict-execution-gate` on normal host runs so a blocked execution gate returns a non-zero code instead of looking like successful task authorization.
 
 Only after the command returns should selected follow-up skills be read or applied.
 
@@ -47,7 +47,7 @@ Only after the command returns should selected follow-up skills be read or appli
 
 ## Required outputs
 
-- `front_door_status`, request classification, plugin route, and `execution_gate`.
+- `front_door_status`, request classification, plugin route, `execution_gate`, and `execution_authorization`.
 - `runtime_applied_skills`, `selected_not_executed_skills`, `immediate_next_skills`, and `skill_status_summary`.
 - `kh_active_directive` when persistent KH use was requested.
 - Blocked/direct rationale when the runtime command cannot run.
@@ -69,6 +69,7 @@ Only after the command returns should selected follow-up skills be read or appli
 - Do not treat selected follow-up skills as exclusive; specialist plugins may still be routed after intake.
 - Do not skip `immediate_next_skills` and jump directly to source exploration, implementation, verification, or final claims.
 - Do not treat a support-file read as immediate skill application, even when the support file contains runtime marker names.
+- Do not treat exit code 3 from `--strict-execution-gate` as a front-door crash. It means KH intake succeeded and the next action is limited to the reported gate/setup evidence.
 
 ## UAF implementation targets
 

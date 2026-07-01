@@ -14,13 +14,13 @@ This workspace includes KH UAF, a personal skillbook and Python-first orchestrat
 3. Prefer the executable front-door command so stale plugin cache paths and passive skill-list mentions do not count as usage:
 
 ```bash
-python -m src.orchestration.kh_front_door --prompt-file "<utf8 prompt file>" --project "<target project>" --host antigravity --summary
+python -m src.orchestration.kh_front_door --prompt-file "<utf8 prompt file>" --project "<target project>" --host antigravity --summary --strict-execution-gate
 ```
 
 Use `--prompt-file` for Korean, Japanese, Chinese, or any other non-ASCII request text so shell argument encoding does not corrupt front-door routing.
 
 4. If the command is unavailable, read `always-on-front-door`, `automatic-intake-harness`, `SKILL.md`, `plugin-composition-policy`, `request-complexity-router`, or the packaged skill catalog to classify the request and select the minimal skill bundle automatically. Users should not need to name every harness.
-5. If front-door returns `execution_gate.can_execute=false`, do not continue with global Codex `MEMORY.md` lookup, `.codex/memories/skills/...` lookup, cross-chat/subagent memory reuse, target-folder existence checks, target-folder inspection, sibling-folder reads, implementation, deliverable generation, verification, or browser QA. Satisfy the gate first, especially `blocked_until_brainstorming_handoff`; for brainstorming, the first visible response must be a domain-first brainstorm before `Test-Path`, `Get-ChildItem`, source reads, or write preflight.
+5. If front-door returns `execution_gate.can_execute=false` or `execution_authorization.must_stop_before_execution=true`, do not continue with global Codex `MEMORY.md` lookup, `.codex/memories/skills/...` lookup, cross-chat/subagent memory reuse, target-folder existence checks, target-folder inspection, sibling-folder reads, implementation, deliverable generation, verification, or browser QA. Satisfy the gate first, especially `blocked_until_brainstorming_handoff`; for brainstorming, the first visible response must be a domain-first brainstorm before `Test-Path`, `Get-ChildItem`, source reads, or write preflight. Exit code 3 from `--strict-execution-gate` means routing succeeded but task work is blocked, not that front-door crashed.
 6. Record selected, considered, skipped, and blocked skills with evidence; then start source reads, edits, role DAG execution, or deliverable generation only when `execution_gate.can_execute=true` or the gate has explicit handoff evidence.
 7. Before delegating non-trivial work to a subagent, the controller should run front-door intake and pass a bounded task packet. A subagent should also run front-door first for its own non-trivial task before memory lookup or workspace inspection. After the subagent returns, audit whether the selected skills were actually used, skipped with rationale, or missing.
 8. Use `README.md` for install and host integration instructions.

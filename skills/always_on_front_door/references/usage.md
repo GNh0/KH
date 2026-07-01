@@ -49,10 +49,10 @@ actual_runtime_path: `src.orchestration.kh_front_door.build_kh_front_door`, `pyt
 Run. For non-ASCII prompts on Windows, prefer `--prompt-file` so the classifier receives the exact user text instead of a mojibaked shell argument:
 
 ```bash
-python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd or target project>" --host codex --summary
+python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd or target project>" --host codex --summary --strict-execution-gate
 ```
 
-`--prompt "<user request>"` remains available for short ASCII-only prompts. `--prompt-stdin` is also available when the host can provide stdin safely.
+`--prompt "<user request>"` remains available for short ASCII-only prompts. `--prompt-stdin` is also available when the host can provide stdin safely. Keep `--strict-execution-gate` for host runs; exit code 3 means front-door succeeded but task execution is blocked until the reported immediate skill/gate evidence exists.
 
 Then:
 
@@ -67,6 +67,7 @@ Then:
 Minimum evidence for a non-trivial request:
 
 - `front_door_status: ok`
+- `execution_authorization.must_stop_before_execution` and the allowed/forbidden next actions
 - `kh_active_directive` status when carryover from a previous turn is in force
 - classification with complexity, domain, confidence, and recommended execution
 - plugin route
