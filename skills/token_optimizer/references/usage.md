@@ -50,6 +50,15 @@ Quality rule: token savings must never hide source-of-truth details and must nev
    - `with_token_optimizer`
    - `estimated_tokens_saved`
    - `token_savings_ratio`
+   - `estimated_payload_without_optimizer`
+   - `estimated_payload_with_optimizer`
+   - `estimated_payload_tokens_saved`
+   - `estimated_payload_token_savings_ratio`
+   - `where_saved`
+   - `host_actual_tokens_available`
+   - `host_actual_tokens_used`
+   - `host_actual_token_source`
+   - `host_actual_token_evidence`
    - `actual_usage_scope`
    - `actual_tokens_saved`
    - `actual_token_savings_ratio`
@@ -60,7 +69,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
    - `billing_tokens_available`
    - `by_strategy` for workflow summaries
    - RTK-style `by_command_family` stats for optimized command output
-   These fields describe the actual optimizer input/output payload counted by KH. They are not provider billing token telemetry unless the host explicitly exposes that telemetry.
+   The `estimated_payload_*` fields describe the raw-vs-compact optimizer payload counted by KH. `host_actual_*` fields describe observed Codex/host token evidence such as session `token_count` events or `goal.tokensUsed`. Legacy `actual_*` fields are retained for compatibility and must not be described as provider billing token savings.
 10. Every workflow-level token decision must include `token_optimizer_status_reason`. When optimization is not applied, also report `not_used_reason` so a user can tell whether it was too small, quality-sensitive passthrough, provider/policy blocked, or no optimizable command output/transcript was present.
 11. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 12. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
@@ -75,6 +84,8 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Before/after token usage statistics for every optimized item or aggregate workflow, with optimizer-local telemetry separated from provider billing-token availability.
+- `host_actual_token_evidence` when a Codex session JSONL or GoalState update exposes actual host token usage.
+- `estimated_payload_tokens_saved` and `where_saved` so RTK-style gain reports can show where context was reduced.
 - Runtime workflow `token_optimization` summary and per-task `metadata.token_optimizer` records when optimizing `WorkflowTaskResult` objects.
 - RTK-style command-family savings statistics for command output, even when KH is the provider.
 - Lifecycle evidence preserved during compression: `task_status`, `review_status`, `commit_sha`, `next_task`, RED/GREEN state, exit code, sandbox retry reason, file references, and reviewer severity.

@@ -10,6 +10,7 @@ from src.orchestration.runtime_token_optimizer import optimize_workflow_task_res
 from src.skills.token_optimizer import (
     aggregate_token_usage_stats,
     compare_token_usage,
+    extract_host_actual_token_evidence,
     minify_code,
     optimize_context_content,
     summarize_command_output,
@@ -25,6 +26,11 @@ class CommandOutputRuntimeTests(unittest.TestCase):
         self.assertEqual(token_usage["token_count_method"], "deterministic_local_estimate_chars_div_4")
         self.assertTrue(token_usage["token_count_is_estimate"])
         self.assertFalse(token_usage["billing_tokens_available"])
+        self.assertEqual(token_usage["estimated_payload_tokens_saved"], token_usage["estimated_tokens_saved"])
+        self.assertEqual(token_usage["payload_token_count_method"], "deterministic_local_estimate_chars_div_4")
+        self.assertTrue(token_usage["payload_token_count_is_estimate"])
+        self.assertIn("host_actual_tokens_available", token_usage)
+        self.assertIn("host_actual_token_evidence", token_usage)
         self.assertEqual(
             token_usage["actual_tokens_saved"],
             token_usage["actual_without_token_optimizer"] - token_usage["actual_with_token_optimizer"],
@@ -336,15 +342,26 @@ class CommandOutputRuntimeTests(unittest.TestCase):
             {
                 "type": "event_msg",
                 "payload": {
-                    "type": "thread_goal_updated",
-                    "goal": {"status": "active", "objective": "Build inventory dashboard"},
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {"total_tokens": 1000},
+                        "last_token_usage": {"input_tokens": 400, "output_tokens": 30},
+                        "model_context_window": 200000,
+                    },
                 },
             },
             {
                 "type": "event_msg",
                 "payload": {
                     "type": "thread_goal_updated",
-                    "goal": {"status": "complete", "objective": "Build inventory dashboard"},
+                    "goal": {"status": "active", "objective": "Build inventory dashboard", "tokensUsed": 1200},
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "thread_goal_updated",
+                    "goal": {"status": "complete", "objective": "Build inventory dashboard", "tokensUsed": 253271},
                 },
             },
             {
@@ -367,6 +384,73 @@ class CommandOutputRuntimeTests(unittest.TestCase):
         self.assertNotIn("DO NOT KEEP", result.stdout)
         self.assertNotIn("encrypted_content", result.stdout)
         self.assertGreater(result.metadata["token_savings_ratio"], 0.1)
+        self.assertTrue(result.metadata["host_actual_tokens_available"])
+        self.assertEqual(result.metadata["host_actual_tokens_used"], 253271)
+        self.assertEqual(result.metadata["host_actual_token_source"], "goal.tokensUsed")
+        token_usage = result.metadata["token_usage"]
+        self.assertTrue(token_usage["host_actual_tokens_available"])
+        self.assertEqual(token_usage["host_actual_tokens_used"], 253271)
+        self.assertEqual(token_usage["host_actual_token_source"], "goal.tokensUsed")
+        self.assertEqual(token_usage["host_actual_token_evidence"]["max_session_total_tokens"], 1000)
+        self.assertEqual(token_usage["host_actual_token_evidence"]["max_last_input_tokens"], 400)
+
+    def test_extract_host_actual_token_evidence_reads_token_count_and_goal_usage(self):
+        lines = [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {"total_tokens": 1700},
+                        "last_token_usage": {"input_tokens": 900, "output_tokens": 20},
+                        "model_context_window": 258400,
+                    },
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "thread_goal_updated",
+                    "goal": {"status": "complete", "tokensUsed": 253271, "timeUsedSeconds": 419},
+                },
+            },
+        ]
+        raw = "\n".join(json.dumps(line, ensure_ascii=False) for line in lines)
+
+        evidence = extract_host_actual_token_evidence(raw)
+
+        self.assertTrue(evidence["host_actual_tokens_available"])
+        self.assertEqual(evidence["host_actual_tokens_used"], 253271)
+        self.assertEqual(evidence["host_actual_token_source"], "goal.tokensUsed")
+        self.assertEqual(evidence["latest_session_total_tokens"], 1700)
+        self.assertEqual(evidence["max_last_input_tokens"], 900)
+        self.assertEqual(evidence["model_context_window"], 258400)
+
+    def test_aggregate_token_usage_stats_carries_host_actual_token_evidence(self):
+        lines = [
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {"total_tokens": 5000},
+                        "last_token_usage": {"input_tokens": 1200, "output_tokens": 100},
+                        "model_context_window": 258400,
+                    },
+                },
+            }
+        ]
+        raw = "\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n" + ("noise\n" * 500)
+        optimized = "noise\n"
+
+        summary = aggregate_token_usage_stats([
+            compare_token_usage(raw, optimized, strategy="session-jsonl", label="codex-session-jsonl")
+        ])
+
+        self.assertTrue(summary["host_actual_tokens_available"])
+        self.assertEqual(summary["host_actual_tokens_used"], 5000)
+        self.assertEqual(summary["host_actual_token_source"], "session_jsonl.token_count")
+        self.assertGreater(summary["estimated_payload_tokens_saved"], 0)
 
     def test_module_cli_compacts_session_jsonl_without_utf8_stdout_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

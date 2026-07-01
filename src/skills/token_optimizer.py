@@ -346,6 +346,7 @@ def summarize_session_jsonl(session_jsonl: str, max_lines: int = 80) -> HarnessR
         return HarnessResult(success=True, stdout="", stderr="", exit_code=0, metadata={})
 
     compact_records: list[tuple[int, int, str]] = []
+    host_actual_token_evidence = extract_host_actual_token_evidence(session_jsonl)
     for index, line in enumerate(raw_lines):
         compact = _compact_session_jsonl_event(line, index + 1)
         if compact is not None:
@@ -396,6 +397,10 @@ def summarize_session_jsonl(session_jsonl: str, max_lines: int = 80) -> HarnessR
         "filtered_lines": len(output_lines),
         "omitted_lines": max(0, len(raw_lines) - len(output_lines)),
         "token_savings_ratio": _savings_ratio(raw_bytes, filtered_bytes),
+        "host_actual_token_evidence": host_actual_token_evidence,
+        "host_actual_tokens_available": host_actual_token_evidence["host_actual_tokens_available"],
+        "host_actual_tokens_used": host_actual_token_evidence["host_actual_tokens_used"],
+        "host_actual_token_source": host_actual_token_evidence["host_actual_token_source"],
         "token_usage": compare_token_usage(
             session_jsonl,
             optimized,
@@ -419,13 +424,25 @@ def compare_token_usage(
     without_optimizer = estimate_token_count(raw_text)
     with_optimizer = estimate_token_count(optimized_text)
     saved = max(0, without_optimizer - with_optimizer)
+    host_actual_token_evidence = extract_host_actual_token_evidence(raw_text)
     return {
         "label": label,
         "strategy": strategy,
+        "where_saved": _where_saved_payload(strategy=strategy, label=label),
         "without_token_optimizer": without_optimizer,
         "with_token_optimizer": with_optimizer,
         "estimated_tokens_saved": saved,
         "token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
+        "estimated_payload_without_optimizer": without_optimizer,
+        "estimated_payload_with_optimizer": with_optimizer,
+        "estimated_payload_tokens_saved": saved,
+        "estimated_payload_token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
+        "payload_token_count_method": TOKEN_COUNT_METHOD,
+        "payload_token_count_is_estimate": True,
+        "host_actual_tokens_available": host_actual_token_evidence["host_actual_tokens_available"],
+        "host_actual_tokens_used": host_actual_token_evidence["host_actual_tokens_used"],
+        "host_actual_token_source": host_actual_token_evidence["host_actual_token_source"],
+        "host_actual_token_evidence": host_actual_token_evidence,
         **_actual_usage_metrics(
             raw_text=raw_text,
             optimized_text=optimized_text,
@@ -451,6 +468,9 @@ def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]
     actual_with_bytes = sum(record["actual_with_token_optimizer_bytes"] for record in normalized)
     actual_without_chars = sum(record["actual_without_token_optimizer_chars"] for record in normalized)
     actual_with_chars = sum(record["actual_with_token_optimizer_chars"] for record in normalized)
+    host_actual_token_evidence = _aggregate_host_actual_token_evidence(
+        [record["host_actual_token_evidence"] for record in normalized]
+    )
     by_strategy: Dict[str, Dict[str, Any]] = {}
     for record in normalized:
         strategy = record["strategy"] or "unknown"
@@ -478,6 +498,12 @@ def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]
                 "actual_with_token_optimizer_chars": 0,
                 "actual_chars_saved": 0,
                 "actual_char_savings_ratio": 0.0,
+                "estimated_payload_without_optimizer": 0,
+                "estimated_payload_with_optimizer": 0,
+                "estimated_payload_tokens_saved": 0,
+                "estimated_payload_token_savings_ratio": 0.0,
+                "host_actual_tokens_available": False,
+                "host_actual_tokens_used": 0,
             },
         )
         bucket["case_count"] += 1
@@ -493,10 +519,20 @@ def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]
         bucket["actual_without_token_optimizer_chars"] += record["actual_without_token_optimizer_chars"]
         bucket["actual_with_token_optimizer_chars"] += record["actual_with_token_optimizer_chars"]
         bucket["actual_chars_saved"] += record["actual_chars_saved"]
+        bucket["estimated_payload_without_optimizer"] += record["estimated_payload_without_optimizer"]
+        bucket["estimated_payload_with_optimizer"] += record["estimated_payload_with_optimizer"]
+        bucket["estimated_payload_tokens_saved"] += record["estimated_payload_tokens_saved"]
+        if record["host_actual_tokens_available"]:
+            bucket["host_actual_tokens_available"] = True
+            bucket["host_actual_tokens_used"] = max(bucket["host_actual_tokens_used"], record["host_actual_tokens_used"])
     for bucket in by_strategy.values():
         bucket["token_savings_ratio"] = _savings_ratio(
             bucket["without_token_optimizer"],
             bucket["with_token_optimizer"],
+        )
+        bucket["estimated_payload_token_savings_ratio"] = _savings_ratio(
+            bucket["estimated_payload_without_optimizer"],
+            bucket["estimated_payload_with_optimizer"],
         )
         bucket["actual_token_savings_ratio"] = _savings_ratio(
             bucket["actual_without_token_optimizer"],
@@ -516,11 +552,21 @@ def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]
         "with_token_optimizer": with_optimizer,
         "estimated_tokens_saved": saved,
         "token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
+        "estimated_payload_without_optimizer": without_optimizer,
+        "estimated_payload_with_optimizer": with_optimizer,
+        "estimated_payload_tokens_saved": saved,
+        "estimated_payload_token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
+        "payload_token_count_method": TOKEN_COUNT_METHOD,
+        "payload_token_count_is_estimate": True,
         "actual_usage_scope": TOKEN_USAGE_SCOPE,
         "token_count_method": TOKEN_COUNT_METHOD,
         "token_count_note": TOKEN_COUNT_NOTE,
         "token_count_is_estimate": True,
         "billing_tokens_available": False,
+        "host_actual_tokens_available": host_actual_token_evidence["host_actual_tokens_available"],
+        "host_actual_tokens_used": host_actual_token_evidence["host_actual_tokens_used"],
+        "host_actual_token_source": host_actual_token_evidence["host_actual_token_source"],
+        "host_actual_token_evidence": host_actual_token_evidence,
         "actual_without_token_optimizer": actual_without_optimizer,
         "actual_with_token_optimizer": actual_with_optimizer,
         "actual_tokens_saved": actual_saved,
@@ -553,6 +599,164 @@ def estimate_token_count(text: str) -> int:
     if not text:
         return 0
     return max(1, (len(text) + 3) // 4)
+
+
+@agent_skill(
+    name="extract_host_actual_token_evidence",
+    description="Extract host-visible actual token evidence such as Codex token_count events and GoalState tokensUsed.",
+)
+def extract_host_actual_token_evidence(text: str) -> Dict[str, Any]:
+    """Extract host-visible token evidence without claiming counterfactual billing savings."""
+    token_count_events: list[Dict[str, Any]] = []
+    goal_token_events: list[Dict[str, Any]] = []
+    max_total_tokens = 0
+    max_last_input_tokens = 0
+    latest_session_total_tokens = 0
+    latest_goal_tokens_used = 0
+    model_context_window = 0
+
+    for line_number, line in enumerate((text or "").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("payload", {}) or {}
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        if payload_type == "token_count":
+            info = payload.get("info", {}) or {}
+            if not isinstance(info, dict):
+                continue
+            total = info.get("total_token_usage", {}) or {}
+            last = info.get("last_token_usage", {}) or {}
+            if not isinstance(total, dict) or not isinstance(last, dict):
+                continue
+            total_tokens = _int_value(total.get("total_tokens", 0))
+            last_input_tokens = _int_value(last.get("input_tokens", 0))
+            last_output_tokens = _int_value(last.get("output_tokens", 0))
+            context_window = _int_value(info.get("model_context_window", 0))
+            latest_session_total_tokens = total_tokens or latest_session_total_tokens
+            max_total_tokens = max(max_total_tokens, total_tokens)
+            max_last_input_tokens = max(max_last_input_tokens, last_input_tokens)
+            model_context_window = context_window or model_context_window
+            token_count_events.append(
+                {
+                    "line": line_number,
+                    "source": "session_jsonl.token_count",
+                    "total_tokens": total_tokens,
+                    "last_input_tokens": last_input_tokens,
+                    "last_output_tokens": last_output_tokens,
+                    "model_context_window": context_window,
+                }
+            )
+            continue
+        if payload_type == "thread_goal_updated":
+            goal = payload.get("goal", {}) or {}
+            if not isinstance(goal, dict):
+                continue
+            tokens_used = _int_value(goal.get("tokensUsed", 0))
+            if tokens_used <= 0:
+                continue
+            latest_goal_tokens_used = tokens_used
+            goal_token_events.append(
+                {
+                    "line": line_number,
+                    "source": "goal.tokensUsed",
+                    "status": str(goal.get("status", "")),
+                    "tokens_used": tokens_used,
+                    "time_used_seconds": _int_value(goal.get("timeUsedSeconds", 0)),
+                }
+            )
+
+    host_actual_tokens_used = latest_goal_tokens_used or latest_session_total_tokens
+    host_actual_token_source = (
+        "goal.tokensUsed"
+        if latest_goal_tokens_used
+        else "session_jsonl.token_count"
+        if latest_session_total_tokens
+        else "unavailable"
+    )
+    host_actual_tokens_available = host_actual_tokens_used > 0
+    evidence_events = [*goal_token_events[-3:], *token_count_events[-3:]]
+    return {
+        "host_actual_tokens_available": host_actual_tokens_available,
+        "host_actual_tokens_used": host_actual_tokens_used,
+        "host_actual_token_source": host_actual_token_source,
+        "latest_goal_tokens_used": latest_goal_tokens_used,
+        "latest_session_total_tokens": latest_session_total_tokens,
+        "max_session_total_tokens": max_total_tokens,
+        "max_last_input_tokens": max_last_input_tokens,
+        "model_context_window": model_context_window,
+        "token_count_event_count": len(token_count_events),
+        "goal_token_event_count": len(goal_token_events),
+        "evidence_event_count": len(token_count_events) + len(goal_token_events),
+        "evidence_events": evidence_events,
+        "missing_reason": ""
+        if host_actual_tokens_available
+        else "no Codex token_count or GoalState tokensUsed events found in optimizer input",
+        "interpretation": (
+            "Host actual tokens describe observed session or goal usage. Payload savings remain estimated unless "
+            "the host exposes billing telemetry for both raw and optimized counterfactual calls."
+        ),
+    }
+
+
+def _where_saved_payload(strategy: str, label: str) -> Dict[str, Any]:
+    return {
+        "strategy": strategy or "unknown",
+        "label": label or "",
+        "scope": label or strategy or "optimizer-payload",
+    }
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _aggregate_host_actual_token_evidence(evidence_records: list[Dict[str, Any]]) -> Dict[str, Any]:
+    available = [record for record in evidence_records if record.get("host_actual_tokens_available")]
+    if not available:
+        return {
+            "host_actual_tokens_available": False,
+            "host_actual_tokens_used": 0,
+            "host_actual_token_source": "unavailable",
+            "latest_goal_tokens_used": 0,
+            "latest_session_total_tokens": 0,
+            "max_session_total_tokens": 0,
+            "max_last_input_tokens": 0,
+            "model_context_window": 0,
+            "token_count_event_count": 0,
+            "goal_token_event_count": 0,
+            "evidence_event_count": 0,
+            "evidence_events": [],
+            "missing_reason": "no host token evidence in aggregated optimizer records",
+        }
+    latest = available[-1]
+    return {
+        "host_actual_tokens_available": True,
+        "host_actual_tokens_used": _int_value(latest.get("host_actual_tokens_used", 0)),
+        "host_actual_token_source": str(latest.get("host_actual_token_source", "")),
+        "latest_goal_tokens_used": max(_int_value(record.get("latest_goal_tokens_used", 0)) for record in available),
+        "latest_session_total_tokens": max(
+            _int_value(record.get("latest_session_total_tokens", 0)) for record in available
+        ),
+        "max_session_total_tokens": max(_int_value(record.get("max_session_total_tokens", 0)) for record in available),
+        "max_last_input_tokens": max(_int_value(record.get("max_last_input_tokens", 0)) for record in available),
+        "model_context_window": max(_int_value(record.get("model_context_window", 0)) for record in available),
+        "token_count_event_count": sum(_int_value(record.get("token_count_event_count", 0)) for record in available),
+        "goal_token_event_count": sum(_int_value(record.get("goal_token_event_count", 0)) for record in available),
+        "evidence_event_count": sum(_int_value(record.get("evidence_event_count", 0)) for record in available),
+        "evidence_events": [event for record in available for event in record.get("evidence_events", [])][-6:],
+        "missing_reason": "",
+    }
 
 
 def _actual_usage_metrics(
@@ -809,6 +1013,31 @@ def _token_usage_record(record: Dict[str, Any]) -> Dict[str, Any]:
     without_optimizer = int(token_usage.get("without_token_optimizer", 0))
     with_optimizer = int(token_usage.get("with_token_optimizer", 0))
     saved = max(0, without_optimizer - with_optimizer)
+    host_actual_token_evidence = (
+        token_usage.get("host_actual_token_evidence")
+        if isinstance(token_usage.get("host_actual_token_evidence"), dict)
+        else {}
+    )
+    if not host_actual_token_evidence:
+        host_actual_token_evidence = {
+            "host_actual_tokens_available": bool(token_usage.get("host_actual_tokens_available", False)),
+            "host_actual_tokens_used": int(token_usage.get("host_actual_tokens_used", 0)),
+            "host_actual_token_source": str(token_usage.get("host_actual_token_source", "unavailable")),
+            "latest_goal_tokens_used": int(token_usage.get("host_actual_tokens_used", 0))
+            if str(token_usage.get("host_actual_token_source", "")) == "goal.tokensUsed"
+            else 0,
+            "latest_session_total_tokens": int(token_usage.get("host_actual_tokens_used", 0))
+            if str(token_usage.get("host_actual_token_source", "")) == "session_jsonl.token_count"
+            else 0,
+            "max_session_total_tokens": 0,
+            "max_last_input_tokens": 0,
+            "model_context_window": 0,
+            "token_count_event_count": 0,
+            "goal_token_event_count": 0,
+            "evidence_event_count": 0,
+            "evidence_events": [],
+            "missing_reason": "host token evidence not present on this token usage record",
+        }
     actual_usage = token_usage.get("actual_usage") if isinstance(token_usage.get("actual_usage"), dict) else {}
     actual_without = int(
         token_usage.get(
@@ -862,10 +1091,30 @@ def _token_usage_record(record: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "label": str(token_usage.get("label", "")),
         "strategy": str(token_usage.get("strategy", "")),
+        "where_saved": token_usage.get("where_saved")
+        if isinstance(token_usage.get("where_saved"), dict)
+        else _where_saved_payload(
+            strategy=str(token_usage.get("strategy", "")),
+            label=str(token_usage.get("label", "")),
+        ),
         "without_token_optimizer": without_optimizer,
         "with_token_optimizer": with_optimizer,
         "estimated_tokens_saved": int(token_usage.get("estimated_tokens_saved", saved)),
         "token_savings_ratio": float(token_usage.get("token_savings_ratio", _savings_ratio(without_optimizer, with_optimizer))),
+        "estimated_payload_without_optimizer": int(
+            token_usage.get("estimated_payload_without_optimizer", without_optimizer)
+        ),
+        "estimated_payload_with_optimizer": int(token_usage.get("estimated_payload_with_optimizer", with_optimizer)),
+        "estimated_payload_tokens_saved": int(token_usage.get("estimated_payload_tokens_saved", saved)),
+        "estimated_payload_token_savings_ratio": float(
+            token_usage.get("estimated_payload_token_savings_ratio", _savings_ratio(without_optimizer, with_optimizer))
+        ),
+        "payload_token_count_method": str(token_usage.get("payload_token_count_method", TOKEN_COUNT_METHOD)),
+        "payload_token_count_is_estimate": bool(token_usage.get("payload_token_count_is_estimate", True)),
+        "host_actual_tokens_available": bool(host_actual_token_evidence.get("host_actual_tokens_available", False)),
+        "host_actual_tokens_used": int(host_actual_token_evidence.get("host_actual_tokens_used", 0)),
+        "host_actual_token_source": str(host_actual_token_evidence.get("host_actual_token_source", "unavailable")),
+        "host_actual_token_evidence": host_actual_token_evidence,
         "actual_usage_scope": str(token_usage.get("actual_usage_scope", TOKEN_USAGE_SCOPE)),
         "token_count_method": str(token_usage.get("token_count_method", TOKEN_COUNT_METHOD)),
         "token_count_is_estimate": bool(token_usage.get("token_count_is_estimate", True)),
