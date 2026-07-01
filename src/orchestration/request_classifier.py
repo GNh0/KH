@@ -803,12 +803,18 @@ LOCALIZED_PATCH_ACTION_TERMS = {
     "patch",
     "reflect",
     "apply",
+    "adjust",
+    "align",
+    "tune",
     "\ucd94\uac00",
     "\ucd94\uac00\ud574",
     "\ub123\uc5b4",
     "\ubc18\uc601",
     "\uc218\uc815",
     "\uace0\uccd0",
+    "\ub9de\ucdb0",
+    "\ub9de\ucd94",
+    "\uc870\uc815",
     "\uc0ad\uc81c",
     "\uc228\uaca8",
     "\uc228\uae30",
@@ -837,6 +843,7 @@ LOCALIZED_PATCH_SCOPE_TERMS = {
     "\ud604\uc7ac \ud30c\uc77c",
     "\ub300\uc0c1 \ud30c\uc77c",
     "\uc791\uc740 \uc218\uc815",
+    "\ub9cc",
 }
 LOCALIZED_PATCH_CONTEXT_KEYS = {
     "localized_patch_context",
@@ -877,8 +884,30 @@ LOCALIZED_PATCH_BROAD_TERMS = {
     "\ud14c\uc2a4\ud2b8 \ucd94\uac00",
     "\ud750\ub984",
 }
-FILE_REFERENCE_RE = re.compile(r"(?<![a-z0-9_])[\w.-]+\.(?:html|css|js|jsx|ts|tsx|py|cs|sql|md|json|xml|xaml)\b")
-CSS_SELECTOR_REFERENCE_RE = re.compile(r"(?<![a-z0-9_])[#.](?!env\b|git\b|gitignore\b|editorconfig\b|prettierrc\b|eslintrc\b|npmrc\b)[a-z][a-z0-9_-]*\b")
+LOCALIZED_PATCH_BROAD_NEGATION_MARKERS = {
+    "\ud558\uc9c0\ub9c8",
+    "\ud558\uc9c0 \ub9d0",
+    "\ud558\uc9c0\ub9d0",
+    "\ub9d0\uace0",
+    "\uc81c\uc678",
+    "\ube7c\uace0",
+}
+LOCALIZED_PATCH_PRE_BROAD_NEGATION_RE = re.compile(
+    r"(?:do\s+not|don't|dont|no|not|without|except|exclude|avoid)\s+$"
+)
+LOCALIZED_PATCH_POST_BROAD_NEGATION_RE = re.compile(
+    r"^(?:\s*(?:is|are|changes?|work)?\s*)?(?:not\s+needed|not\s+required|excluded?|excepted?|out\s+of\s+scope|하지마|하지\s+말|하지말|말고|제외|빼고)"
+)
+KOREAN_POST_BROAD_NEGATION_MARKERS = ("\ud558\uc9c0\ub9c8", "\ud558\uc9c0 \ub9d0", "\ud558\uc9c0\ub9d0", "\ub9d0\uace0", "\uc81c\uc678", "\ube7c\uace0")
+FILE_REFERENCE_RE = re.compile(
+    r"(?<![a-z0-9_])[\w.-]+\.(?:html|css|js|jsx|ts|tsx|py|cs|sql|md|json|xml|xaml)(?=$|[^A-Za-z0-9_.-])"
+)
+CSS_SELECTOR_REFERENCE_RE = re.compile(
+    r"(?<![a-z0-9_])[#.](?!env\b|git\b|gitignore\b|editorconfig\b|prettierrc\b|eslintrc\b|npmrc\b)[a-z][a-z0-9_-]*(?=$|[^A-Za-z0-9_-])"
+)
+CSS_PROPERTY_REFERENCE_RE = re.compile(
+    r"(?<![a-z0-9_-])(?:max-|min-)?(?:width|height|margin|padding|gap|display|position|top|right|bottom|left|font-size|line-height|color|background|border|overflow|z-index)(?![a-z0-9_-])"
+)
 MEDIUM_TERMS = {
     "summarize",
     "compare",
@@ -3544,7 +3573,7 @@ def _is_localized_patch_continuation(normalized: str, context: dict) -> bool:
         return False
     if _has_conditional_mutation_command(normalized):
         return False
-    if _contains_any(normalized, LOCALIZED_PATCH_BROAD_TERMS):
+    if _has_unnegated_localized_patch_broad_terms(normalized):
         return False
 
     context_scope = _has_localized_patch_context(context)
@@ -3552,6 +3581,7 @@ def _is_localized_patch_continuation(normalized: str, context: dict) -> bool:
         _contains_any(normalized, LOCALIZED_PATCH_SCOPE_TERMS)
         or FILE_REFERENCE_RE.search(normalized) is not None
         or CSS_SELECTOR_REFERENCE_RE.search(normalized) is not None
+        or CSS_PROPERTY_REFERENCE_RE.search(normalized) is not None
     )
     if not (context_scope or text_scope):
         return False
@@ -3567,6 +3597,42 @@ def _is_localized_patch_continuation(normalized: str, context: dict) -> bool:
 
     token_count = len(normalized.split())
     return token_count <= 32 or bool(context_scope)
+
+
+def _has_unnegated_localized_patch_broad_terms(normalized: str) -> bool:
+    for term in LOCALIZED_PATCH_BROAD_TERMS:
+        start = normalized.find(term)
+        while start != -1:
+            end = start + len(term)
+            before = normalized[max(0, start - 36) : start]
+            after = normalized[end : min(len(normalized), end + 28)]
+            directly_negated = (
+                LOCALIZED_PATCH_PRE_BROAD_NEGATION_RE.search(before) is not None
+                or LOCALIZED_PATCH_POST_BROAD_NEGATION_RE.search(after) is not None
+                or _contains_any(after[:18], LOCALIZED_PATCH_BROAD_NEGATION_MARKERS)
+                or _is_korean_post_broad_term_negated(after)
+            )
+            if not directly_negated:
+                return True
+            start = normalized.find(term, end)
+    return False
+
+
+def _is_korean_post_broad_term_negated(after: str) -> bool:
+    marker_positions = [after.find(marker) for marker in KOREAN_POST_BROAD_NEGATION_MARKERS]
+    marker_positions = [pos for pos in marker_positions if pos != -1]
+    if not marker_positions:
+        return False
+    marker_pos = min(marker_positions)
+    if marker_pos > 56:
+        return False
+    before_marker = after[:marker_pos]
+    if any(punctuation in before_marker for punctuation in ".?!"):
+        return False
+    return _contains_any(
+        before_marker,
+        {"\uc774\ub098", "\uac70\ub098", "\ub610\ub294", "\uc218\uc815\uc740", "\uc218\uc815\uc774\ub098", "\ubcc0\uacbd\uc740", "\ubcc0\uacbd\uc774\ub098"},
+    )
 
 
 def _is_dotfile_config_mutation(normalized: str, context: dict) -> bool:

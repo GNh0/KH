@@ -1152,6 +1152,26 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
 
+    def test_korean_file_reference_localized_css_patch_does_not_trigger_large_preflight(self):
+        result = build_kh_front_door(
+            "standalone_resource.html\uc5d0\uc11c \uc5f0\ucc28 \ub9ac\uc2a4\ud2b8 li max-width\ub9cc "
+            "\ub9de\ucdb0\uc918. \uc0c8 \uae30\ub2a5\uc774\ub098 \uc804\uccb4 \ub9ac\ud329\ud1a0\ub9c1\uc740 "
+            "\ud558\uc9c0\ub9c8.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("localized_patch_continuation", payload["classification"]["reasons"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
     def test_subagent_packets_require_worker_workspace_decision_for_autonomy_tests(self):
         repo_root = Path(__file__).resolve().parents[1]
         packets = (repo_root / "skills" / "subagent_review_pipeline" / "references" / "standard-task-packets.md").read_text(

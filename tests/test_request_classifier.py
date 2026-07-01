@@ -133,6 +133,16 @@ class RequestClassifierTests(unittest.TestCase):
                 "\ud604\uc7ac \ud30c\uc77c\uc758 \ud55c\uc904\ub9cc \ubc18\uc601\ud574\uc918",
                 {"domain": "software", "current_file": "standalone_resource.html", "patch_scope": "single_line"},
             ),
+            (
+                "standalone_resource.html\uc5d0\uc11c \uc5f0\ucc28 \ub9ac\uc2a4\ud2b8 li max-width\ub9cc \ub9de\ucdb0\uc918. "
+                "\uc0c8 \uae30\ub2a5\uc774\ub098 \uc804\uccb4 \ub9ac\ud329\ud1a0\ub9c1\uc740 \ud558\uc9c0\ub9c8.",
+                {},
+            ),
+            (
+                "standalone_resource.html\uc758 .leave-list width\ub9cc \uc870\uc815\ud574\uc918. "
+                "\ud14c\uc2a4\ud2b8 \ucd94\uac00\ub098 \uc544\ud0a4\ud14d\ucc98 \ubcc0\uacbd\uc740 \uc81c\uc678\ud574.",
+                {},
+            ),
         ]
 
         for prompt, context in cases:
@@ -143,6 +153,39 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertIn("localized_patch_continuation", result.reasons)
                 self.assertIn("localized_patch_evidence", result.evidence_required)
                 self.assertNotIn("goal-state-harness", result.required_harnesses)
+
+    def test_cjk_particle_file_references_count_as_localized_patch_targets(self):
+        cases = [
+            "standalone_resource.html\uc5d0\uc11c max-width\ub9cc \uc870\uc815\ud574\uc918",
+            "standalone_resource.html\uc758 max-width\ub9cc \uc218\uc815\ud574\uc918",
+            "standalone_resource.html\uc5d0 max-width\ub9cc \ubc18\uc601\ud574\uc918",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("localized_patch_continuation", result.reasons)
+
+    def test_negated_broad_terms_do_not_escalate_localized_patch(self):
+        result = classify_request(
+            "standalone_resource.html\uc5d0\uc11c li gap\ub9cc \ub9de\ucdb0\uc918. "
+            "\uc804\uccb4 \ud30c\uc77c \uc218\uc815\uc774\ub098 workflow \ubcc0\uacbd\uc740 \ud558\uc9c0 \ub9d0\uace0."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("localized_patch_continuation", result.reasons)
+
+    def test_negation_does_not_mask_unrelated_broad_terms(self):
+        result = classify_request(
+            "standalone_resource.html width\ub9cc \uc218\uc815\ud574\uc918, without tests refactor architecture"
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertNotIn("localized_patch_continuation", result.reasons)
 
     def test_localized_patch_context_does_not_hide_broad_or_conditional_work(self):
         cases = [
