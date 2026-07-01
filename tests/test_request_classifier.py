@@ -343,6 +343,27 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("brainstorming-harness", result.recommended_skills)
         self.assertIn("early_domain_discovery_needs_brainstorming", result.reasons)
 
+    def test_production_dashboard_app_routes_to_brainstorming_not_devops(self):
+        cases = [
+            "Create a new production defects dashboard app.",
+            "Create a production KPI report dashboard.",
+            "Create a production defect report workflow.",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertNotEqual(result.domain, "devops")
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("brainstorming-harness", result.recommended_skills)
+                self.assertIn("early_domain_discovery_needs_brainstorming", result.reasons)
+
+        rollback = classify_request("Roll back production now after the failed deployment.")
+        self.assertEqual(rollback.complexity, "high_risk")
+        self.assertEqual(rollback.domain, "devops")
+        self.assertEqual(rollback.recommended_execution, "role_dag")
+
     def test_non_software_discovery_routes_to_brainstorming(self):
         cases = [
             (

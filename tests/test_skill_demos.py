@@ -12,6 +12,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class SkillDemoTests(unittest.TestCase):
+    def test_demo_prompts_do_not_teach_static_web_defaults(self):
+        forbidden = [
+            "Create a small static task tracker",
+            "Make a small static dashboard",
+            "Create a small static dashboard",
+        ]
+        paths = [
+            REPO_ROOT / "src" / "skills" / "demo_scenarios.py",
+            REPO_ROOT / "skills" / "automatic_intake_harness" / "examples" / "minimal-workflow.md",
+            REPO_ROOT / "skills" / "always_on_front_door" / "examples" / "minimal-workflow.md",
+        ]
+
+        for path in paths:
+            content = path.read_text(encoding="utf-8")
+            for phrase in forbidden:
+                with self.subTest(path=str(path), phrase=phrase):
+                    self.assertNotIn(phrase, content)
+
     def test_every_packaged_skill_has_runnable_demo(self):
         catalog = collect_packaged_skills()
         skills = catalog["skills"]

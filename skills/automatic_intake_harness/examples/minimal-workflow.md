@@ -2,7 +2,7 @@
 
 ## Scenario
 
-A user asks: "Create a small static task tracker in this folder and verify it."
+A user asks: "Create the approved project-appropriate deliverable in this folder and verify it."
 
 The user did not mention KH, UAF, plugins, skills, harnesses, routing, or orchestration.
 

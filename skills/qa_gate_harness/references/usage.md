@@ -23,6 +23,7 @@ Do not use this skill only because it is available. Use it when the current task
   - `src.orchestration.gate_evaluators.build_qa_check`
   - `src.orchestration.gate_evaluators.evaluate_qa_checks`
   - `src.orchestration.roles`
+  - `src.orchestration.role_orchestrator.GateRoleRunner`
   - `src.contracts.WorkflowDispatchResult`
   - `tests.test_gate_evaluators`
 

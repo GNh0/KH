@@ -26,6 +26,7 @@ The agent must decide whether `qa-gate-harness` applies, run or apply it accordi
   - `src.orchestration.gate_evaluators.build_qa_check`
   - `src.orchestration.gate_evaluators.evaluate_qa_checks`
   - `src.orchestration.roles`
+  - `src.orchestration.role_orchestrator.GateRoleRunner`
   - `src.contracts.WorkflowDispatchResult`
   - `tests.test_gate_evaluators`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.

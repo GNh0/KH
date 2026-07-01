@@ -5,7 +5,7 @@
 User says:
 
 ```text
-Make a small static dashboard in this folder and verify it.
+Create the approved project-appropriate deliverables in this folder and verify them.
 ```
 
 The user did not name KH, UAF, skills, or harnesses.
@@ -16,7 +16,7 @@ The user did not name KH, UAF, skills, or harnesses.
 2. Run front-door intake before reading source files, doing a memory quick pass, checking the target folder, or writing output:
 
 ```bash
-python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd>" --host codex --summary
+python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd>" --host codex --summary --strict-execution-gate
 ```
 
 3. Record the returned classification and plugin route.
@@ -32,7 +32,7 @@ python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt f
 - verification output includes command, exit code, and result
 - `actual_runtime_path`: `src.orchestration.kh_front_door.build_kh_front_door` or `scripts/front_door.py`
 - `execution_level`: `python-module`
-- `implementation_targets`: `src.orchestration.kh_front_door.build_kh_front_door`, `src.orchestration.request_classifier.classify_request`, `src.orchestration.plugin_composition.compose_plugin_route`, `src.skills.uaf_skill_catalog.collect_packaged_skills`, `skills/always_on_front_door/SKILL.md`, `skills/automatic_intake_harness/SKILL.md`, `tests.test_kh_front_door_always_on`
+- `implementation_targets`: `src.orchestration.kh_front_door.build_kh_front_door`, `src.orchestration.request_classifier.classify_request`, `src.orchestration.plugin_composition.compose_plugin_route`, `src.skills.uaf_skill_catalog.collect_packaged_skills`, `src.orchestration.session_skill_audit.analyze_session_skills`, `skills/always_on_front_door/SKILL.md`, `skills/automatic_intake_harness/SKILL.md`, `tests.test_kh_front_door_always_on`, `tests.test_session_skill_audit`
 
 ## Failure cases
 

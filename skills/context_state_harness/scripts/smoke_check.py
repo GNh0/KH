@@ -10,6 +10,7 @@ REQUIRED_SUPPORT_FILES = [
     "references/usage.md",
     "examples/minimal-workflow.md",
     "scripts/smoke_check.py",
+    "scripts/demo.py",
 ]
 IMPLEMENTATION_TARGETS_PATTERN = re.compile(
     r"^## UAF implementation targets\s*(?P<body>.*?)(?:\n## |\Z)",

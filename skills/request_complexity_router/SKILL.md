@@ -31,7 +31,7 @@ Source label: Request complexity routing.
 4. Use `skill_read` or a narrow Python module for bounded summaries, comparisons, and analysis.
 5. Escalate to GoalState, role DAG, and review/QA gates for implementation, deliverables, persistent state, or high-impact decisions.
 6. For ambiguous prompts, ask a short clarification instead of starting a full workflow.
-7. Keep `token-optimizer` available as cross-cutting infrastructure, but only apply compression when content is large, log-like, or expected to exceed the context budget. If `estimated_context_tokens`, broad file reads, expected tool calls, or subagent transcripts cross the threshold, the token gate must be applied even when the user-facing question sounds simple.
+7. Keep `token-optimizer` available as cross-cutting infrastructure. For every non-trivial KH-routed request, record the token gate as `used`, `considered_not_needed`, `passthrough`, or `blocked`; apply compression only when content is large, log-like, safely classifiable, or expected to exceed the context budget. If `estimated_context_tokens`, broad file reads, expected tool calls, or subagent transcripts cross the threshold, the token gate must be applied even when the user-facing question sounds simple.
 8. Workspace strategy is a cross-cutting output for implementation routes. Prefer `host-worktree`, `project-local-worktree`, or `isolated-branch` for Git-backed implementation unless the task is documentation-only, a single-file small patch, or explicitly in-place.
 9. Heavy implementation routes should include `goal-state-harness` so completion criteria, evidence requirements, and blocked states survive context compaction.
 10. For heavy implementation routes or threshold-crossing contexts, final status must include `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`. Do not make a light request heavy just because this gate is considered.
@@ -41,6 +41,7 @@ Source label: Request complexity routing.
 14. For large-work progress and final reports, require `skill_transition_handoff` evidence so bundle members that became necessary are not left as passive listed skills.
 15. Do not create a large-work bundle for light or medium requests; keep them cheap unless context budget thresholds require only token optimization evidence.
 16. Do not grow this into a large keyword dictionary. Prefer intent order: conceptual questions stay light, concrete build/review/design work becomes heavy, and destructive or regulated advice overrides to high-risk.
+17. Do not choose a development stack, file template, static web shape, document format, drawing format, or generated artifact layout until the user objective, operating context, output type, and any required brainstorming/design approval are known.
 
 ## External Benchmark Recipe
 

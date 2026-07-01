@@ -2,15 +2,15 @@
 
 ## Scenario
 
-A test fails after a feature change. The output says an API route returns 404, but the user expected the dashboard to load real data.
+A verification check fails after a feature change. The output says the generated artifact is missing a required record, but the user expected the saved result to satisfy the contract.
 
 ## Expected steps
 
-1. Record the failing command, expected response, actual 404 response, and affected route.
-2. Reproduce the failure with the narrowest API test.
-3. Hypothesize that the route was registered under a different prefix.
-4. Inspect only the route registration and test client setup.
-5. Patch the route or test to match the intended contract.
+1. Record the failing command, expected record, actual missing record, and affected artifact or module.
+2. Reproduce the failure with the narrowest relevant check.
+3. Hypothesize that the producer skipped a required field, record, or mapping.
+4. Inspect only the producer, mapper, or verification setup that can affect the missing record.
+5. Patch the producer or test to match the intended contract.
 6. Add or update the regression test.
 7. Re-run the original failing command and broader relevant tests.
 8. Record whether a reusable route-registration lesson should become a scenario regression.
@@ -20,13 +20,13 @@ A test fails after a feature change. The output says an API route returns 404, b
 - `actual_runtime_path`: `skills/systematic_debugging_harness/SKILL.md`
 - `execution_level`: `hybrid-harness`
 - `debug_status`: `fixed`
-- `root_cause`: route prefix mismatch
-- `regression_evidence`: targeted API test
+- `root_cause`: required record not emitted
+- `regression_evidence`: targeted artifact or module check
 - `verification`: original failing check now passes
 
 ## Failure cases
 
-- The agent patches unrelated UI code without reproducing the 404.
+- The agent patches unrelated files without reproducing the missing-record failure.
 - The final answer says fixed while the original command still fails.
 - The failure was a missing database service, but product code was changed anyway.
 - No regression evidence is added for a real product bug.

@@ -26,6 +26,9 @@ The agent must decide whether `memory-state-harness` applies, run or apply it ac
   - `src.contracts.MemoryEvent`
   - `src.orchestration.memory_state`
   - `src.orchestration.memory_store`
+  - `src.orchestration.runtime_memory`
+  - `src.orchestration.session_start_context`
+  - `src.orchestration.interruption_state`
   - `src.platforms.codex_thread_registry`
   - `src.tasks.workflows`
 - `actual_runtime_path`: the concrete module, workflow, policy gate, or procedural step used in this run.

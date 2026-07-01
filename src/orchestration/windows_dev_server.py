@@ -21,7 +21,7 @@ class WindowsDevServerLaunchPlan:
 
 def build_streamlit_launch_plan(
     project_dir: str | Path,
-    app_path: str = "dashboard/Home.py",
+    app_path: str | Path | None = None,
     *,
     port: int = 8501,
     python_exe: str = "python",
@@ -29,6 +29,9 @@ def build_streamlit_launch_plan(
     visible: bool = False,
     log_dir: str = "logs",
 ) -> WindowsDevServerLaunchPlan:
+    if app_path is None or not str(app_path).strip():
+        raise ValueError("app_path must be explicit; KH must not assume a dashboard or web app layout.")
+
     root = Path(project_dir)
     stdout_path = root / log_dir / "streamlit.out"
     stderr_path = root / log_dir / "streamlit.err"
@@ -40,12 +43,13 @@ def build_streamlit_launch_plan(
     for key, value in sorted((env or {}).items()):
         env_assignments.append(f"$env:{_ps_identifier(key)} = '{_ps_quote(value)}'")
 
+    app_arg = str(app_path)
     args = (
-        f"-m streamlit run {_ps_quote(app_path)} "
+        f"-m streamlit run \"{_ps_quote(app_arg)}\" "
         f"--server.address 0.0.0.0 --server.port {int(port)} --server.headless true"
     )
     command_lines = [
-        "New-Item -ItemType Directory -Path logs -Force | Out-Null",
+        f"New-Item -ItemType Directory -Path '{_ps_quote(log_dir)}' -Force | Out-Null",
         *env_assignments,
         (
             f"$p = Start-Process -FilePath '{_ps_quote(python_exe)}' "

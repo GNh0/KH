@@ -93,8 +93,9 @@ class AgentLoop:
         print("=== 2. [Dispatcher] Selecting target files ===")
         dispatch_prompt = (
             "Return only a JSON array of source file paths that should be created "
-            "or modified to implement the architecture. Example: "
-            "[\"server.py\", \"index.html\", \"style.css\"]."
+            "or modified to implement the approved architecture. Use paths that match "
+            "the chosen stack and artifact type. Example: "
+            "[\"src/domain_model.py\", \"docs/specification.md\", \"exports/report_schema.json\"]."
         )
         files_str = self.llm.chat("You output only JSON arrays.", f"{dispatch_prompt}\n\n{design_content}")
         target_files = self.parse_target_files(files_str)

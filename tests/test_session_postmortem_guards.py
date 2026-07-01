@@ -1105,13 +1105,18 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertIn("tasks.task-1.spec_review_status", result["missing"])
 
-    def test_windows_streamlit_launch_plan_normalizes_path_and_health_check(self):
+    def test_windows_streamlit_launch_plan_requires_explicit_app_path_and_health_check(self):
+        with self.assertRaises(ValueError):
+            build_streamlit_launch_plan("D:/Coding/DeepLStock")
+
         plan = build_streamlit_launch_plan(
             "D:/Coding/DeepLStock",
+            app_path="src/app.py",
             env={"PYTHONPATH": "src", "DASHBOARD_URL": "http://deeplstock-pc:8501"},
             visible=True,
         )
 
+        self.assertIn('streamlit run "src/app.py"', plan.command)
         self.assertEqual(plan.url, "http://127.0.0.1:8501")
         self.assertIn("SetEnvironmentVariable('PATH'", plan.command)
         self.assertIn("-WindowStyle Normal", plan.command)

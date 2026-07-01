@@ -8,8 +8,10 @@ from pathlib import Path
 SKILL_NAME = 'subagent-review-pipeline'
 REQUIRED_SUPPORT_FILES = [
     "references/usage.md",
+    "references/standard-task-packets.md",
     "examples/minimal-workflow.md",
     "scripts/smoke_check.py",
+    "scripts/demo.py",
 ]
 IMPLEMENTATION_TARGETS_PATTERN = re.compile(
     r"^## UAF implementation targets\s*(?P<body>.*?)(?:\n## |\Z)",

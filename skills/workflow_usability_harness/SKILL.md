@@ -41,7 +41,7 @@ Use this harness when:
 - A finished or interrupted Codex session must be checked for false completion, hidden verification failures, token-gate omissions, reviewer timeouts, subagent cleanup, secret exposure, and git integration.
 - A stopped or paused goal must prove that the user stop request overrode any later `goal_context` continuation.
 - A postmortem must distinguish skill inspection from skill application; reading a skill file is not runtime usage unless there is harness output, module execution, token-savings metadata, or explicit passthrough evidence.
-- Windows local app-server verification needs a reproducible launch plan with normalized `Path`/`PATH`, redirected logs, and a separate HTTP health check.
+- Windows local app-server verification needs a reproducible launch plan with an explicit runtime entrypoint, normalized `Path`/`PATH`, redirected logs, and a separate HTTP health check.
 
 Do not use this harness to skip planning, review, QA, or Compound. It exposes those steps; it does not replace them.
 
@@ -60,7 +60,7 @@ Do not use this harness to skip planning, review, QA, or Compound. It exposes th
 11. When reviewing a real Codex session log, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl` and block final-health claims if `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, or `user_stop_guard` is blocked.
 12. When a user stop is honored, call `src.orchestration.interruption_state.write_interruption_checkpoint` so `.kh` state and scoped durable memory both preserve what was done, what remains, and where to resume.
 13. For full-catalog skill usage review, call `src.orchestration.session_skill_audit.analyze_session_skills` or the module CLI so every KH packaged skill is classified as required, applied, inspected, mentioned, or missing.
-14. For Windows Streamlit or similar local dev-server checks, build a launch and health-check plan through `src.orchestration.windows_dev_server.build_streamlit_launch_plan` instead of retrying ad hoc `Start-Process` variants.
+14. For Windows local dev-server checks, first identify the approved runtime and entrypoint. When the selected runtime is Streamlit, build a launch and health-check plan through `src.orchestration.windows_dev_server.build_streamlit_launch_plan` with an explicit `app_path` instead of retrying ad hoc `Start-Process` variants.
 15. Route any next skills from the Compound handoff into `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`.
 
 ## Provider Policy

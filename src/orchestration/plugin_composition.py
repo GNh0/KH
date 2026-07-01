@@ -11,6 +11,10 @@ CAPABILITY_ALIASES = {
     "browser": "browser_qa",
     "browser-test": "browser_qa",
     "browser-use": "browser_qa",
+    "artifact": "artifact_qa",
+    "artifact-checker": "artifact_qa",
+    "render-check": "artifact_qa",
+    "structure-check": "artifact_qa",
     "ci": "repo_pr_ci",
     "github": "repo_pr_ci",
     "gitlab": "repo_pr_ci",
@@ -63,6 +67,16 @@ SPECIALIST_TRIGGERS = {
         "visual qa",
         "화면",
         "브라우저",
+    },
+    "artifact_qa": {
+        "artifact qa",
+        "artifact verification",
+        "approved deliverable",
+        "generated artifact",
+        "render check",
+        "structure check",
+        "structural validation",
+        "matching host tool",
     },
     "repo_pr_ci": {
         "pull request",
@@ -242,6 +256,7 @@ SQL_DIAGNOSTIC_QUESTION_MARKERS = (
 
 SPECIALIST_FALLBACKS = {
     "browser_qa": "manual_qa_evidence",
+    "artifact_qa": "manual_artifact_validation",
     "repo_pr_ci": "local_git_commands",
     "knowledge_docs": "docs_kh_markdown",
     "image_generation": "text_or_svg_artifact",
@@ -922,6 +937,7 @@ def _controller_reasons(provider: CapabilityProvider) -> List[str]:
 def _scope_for_capability(capability: str) -> str:
     return {
         "browser_qa": "visual QA, screenshots, and local web verification",
+        "artifact_qa": "artifact-specific QA, render checks, and structural validation",
         "repo_pr_ci": "repository, issue, pull request, CI, and publishing work",
         "knowledge_docs": "knowledge capture, wiki, and documentation storage",
         "image_generation": "bitmap image generation or image editing",

@@ -40,6 +40,7 @@ Do not use this skill only because it is available. Use it when the current task
   - `src.orchestration.memory_store`
   - `src.orchestration.runtime_memory`
   - `src.orchestration.session_start_context`
+  - `src.orchestration.interruption_state`
   - `src.platforms.codex_thread_registry`
   - `src.tasks.workflows`
 

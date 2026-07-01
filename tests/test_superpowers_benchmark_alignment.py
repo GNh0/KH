@@ -233,6 +233,30 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         ]:
             self.assertIn(expected, combined)
 
+    def test_runtime_prompts_use_stack_neutral_generated_file_language(self):
+        guard = read_text("skills/guard_policy_harness/SKILL.md")
+        front_door_example = read_text("skills/always_on_front_door/examples/minimal-workflow.md")
+        agent_loop = read_text("src/orchestration/agent_loop.py")
+        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
+        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+        runtime_text = "\n".join([guard, front_door_example, agent_loop, prompts])
+
+        for expected in [
+            "project files, documents, images, drawings, data exports, or any stack-specific generated artifact",
+            "workspace-root project files, stack-specific generated files",
+            "the chosen stack and artifact type",
+            "approved project-appropriate deliverables",
+        ]:
+            self.assertIn(expected, runtime_text)
+
+        for banned in [
+            "do not create `index.html`, `styles.css`, `app.js`",
+            "workspace-root files such as `index.html`, `styles.css`, `app.js`",
+            "Make a small static dashboard",
+            "[\"server.py\", \"index.html\", \"style.css\"]",
+        ]:
+            self.assertNotIn(banned, runtime_text)
+
     def test_skill_transition_policy_connects_large_work_skills(self):
         readme = read_text("README.md")
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")

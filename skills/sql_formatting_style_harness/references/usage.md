@@ -72,4 +72,4 @@ For PowerBuilder/PBL validation, keep the sweep bounded and source-safe:
 5. Run `verify_sql_formatting_style` on each original/formatted pair.
 6. Report broad PBL sweep status separately from unit-test fixture coverage.
 
-This implementation pass includes the bounded hook and fixture coverage. It does not perform a broad `C:\GWERP` sweep unless explicitly run with an external output directory.
+The packaged implementation includes the bounded hook and fixture coverage. It does not perform a broad `C:\GWERP` sweep unless explicitly run with an external output directory.

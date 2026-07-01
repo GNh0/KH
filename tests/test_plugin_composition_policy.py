@@ -25,7 +25,7 @@ class PluginCompositionPolicyTests(unittest.TestCase):
 
     def test_heavy_work_composes_controller_and_specialist_assistants(self):
         decision = compose_plugin_route(
-            "Build a SaaS dashboard, verify the browser screen, and prepare the PR.",
+            "Build the approved deliverable for this project, verify it with the matching host tool, and prepare the PR.",
             providers=[
                 {
                     "provider_id": "kh",
@@ -37,8 +37,8 @@ class PluginCompositionPolicyTests(unittest.TestCase):
                     ],
                 },
                 {
-                    "provider_id": "visual-checker",
-                    "capabilities": ["browser_qa", "screenshot"],
+                    "provider_id": "artifact-checker",
+                    "capabilities": ["artifact_qa", "render_or_structure_check"],
                 },
                 {
                     "provider_id": "repo-service",
@@ -51,7 +51,7 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertEqual(decision.controller.provider_id, "kh")
         self.assertEqual(
             {(assistant.provider_id, assistant.capability) for assistant in decision.assistants},
-            {("visual-checker", "browser_qa"), ("repo-service", "repo_pr_ci")},
+            {("artifact-checker", "artifact_qa"), ("repo-service", "repo_pr_ci")},
         )
         self.assertFalse(decision.ask_user)
         self.assertEqual(decision.conflict_policy, "delegated_scope")

@@ -49,7 +49,7 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 14. When honoring a user stop, call `src.orchestration.interruption_state.write_interruption_checkpoint(...)` to save `.kh/development/<run-id>/state/interruption.json`, `.kh/development/<run-id>/content/interruption.md`, and a scoped durable `resume-checkpoint` memory record.
 15. For full skill usage review, call `src.orchestration.session_skill_audit.analyze_session_skills(...)` or `python -m src.orchestration.session_skill_audit --summary <jsonl>`.
 16. Treat skill-file reads and default-prompt mentions as inspection only. Token optimizer usage requires runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence.
-17. For Windows Streamlit or similar local dev-server checks, use `src.orchestration.windows_dev_server.build_streamlit_launch_plan(...)` to avoid repeated hidden-process failures caused by Path/PATH environment quirks.
+17. For Windows local dev-server checks, identify the approved runtime and entrypoint first. When the selected runtime is Streamlit, use `src.orchestration.windows_dev_server.build_streamlit_launch_plan(..., app_path=\"<approved entrypoint>\")` to avoid repeated hidden-process failures caused by Path/PATH environment quirks without assuming a dashboard layout.
 
 ## Evidence to produce
 

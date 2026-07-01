@@ -2837,7 +2837,7 @@ def _detect_domain(normalized: str, context: dict) -> str:
         return "tax"
     if _contains_any(normalized, CIVIC_TERMS):
         return "civic"
-    if _contains_any(normalized, DEVOPS_TERMS):
+    if _contains_any(normalized, DEVOPS_TERMS) and not _is_non_devops_production_discovery(normalized):
         return "devops"
     if _contains_any(normalized, GOV_ADMIN_TERMS):
         return "benefits" if _contains_any(normalized, {"benefits", "unemployment"}) else "permits"
@@ -3849,6 +3849,49 @@ def _is_general_advice_request(normalized: str) -> bool:
     )
 
 
+def _is_non_devops_production_discovery(normalized: str) -> bool:
+    if "production" not in normalized:
+        return False
+    if _contains_any(
+        normalized,
+        {
+            "roll back",
+            "rollback",
+            "deploy",
+            "deployment",
+            "failover",
+            "kubernetes",
+            "readiness",
+            "cloud",
+            "terraform",
+            "lambda",
+            "dynamodb",
+            "pagerduty",
+            "incident",
+            "outage",
+            "migration",
+        },
+    ):
+        return False
+    return _contains_any(
+        normalized,
+        {
+            "dashboard",
+            "app",
+            "defect",
+            "defects",
+            "factory",
+            "team",
+            "tracker",
+            "workflow",
+            "process",
+            "product",
+            "report",
+            "management",
+        },
+    )
+
+
 def _is_defensive_security_work(normalized: str) -> bool:
     return _contains_any(normalized, {"fix", "review", "regression tests", "vulnerability"})
 
@@ -3882,11 +3925,28 @@ def _is_unapproved_product_discovery_request(normalized: str, context: dict, dom
     if _has_blocking_discovery_specificity(normalized):
         return False
     has_product_object = _contains_any(normalized, PRODUCT_DISCOVERY_OBJECT_TERMS)
+    has_domain_direction_object = _contains_any(
+        normalized,
+        {
+            "workflow",
+            "process",
+            "procedure",
+            "report",
+            "report structure",
+            "dashboard",
+            "operating model",
+            "operational model",
+            "\uc5c5\ubb34\ud750\ub984",
+            "\ud504\ub85c\uc138\uc2a4",
+            "\ubcf4\uace0\uc11c",
+            "\ub300\uc2dc\ubcf4\ub4dc",
+        },
+    )
     if not _contains_any(normalized, DOMAIN_DISCOVERY_OBJECT_TERMS):
         return False
     if not _contains_any(normalized, DOMAIN_DISCOVERY_ACTION_TERMS):
         return False
-    if not has_product_object and not _contains_any(normalized, DOMAIN_DISCOVERY_INTENT_TERMS):
+    if not has_product_object and not has_domain_direction_object and not _contains_any(normalized, DOMAIN_DISCOVERY_INTENT_TERMS):
         return False
     if _contains_any(normalized, {"prd", "product requirements document", "launch email", "screen design"}):
         return False
@@ -4056,7 +4116,41 @@ def _has_blocking_discovery_specificity(normalized: str) -> bool:
     if not _contains_any(normalized, PRODUCT_DISCOVERY_SPECIFICITY_TERMS):
         return False
     specificity_terms = PRODUCT_DISCOVERY_SPECIFICITY_TERMS - VAGUE_DISCOVERY_SPECIFICITY_TERMS
+    if _contains_any(normalized, {"kpi", "metrics"}) and _is_vague_dashboard_or_report_discovery(normalized):
+        specificity_terms = specificity_terms - {"kpi", "metrics"}
     return _contains_any(normalized, specificity_terms)
+
+
+def _is_vague_dashboard_or_report_discovery(normalized: str) -> bool:
+    if not _contains_any(normalized, {"dashboard", "report", "\ub300\uc2dc\ubcf4\ub4dc", "\ubcf4\uace0\uc11c"}):
+        return False
+    if not _contains_any(normalized, PRODUCT_DISCOVERY_ACTION_TERMS | {"direction", "approach", "plan"}):
+        return False
+    return not _contains_any(
+        normalized,
+        {
+            "html",
+            "css",
+            "javascript",
+            "react",
+            "api",
+            "database",
+            "table",
+            "filter",
+            "docx",
+            "xlsx",
+            "pdf",
+            "dxf",
+            "svg",
+            "verify",
+            "validate",
+            "test",
+            "tests",
+            "sample",
+            "including ",
+            "with ",
+        },
+    )
 
 
 def _product_discovery_domain(domain: str, normalized: str) -> str:

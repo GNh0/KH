@@ -932,7 +932,7 @@ def _automatic_intake_scenario(skill_name: str, output_dir: Path, repo_root: Pat
     project_dir = output_dir / "ordinary-project"
     project_dir.mkdir(parents=True, exist_ok=True)
     success = build_kh_front_door(
-        "Create a small static task tracker in this folder and verify it.",
+        "Create the approved project-appropriate deliverable in this folder and verify it.",
         project=project_dir,
         host="codex",
     )
@@ -998,8 +998,8 @@ def _plugin_composition_scenario(skill_name: str, output_dir: Path, repo_root: P
             "capabilities": ["workflow_control", "memory_goal_resume", "tdd_review"],
         },
         {
-            "provider_id": "visual-checker",
-            "capabilities": ["browser_qa", "screenshot"],
+            "provider_id": "artifact-checker",
+            "capabilities": ["artifact_qa", "render_or_structure_check"],
         },
         {
             "provider_id": "repo-service",
@@ -1012,7 +1012,7 @@ def _plugin_composition_scenario(skill_name: str, output_dir: Path, repo_root: P
         },
     ]
     hybrid = compose_plugin_route(
-        "Build a SaaS dashboard, verify the browser screen, and prepare the PR.",
+        "Build the approved deliverable for this project, verify it with the matching host tool, and prepare the PR.",
         providers=providers,
     )
     direct = compose_plugin_route(

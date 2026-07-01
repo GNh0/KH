@@ -118,6 +118,9 @@ def build_large_work_orchestration_bundle(
 ) -> LargeWorkOrchestrationBundle:
     overrides = overrides or {}
     skill_statuses = _default_skill_statuses()
+    token_status = str(token_optimizer_status or "").strip()
+    if token_status in TOKEN_OPTIMIZER_STATUS_VALUES and "token-optimizer" not in overrides:
+        skill_statuses["token-optimizer"] = _token_optimizer_skill_status(token_status)
     for skill_name, override in overrides.items():
         base = skill_statuses.get(
             skill_name,
@@ -358,3 +361,34 @@ def _default_token_optimizer_status_reason(status: str) -> str:
     if status == "blocked":
         return "Token optimizer not used because optimization was blocked and requires follow-up evidence."
     return "Token optimizer not used because the large-work bundle has not yet produced optimizable output."
+
+
+def _token_optimizer_skill_status(status: str) -> SkillApplicationStatus:
+    if status == "used":
+        return SkillApplicationStatus(
+            status="applied",
+            application_mode="runtime",
+            evidence_note="Token optimizer ran and produced runtime token evidence for this workflow.",
+            evidence_keys=["token_optimizer_status", "token_usage"],
+        )
+    if status == "passthrough":
+        return SkillApplicationStatus(
+            status="applied",
+            application_mode="procedural",
+            evidence_note="Token optimizer gate was applied and content was passed through unchanged for quality.",
+            evidence_keys=["token_optimizer_status", "not_used_reason"],
+        )
+    if status == "blocked":
+        return SkillApplicationStatus(
+            status="blocked",
+            application_mode="blocked",
+            evidence_note="Token optimizer gate was required but could not preserve required facts.",
+            evidence_keys=["token_optimizer_status", "blocked_reason"],
+            blocked_reason="token_optimizer_blocked",
+        )
+    return SkillApplicationStatus(
+        status="applied",
+        application_mode="procedural",
+        evidence_note="Token optimizer decision gate was checked; optimization was not needed for this payload.",
+        evidence_keys=["token_optimizer_status", "not_used_reason"],
+    )
