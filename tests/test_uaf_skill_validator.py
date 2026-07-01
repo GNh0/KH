@@ -19,9 +19,22 @@ description: Use when validating a UAF harness.
 
 # Valid Harness
 
+## KH Entry Contract
+
+- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Report this skill as applied only after runtime, artifact, gate, passthrough, or blocked evidence exists.
+
 ## Workflow
 
 1. Do the work.
+
+## Required outputs
+
+- Validation evidence.
+
+## Common mistakes
+
+- Do not count reading SKILL.md as execution.
 
 ## UAF implementation targets
 
@@ -88,6 +101,24 @@ class UafSkillValidatorTests(unittest.TestCase):
 
         self.assertFalse(report.success)
         self.assertIn("missing_behavior_section", {issue.code for issue in report.issues})
+
+    def test_missing_kh_entry_contract_is_reported(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            write_skill(
+                temp_dir,
+                "entry_contract",
+                VALID_SKILL.replace(
+                    "## KH Entry Contract\n\n"
+                    "- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.\n"
+                    "- Report this skill as applied only after runtime, artifact, gate, passthrough, or blocked evidence exists.\n\n",
+                    "",
+                ),
+            )
+
+            report = validate_skill_folders(skills_dir=temp_dir)
+
+        self.assertFalse(report.success)
+        self.assertIn("missing_kh_entry_contract", {issue.code for issue in report.issues})
 
     def test_duplicate_skill_names_are_reported(self):
         with tempfile.TemporaryDirectory() as temp_dir:

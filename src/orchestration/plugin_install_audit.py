@@ -66,6 +66,7 @@ class KhPluginInstallAudit:
     expected_source_version: str
     findings: List[str]
     recommended_actions: List[str]
+    notes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -80,6 +81,7 @@ class KhPluginInstallAudit:
             "expected_source_version": self.expected_source_version,
             "findings": list(self.findings),
             "recommended_actions": list(self.recommended_actions),
+            "notes": list(self.notes),
         }
 
     def to_summary_dict(self) -> Dict[str, Any]:
@@ -88,6 +90,7 @@ class KhPluginInstallAudit:
             "marketplace_ref": self.marketplace_config.ref,
             "marketplace_last_revision": self.marketplace_config.last_revision,
             "plugin_source_ref": self.marketplace_plugin_source.source_ref,
+            "marketplace_descriptor_ref": self.marketplace_config.ref,
             "expected_source_version": self.expected_source_version,
             "latest_installed_version": self.latest_installed_version,
             "installed_cache_versions": [cache.version_dir for cache in self.installed_caches],
@@ -95,6 +98,7 @@ class KhPluginInstallAudit:
             "config_encoding_warnings": list(self.marketplace_config.encoding_warnings),
             "findings": list(self.findings),
             "recommended_actions": list(self.recommended_actions),
+            "notes": list(self.notes),
         }
 
 
@@ -116,6 +120,7 @@ def audit_kh_plugin_install(
     expected_source = source_versions.get("codex_plugin") or source_versions.get("root_plugin", "")
     findings: List[str] = []
     actions: List[str] = []
+    notes: List[str] = []
 
     if not config.exists:
         findings.append("Codex config.toml was not found.")
@@ -127,11 +132,11 @@ def audit_kh_plugin_install(
         findings.append("Codex config.toml contains possible encoding damage or replacement characters.")
         actions.append("Review config.toml encoding and repair damaged text before editing marketplace settings.")
     elif config.ref == "main" and descriptor.source_ref:
-        findings.append(
+        notes.append(
             "Marketplace config ref is the marketplace descriptor layer; plugin source ref comes from marketplace.json."
         )
     elif config.ref and descriptor.source_ref and config.ref != descriptor.source_ref:
-        findings.append(
+        notes.append(
             "Marketplace config ref differs from plugin source ref. This can be valid when main hosts the marketplace descriptor."
         )
 
@@ -151,7 +156,7 @@ def audit_kh_plugin_install(
         )
         actions.append("Upgrade KH UAF in Codex and open a fresh session before judging blind automatic intake.")
     elif expected_source and latest_installed:
-        findings.append(f"Installed KH UAF cache version matches or exceeds source version: {latest_installed}.")
+        notes.append(f"Installed KH UAF cache version matches or exceeds source version: {latest_installed}.")
 
     if caches:
         actions.append("Verify the active session skill list points at the latest installed cache path, not only the filesystem cache.")
@@ -183,6 +188,7 @@ def audit_kh_plugin_install(
         expected_source_version=expected_source,
         findings=findings,
         recommended_actions=actions,
+        notes=notes,
     )
 
 

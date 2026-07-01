@@ -231,6 +231,50 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertEqual(decision.controller.capability, "sql_formatting")
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
 
+    def test_named_dml_sql_style_request_routes_to_sql_formatting_without_pasted_sql(self):
+        decision = compose_plugin_route(
+            "\uc774 INSERT, UPDATE, DELETE SQL\uc744 \uc6b0\ub9ac "
+            "\uc2a4\ud0c0\uc77c\ub85c \uc815\ub9ac\ud558\uace0 "
+            "\uc2a4\uce7c\ub77c \ud568\uc218\uac00 JOIN\uc73c\ub85c "
+            "\uc548\uc804\ud558\uac8c \ubc14\ub00c\uba74 \ubc14\uafd4\uc918.",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertEqual(decision.route, "single")
+        self.assertEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertEqual(decision.controller.capability, "sql_formatting")
+        self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
+    def test_english_named_dml_sql_style_request_routes_to_sql_formatting(self):
+        decision = compose_plugin_route(
+            "Format this SQL and align the INSERT, UPDATE, DELETE blocks to our style.",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertEqual(decision.route, "single")
+        self.assertEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertEqual(decision.controller.capability, "sql_formatting")
+        self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
+    def test_sql_formatting_meta_review_does_not_invoke_provider(self):
+        decision = compose_plugin_route(
+            "Review whether SQL-formatting is not hidden by KH routing.",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertNotEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertNotIn("explicit_user_request:sql-formatting", decision.reasons)
+        self.assertNotIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
     def test_stored_procedure_generation_request_adds_sql_formatting_assistant(self):
         decision = compose_plugin_route(
             "Begin Tran\n"

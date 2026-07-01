@@ -115,6 +115,7 @@ SQL_STATEMENT_PATTERN = re.compile(
     r"\b(?:select|insert\s+into|update|delete\s+from|merge|exec(?:ute)?|if\s+exists|raiserror|throw|openxml|begin\s+tran|rollback|create\s+(?:or\s+alter\s+)?procedure)\b",
     re.IGNORECASE,
 )
+SQL_NAMED_DML_PATTERN = re.compile(r"\b(?:insert|update|delete|merge)\b", re.IGNORECASE)
 SQL_CONTEXT_PATTERN = re.compile(
     r"\b(?:from|where|join|set|values|group\s+by|order\s+by|procedure|proc|exec(?:ute)?|raiserror|openxml|if\s+exists|저장\s*프로시저|프로시저)\b|@[a-z_][a-z0-9_]*",
     re.IGNORECASE,
@@ -420,7 +421,8 @@ def compose_plugin_route(
     lowered = str(text or "").lower()
     reasons: List[str] = []
 
-    explicit_provider = _explicit_provider_request(lowered, provider_list)
+    sql_meta_review = _has_sql_meta_review_context(lowered)
+    explicit_provider = None if sql_meta_review else _explicit_provider_request(lowered, provider_list)
     if explicit_provider:
         if explicit_provider.status != "available":
             unavailable = {
@@ -975,7 +977,22 @@ def looks_like_sql_output_request(text: str) -> bool:
     lowered = str(text or "").lower()
     if _has_sql_meta_review_context(lowered):
         return False
+    if _looks_like_named_dml_sql_style_request(lowered):
+        return True
     if not SQL_STATEMENT_PATTERN.search(lowered) or not SQL_CONTEXT_PATTERN.search(lowered):
+        return False
+    if _has_sql_equivalence_question_without_output_request(lowered):
+        return False
+    if _has_sql_diagnostic_question_without_output_request(lowered):
+        return False
+    return any(marker in lowered for marker in SQL_OUTPUT_REQUEST_MARKERS)
+
+
+def _looks_like_named_dml_sql_style_request(lowered: str) -> bool:
+    statement_names = {match.group(0).lower() for match in SQL_NAMED_DML_PATTERN.finditer(lowered)}
+    if len(statement_names) < 2:
+        return False
+    if not any(marker in lowered for marker in ("sql", "query", "\ucffc\ub9ac")):
         return False
     if _has_sql_equivalence_question_without_output_request(lowered):
         return False

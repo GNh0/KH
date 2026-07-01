@@ -79,7 +79,8 @@ class PluginInstallAuditTests(unittest.TestCase):
         self.assertEqual(audit.marketplace_config.parse_status, "ok")
         self.assertEqual(audit.marketplace_config.ref, "main")
         self.assertEqual(audit.marketplace_plugin_source.source_ref, "codex-runtime")
-        self.assertTrue(any("descriptor layer" in finding for finding in audit.findings))
+        self.assertFalse(any("descriptor layer" in finding for finding in audit.findings))
+        self.assertTrue(any("descriptor layer" in note for note in audit.notes))
 
 
 if __name__ == "__main__":

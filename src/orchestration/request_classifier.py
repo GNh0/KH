@@ -17,6 +17,7 @@ LARGE_WORK_BUNDLE_SKILLS = [
     "worktree-isolation-harness",
     "plan-execution-harness",
     "systematic-debugging-harness",
+    "command-output-harness",
     "token-optimizer",
     "memory-state-harness",
     "parallel-orchestration-harness",
@@ -25,6 +26,9 @@ LARGE_WORK_BUNDLE_SKILLS = [
     "quality-gates-harness",
     "review-gate-harness",
     "qa-gate-harness",
+    "artifact-render-qa-harness",
+    "deliverable-template-quality-harness",
+    "traceability-matrix-harness",
     "verification-before-completion-harness",
     "branch-finishing-harness",
     "compound-engineering-harness",
@@ -621,6 +625,107 @@ READONLY_SOURCE_CONDITION_TERMS = {
     "\uc218\uc815\uc774 \uc548",
     "\uc218\uc815\uc744 \ubabb",
 }
+READONLY_SOURCE_AUDIT_TERMS = {
+    "read-only audit",
+    "readonly audit",
+    "audit",
+    "review",
+    "inspect",
+    "find issues",
+    "find the issues",
+    "report issues",
+    "report the issues",
+    "issue report",
+    "bug report",
+    "\uac10\uc0ac",
+    "\uac80\ud1a0",
+}
+READONLY_SOURCE_AUDIT_BOUNDARY_TERMS = {
+    "read-only",
+    "readonly",
+    "read only",
+    "do not edit",
+    "don't edit",
+    "dont edit",
+    "do not modify",
+    "don't modify",
+    "dont modify",
+    "do not change",
+    "don't change",
+    "dont change",
+    "no edits",
+    "no edit",
+    "no changes",
+    "without editing",
+    "without modifying",
+    "without changing",
+    "report only",
+    "analysis only",
+    "\ucf54\ub4dc\ub294 \uc218\uc815\ud558\uc9c0",
+    "\ucf54\ub4dc\ub97c \uc218\uc815\ud558\uc9c0",
+    "\ucf54\ub4dc \uc218\uc815 \uc5c6\uc774",
+    "\uc218\uc815\ud558\uc9c0 \ub9d0\uace0",
+    "\uc218\uc815\ud558\uc9c0",
+    "\uc218\uc815 \uc5c6\uc774",
+    "\ubcc0\uacbd\ud558\uc9c0",
+    "\ubcc0\uacbd \uc5c6\uc774",
+    "\uace0\uce58\uc9c0",
+}
+READONLY_SOURCE_AUDIT_SOURCE_TERMS = {
+    "source",
+    "code",
+    "repo",
+    "repository",
+    "file",
+    "files",
+    "module",
+    "runtime",
+    "test",
+    "tests",
+    "branch",
+    "checkout",
+    "\ucf54\ub4dc",
+    "\uad6c\ud604",
+    "\ud604\uc7ac \uad6c\ud604",
+    "\ub3d9\uc791",
+    "\uc138\uc158",
+    "\uc2a4\ud0ac",
+    "\ud558\ub124\uc2a4",
+    "\ub77c\uc6b0\ud305",
+    "\ud504\ub7f0\ud2b8\ub3c4\uc5b4",
+}
+READONLY_SOURCE_AUDIT_MUTATION_TERMS = {
+    "fix it",
+    "fix them",
+    "patch it",
+    "patch them",
+    "repair it",
+    "repair them",
+    "implement it",
+    "implement them",
+    "start implementation",
+    "begin implementation",
+    "make the change",
+    "make changes",
+    "apply the change",
+    "apply changes",
+    "edit the file",
+    "modify the file",
+    "change the file",
+    "update the file",
+    "add tests",
+    "add regression",
+    "add regressions",
+    "write tests",
+    "commit",
+    "push",
+    "\uc218\uc815\ud574\uc918",
+    "\ubcc0\uacbd\ud574\uc918",
+    "\uace0\uccd0\uc918",
+    "\ud328\uce58\ud574\uc918",
+    "\uad6c\ud604\ud574\uc918",
+    "\ud14c\uc2a4\ud2b8 \ucd94\uac00",
+}
 SOURCE_MUTATION_COMMAND_TERMS = {
     "modify it",
     "change it",
@@ -995,6 +1100,9 @@ EXTRA_SOFTWARE_DOMAIN_TERMS = {
     "jwt",
     "oauth",
     "pytest",
+    "sql",
+    "t-sql",
+    "tsql",
     "traceback",
     "login",
     "refresh token",
@@ -2067,6 +2175,42 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_high_risk(normalized, domain, context):
         return _high_risk_classification(domain, cross_cutting, evidence_required, reasons)
 
+    if _is_provider_meta_review_request(normalized):
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "routing_review"]),
+            reasons=[*reasons, "provider_meta_review_request"],
+            confidence=0.78,
+        )
+
+    if _is_sql_formatting_style_request(normalized):
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "sql_formatting_style_check"]),
+            reasons=[*reasons, "sql_formatting_style_request"],
+            confidence=0.78,
+        )
+
+    if _is_readonly_source_audit_request(normalized, domain):
+        return _classification(
+            complexity="medium",
+            domain="software" if domain == "general" else domain,
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "source_summary", "audit_findings"]),
+            reasons=[*reasons, "readonly_source_audit_request"],
+            confidence=0.8,
+        )
+
     if _is_contextual_audit_repair_request(normalized, context):
         return _heavy_classification(
             _contextual_audit_repair_domain(domain, context),
@@ -2739,6 +2883,8 @@ def _detect_domain(normalized: str, context: dict) -> str:
         return "security"
     if _contains_any(normalized, {"react", "vue", "frontend"}):
         return "software"
+    if _is_strong_software_product_request(normalized):
+        return "software"
     if _contains_any(normalized, EXTRA_PRODUCT_DESIGN_HEAVY_TERMS):
         return "product-design"
     if _contains_any(normalized, DESIGN_HEAVY_TERMS):
@@ -2760,6 +2906,56 @@ def _detect_domain(normalized: str, context: dict) -> str:
     if _contains_any(normalized, SOFTWARE_HEAVY_TERMS | EXTRA_SOFTWARE_HEAVY_TERMS):
         return "software"
     return "general"
+
+
+def _is_strong_software_product_request(normalized: str) -> bool:
+    has_implementation_intent = _contains_any(
+        normalized,
+        {
+            "add",
+            "build",
+            "code",
+            "create",
+            "develop",
+            "fix",
+            "implement",
+            "refactor",
+            "scaffold",
+            "write",
+        },
+    )
+    if not has_implementation_intent:
+        return False
+    return _contains_any(
+        normalized,
+        {
+            "api",
+            "auth",
+            "authentication",
+            "backend",
+            "frontend",
+            "database",
+            "server",
+            "tests",
+            "test",
+            "i18n",
+            "login",
+            "jwt",
+            "oauth",
+        },
+    ) and _contains_any(
+        normalized,
+        {
+            "saas",
+            "crm",
+            "mvp",
+            "dashboard",
+            "app",
+            "web app",
+            "portal",
+            "tool",
+        },
+    )
 
 
 def _domain_override_from_text(normalized: str) -> str:
@@ -2905,6 +3101,83 @@ def _looks_like_sql_or_tsql_payload(normalized: str) -> bool:
         markers += 1
         has_strong_anchor = True
     return has_strong_anchor and markers >= 2
+
+
+SQL_FORMATTING_STYLE_ACTION_TERMS = {
+    "align",
+    "clean",
+    "clean up",
+    "format",
+    "normalize",
+    "organize",
+    "refactor",
+    "rewrite",
+    "standardize",
+    "\uc815\ub9ac",
+    "\uc815\ub82c",
+    "\ub9de\ucdb0",
+}
+SQL_FORMATTING_STYLE_SUBJECT_TERMS = {
+    "sql",
+    "t-sql",
+    "tsql",
+    "query",
+    "\ucffc\ub9ac",
+}
+SQL_NAMED_DML_RE = re.compile(r"\b(?:insert|update|delete|merge)\b", re.IGNORECASE)
+
+
+def _is_sql_formatting_style_request(normalized: str) -> bool:
+    if not _contains_any(normalized, SQL_FORMATTING_STYLE_ACTION_TERMS):
+        return False
+    if not _contains_any(normalized, SQL_FORMATTING_STYLE_SUBJECT_TERMS):
+        return False
+    if _contains_any(normalized, {"sql injection", "vulnerability", "exploit"}):
+        return False
+    dml_names = {match.group(0).lower() for match in SQL_NAMED_DML_RE.finditer(normalized)}
+    if len(dml_names) >= 2:
+        return True
+    return _looks_like_sql_or_tsql_payload(normalized)
+
+
+def _is_provider_meta_review_request(normalized: str) -> bool:
+    provider_markers = {
+        "sql-formatting",
+        "sql formatting",
+        "sql-formatting-style-harness",
+        "front-door",
+        "front door",
+        "kh routing",
+        "plugin routing",
+        "provider",
+        "specialist",
+    }
+    meta_markers = {
+        "review",
+        "audit",
+        "check whether",
+        "whether",
+        "evaluate",
+        "evaluation",
+        "risk",
+        "hidden",
+        "hides",
+        "not hidden",
+        "routing",
+        "route",
+        "classifier",
+        "\uac80\ud1a0",
+        "\uac10\uc0ac",
+        "\ud3c9\uac00",
+        "\ub9ac\ubdf0",
+        "\ub77c\uc6b0\ud305",
+        "\ubd84\ub958",
+    }
+    if not _contains_any(normalized, provider_markers):
+        return False
+    if not _contains_any(normalized, meta_markers):
+        return False
+    return not _contains_any(normalized, READONLY_SOURCE_AUDIT_MUTATION_TERMS)
 
 
 def _is_high_risk(normalized: str, domain: str, context: dict) -> bool:
@@ -3318,6 +3591,22 @@ def _is_readonly_source_condition_question(normalized: str) -> bool:
     if _has_source_condition_mutation_command(normalized):
         return False
     return _has_source_condition_context(normalized) and _contains_any(normalized, READONLY_SOURCE_QUESTION_TERMS)
+
+
+def _is_readonly_source_audit_request(normalized: str, domain: str) -> bool:
+    if domain == "security" or _contains_any(normalized, SECURITY_HIGH_RISK_TERMS | EXTRA_SECURITY_HIGH_RISK_TERMS):
+        return False
+    if not _contains_any(normalized, READONLY_SOURCE_AUDIT_BOUNDARY_TERMS):
+        return False
+    if not _contains_any(normalized, READONLY_SOURCE_AUDIT_TERMS):
+        return False
+    has_source_context = domain == "software" or _contains_any(
+        normalized,
+        READONLY_SOURCE_AUDIT_SOURCE_TERMS | SOFTWARE_DOMAIN_TERMS | EXTRA_SOFTWARE_DOMAIN_TERMS,
+    )
+    if not has_source_context:
+        return False
+    return not _contains_any(normalized, READONLY_SOURCE_AUDIT_MUTATION_TERMS)
 
 
 def _is_source_condition_mutation_command(normalized: str) -> bool:

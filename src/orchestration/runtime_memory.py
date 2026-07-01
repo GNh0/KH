@@ -682,19 +682,54 @@ def record_workflow_memory_candidates(
 ) -> Dict[str, Any]:
     """Persist workflow memory candidates without promoting them to durable records."""
     metadata = metadata or {}
+    provider = resolve_memory_provider(metadata)
     candidates = list(candidates or [])
     if not candidates:
         return {
             "status": "considered_not_needed",
+            "provider": provider,
             "candidate_count": 0,
             "recorded_count": 0,
             "skipped_count": 0,
             "blocked_count": 0,
             "evidence": [],
         }
+    if provider["status"] == "blocked":
+        return {
+            "status": "blocked",
+            "provider": provider,
+            "candidate_count": len(candidates),
+            "recorded_count": 0,
+            "skipped_count": 0,
+            "blocked_count": len(candidates),
+            "blocked": [
+                {
+                    "record_id": _candidate_record_id(candidate),
+                    "error_type": "MemoryProviderBlocked",
+                    "message": provider["rationale"],
+                }
+                for candidate in candidates
+            ],
+            "rationale": provider["rationale"],
+            "promotion": "blocked",
+            "evidence": ["memory-state-harness", "memory_provider_policy"],
+        }
+    if provider["provider"] == "passthrough":
+        return {
+            "status": "skipped_with_rationale",
+            "provider": provider,
+            "candidate_count": len(candidates),
+            "recorded_count": 0,
+            "skipped_count": len(candidates),
+            "blocked_count": 0,
+            "rationale": "memory provider passthrough selected; workflow memory candidates were not written",
+            "promotion": "passthrough",
+            "evidence": ["memory-state-harness", "memory_provider_policy"],
+        }
     if metadata.get("memory_candidates_auto") is False:
         return {
             "status": "skipped_with_rationale",
+            "provider": provider,
             "candidate_count": len(candidates),
             "recorded_count": 0,
             "skipped_count": len(candidates),
@@ -730,6 +765,7 @@ def record_workflow_memory_candidates(
         status = "blocked"
     return {
         "status": status,
+        "provider": provider,
         "memory_scope": scope.to_dict(),
         "store": store.describe_paths(),
         "candidate_count": len(candidates),
@@ -782,6 +818,14 @@ def _as_memory_record(item: MemoryRecord | Dict[str, Any]) -> MemoryRecord:
     if isinstance(item, dict):
         return MemoryRecord.from_dict(item)
     raise TypeError("memory candidate must be MemoryRecord or dict")
+
+
+def _candidate_record_id(item: MemoryRecord | Dict[str, Any]) -> str:
+    if isinstance(item, MemoryRecord):
+        return str(item.record_id)
+    if isinstance(item, dict):
+        return str(item.get("record_id", ""))
+    return ""
 
 
 def _source_memory_scope(

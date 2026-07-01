@@ -15,6 +15,7 @@ BEHAVIOR_SECTION_PATTERN = re.compile(
 )
 REQUIRED_OUTPUTS_PATTERN = re.compile(r"^##\s+Required outputs\b", re.IGNORECASE | re.MULTILINE)
 COMMON_MISTAKES_PATTERN = re.compile(r"^##\s+Common mistakes\b", re.IGNORECASE | re.MULTILINE)
+KH_ENTRY_CONTRACT_PATTERN = re.compile(r"^##\s+KH Entry Contract\b", re.IGNORECASE | re.MULTILINE)
 
 
 @dataclass
@@ -166,6 +167,12 @@ def _validate_skill_file(skills_dir: str, folder_name: str, skill_path: str) -> 
         result.add_issue(
             "missing_behavior_section",
             "Skill body must include a behavior section such as Workflow, Instructions, Core Flow, or equivalent.",
+        )
+
+    if not KH_ENTRY_CONTRACT_PATTERN.search(content):
+        result.add_issue(
+            "missing_kh_entry_contract",
+            "Skill body must include a '## KH Entry Contract' section that separates routing, selection, and execution evidence.",
         )
 
     if "## UAF implementation targets" not in content:

@@ -74,6 +74,24 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertIn("readonly_source_condition_question", result.reasons)
                 self.assertNotEqual(result.recommended_execution, "role_dag")
 
+    def test_korean_kh_readonly_audit_with_no_edit_stays_medium(self):
+        result = classify_request(
+            "KH UAF \uc138\uc158 \uc0ac\uc6a9\uc131/\uc2a4\ud0ac \uc801\uc6a9 "
+            "\uac10\uc0ac\ub97c \ud574\uc918. \ucf54\ub4dc\ub294 "
+            "\uc218\uc815\ud558\uc9c0 \ub9d0\uace0 \ud604\uc7ac "
+            "\uad6c\ud604\uc774 \uacfc\uc7a5 \uc5c6\uc774 "
+            "\ub3d9\uc791\ud558\ub294\uc9c0 \ud655\uc778\ud574\uc918."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("source_summary", result.evidence_required)
+        self.assertIn("audit_findings", result.evidence_required)
+        self.assertIn("readonly_source_audit_request", result.reasons)
+        self.assertNotIn("goal-state-harness", result.required_harnesses)
+        self.assertNotEqual(result.recommended_execution, "role_dag")
+
     def test_source_condition_mutation_commands_route_heavy(self):
         cases = [
             "\uccb4\ud06c\ub85c\uc9c1 \uc218\uc815\ud574\uc918",
@@ -215,6 +233,13 @@ class RequestClassifierTests(unittest.TestCase):
         result = classify_request(
             r"Create C:\work\dashboard as HTML/CSS/JS files with sample KPI cards, a table, filter button behavior, verification, and residual risk notes."
         )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "role_dag")
+
+    def test_saas_crm_with_api_and_tests_is_software_not_product_design(self):
+        result = classify_request("Build a SaaS CRM MVP with auth, dashboard, API, tests, and i18n.")
 
         self.assertEqual(result.complexity, "heavy")
         self.assertEqual(result.domain, "software")
@@ -770,6 +795,24 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertEqual(mobile.domain, "product-design")
         self.assertEqual(dashboard.complexity, "heavy")
         self.assertEqual(dashboard.domain, "product-design")
+
+    def test_named_dml_sql_formatting_is_medium_not_large_preflight(self):
+        result = classify_request("Format this SQL and align the INSERT, UPDATE, DELETE blocks to our style.")
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("sql_formatting_style_request", result.reasons)
+        self.assertIn("sql_formatting_style_check", result.evidence_required)
+
+    def test_sql_formatting_meta_review_is_medium_not_large_preflight(self):
+        result = classify_request("Review whether SQL-formatting is not hidden by KH routing.")
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("provider_meta_review_request", result.reasons)
+        self.assertIn("routing_review", result.evidence_required)
 
     def test_api_design_is_software_heavy_not_product_design(self):
         result = classify_request("Design an API for payments.")

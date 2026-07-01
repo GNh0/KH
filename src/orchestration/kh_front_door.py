@@ -98,6 +98,7 @@ class KhFrontDoorResult:
             "large_work_orchestration_bundle": self.large_work_orchestration_bundle,
             "large_work_bundle_validation": self.large_work_bundle_validation,
             "token_optimizer_decision": dict(self.token_optimizer_decision),
+            "token_optimizer_lifecycle": _token_optimizer_lifecycle_summary(self.token_optimizer_decision),
             "memory_policy": dict(self.memory_policy),
             "warnings": list(self.warnings),
         }
@@ -148,6 +149,7 @@ class KhFrontDoorResult:
             "selected_not_executed_skills": selected_not_executed_skills,
             "token_optimizer_decision": dict(self.token_optimizer_decision),
             "token_optimizer_gate": _token_optimizer_gate_summary(self.token_optimizer_decision),
+            "token_optimizer_lifecycle": _token_optimizer_lifecycle_summary(self.token_optimizer_decision),
             "memory_policy": dict(self.memory_policy),
             "skill_status_summary": {
                 name: {
@@ -826,7 +828,12 @@ def _front_door_token_optimizer_decision(prompt: str, classification: Dict[str, 
         "token_optimizer_status": status,
         "token_optimizer_status_reason": reason,
         "token_optimizer_gate_status": "checked",
+        "token_optimizer_lifecycle_status": "gate_checked",
         "optimization_applied": status == "used",
+        "actual_optimization_used": status == "used",
+        "actual_optimization_claimed": status == "used",
+        "actual_optimization_kind": "compression_filter_or_minify" if status == "used" else "none",
+        "usage_kind": "optimization" if status == "used" else "gate_check_only",
         "actual_optimization_status": status,
         "actual_optimization_summary": _token_optimizer_actual_summary(status, usage, reason),
         "not_used_reason": reason if status != "used" else "",
@@ -854,10 +861,16 @@ def _apply_front_door_token_optimizer_gate(
     updated["token-optimizer"] = _status(
         "applied",
         "runtime",
-        f"Front-door checked the Token Optimizer decision gate; actual optimization status={status}. {reason}",
+        (
+            "Front-door checked the Token Optimizer decision gate; no actual payload optimization is claimed "
+            f"unless status=used. Actual optimization status={status}. {reason}"
+        ),
         ["token_optimizer_decision", "token_optimizer_status", "token_optimizer_status_reason"],
     )
-    updated["token-optimizer"]["metadata"] = {"token_optimizer_decision": dict(decision)}
+    updated["token-optimizer"]["metadata"] = {
+        "token_optimizer_decision": dict(decision),
+        "token_optimizer_lifecycle": _token_optimizer_lifecycle_summary(decision),
+    }
     return updated
 
 
@@ -891,6 +904,23 @@ def _token_optimizer_gate_summary(decision: Dict[str, Any]) -> Dict[str, Any]:
         "token_savings_ratio": float(decision.get("token_savings_ratio") or 0.0),
         "actual_usage_scope": str(decision.get("actual_usage_scope") or ""),
         "summary": str(decision.get("actual_optimization_summary") or ""),
+    }
+
+
+def _token_optimizer_lifecycle_summary(decision: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(decision.get("token_optimizer_status") or "unknown")
+    actual_used = bool(decision.get("actual_optimization_used") or decision.get("optimization_applied"))
+    return {
+        "gate_status": str(decision.get("token_optimizer_gate_status") or "checked"),
+        "lifecycle_status": str(decision.get("token_optimizer_lifecycle_status") or "gate_checked"),
+        "decision_status": status,
+        "actual_optimization_status": str(decision.get("actual_optimization_status") or status),
+        "actual_optimization_used": actual_used,
+        "actual_optimization_claimed": bool(decision.get("actual_optimization_claimed") or actual_used),
+        "actual_optimization_kind": str(decision.get("actual_optimization_kind") or ("optimization" if actual_used else "none")),
+        "usage_kind": str(decision.get("usage_kind") or ("optimization" if actual_used else "gate_check_only")),
+        "not_used_reason": str(decision.get("not_used_reason") or ""),
+        "reason": str(decision.get("token_optimizer_status_reason") or decision.get("not_used_reason") or ""),
     }
 
 

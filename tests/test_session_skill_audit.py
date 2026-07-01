@@ -4923,6 +4923,200 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertIn("db_writes", issue["blocked_actions"])
         self.assertIn("ALTER PROCEDURE", issue["first_blocked_work"])
 
+    def test_front_door_large_work_gate_requires_full_preflight_not_shallow_markers(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "classification": {
+                "complexity": "heavy",
+                "domain": "software",
+                "recommended_execution": "role_dag",
+            },
+            "plugin_route": {"route": "single", "controller": "kh"},
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["verification-before-completion-harness"],
+            "immediate_next_skills": [
+                "goal-state-harness",
+                "workflow-usability-harness",
+                "host-agent-orchestration",
+                "parallel-orchestration-harness",
+            ],
+            "execution_gate": {
+                "status": "blocked_until_large_work_preflight",
+                "can_execute": False,
+                "required_before_execution": [
+                    "goal-state-harness",
+                    "large_work_orchestration_bundle",
+                    "skill_statuses",
+                    "workspace_strategy",
+                    "token_optimizer_status",
+                    "token_optimizer_status_reason",
+                    "host_runtime",
+                    "nested_subagents_available_or_not_applicable",
+                    "subagent_strategy_with_rationale",
+                    "parallel_strategy_decision_with_rationale",
+                    "role_execution_audit.status_or_pre_role_skip",
+                    "guard_policy_or_rollback_strategy",
+                    "verification_plan",
+                    "immediate_next_skills_applied_skipped_or_blocked",
+                    "same_turn_immediate_skill_evidence",
+                ],
+                "blocked_actions": ["broad_source_exploration", "implementation"],
+            },
+            "execution_authorization": {
+                "status": "blocked_by_execution_gate",
+                "must_stop_before_execution": True,
+                "can_execute_now": False,
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "large_work_orchestration_bundle workspace_strategy token_optimizer_status "
+                            "subagent_strategy goal-state-harness workflow-usability-harness "
+                            "host-agent-orchestration parallel-orchestration-harness"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n token src/orchestration/request_classifier.py",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "front_door_execution_gate_bypassed"
+                for issue in audit.issues
+            )
+        )
+
+    def test_front_door_large_work_gate_releases_with_full_preflight_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "classification": {
+                "complexity": "heavy",
+                "domain": "software",
+                "recommended_execution": "role_dag",
+            },
+            "plugin_route": {"route": "single", "controller": "kh"},
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["verification-before-completion-harness"],
+            "immediate_next_skills": [
+                "goal-state-harness",
+                "workflow-usability-harness",
+                "host-agent-orchestration",
+                "parallel-orchestration-harness",
+            ],
+            "execution_gate": {
+                "status": "blocked_until_large_work_preflight",
+                "can_execute": False,
+                "required_before_execution": [
+                    "goal-state-harness",
+                    "large_work_orchestration_bundle",
+                    "skill_statuses",
+                    "workspace_strategy",
+                    "token_optimizer_status",
+                    "token_optimizer_status_reason",
+                    "host_runtime",
+                    "nested_subagents_available_or_not_applicable",
+                    "subagent_strategy_with_rationale",
+                    "parallel_strategy_decision_with_rationale",
+                    "role_execution_audit.status_or_pre_role_skip",
+                    "guard_policy_or_rollback_strategy",
+                    "verification_plan",
+                    "immediate_next_skills_applied_skipped_or_blocked",
+                    "same_turn_immediate_skill_evidence",
+                ],
+                "blocked_actions": ["broad_source_exploration", "implementation"],
+            },
+            "execution_authorization": {
+                "status": "blocked_by_execution_gate",
+                "must_stop_before_execution": True,
+                "can_execute_now": False,
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": (
+                            "large_work_orchestration_bundle=recorded skill_statuses=recorded "
+                            "workspace_strategy=current-checkout token_optimizer_status=considered_not_needed "
+                            "token_optimizer_status_reason=no-large-output host_runtime=codex "
+                            "nested_subagents_available=false subagent_strategy=single-controller "
+                            "because shared-state requested files are coupled. "
+                            "parallel_strategy_decision=sequential because shared-state risk. "
+                            "role_execution_audit.status=skipped because no independent role artifact is useful. "
+                            "guard_policy=do-not-revert rollback policy=no revert. "
+                            "verification_plan=pytest-focused-tests. "
+                            "goal-state-harness status=applied evidence objective goal. "
+                            "workflow-usability-harness status=skipped_with_rationale reason=short-run. "
+                            "host-agent-orchestration status=skipped_with_rationale reason=single-controller. "
+                            "parallel-orchestration-harness status=skipped_with_rationale reason=sequential."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n token src/orchestration/request_classifier.py",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "front_door_execution_gate_bypassed"
+                for issue in audit.issues
+            )
+        )
+
     def test_immediate_next_skill_support_reference_output_is_not_runtime_evidence(self):
         front_door_output = {
             "front_door_status": "ok",

@@ -1058,16 +1058,6 @@ def _execution_gate_release_evidence(
     required = {str(item).lower() for item in required_before if str(item)}
     if not required:
         return False
-    release_markers = [
-        "large_work_orchestration_bundle",
-        "workspace_strategy",
-        "token_optimizer_status",
-        "subagent_strategy",
-        "parallel_strategy_decision",
-        "verification_plan",
-    ]
-    if required & set(release_markers):
-        return all(marker in lowered for marker in release_markers[:4])
     brainstorm_markers = [
         "brainstormsession",
         "decision_log",
@@ -1077,7 +1067,166 @@ def _execution_gate_release_evidence(
     ]
     if "brainstorming-harness" in required:
         return all(marker in lowered for marker in brainstorm_markers)
+    if _requires_large_work_preflight(required):
+        return _large_work_preflight_release_evidence(lowered, required, immediate)
     return False
+
+
+def _requires_large_work_preflight(required: Set[str]) -> bool:
+    return bool(
+        required
+        & {
+            "large_work_orchestration_bundle",
+            "skill_statuses",
+            "workspace_strategy",
+            "token_optimizer_status",
+            "token_optimizer_status_reason",
+            "host_runtime",
+            "nested_subagents_available_or_not_applicable",
+            "subagent_strategy_with_rationale",
+            "parallel_strategy_decision_with_rationale",
+            "role_execution_audit.status_or_pre_role_skip",
+            "guard_policy_or_rollback_strategy",
+            "verification_plan",
+            "immediate_next_skills_applied_skipped_or_blocked",
+            "same_turn_immediate_skill_evidence",
+        }
+    )
+
+
+def _large_work_preflight_release_evidence(
+    lowered: str,
+    required: Set[str],
+    immediate: Sequence[str],
+) -> bool:
+    if immediate and not all(_has_gate_immediate_skill_resolution(lowered, skill) for skill in immediate):
+        return False
+    for requirement in required:
+        if requirement in {str(skill).lower() for skill in immediate}:
+            continue
+        if requirement in {
+            "immediate_next_skills_applied_skipped_or_blocked",
+            "same_turn_immediate_skill_evidence",
+        }:
+            if not immediate or not all(_has_gate_immediate_skill_resolution(lowered, skill) for skill in immediate):
+                return False
+            continue
+        if not _has_large_work_requirement_evidence(lowered, requirement):
+            return False
+    return True
+
+
+def _has_large_work_requirement_evidence(lowered: str, requirement: str) -> bool:
+    if requirement == "large_work_orchestration_bundle":
+        return _has_field_assignment_or_recorded(lowered, "large_work_orchestration_bundle")
+    if requirement == "skill_statuses":
+        return _has_field_assignment_or_recorded(lowered, "skill_statuses") or _has_field_assignment_or_recorded(
+            lowered,
+            "skill_status_summary",
+        )
+    if requirement == "workspace_strategy":
+        return _has_field_assignment(lowered, "workspace_strategy")
+    if requirement == "token_optimizer_status":
+        return _has_status_assignment(
+            lowered,
+            "token_optimizer_status",
+            {"used", "considered_not_needed", "passthrough", "blocked", "skipped_with_rationale"},
+        )
+    if requirement == "token_optimizer_status_reason":
+        return _has_field_assignment_or_recorded(lowered, "token_optimizer_status_reason") or (
+            "token optimizer" in lowered and ("reason=" in lowered or "reason:" in lowered)
+        )
+    if requirement == "host_runtime":
+        return _has_field_assignment(lowered, "host_runtime") or _has_field_assignment(lowered, "host")
+    if requirement == "nested_subagents_available_or_not_applicable":
+        return (
+            _has_field_assignment(lowered, "nested_subagents_available")
+            or "nested_subagents_unavailable" in lowered
+            or "nested subagents unavailable" in lowered
+            or "not_applicable" in lowered
+        )
+    if requirement == "subagent_strategy_with_rationale":
+        return _has_subagent_strategy_rationale(lowered)
+    if requirement == "parallel_strategy_decision_with_rationale":
+        return _has_parallel_strategy_rationale(lowered)
+    if requirement == "role_execution_audit.status_or_pre_role_skip":
+        return _has_role_execution_audit_rationale(lowered)
+    if requirement == "guard_policy_or_rollback_strategy":
+        return any(
+            marker in lowered
+            for marker in [
+                "guard_policy",
+                "guard policy",
+                "rollback_strategy",
+                "rollback strategy",
+                "rollback policy",
+                "do not revert",
+                "no revert",
+                "snapshot strategy",
+            ]
+        )
+    if requirement == "verification_plan":
+        return _has_field_assignment_or_recorded(lowered, "verification_plan") or (
+            "verification plan" in lowered and any(marker in lowered for marker in ["pytest", "test", "qa", "check"])
+        )
+    if requirement.endswith("-harness"):
+        return _has_gate_immediate_skill_resolution(lowered, requirement)
+    return requirement in lowered
+
+
+def _has_gate_immediate_skill_resolution(lowered: str, skill_name: str) -> bool:
+    aliases = [skill_name.lower(), skill_name.replace("-", "_").lower()]
+    for alias in aliases:
+        if alias not in lowered:
+            continue
+        window = _text_window(lowered, alias, radius=300)
+        if _is_immediate_blocked_evidence(window) or _is_immediate_skipped_evidence(window):
+            return True
+        if _has_status_assignment(window, "status", {"applied"}) and any(
+            marker in window
+            for marker in [
+                "evidence",
+                "artifact",
+                "objective",
+                "goal",
+                "runtime",
+                "strategy",
+                "progress",
+                "host_runtime",
+                "verification_plan",
+            ]
+        ):
+            return True
+        if skill_name == "goal-state-harness" and "thread_goal_updated" in window:
+            return True
+    return False
+
+
+def _has_field_assignment(lowered: str, field: str) -> bool:
+    return re.search(rf"['\"]?{re.escape(field)}['\"]?\s*[:=]\s*['\"]?[a-z0-9_.-]+", lowered) is not None
+
+
+def _has_status_assignment(lowered: str, field: str, statuses: Set[str]) -> bool:
+    pattern = "|".join(re.escape(status) for status in sorted(statuses))
+    return re.search(rf"['\"]?{re.escape(field)}['\"]?\s*[:=]\s*['\"]?(?:{pattern})\b", lowered) is not None
+
+
+def _has_field_assignment_or_recorded(lowered: str, field: str) -> bool:
+    if _has_field_assignment(lowered, field):
+        return True
+    return any(
+        marker in _text_window(lowered, field, radius=120)
+        for marker in ["recorded", "applied", "ready", "present"]
+    )
+
+
+def _text_window(text: str, marker: str, radius: int = 200) -> str:
+    index = text.find(marker)
+    if index < 0:
+        return ""
+    start = max(0, index - radius)
+    end = min(len(text), index + len(marker) + radius)
+    return text[start:end]
 
 
 def _blocked_execution_work_start(payload: Dict[str, Any], lowered: str) -> bool:

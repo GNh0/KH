@@ -146,6 +146,80 @@ class KhFrontDoorTests(unittest.TestCase):
             any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
         )
 
+    def test_front_door_routes_named_dml_sql_style_request_to_host_local_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "\uc774 INSERT, UPDATE, DELETE SQL\uc744 \uc6b0\ub9ac "
+                    "\uc2a4\ud0c0\uc77c\ub85c \uc815\ub9ac\ud558\uace0 "
+                    "\uc2a4\uce7c\ub77c \ud568\uc218\uac00 JOIN\uc73c\ub85c "
+                    "\uc548\uc804\ud558\uac8c \ubc14\ub00c\uba74 \ubc14\uafd4\uc918.",
+                    project=Path.cwd(),
+                    host="codex",
+                )
+        payload = result.to_dict()
+        summary = result.to_summary_dict()
+
+        self.assertEqual(summary["classification"]["complexity"], "medium")
+        self.assertEqual(summary["classification"]["domain"], "software")
+        self.assertEqual(summary["classification"]["recommended_execution"], "skill_read")
+        self.assertEqual(summary["plugin_route"]["route"], "single")
+        self.assertEqual(summary["plugin_route"]["controller"], "sql-formatting")
+        self.assertEqual(payload["plugin_route"]["controller"]["capability"], "sql_formatting")
+        self.assertIn("specialist_trigger:sql-formatting:sql_formatting", payload["plugin_route"]["reasons"])
+        self.assertIn("sql-formatting-style-harness", payload["recommended_skills"])
+        self.assertEqual(payload["immediate_next_skills"], ["sql-formatting-style-harness"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertTrue(
+            any("SQL PRE-OUTPUT GATE" in action for action in payload["required_next_actions"])
+        )
+
+    def test_front_door_routes_english_named_dml_sql_style_request_to_host_local_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "Format this SQL and align the INSERT, UPDATE, DELETE blocks to our style.",
+                    project=Path.cwd(),
+                    host="codex",
+                )
+        payload = result.to_dict()
+        summary = result.to_summary_dict()
+
+        self.assertEqual(summary["classification"]["complexity"], "medium")
+        self.assertEqual(summary["classification"]["domain"], "software")
+        self.assertEqual(summary["classification"]["recommended_execution"], "skill_read")
+        self.assertEqual(summary["plugin_route"]["controller"], "sql-formatting")
+        self.assertEqual(payload["plugin_route"]["controller"]["capability"], "sql_formatting")
+        self.assertEqual(payload["immediate_next_skills"], ["sql-formatting-style-harness"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+
     def test_front_door_does_not_route_provider_when_name_is_review_example(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp) / "skills" / "sql-formatting"
@@ -174,6 +248,40 @@ class KhFrontDoorTests(unittest.TestCase):
             {assistant["provider_id"] for assistant in payload["plugin_route"]["assistants"]},
         )
         self.assertNotIn("sql-formatting-style-harness", payload["recommended_skills"])
+        self.assertFalse(
+            any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
+        )
+
+    def test_front_door_does_not_route_exact_sql_formatting_meta_review_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "Review whether SQL-formatting is not hidden by KH routing.",
+                    project=Path(tmp),
+                    host="codex",
+                )
+        payload = result.to_dict()
+        summary = result.to_summary_dict()
+
+        self.assertEqual(summary["classification"]["complexity"], "medium")
+        self.assertEqual(summary["classification"]["recommended_execution"], "skill_read")
+        self.assertNotEqual(payload["plugin_route"]["controller"]["provider_id"], "sql-formatting")
+        self.assertNotIn("explicit_user_request:sql-formatting", payload["plugin_route"]["reasons"])
+        self.assertNotIn("sql-formatting-style-harness", payload["recommended_skills"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
         self.assertFalse(
             any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
         )
@@ -362,8 +470,16 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("not_used_reason", payload["token_optimizer_decision"])
         self.assertEqual(payload["token_optimizer_decision"]["token_optimizer_gate_status"], "checked")
         self.assertFalse(payload["token_optimizer_decision"]["optimization_applied"])
+        self.assertFalse(payload["token_optimizer_decision"]["actual_optimization_used"])
+        self.assertFalse(payload["token_optimizer_decision"]["actual_optimization_claimed"])
+        self.assertEqual(payload["token_optimizer_decision"]["usage_kind"], "gate_check_only")
         self.assertEqual(payload["token_optimizer_decision"]["actual_optimization_status"], "considered_not_needed")
         self.assertIn("Token Optimizer not used", payload["token_optimizer_decision"]["actual_optimization_summary"])
+        self.assertEqual(payload["token_optimizer_lifecycle"]["gate_status"], "checked")
+        self.assertEqual(payload["token_optimizer_lifecycle"]["decision_status"], "considered_not_needed")
+        self.assertEqual(payload["token_optimizer_lifecycle"]["usage_kind"], "gate_check_only")
+        self.assertFalse(payload["token_optimizer_lifecycle"]["actual_optimization_used"])
+        self.assertIn("no command output", payload["token_optimizer_lifecycle"]["not_used_reason"])
         self.assertTrue(payload["large_work_bundle_validation"]["valid"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertEqual(
@@ -477,6 +593,9 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["token_optimizer_gate"]["gate_status"], "checked")
         self.assertFalse(payload["token_optimizer_gate"]["optimization_applied"])
         self.assertIn("not used", payload["token_optimizer_gate"]["summary"])
+        self.assertEqual(payload["token_optimizer_lifecycle"]["lifecycle_status"], "gate_checked")
+        self.assertEqual(payload["token_optimizer_lifecycle"]["usage_kind"], "gate_check_only")
+        self.assertFalse(payload["token_optimizer_lifecycle"]["actual_optimization_claimed"])
         self.assertIn("without_token_optimizer", payload["token_optimizer_decision"])
         self.assertNotIn("token-optimizer", payload["selected_not_executed_skills"])
 
@@ -871,6 +990,69 @@ class KhFrontDoorTests(unittest.TestCase):
             "blocked_until_large_work_preflight",
         )
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_readonly_source_audit_with_no_edit_stays_medium(self):
+        result = build_kh_front_door(
+            "Read-only audit this runtime code and report issues. Do not edit files.",
+            project=Path.cwd(),
+            host="codex",
+            request_context={"domain": "software", "project_markers": [".kh"]},
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("source_summary", payload["classification"]["evidence_required"])
+        self.assertIn("audit_findings", payload["classification"]["evidence_required"])
+        self.assertIn("readonly_source_audit_request", payload["classification"]["reasons"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_korean_kh_readonly_audit_with_no_edit_does_not_trigger_large_preflight(self):
+        result = build_kh_front_door(
+            "KH UAF \uc138\uc158 \uc0ac\uc6a9\uc131/\uc2a4\ud0ac \uc801\uc6a9 "
+            "\uac10\uc0ac\ub97c \ud574\uc918. \ucf54\ub4dc\ub294 "
+            "\uc218\uc815\ud558\uc9c0 \ub9d0\uace0 \ud604\uc7ac "
+            "\uad6c\ud604\uc774 \uacfc\uc7a5 \uc5c6\uc774 "
+            "\ub3d9\uc791\ud558\ub294\uc9c0 \ud655\uc778\ud574\uc918.",
+            project=Path.cwd(),
+            host="codex",
+            request_context={"project_markers": [".kh"]},
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["domain"], "software")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("source_summary", payload["classification"]["evidence_required"])
+        self.assertIn("audit_findings", payload["classification"]["evidence_required"])
+        self.assertIn("readonly_source_audit_request", payload["classification"]["reasons"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_readonly_security_audit_still_uses_large_preflight(self):
+        result = build_kh_front_door(
+            "Read-only security audit this auth code and report risks. Do not edit files.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertIn(payload["classification"]["complexity"], {"heavy", "high_risk"})
+        self.assertNotIn("readonly_source_audit_request", payload["classification"]["reasons"])
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertIn("goal-state-harness", payload["immediate_next_skills"])
 
     def test_list_double_click_update_condition_question_does_not_trigger_large_preflight(self):
         result = build_kh_front_door(

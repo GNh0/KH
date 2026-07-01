@@ -25,6 +25,7 @@ TOKEN_OPTIMIZER_STATUS_VALUES = {
 BUNDLE_MEMBER_SKILLS = [
     "request-complexity-router",
     "host-agent-orchestration",
+    "domain-orchestration-harness",
     "goal-state-harness",
     "development-lifecycle-harness",
     "worktree-isolation-harness",
@@ -36,6 +37,9 @@ BUNDLE_MEMBER_SKILLS = [
     "parallel-orchestration-harness",
     "subagent-review-pipeline",
     "role-execution-audit-harness",
+    "quality-gates-harness",
+    "review-gate-harness",
+    "qa-gate-harness",
     "artifact-render-qa-harness",
     "deliverable-template-quality-harness",
     "traceability-matrix-harness",
@@ -211,6 +215,12 @@ def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
             evidence_note="Resolved host runtime, tool boundaries, and whether subagents can be used.",
             evidence_keys=["host_runtime_decision"],
         ),
+        "domain-orchestration-harness": SkillApplicationStatus(
+            status="applied",
+            application_mode="procedural",
+            evidence_note="Classified the work domain and selected domain-appropriate planning, roles, gates, and deliverables.",
+            evidence_keys=["domain_profile", "work_design"],
+        ),
         "goal-state-harness": SkillApplicationStatus(
             status="applied",
             application_mode="procedural",
@@ -248,9 +258,9 @@ def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
             evidence_keys=["command_output_filter_plan"],
         ),
         "token-optimizer": SkillApplicationStatus(
-            status="applied",
-            application_mode="runtime",
-            evidence_note="Used, blocked, passed through, or explicitly skipped context optimization.",
+            status="considered_not_needed",
+            application_mode="considered",
+            evidence_note="Token optimizer gate is required, but no command output, transcript, or artifact payload has been optimized yet.",
             evidence_keys=["token_optimizer_status"],
         ),
         "memory-state-harness": SkillApplicationStatus(
@@ -276,6 +286,24 @@ def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
             application_mode="considered",
             evidence_note="No runtime role DAG execution claimed yet.",
             evidence_keys=["role_execution_audit"],
+        ),
+        "quality-gates-harness": SkillApplicationStatus(
+            status="applied",
+            application_mode="procedural",
+            evidence_note="Requires failing-first, systematic debugging, or quality gate evidence before completion for large work.",
+            evidence_keys=["quality_gate_status", "red_green_status"],
+        ),
+        "review-gate-harness": SkillApplicationStatus(
+            status="applied",
+            application_mode="procedural",
+            evidence_note="Requires structured review findings, no-findings evidence, or a blocked review rationale.",
+            evidence_keys=["review_status", "review_findings"],
+        ),
+        "qa-gate-harness": SkillApplicationStatus(
+            status="applied",
+            application_mode="procedural",
+            evidence_note="Requires QA, regression, browser/app, or manual verification evidence before release claims.",
+            evidence_keys=["qa_status", "regression_evidence"],
         ),
         "artifact-render-qa-harness": SkillApplicationStatus(
             status="considered_not_needed",

@@ -1,21 +1,29 @@
 ---
 name: universal-agent-framework
-description: "A pure-local, highly concurrent, and sandboxed AI/domain orchestration framework. Use this skill when the user asks to orchestrate a complex project, persist design artifacts, or parallelize multiple bounded tasks."
+description: "A local-first, auditable AI/domain orchestration framework. Use this skill when the user asks to orchestrate a complex project, persist design artifacts, or coordinate bounded task, review, memory, and verification workflows."
 ---
 
 # Universal Agent Framework (UAF)
 
-This is a local-first, zero-dependency, and hyper-concurrent agentic orchestration framework. It uses a Pure Python `asyncio` architecture to bypass traditional broker limits, can carry domain-neutral design artifacts through workflows, routes user-facing deliverables to the target project's `docs/` folder by work type, keeps harness-only quality evidence in metadata, and can safely test Python code on Windows via `multiprocessing`-based sandboxing.
+This is a local-first UAF skillbook and orchestration runtime. It uses Python contracts, bounded workflow dispatch, role orchestration, evidence gates, scoped memory, token-gate telemetry, and packaged skills to carry domain-neutral design and implementation work through auditable workflows. User-facing deliverables route to the target project's `docs/` folder by work type, while harness-only quality evidence stays in runtime metadata.
 
-## Front-Door Auto Routing
+## Front-Door Routing
 
 When a request is non-trivial, do not wait for the user to enumerate individual skills. Run the KH front door first even when the user did not say KH, UAF, skill, harness, plugin, front door, router, or catalog.
 
 Non-trivial means the request involves project files, code changes, deliverables, substantial documents, long command output, review, QA, verification, branch finishing, subagents, persistent state, or high-risk actions. Simple definitions, one-line explanations, translations, and tiny direct answers can remain direct after intake classifies them as light.
 
 ```bash
-python -m src.orchestration.kh_front_door --prompt "<user request>" --project "<target project>" --host codex --summary
+python skills/always_on_front_door/scripts/front_door.py --prompt-file "<utf8 prompt file>" --project "<target project>" --host codex --summary --strict-execution-gate
 ```
+
+When already running from the KH repository root, the equivalent module entrypoint is:
+
+```bash
+python -m src.orchestration.kh_front_door --prompt-file "<utf8 prompt file>" --project "<target project>" --host codex --summary --strict-execution-gate
+```
+
+Use `--prompt-file` for non-ASCII or multi-line prompts. The inline `--prompt` option is acceptable only for short ASCII-only prompts.
 
 1. Apply `automatic-intake-harness` so ordinary user wording still reaches KH intake.
 2. Inspect this root guide or the packaged skill catalog.
@@ -34,7 +42,7 @@ If a host-provided KH skill file path fails after a plugin upgrade, stop using t
 - Dependencies: `uvicorn`, `fastapi`, `httpx`, `requests` (installed via pip)
 
 ## Execution via CLI
-Do NOT run internal scripts directly. Always use the built-in `cli.py` orchestrator. The CLI handles orchestration, dispatch metadata, and process garbage collection automatically. The webhook server is optional and only needed for external host callbacks.
+For full workflow runs, use the built-in `cli.py` orchestrator. The CLI handles orchestration, dispatch metadata, and process cleanup. The front-door bootstrap is the exception: hosts should run the skill-local `skills/always_on_front_door/scripts/front_door.py` wrapper, or the equivalent `python -m src.orchestration.kh_front_door` command when already inside the KH repository root. The webhook server is optional and only needed for external host callbacks.
 
 ### Commands
 

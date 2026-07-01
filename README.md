@@ -17,19 +17,19 @@ The goal is not to depend on a vendor-specific local skill folder. UAF packages 
 Users should not need to name KH, UAF, or any individual skill/harness for non-trivial work. If KH is installed and the request involves project files, code changes, deliverables, substantial documents, long command output, review, QA, verification, branch finishing, subagents, persistent state, or high-risk actions, the host should select only `kh-uaf:always-on-front-door` first and make the first standalone work-bearing tool call the KH front door before opening other skill files, source exploration, memory lookup, target-folder checks, or edits:
 
 ```bash
-python skills/always_on_front_door/scripts/front_door.py --prompt "<user request>" --project "<target project>" --host codex --summary --strict-execution-gate
+python skills/always_on_front_door/scripts/front_door.py --prompt-file "<utf8 prompt file>" --project "<target project>" --host codex --summary --strict-execution-gate
 ```
 
-When already running from the KH repository root, the equivalent module entrypoint is `python -m src.orchestration.kh_front_door ...`; both paths execute `src.orchestration.kh_front_door.build_kh_front_door`. With `--strict-execution-gate`, exit code 3 means front-door succeeded but `execution_authorization.must_stop_before_execution=true`; only the reported setup evidence may run next.
+Use `--prompt-file` for non-ASCII or multi-line prompts. The inline `--prompt` option is acceptable only for short ASCII-only prompts. When already running from the KH repository root, the equivalent module entrypoint is `python -m src.orchestration.kh_front_door ...`; both paths execute `src.orchestration.kh_front_door.build_kh_front_door`. With `--strict-execution-gate`, exit code 3 means front-door succeeded but `execution_authorization.must_stop_before_execution=true`; only the reported setup evidence may run next.
 
 1. Apply `always-on-front-door` and `automatic-intake-harness` to decide whether ordinary user wording needs KH intake.
 2. Inspect the KH root guide or packaged skill catalog.
 3. Route through `plugin-composition-policy` and `request-complexity-router`.
-4. Select the minimal skill bundle automatically.
+4. Return the minimal skill bundle for the host to apply, skip with rationale, or block with evidence.
 5. Record each selected, considered, skipped, or blocked skill with evidence.
 6. Start source reads, edits, role DAG execution, or deliverable generation only after that intake step.
 
-This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. `session-skill-audit` flags a P1 `always-on-front-door` `missing_front_door` issue when a KH-capable session begins non-trivial work before the front door runs, unless the request was classified as light/direct or plugin composition did not select KH.
+This is the contract that prevents KH from becoming a manual checklist. The front-door command resolves the current repo-local or installed cache skill source, rejects stale KH cache paths, classifies the request, composes the provider route, and returns machine-readable selected/considered/skipped/blocked skill evidence. KH can require and audit this intake path, but actual host or subagent compliance depends on the installed plugin, active session prompt, and tool runtime. `session-skill-audit` flags a P1 `always-on-front-door` `missing_front_door` issue when a KH-capable session begins non-trivial work before the front door runs, unless the request was classified as light/direct or plugin composition did not select KH.
 
 `Test-Path`, `Get-ChildItem`, `rg`, `Get-Content`, `Select-String`, file reads, parent/sibling folder scans, non-bootstrap SKILL.md reads, MEMORY.md searches, browser/document/image actions, and plugin-specific work are already work exploration. They should happen after front-door intake unless the request is light/direct or the front-door command is unavailable and the blocked rationale is recorded first. Do not parallelize those actions in the same pre-intake batch as the front-door command. When a target folder is explicit, sibling run folders are not context unless the user asks for comparison or reuse.
 
@@ -40,7 +40,7 @@ Internal skill/harness instructions and subagent packets can stay in English. Fi
 ## What It Includes
 
 - 41 packaged skills/harnesses with support files, smoke checks, and runnable demos.
-- `always-on-front-door` as the host-visible bootstrap skill that should run before other work-bearing skills or plugins.
+- `always-on-front-door` as the host-visible bootstrap skill and auditable intake contract that should run before other work-bearing skills or plugins.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - `brainstorming-harness` for early product, project, workflow, analysis, research, process, document, specification, operations, investment, and design discovery before execution, artifact generation, architecture, or implementation.
@@ -56,6 +56,8 @@ Internal skill/harness instructions and subagent packets can stay in English. Fi
 - `KH-Bench Verified`, a practical task benchmark separate from internal skill quality scores.
 - `KH Practical Quality Gate`, the release gate that treats KH-Bench/SIDE/E2E results as the primary quality signal and static skill scores as a structure check.
 - `scenario-evaluation-harness`, a deterministic SIDE-style loop for request routing, evidence, gate, and resume behavior.
+
+For the current-vs-historical document boundary, see `docs/README.md`.
 
 By default, user-facing files are written to the target project, while UAF runtime state is written outside the project root under the KH-UAF runtime store. Set `UAF_PROJECT_LOCAL_STATE=1` only when you explicitly want `.uaf` and snapshot state inside the project.
 
@@ -131,13 +133,13 @@ Git ref: main
 Sparse path: .agents/plugins
 ```
 
-The marketplace file lives on `main`, but it installs the plugin from the `codex-runtime` branch. `main` keeps tests, audits, and development docs; `codex-runtime` is the slim plugin runtime branch intended for Codex cache installs.
+The `Git ref: main` line is for the marketplace descriptor only: Codex reads `.agents/plugins/marketplace.json` from `main`. That descriptor points the installed plugin source at `codex-runtime`. Treat the installed cache under `$CODEX_HOME/plugins/cache/.../kh-uaf/<version>` as a generated copy of the plugin source, not as the source branch itself. `main` keeps tests, audits, and development docs; `codex-runtime` is the slim plugin runtime branch intended for Codex cache installs.
 
 After install or upgrade, start a new thread so Codex reloads the skills.
 
 Upgrade note: Codex installs plugin cache entries by manifest version. When publishing a new plugin build, bump both `.codex-plugin/plugin.json` and the root `plugin.json` version. If the marketplace clone is current but the installed plugin still appears under an older cache path such as `kh-uaf/2.9.27`, install or upgrade again after the version bump.
 
-Codex subagent note: KH is intended to work from the installed marketplace plugin cache. Do not install a separate `$CODEX_HOME/skills` bootstrap copy for KH. If a blind subagent misses KH, treat it as a stale session or plugin injection problem: upgrade/reinstall the marketplace plugin, start a fresh session, and audit the session log for `kh-uaf:always-on-front-door` or the installed cache wrapper path before claiming automatic routing.
+Codex subagent note: KH is intended to work from the installed marketplace plugin cache. Do not install a separate `$CODEX_HOME/skills` bootstrap copy for KH. If a subagent starts non-trivial work without KH intake, treat it as a stale session, missing plugin injection, or host-compliance issue: upgrade/reinstall the marketplace plugin, start a fresh session, and audit the session log for `kh-uaf:always-on-front-door` or the installed cache wrapper path before claiming the intake contract was followed.
 
 To separate marketplace descriptor state from installed plugin cache state, run:
 
@@ -145,7 +147,7 @@ To separate marketplace descriptor state from installed plugin cache state, run:
 python -m src.orchestration.plugin_install_audit --summary
 ```
 
-`ref = "main"` in the Codex marketplace config is expected for this repository: it reads `.agents/plugins/marketplace.json`. The plugin source ref inside that marketplace descriptor should point at `codex-runtime`. Treat a run as stale only when the installed cache version or active session skill paths still point at an older KH UAF version.
+`ref = "main"` in the Codex marketplace config is expected for this repository: it reads `.agents/plugins/marketplace.json`. The plugin source ref inside that marketplace descriptor should point at `codex-runtime`. Treat a run as stale only when the installed cache version or active session skill paths still point at an older KH UAF version, or when the active session never received the installed plugin prompt.
 Use `--strict` when this diagnostic should fail CI or a release script on stale cache state.
 
 Direct Windows clone:

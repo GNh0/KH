@@ -10,6 +10,7 @@ from src.orchestration.runtime_memory import (
     build_active_memory_preflight,
     build_explicit_cross_scope_memory_import,
     build_parent_scope_memory_access,
+    record_workflow_memory_candidates,
     submit_parent_memory_candidates,
     resolve_memory_provider,
     write_pre_compaction_memory_flush,
@@ -23,6 +24,60 @@ class RuntimeMemoryTests(unittest.TestCase):
         self.assertEqual(decision["provider"], "local")
         self.assertEqual(decision["status"], "fallback")
         self.assertEqual(decision["fallback_provider"], "local")
+
+    def test_workflow_memory_candidates_skip_when_provider_passthrough(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / ".memory"
+            candidate = MemoryRecord(
+                record_id="workflow-lesson",
+                kind="lesson",
+                content="Keep token gate accounting separate from optimization usage.",
+                scope="project",
+                source="test",
+            )
+
+            result = record_workflow_memory_candidates(
+                str(root),
+                {"memory_root": str(memory_root), "memory_provider": "passthrough"},
+                [candidate],
+            )
+
+            self.assertEqual(result["status"], "skipped_with_rationale")
+            self.assertEqual(result["provider"]["provider"], "passthrough")
+            self.assertEqual(result["recorded_count"], 0)
+            self.assertEqual(result["skipped_count"], 1)
+            self.assertFalse(memory_root.exists())
+
+    def test_workflow_memory_candidates_block_when_strict_external_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / ".memory"
+            candidate = MemoryRecord(
+                record_id="external-only",
+                kind="lesson",
+                content="Strict external memory must not fall back to local candidate writes.",
+                scope="project",
+                source="test",
+            )
+
+            result = record_workflow_memory_candidates(
+                str(root),
+                {
+                    "memory_root": str(memory_root),
+                    "memory_provider": "external",
+                    "memory_provider_strict": True,
+                    "external_memory_available": False,
+                },
+                [candidate],
+            )
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertEqual(result["provider"]["status"], "blocked")
+            self.assertEqual(result["recorded_count"], 0)
+            self.assertEqual(result["blocked_count"], 1)
+            self.assertEqual(result["blocked"][0]["record_id"], "external-only")
+            self.assertFalse(memory_root.exists())
 
     def test_active_memory_preflight_recalls_and_writes_bounded_prompt_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
