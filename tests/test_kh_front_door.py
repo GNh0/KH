@@ -541,8 +541,8 @@ class KhFrontDoorTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 3)
         self.assertTrue(payload["execution_authorization"]["must_stop_before_execution"])
-        self.assertFalse(payload["execution_authorization"]["can_execute_now"])
-        self.assertIn("BLOCKING FRONT-DOOR RESULT", payload["required_next_actions"][0])
+        self.assertEqual(payload["execution_authorization"]["status"], "blocked_by_execution_gate")
+        self.assertIn("large_work_preflight", payload["required_next_action_codes"])
 
     def test_cli_summary_outputs_machine_readable_front_door_json(self):
         completed = subprocess.run(
@@ -569,30 +569,16 @@ class KhFrontDoorTests(unittest.TestCase):
 
         self.assertEqual(payload["front_door_status"], "ok")
         self.assertEqual(payload["plugin_route"]["controller"], "kh")
-        self.assertIn("skill-catalog", payload["recommended_skills"])
         self.assertIn("immediate_next_skills", payload)
-        self.assertEqual(
-            payload["runtime_applied_skills"],
-            [
-                "always-on-front-door",
-                "automatic-intake-harness",
-                "plugin-composition-policy",
-                "request-complexity-router",
-                "skill-catalog",
-                "token-optimizer",
-            ],
-        )
-        self.assertEqual(payload["summary_mode"], "compact")
-        self.assertEqual(payload["skill_status_summary"]["by_status"]["applied"], 6)
-        self.assertEqual(payload["skill_status_summary"]["by_application_mode"]["runtime"], 6)
-        self.assertEqual(payload["token_optimizer_gate"]["gate_status"], "checked")
-        self.assertFalse(payload["token_optimizer_gate"]["optimization_applied"])
-        self.assertIn("not used", payload["token_optimizer_gate"]["summary"])
-        self.assertEqual(payload["token_optimizer_lifecycle"]["lifecycle_status"], "gate_checked")
-        self.assertEqual(payload["token_optimizer_lifecycle"]["usage_kind"], "gate_check_only")
-        self.assertFalse(payload["token_optimizer_lifecycle"]["actual_optimization_claimed"])
-        self.assertIn("without_token_optimizer", payload["token_optimizer_decision"])
-        self.assertNotIn("token-optimizer", payload["selected_not_executed_skills"])
+        self.assertEqual(payload["summary_mode"], "ultra_compact")
+        self.assertEqual(payload["token_optimizer"]["status"], "considered_not_needed")
+        self.assertFalse(payload["token_optimizer"]["used"])
+        self.assertEqual(payload["token_optimizer"]["reason_code"], "no_candidate_output")
+        self.assertNotIn("saved", payload["token_optimizer"])
+        self.assertIn("required_next_action_codes", payload)
+        self.assertNotIn("recommended_skills", payload)
+        self.assertNotIn("skill_status_summary", payload)
+        self.assertNotIn("token_optimizer_decision", payload)
 
     def test_cli_prompt_file_preserves_korean_request_for_brainstorming_gate(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -629,9 +615,9 @@ class KhFrontDoorTests(unittest.TestCase):
             )
         payload = json.loads(completed.stdout)
 
-        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertIn("brainstorming-harness", payload["immediate_next_skills"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
-        self.assertIn("MEMORY.md_lookup", payload["execution_gate"]["blocked_actions"])
+        self.assertIn("brainstorming_handoff", payload["required_next_action_codes"])
 
     def test_skill_local_front_door_wrapper_runs_outside_repo_root(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -660,7 +646,8 @@ class KhFrontDoorTests(unittest.TestCase):
 
         self.assertEqual(payload["front_door_status"], "ok")
         self.assertEqual(payload["plugin_route"]["controller"], "kh")
-        self.assertIn("always-on-front-door", payload["runtime_applied_skills"])
+        self.assertEqual(payload["summary_mode"], "ultra_compact")
+        self.assertIn("large_work_preflight", payload["required_next_action_codes"])
 
     def test_ordinary_non_trivial_request_runs_automatic_intake_without_kh_terms(self):
         result = build_kh_front_door(

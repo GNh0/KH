@@ -165,63 +165,54 @@ class KhFrontDoorResult:
 
     def to_compact_summary_dict(self) -> Dict[str, Any]:
         route_controller = self.plugin_route.get("controller", {})
-        runtime_applied_skills = [
-            name
-            for name, status in self.skill_statuses.items()
-            if status.get("status") == "applied" and status.get("application_mode") == "runtime"
+        token_summary = _compact_token_optimizer_decision(self.token_optimizer_decision)
+        plugin_route: Dict[str, Any] = {
+            "route": self.plugin_route.get("route"),
+        }
+        controller_id = route_controller.get("provider_id")
+        if controller_id and controller_id != "none":
+            plugin_route["controller"] = controller_id
+        assistants = [
+            assistant.get("provider_id")
+            for assistant in self.plugin_route.get("assistants", [])
+            if assistant.get("provider_id")
         ]
-        immediate_next = set(self.immediate_next_skills)
-        selected_not_executed_skills = [
-            name
-            for name, status in self.skill_statuses.items()
-            if name not in runtime_applied_skills and name not in immediate_next
-        ]
-        return {
-            "summary_mode": "compact",
+        if assistants:
+            plugin_route["assistants"] = assistants
+        payload: Dict[str, Any] = {
+            "summary_mode": "ultra_compact",
             "front_door_status": self.front_door_status,
-            "host": self.host,
-            "project": self.project,
-            "skill_source": _compact_skill_source(self.skill_source),
-            "stale_or_missing_skill_paths": [
-                _compact_host_skill_path_check(check)
-                for check in self.host_skill_path_checks
-                if check.status != "ok"
-            ],
             "classification": {
                 "complexity": self.classification.get("complexity"),
-                "domain": self.classification.get("domain"),
                 "recommended_execution": self.classification.get("recommended_execution"),
-                "confidence": self.classification.get("confidence"),
             },
-            "plugin_route": {
-                "route": self.plugin_route.get("route"),
-                "controller": route_controller.get("provider_id"),
-                "assistants": [
-                    assistant.get("provider_id")
-                    for assistant in self.plugin_route.get("assistants", [])
-                ],
-                "ask_user": self.plugin_route.get("ask_user"),
-            },
-            "recommended_skills": list(self.recommended_skills),
-            "immediate_next_skills": list(self.immediate_next_skills),
-            "runtime_applied_skills": runtime_applied_skills,
-            "selected_not_executed_skills": selected_not_executed_skills,
+            "plugin_route": plugin_route,
             "execution_gate": _compact_execution_gate(self.execution_gate),
-            "execution_authorization": _compact_execution_authorization(self.execution_authorization),
-            "required_next_actions": _compact_required_next_actions(
-                self.required_next_actions,
-                self.execution_authorization,
-                self.immediate_next_skills,
-                self.plugin_route,
-            ),
-            "required_next_actions_count": len(self.required_next_actions),
-            "token_optimizer_decision": _compact_token_optimizer_decision(self.token_optimizer_decision),
-            "token_optimizer_gate": _compact_token_optimizer_gate_summary(self.token_optimizer_decision),
-            "token_optimizer_lifecycle": _compact_token_optimizer_lifecycle_summary(self.token_optimizer_decision),
-            "memory_policy": _compact_memory_policy(self.memory_policy),
-            "skill_status_summary": _compact_skill_status_summary(self.skill_statuses),
-            "warnings": list(self.warnings),
+            "token_optimizer": token_summary,
+            "skill_source": _compact_skill_source(self.skill_source),
         }
+        domain = self.classification.get("domain")
+        if domain and domain != "general":
+            payload["classification"]["domain"] = domain
+        if self.immediate_next_skills:
+            payload["immediate_next_skills"] = list(self.immediate_next_skills)
+        action_codes = _compact_required_next_action_codes(
+            self.execution_authorization,
+            self.immediate_next_skills,
+            self.plugin_route,
+            self.execution_gate,
+        )
+        if action_codes:
+            payload["required_next_action_codes"] = action_codes
+        authorization = _compact_execution_authorization(self.execution_authorization)
+        if authorization:
+            payload["execution_authorization"] = authorization
+        deferred_count = _count_deferred_skills(self.skill_statuses, self.immediate_next_skills)
+        if deferred_count:
+            payload["deferred_skill_count"] = deferred_count
+        if self.warnings:
+            payload["warnings"] = list(self.warnings)
+        return payload
 
 
 def build_kh_front_door(
@@ -985,13 +976,15 @@ def _token_optimizer_lifecycle_summary(decision: Dict[str, Any]) -> Dict[str, An
 
 
 def _compact_skill_source(skill_source: SkillSource) -> Dict[str, Any]:
-    return {
+    payload = {
         "source_type": skill_source.source_type,
         "version": skill_source.version,
-        "exists": skill_source.exists,
-        "skill_count": skill_source.skill_count,
-        "reason": skill_source.reason,
     }
+    if not skill_source.exists:
+        payload["exists"] = False
+    elif skill_source.skill_count <= 0:
+        payload["skill_count"] = skill_source.skill_count
+    return payload
 
 
 def _compact_host_skill_path_check(check: HostSkillPathCheck) -> Dict[str, Any]:
@@ -1004,43 +997,103 @@ def _compact_host_skill_path_check(check: HostSkillPathCheck) -> Dict[str, Any]:
 
 
 def _compact_execution_gate(execution_gate: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+    payload = {
         "status": execution_gate.get("status"),
         "can_execute": execution_gate.get("can_execute"),
-        "reason": execution_gate.get("reason"),
-        "required_before_execution": list(execution_gate.get("required_before_execution", []) or []),
-        "blocked_actions": list(execution_gate.get("blocked_actions", []) or []),
     }
+    return payload
 
 
 def _compact_execution_authorization(authorization: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "status": authorization.get("status"),
-        "can_execute_now": authorization.get("can_execute_now"),
-        "can_start_task_work": authorization.get("can_start_task_work"),
-        "must_stop_before_execution": authorization.get("must_stop_before_execution"),
-        "pending_immediate_next_skills": list(authorization.get("pending_immediate_next_skills", []) or []),
-        "required_before_execution": list(authorization.get("required_before_execution", []) or []),
-        "forbidden_next_actions": list(authorization.get("forbidden_next_actions", []) or []),
-        "strict_exit_code_when_blocked": authorization.get("strict_exit_code_when_blocked"),
+    pending = list(authorization.get("pending_immediate_next_skills", []) or [])
+    must_stop = bool(authorization.get("must_stop_before_execution"))
+    if not must_stop and not pending:
+        return {}
+    payload: Dict[str, Any] = {
+        "must_stop_before_execution": must_stop,
     }
+    if authorization.get("status") == "blocked_by_execution_gate":
+        payload["status"] = authorization.get("status")
+    strict_code = authorization.get("strict_exit_code_when_blocked")
+    if strict_code not in {None, 3}:
+        payload["strict_exit_code_when_blocked"] = strict_code
+    return payload
 
 
 def _compact_token_optimizer_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "provider": decision.get("provider") or decision.get("token_optimizer_provider"),
-        "token_optimizer_status": decision.get("token_optimizer_status"),
-        "not_used_reason": decision.get("not_used_reason"),
-        "optimization_applied": bool(decision.get("optimization_applied")),
-        "actual_optimization_claimed": bool(decision.get("actual_optimization_claimed")),
-        "usage_kind": decision.get("usage_kind"),
-        "without_token_optimizer": int(decision.get("without_token_optimizer") or 0),
-        "with_token_optimizer": int(decision.get("with_token_optimizer") or 0),
-        "estimated_tokens_saved": int(decision.get("estimated_tokens_saved") or 0),
-        "token_savings_ratio": float(decision.get("token_savings_ratio") or 0.0),
-        "billing_tokens_available": bool(decision.get("billing_tokens_available")),
-        "token_count_is_estimate": bool(decision.get("token_count_is_estimate", True)),
+    used = bool(decision.get("optimization_applied") or decision.get("actual_optimization_used"))
+    payload: Dict[str, Any] = {
+        "status": decision.get("token_optimizer_status"),
+        "used": used,
+        "reason_code": _compact_token_reason_code(decision),
     }
+    if used:
+        payload.update(
+            {
+                "provider": decision.get("provider") or decision.get("token_optimizer_provider"),
+                "saved": int(decision.get("estimated_tokens_saved") or 0),
+                "ratio": float(decision.get("token_savings_ratio") or 0.0),
+                "billing_tokens_available": bool(decision.get("billing_tokens_available")),
+            }
+        )
+    return payload
+
+
+def _compact_token_reason_code(decision: Dict[str, Any]) -> str:
+    status = str(decision.get("token_optimizer_status") or "").strip()
+    if status in {"used", "blocked", "passthrough"}:
+        return status
+    reason = str(decision.get("not_used_reason") or decision.get("token_optimizer_status_reason") or "").lower()
+    if "no command output" in reason or "subagent transcript" in reason or "compressible artifact" in reason:
+        return "no_candidate_output"
+    if "too small" in reason or "small" in reason:
+        return "small_input"
+    if "contract" in reason or "source-of-truth" in reason or "preserve" in reason:
+        return "quality_passthrough"
+    if status:
+        return status
+    return "not_needed"
+
+
+def _compact_required_next_action_codes(
+    authorization: Dict[str, Any],
+    immediate_next_skills: Sequence[str],
+    plugin_route: Dict[str, Any],
+    execution_gate: Dict[str, Any],
+) -> List[str]:
+    codes: List[str] = []
+    if authorization.get("must_stop_before_execution"):
+        codes.append("stop_before_task_work")
+    if immediate_next_skills:
+        codes.append("apply_immediate_next_skills")
+
+    gate_status = str(execution_gate.get("status") or "")
+    if gate_status == "blocked_until_large_work_preflight":
+        codes.append("large_work_preflight")
+    elif gate_status == "blocked_until_brainstorming_handoff":
+        codes.append("brainstorming_handoff")
+    elif gate_status and not bool(execution_gate.get("can_execute", True)):
+        codes.append(gate_status)
+
+    controller = plugin_route.get("controller", {}) or {}
+    controller_id = str(controller.get("provider_id") or "")
+    if controller_id and controller_id not in {"none", "kh"}:
+        codes.append("apply_selected_provider")
+    return _dedupe(codes)
+
+
+def _count_deferred_skills(
+    statuses: Dict[str, Dict[str, Any]],
+    immediate_next_skills: Sequence[str],
+) -> int:
+    immediate = set(str(skill) for skill in immediate_next_skills)
+    count = 0
+    for name, status in statuses.items():
+        if name in immediate:
+            continue
+        if status.get("status") not in {"applied", "pending_immediate_execution"}:
+            count += 1
+    return count
 
 
 def _compact_token_optimizer_gate_summary(decision: Dict[str, Any]) -> Dict[str, Any]:

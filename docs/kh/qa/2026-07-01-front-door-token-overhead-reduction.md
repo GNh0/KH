@@ -45,6 +45,27 @@ Measured against local 2.9.101 source after the patch:
 | SQL formatting route | 3,701 | 925 | 66.2% |
 | Heavy workflow route | 6,739 | 1,685 | 72.4% |
 
+## Ultra-Compact Follow-Up
+
+Measured against local 2.9.102 source after reducing `--summary` to a routing
+signal rather than an evidence report:
+
+| Scenario | Prompt tokens | 2.9.100 summary tokens | 2.9.101 compact tokens | 2.9.102 ultra-compact tokens | Delta vs 2.9.101 |
+|---|---:|---:|---:|---:|---:|
+| Light question | 3 | 2,297 | 663 | 106 | -84.0% |
+| Current token-overhead question | 9 | 2,418 | 669 | 106 | -84.2% |
+| Short rewrite | 14 | 2,630 | 663 | 161 | -75.7% |
+| SQL formatting | 19 | 2,753 | 926 | 166 | -82.1% |
+| Inventory dashboard direction | 24 | 3,739 | 1,310 | 161 | -87.7% |
+| Heavy implementation request | 26 | 6,121 | 1,685 | 205 | -87.8% |
+
+The ultra-compact payload keeps only classification, plugin route, execution gate,
+immediate next skill names when required, short next-action codes, skill source
+version, and token optimizer status. Token optimizer savings fields are emitted
+only when optimization was actually used. Full skill lists, long gate reasons,
+status summaries, and detailed token telemetry remain available through
+`--verbose-summary` and full JSON output.
+
 ## Regression Found During Subagent QA
 
 The installed 2.9.100 cache also over-routed this short request:
@@ -75,9 +96,7 @@ rephrase requests as `light/general/direct_answer`.
 
 ## Remaining Deployment State
 
-Source manifests are bumped to `2.9.101`. Installed Codex marketplace cache remains
-`2.9.100` until the user upgrades the marketplace entry after this branch is pushed.
-`python -B -m src.orchestration.plugin_install_audit --summary` therefore reports
-`attention_required`, and `python -B -m src.benchmarks.practical_quality_gate --summary`
-reports `release_ready=false` only because installed cache 2.9.100 is behind source
-2.9.101. KH-Bench itself passed 8/8 inside that gate.
+Source manifests are bumped to `2.9.102`. Installed Codex marketplace cache remains
+behind until the user upgrades the marketplace entry after this branch is pushed.
+`python -B -m src.orchestration.plugin_install_audit --summary` may therefore report
+`attention_required` until the installed cache catches up.
