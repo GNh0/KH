@@ -110,6 +110,26 @@ class CommandOutputRuntimeTests(unittest.TestCase):
             self.assertIn(fact, result.stdout)
         self.assertIn("required facts", result.metadata["fallback_reason"])
 
+    def test_summary_preserves_single_colon_file_line_under_noisy_pytest_output(self):
+        lines = [f"tests/test_bulk.py::test_{index} PASSED fixture line {index}" for index in range(180)]
+        lines.extend([
+            "FAILED tests/test_billing.py::test_invoice_total_rounds_half_up",
+            "Traceback (most recent call last):",
+            "tests/test_billing.py:42: AssertionError",
+            "AssertionError: assert Decimal('10.00') == Decimal('10.01')",
+            "exit code: 1",
+        ])
+
+        result = summarize_command_output("python -m pytest", stdout="\n".join(lines), stderr="", exit_code=1, max_lines=5)
+
+        for fact in [
+            "FAILED tests/test_billing.py::test_invoice_total_rounds_half_up",
+            "tests/test_billing.py:42: AssertionError",
+            "AssertionError: assert Decimal('10.00') == Decimal('10.01')",
+            "exit code: 1",
+        ]:
+            self.assertIn(fact, result.stdout)
+
     def test_summary_preserves_pytest_multiline_expected_actual_diff(self):
         log = _pytest_multiline_diff_log()
 

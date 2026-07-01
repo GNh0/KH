@@ -38,6 +38,7 @@ IMPORTANT_LOG_PATTERNS = tuple(
         r"\bexit code\s*:\s*\d+",
         r"\breturncode\s*[:=]\s*\d+",
         r"\bline\s+\d+\b",
+        r"\b[A-Za-z0-9_./\\-]+\.(?:py|js|ts|tsx|cs|java|sql|md):\d+\b",
         r"\b[A-Za-z0-9_./\\-]+\.py::[A-Za-z0-9_./\\:-]+",
         r"\b(USER_CONSTRAINT|DECISION|EVIDENCE|BLOCKER|P[0-2])\b",
     ]
@@ -1162,7 +1163,10 @@ def _line_priority(line: str) -> int:
         return 80
     if re.search(r"\b(user_constraint|decision|evidence|blocker|p[0-2])\b", lowered):
         return 75
-    if re.search(r"\bline\s+\d+\b|:\d+:\d+|\(\d+,\d+\)", lowered):
+    if re.search(
+        r"\bline\s+\d+\b|:\d+:\d+|\(\d+,\d+\)|\b[A-Za-z0-9_./\\-]+\.(?:py|js|ts|tsx|cs|java|sql|md):\d+\b",
+        lowered,
+    ):
         return 70
     if any(pattern.search(line) for pattern in IMPORTANT_LOG_PATTERNS):
         return 50

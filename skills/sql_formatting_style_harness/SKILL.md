@@ -23,7 +23,7 @@ When this skill triggers alongside `sql-formatting`, use this order:
 1. Read and apply the host-local `sql-formatting` skill.
 2. Keep the user's original SQL unchanged in memory for comparison.
 3. Format the SQL according to the host-local style.
-4. Run `python -m src.skills.sql_formatting_style --original-file <path> --formatted-file <path>` or call `verify_sql_formatting_style(...)`.
+4. Run `python -m src.skills.sql_formatting_style --original <path> --formatted <path>` or call `verify_sql_formatting_style(...)`.
 5. Emit final SQL only after the verifier passes, or state that KH verification is blocked and why.
 
 If a host cannot create temporary comparison files, record `sql_formatting_style_harness=blocked` with the reason. Do not claim KH verification ran.
