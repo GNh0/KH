@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.orchestration.kh_front_door import _source_identity_for_root, build_kh_front_door
+from src.skills.token_optimizer import estimate_token_count
 
 
 class KhFrontDoorTests(unittest.TestCase):
@@ -575,10 +576,55 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertFalse(payload["token_optimizer"]["used"])
         self.assertEqual(payload["token_optimizer"]["reason_code"], "no_candidate_output")
         self.assertNotIn("saved", payload["token_optimizer"])
+        self.assertEqual(
+            payload["execution_authorization"]["status"],
+            "blocked_by_pending_immediate_skill_gate",
+        )
         self.assertIn("required_next_action_codes", payload)
         self.assertNotIn("recommended_skills", payload)
         self.assertNotIn("skill_status_summary", payload)
         self.assertNotIn("token_optimizer_decision", payload)
+
+    def test_cli_summary_stays_within_ultra_compact_token_budget(self):
+        cases = [
+            ("2+2?", 130),
+            (
+                "SELECT A.ORDNUM,A.ORDSEQ,F_BA011T_FIND_SUBNM(A.ITEMCD) AS ITEMNM "
+                "FROM SA100T A WHERE A.ORGDIV=@ORGDIV",
+                230,
+            ),
+            ("Build a small HTML todo tool and verify it.", 260),
+        ]
+        for prompt, token_budget in cases:
+            with self.subTest(prompt=prompt):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-m",
+                        "src.orchestration.kh_front_door",
+                        "--prompt",
+                        prompt,
+                        "--project",
+                        ".",
+                        "--host",
+                        "codex",
+                        "--summary",
+                    ],
+                    cwd=Path(__file__).resolve().parents[1],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                payload = json.loads(completed.stdout)
+
+                self.assertEqual(payload["summary_mode"], "ultra_compact")
+                self.assertLessEqual(
+                    estimate_token_count(completed.stdout),
+                    token_budget,
+                    completed.stdout,
+                )
 
     def test_cli_prompt_file_preserves_korean_request_for_brainstorming_gate(self):
         repo_root = Path(__file__).resolve().parents[1]

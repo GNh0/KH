@@ -1012,7 +1012,10 @@ def _compact_execution_authorization(authorization: Dict[str, Any]) -> Dict[str,
     payload: Dict[str, Any] = {
         "must_stop_before_execution": must_stop,
     }
-    if authorization.get("status") == "blocked_by_execution_gate":
+    if authorization.get("status") in {
+        "blocked_by_execution_gate",
+        "blocked_by_pending_immediate_skill_gate",
+    }:
         payload["status"] = authorization.get("status")
     strict_code = authorization.get("strict_exit_code_when_blocked")
     if strict_code not in {None, 3}:

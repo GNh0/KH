@@ -54,9 +54,9 @@ signal rather than an evidence report:
 |---|---:|---:|---:|---:|---:|
 | Light question | 3 | 2,297 | 663 | 106 | -84.0% |
 | Current token-overhead question | 9 | 2,418 | 669 | 106 | -84.2% |
-| Short rewrite | 14 | 2,630 | 663 | 161 | -75.7% |
-| SQL formatting | 19 | 2,753 | 926 | 166 | -82.1% |
-| Inventory dashboard direction | 24 | 3,739 | 1,310 | 161 | -87.7% |
+| Short rewrite | 14 | 2,630 | 663 | 174 | -73.8% |
+| SQL formatting | 19 | 2,753 | 926 | 179 | -80.7% |
+| Inventory dashboard direction | 24 | 3,739 | 1,310 | 174 | -86.7% |
 | Heavy implementation request | 26 | 6,121 | 1,685 | 205 | -87.8% |
 
 The ultra-compact payload keeps only classification, plugin route, execution gate,
@@ -65,6 +65,18 @@ version, and token optimizer status. Token optimizer savings fields are emitted
 only when optimization was actually used. Full skill lists, long gate reasons,
 status summaries, and detailed token telemetry remain available through
 `--verbose-summary` and full JSON output.
+
+Reviewer QA also measured an English inline rewrite prompt at 106-107 estimated
+tokens because that exact request is now classified as `light/direct_answer`.
+The table's short-rewrite row uses the Korean rewrite prompt above, which still
+routes through the medium lightweight skill gate and therefore costs more.
+Medium rows include `execution_authorization.status=blocked_by_pending_immediate_skill_gate`
+so hosts cannot mistake `execution_gate.can_execute=true` for permission to skip
+immediate selected skills.
+
+`tests.test_kh_front_door` now includes an ultra-compact token budget regression
+test so representative light, SQL, and heavy-preflight summaries fail if they
+creep back toward verbose output size.
 
 ## Regression Found During Subagent QA
 
