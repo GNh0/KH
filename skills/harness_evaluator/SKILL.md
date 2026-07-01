@@ -12,7 +12,7 @@ description: Use when kh-uaf:always-on-front-door has already run and selected t
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
-This skill acts as a Tester/Evaluator for your code. It runs the code in an isolated subprocess with AST validation to prevent Remote Code Execution (RCE) and infinite loops.
+This skill acts as a Tester/Evaluator for Python code. It uses AST validation, subprocess isolation, and timeout limits to reduce accidental side effects and runaway execution. These controls mitigate risk but do not make untrusted code safe outside the configured sandbox.
 
 ## Support files
 

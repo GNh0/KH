@@ -2,7 +2,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List
 
 
-TOKEN_OPTIMIZER_PROVIDERS = {"kh", "rtk", "hybrid", "passthrough"}
+TOKEN_OPTIMIZER_PROVIDERS = {"kh", "rtk", "hybrid"}
 HIGH_NOISE_COMMAND_MARKERS = (
     "pytest",
     "unittest",
@@ -53,17 +53,18 @@ def resolve_token_optimizer_provider(
     strict: bool = False,
 ) -> TokenOptimizerProviderDecision:
     """Resolve the context-budget provider without requiring optional RTK runtime."""
+    raw_requested = str(token_optimizer_provider or "kh").strip().lower()
     requested = _normalize_provider(token_optimizer_provider)
     kind = str(content_kind or "auto").strip().lower()
     command_text = str(command or "").strip()
 
-    if requested == "passthrough":
+    if raw_requested == "passthrough":
         return _decision(
-            provider="passthrough",
-            requested_provider=requested,
+            provider="kh",
+            requested_provider=raw_requested,
             status="selected",
             command_strategy="quality-preserving-passthrough",
-            rationale="Explicit passthrough selected; no compression is attempted.",
+            rationale="Explicit passthrough decision selected; KH records the no-compression evidence.",
             command=command_text,
             content_kind=kind,
             rtk_available=rtk_available,
@@ -71,11 +72,10 @@ def resolve_token_optimizer_provider(
 
     if kind in QUALITY_SENSITIVE_KINDS:
         return _decision(
-            provider="passthrough",
+            provider="kh",
             requested_provider=requested,
             status="selected",
             command_strategy="quality-preserving-passthrough",
-            fallback_provider="passthrough",
             rationale="Content is quality-sensitive; exact evidence must be preserved.",
             command=command_text,
             content_kind=kind,
@@ -161,7 +161,9 @@ def validate_token_optimizer_provider(value: str) -> Dict[str, Any]:
     valid = provider in TOKEN_OPTIMIZER_PROVIDERS
     return {
         "valid": valid,
-        "provider": provider if provider else "kh",
+        "provider": provider if valid else "kh",
+        "requested_provider": provider,
+        "decision_values": ["used", "considered_not_needed", "passthrough", "blocked"],
         "allowed": sorted(TOKEN_OPTIMIZER_PROVIDERS),
         "evidence": ["token_optimizer_provider"] if valid else [],
     }

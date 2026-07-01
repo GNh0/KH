@@ -11,7 +11,7 @@ description: Use when formatting, cleaning, standardizing, refactoring, or gener
 - If `kh_active_directive=active` was set by an earlier user instruction, keep KH-routed setup active for this work-bearing request.
 - Use the host-local `sql-formatting` skill as the primary formatting standard when it exists.
 - Do not replace, suppress, or reinterpret the host-local skill. This harness verifies outputs from that skill or from an agent that claims to follow it.
-- Treat SQL, T-SQL, stored procedures, comments, Korean literals, and business rule text as contract-sensitive passthrough content. Do not token-compress it.
+- Treat SQL, T-SQL, stored procedures, comments, localized literals, and business rule text as contract-sensitive passthrough content. Do not token-compress it.
 - Treat unknown scalar functions as contract-sensitive text unless DB/MCP metadata, project source, or the host-local style contract proves an equivalent lookup join. `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is a verified BA011T lookup contract when the host-local `sql-formatting` skill is available.
 - Report this skill as applied only when `src.skills.sql_formatting_style.verify_sql_formatting_style` or the module CLI produced a `HarnessResult`-shaped result.
 - A `selected_not_executed_skills` entry, a skill-file read, or a style-standard mention is not execution evidence.
@@ -48,7 +48,7 @@ If a host cannot create temporary comparison files, record `sql_formatting_style
 
 ## Mechanical checks
 
-- Preserve string literals, Korean literals, comment shape/count, key predicates, JOIN conditions, calculations, and `ELSE` count.
+- Preserve string literals, localized literals, comment shape/count, key predicates, JOIN conditions, calculations, and `ELSE` count.
 - Permit alias-only identifier/casing updates inside still-commented SQL conditions, but block removed, uncommented, or business-text-changing comments.
 - Check uppercase identifiers outside literals/comments.
 - Check stored procedure parameter leading-comma layout.
@@ -61,7 +61,7 @@ If a host cannot create temporary comparison files, record `sql_formatting_style
 
 ## PowerBuilder validation path
 
-- For GWERP or other PowerBuilder sources, use `C:\PblScripter\Export-PBL.ps1` only to export readable source into a separate output directory.
+- For GWERP or other PowerBuilder sources, use the user-provided or host-configured PBL export tool path, such as `C:\PblScripter\Export-PBL.ps1` in the local default environment, only to export readable source into a separate output directory.
 - Do not write to `C:\GWERP` or the source PBL tree.
 - Extract SQL-looking fragments containing `SELECT`, `UPDATE`, `DELETE`, or `INSERT` from exported `.srw`, `.sru`, `.srd`, `.txt`, or `.sql` files.
 - Keep extracted fragments as passthrough text, format them through host-local `sql-formatting`, then run this verifier on each original/formatted pair.
@@ -76,7 +76,7 @@ The harness does not claim to prove DB semantics. Execution-plan changes, result
 - `HarnessResult.success`, `exit_code`, `stdout`, `stderr`, and `metadata`.
 - `metadata.style_contract_source` with host-local path/hash when available or packaged fallback reference otherwise.
 - `metadata.mechanical_checks.status`.
-- Preservation issue list for string literals, Korean literals, comment shape/count/text, predicates, JOIN conditions, calculations, and `ELSE` additions.
+- Preservation issue list for string literals, localized literals, comment shape/count/text, predicates, JOIN conditions, calculations, and `ELSE` additions.
 - Style issue list for uppercase identifiers, stored procedure parameter layout, SELECT leading commas, wide INSERT grouped layout, JOIN indentation, CASE parentheses, verified scalar lookup conversion decisions, and BA011T conversion shape.
 - `metadata.semantic_checks.status=not_proven` unless separate DB-backed evidence is attached outside this regex verifier.
 - `metadata.token_optimizer_status=passthrough`.
@@ -87,7 +87,7 @@ The harness does not claim to prove DB semantics. Execution-plan changes, result
 
 - Do not claim the host-local `sql-formatting` skill was used without verifier evidence when the request requires proof.
 - Do not use this KH harness as a formatter or as a replacement for the host-local style skill.
-- Do not token-compress SQL, stored procedures, Korean literals, comments, or other contract-sensitive text.
+- Do not token-compress SQL, stored procedures, localized literals, comments, or other contract-sensitive text.
 - Do not treat regex preservation checks as proof of DB semantic equivalence.
 - Do not trigger the harness for mention-only risk examples that are not actionable SQL formatting requests.
 - Do not require scalar-to-join conversion for unknown scalar functions when the function body or lookup contract cannot be checked. Preserve those functions and require the formatter to state why conversion was skipped.

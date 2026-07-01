@@ -44,6 +44,7 @@ class DefaultRoleRunner:
     async def run_role(self, profile: RoleProfile, context: Dict[str, Any]) -> WorkflowTaskResult:
         await asyncio.sleep(0)
         deliverable_names = _deliverable_names(context)
+        deliverable_profile = _deliverable_profile(context)
         evidence = _role_evidence_key(profile.name)
         role_artifacts = _write_role_artifacts(profile, context)
         return WorkflowTaskResult(
@@ -58,7 +59,7 @@ class DefaultRoleRunner:
                 "purpose": profile.purpose,
                 "inputs": list(profile.inputs),
                 "outputs": list(profile.outputs),
-                "required_deliverables": _role_deliverables(profile.name, deliverable_names),
+                "required_deliverables": _role_deliverables(profile.name, deliverable_names, deliverable_profile),
                 "role_artifacts": role_artifacts,
                 "evidence": [evidence],
                 "completed_at": _utc_now(),
@@ -99,10 +100,13 @@ class GateRoleRunner(DefaultRoleRunner):
             return await super().run_role(profile, context)
 
         role_gate_results[profile.name] = gate
+        deliverable_names = _deliverable_names(context)
+        deliverable_profile = _deliverable_profile(context)
         metadata = {
             "execution_model": "parallel-role-stage",
             "stage": profile.stage,
             "gate": gate,
+            "required_deliverables": _role_deliverables(profile.name, deliverable_names, deliverable_profile),
             "role_artifacts": _write_role_artifacts(profile, context, gate=gate),
             "evidence_records": list(gate.get("evidence_records", [])),
             "completed_at": _utc_now(),
@@ -134,11 +138,14 @@ class GateRoleRunner(DefaultRoleRunner):
             role_gate_results=role_gate_results,
         )
         role_gate_results[profile.name] = gate
+        deliverable_names = _deliverable_names(context)
+        deliverable_profile = _deliverable_profile(context)
         metadata = {
             "execution_model": "parallel-role-stage",
             "stage": profile.stage,
             "pending_dependencies": list(pending_dependencies),
             "gate": gate,
+            "required_deliverables": _role_deliverables(profile.name, deliverable_names, deliverable_profile),
             "evidence_records": list(gate.get("evidence_records", [])),
             "completed_at": _utc_now(),
         }
@@ -616,15 +623,52 @@ def _deliverable_names(context: Dict[str, Any]) -> List[str]:
     ]
 
 
-def _role_deliverables(role_name: str, names: List[str]) -> List[str]:
-    by_role = {
-        "product-strategist": ["요구정의서.docx", "산출물_정의서.docx"],
-        "system-architect": ["오케스트레이션_설계서.docx", "처리흐름도.docx"],
-        "implementation-planner": ["역할별_작업분해표.xlsx"],
-        "qa-verifier": ["증거계획서.xlsx"],
-        "security-reviewer": ["위험_정책_체크리스트.xlsx"],
+def _deliverable_profile(context: Dict[str, Any]) -> str:
+    exports = context.get("deliverable_exports", {}) or {}
+    profile = str(exports.get("profile") or context.get("deliverable_profile") or "general-orchestration")
+    return profile.strip().lower() or "general-orchestration"
+
+
+def _role_deliverables(role_name: str, names: List[str], profile_name: str = "general-orchestration") -> List[str]:
+    general_by_role = {
+        "product-strategist": ["requirements_brief.docx", "deliverable_definition.docx"],
+        "system-architect": ["orchestration_design.docx", "process_flow.docx"],
+        "implementation-planner": ["role_task_breakdown.xlsx"],
+        "qa-verifier": ["evidence_plan.xlsx"],
+        "security-reviewer": ["risk_policy_checklist.xlsx"],
         "release-manager": list(names),
     }
+    software_by_role = {
+        "product-strategist": ["requirements_brief.docx", "functional_specification.docx"],
+        "system-architect": ["development_design.docx", "screen_api_definition.docx", "data_definition.xlsx"],
+        "implementation-planner": ["role_task_breakdown.xlsx"],
+        "qa-verifier": ["test_verification_plan.xlsx"],
+        "security-reviewer": ["risk_policy_checklist.xlsx"],
+        "release-manager": list(names),
+    }
+    product_by_role = {
+        "product-strategist": ["product_design_document.docx"],
+        "system-architect": ["concept_drawing.svg", "concept_drawing.dxf", "dimension_bom.xlsx"],
+        "implementation-planner": ["dimension_bom.xlsx"],
+        "qa-verifier": ["product_design_document.docx"],
+        "security-reviewer": [],
+        "release-manager": list(names),
+    }
+    investment_by_role = {
+        "product-strategist": ["investment_analysis_report.docx"],
+        "system-architect": ["scenario_model.xlsx"],
+        "implementation-planner": ["scenario_model.xlsx"],
+        "qa-verifier": ["investment_analysis_report.docx"],
+        "security-reviewer": ["risk_policy_checklist.xlsx"],
+        "release-manager": list(names),
+    }
+    profile_map = {
+        "software-development": software_by_role,
+        "product-design": product_by_role,
+        "investment-analysis": investment_by_role,
+        "general-orchestration": general_by_role,
+    }
+    by_role = profile_map.get(profile_name, general_by_role)
     expected = by_role.get(role_name, [])
     if not expected:
         return []

@@ -26,7 +26,7 @@ Use this as an early decision gate for every non-trivial KH turn, not only as a 
 - `passthrough`: content was large but contract-sensitive, source-of-truth, or unsafe to summarize without reducing answer quality.
 - `blocked`: optimization was required but could not preserve required facts or would reduce answer quality.
 
-When a host exposes more than one context optimization path, record `token_optimizer_provider` as `kh`, `rtk`, `hybrid`, or `passthrough`. KH is the built-in Python provider. RTK-style command optimization is optional. Hybrid may use RTK for high-noise command output when available and fall back to KH otherwise. Passthrough is required for source-of-truth content when compression would lower quality.
+When a host exposes more than one context optimization path, record `token_optimizer_provider` as `kh`, `rtk`, or `hybrid`. KH is the built-in Python provider. RTK-style command optimization is optional. Hybrid may use RTK for high-noise command output when available and fall back to KH otherwise. `passthrough` is a decision/status for source-of-truth content when compression would lower quality; it is not a provider.
 
 ## Development evidence quality bar
 
@@ -76,7 +76,7 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 ## Required outputs
 
 - `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
-- `token_optimizer_provider`: `kh`, `rtk`, `hybrid`, or `passthrough` when provider policy is relevant.
+- `token_optimizer_provider`: `kh`, `rtk`, or `hybrid` when provider policy is relevant. Use `token_optimizer_status=passthrough` for quality-preserving no-compression decisions.
 - Compact log or code text that preserves errors, file paths, test names, and exit status context.
 - Token-savings estimate or before/after size when used inside a harness result.
 - Token usage before/after statistics when the skill is used as workflow evidence, including RTK-style estimated payload telemetry, host actual token evidence when available from `goal.tokensUsed` or session `token_count`, and a clear `billing_tokens_available` flag.

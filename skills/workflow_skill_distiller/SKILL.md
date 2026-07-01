@@ -13,7 +13,7 @@ description: Use when kh-uaf:always-on-front-door has already run and selected t
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
-This is UAF's Compound step: it captures repeatable workflow lessons as portable skills instead of leaving them only in chat history. A new skill should be added as `skills/<skill-name>/SKILL.md`; optional support files are used only when that `SKILL.md` says when to read or run them.
+This is the downstream distillation step for Compound-captured learning. `compound-engineering-harness` owns the learning capture, no-learning rationale, memory/scenario handoff, and regression plan; this skill runs only when that capture identifies a repeatable workflow that should become a portable skill. A new skill should be added as `skills/<skill-name>/SKILL.md`; optional support files are used only when that `SKILL.md` says when to read or run them.
 
 ## Support files
 

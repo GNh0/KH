@@ -30,76 +30,76 @@ NON_TEMPLATE_ARTIFACT_TYPES = {
 
 TEMPLATE_MARKERS = {
     "requirements-brief": [
-        "문서 정보", "개정 이력", "배경 및 목적", "범위",
-        "기능 요구사항", "비기능 요구사항", "인수 기준",
+        "Document Info", "Revision History", "Background and Purpose", "Scope",
+        "Functional Requirements", "Non-Functional Requirements", "Acceptance Criteria",
     ],
     "orchestration-design": [
-        "문서 정보", "설계 원칙", "역할 DAG", "병렬 실행 전략",
-        "상태 저장소", "게이트 설계",
+        "Document Info", "Design Principles", "Role DAG", "Parallel Execution Strategy",
+        "State Stores", "Gate Design",
     ],
     "deliverable-definition": [
-        "산출물 목록", "산출물별 정의", "품질 기준", "승인 기준",
+        "Deliverable List", "Deliverable Definitions", "Quality Criteria", "Approval Criteria",
     ],
     "process-flow": [
-        "프로세스 개요", "스윔레인", "단계별 처리 흐름", "의사결정 지점", "예외 흐름",
+        "Process Overview", "Swimlanes", "Step-by-Step Flow", "Decision Points", "Exception Flow",
     ],
     "role-task-breakdown": [
-        "WBS ID", "작업명", "입력", "출력", "완료 기준", "의존성", "증거",
+        "WBS ID", "Task Name", "Input", "Output", "Done Criteria", "Dependency", "Evidence",
     ],
     "evidence-plan": [
-        "증거 ID", "증거 키", "산출물", "검증 방법", "통과 기준", "차단 기준",
+        "Evidence ID", "Evidence Key", "Deliverable", "Verification Method", "Pass Criteria", "Block Criteria",
     ],
     "risk-policy-checklist": [
-        "위험 ID", "분류", "위험 항목", "영향도", "발생 가능성", "완화 방안", "차단 기준",
+        "Risk ID", "Category", "Risk Item", "Impact", "Probability", "Mitigation", "Block Criteria",
     ],
     "user-manual": [
-        "개정 이력", "사용 대상", "사전 준비", "사용 절차", "문제 해결",
+        "Revision History", "Audience", "Prerequisites", "Procedure", "Troubleshooting",
     ],
     "manual": [
-        "개정 이력", "사용 대상", "사전 준비", "사용 절차", "문제 해결",
+        "Revision History", "Audience", "Prerequisites", "Procedure", "Troubleshooting",
     ],
     "functional-specification": [
-        "문서 정보", "개정 이력", "기능 개요", "기능 목록", "기능 상세",
-        "화면/메뉴", "권한", "입출력 정의", "처리 규칙", "인수 기준", "추적성",
+        "Document Info", "Revision History", "Feature Overview", "Feature List", "Feature Details",
+        "Screens and Menus", "Permissions", "Input and Output", "Processing Rules", "Acceptance Criteria", "Traceability",
     ],
     "development-design": [
-        "문서 정보", "시스템 구성도", "아키텍처 구성", "모듈 설계",
-        "인터페이스 설계", "데이터베이스 설계", "처리 흐름", "테스트 전략",
+        "Document Info", "System Context", "Architecture", "Module Design",
+        "Interface Design", "Database Design", "Processing Flow", "Test Strategy",
     ],
     "screen-api-definition": [
-        "화면 목록", "화면 레이아웃", "화면 항목 정의", "이벤트 정의",
-        "API 목록", "API 정의", "요청/응답", "상태 코드",
+        "Screen List", "Screen Layout", "Screen Field Definitions", "Event Definitions",
+        "API List", "API Definition", "Request and Response", "Status Codes",
     ],
     "data-definition": [
-        "테이블명", "컬럼명", "필드명", "자료형", "PK", "FK", "필수", "검증 규칙",
+        "Table Name", "Column Name", "Field Name", "Data Type", "PK", "FK", "Required", "Validation Rule",
     ],
     "test-verification-plan": [
-        "테스트 ID", "테스트 유형", "시나리오", "수행 절차", "기대 결과", "증거 키",
+        "Test ID", "Test Type", "Scenario", "Steps", "Expected Result", "Evidence Key",
     ],
     "product-design-document": [
-        "문서 정보", "개정 이력", "설계 개요", "규격 요약", "설계 요구사항",
-        "치수 기준", "BOM", "도면 목록", "검증 방법", "승인 기준",
+        "Document Info", "Revision History", "Design Overview", "Specification Summary", "Design Requirements",
+        "Dimension Basis", "BOM", "Drawing List", "Verification Method", "Approval Criteria",
     ],
     "design-document": [
-        "문서 정보", "개정 이력", "설계 개요", "규격 요약", "설계 요구사항",
-        "치수 기준", "BOM", "도면 목록", "검증 방법", "승인 기준",
+        "Document Info", "Revision History", "Design Overview", "Specification Summary", "Design Requirements",
+        "Dimension Basis", "BOM", "Drawing List", "Verification Method", "Approval Criteria",
     ],
     "dimension-bom": [
-        "품번", "품명", "재질", "규격", "치수", "수량", "공차", "근거",
+        "Part No", "Part Name", "Material", "Specification", "Dimension", "Quantity", "Tolerance", "Basis",
     ],
     "table-model": [
-        "품번", "품명", "재질", "규격", "치수", "수량", "공차", "근거",
+        "Part No", "Part Name", "Material", "Specification", "Dimension", "Quantity", "Tolerance", "Basis",
     ],
     "analysis-report": [
-        "문서 정보", "Executive Summary", "투자 개요", "핵심 가정",
-        "시나리오 분석", "수익/위험 분석", "리스크", "최종 의견",
+        "Document Info", "Executive Summary", "Investment Overview", "Key Assumptions",
+        "Scenario Analysis", "Return and Risk Analysis", "Risks", "Final View",
     ],
     "scenario-model": [
-        "시나리오", "가정 항목", "기준값", "상승", "기준", "하락", "민감도", "근거",
+        "Scenario", "Assumption Item", "Base Value", "Upside", "Base", "Downside", "Sensitivity", "Basis",
     ],
     "traceability-matrix": [
-        "Trace ID", "Requirement ID", "요구사항", "산출물", "산출물 유형",
-        "증거 키", "검토 게이트", "상태",
+        "Trace ID", "Requirement ID", "Requirement", "Deliverable", "Deliverable Type",
+        "Evidence Key", "Review Gate", "Status",
     ],
 }
 
@@ -114,13 +114,13 @@ def build_traceability_matrix_rows(
     header = [
         "Trace ID",
         "Requirement ID",
-        "요구사항",
-        "산출물",
-        "산출물 유형",
-        "증거 키",
-        "검토 게이트",
-        "상태",
-        "비고",
+        "Requirement",
+        "Deliverable",
+        "Deliverable Type",
+        "Evidence Key",
+        "Review Gate",
+        "Status",
+        "Notes",
     ]
     rows = [header]
     dict_rows: List[Dict[str, str]] = []
@@ -544,13 +544,13 @@ def _normalize_traceability_rows(rows: Iterable[Any]) -> List[List[str]]:
         header = [
             "Trace ID",
             "Requirement ID",
-            "요구사항",
-            "산출물",
-            "산출물 유형",
-            "증거 키",
-            "검토 게이트",
-            "상태",
-            "비고",
+            "Requirement",
+            "Deliverable",
+            "Deliverable Type",
+            "Evidence Key",
+            "Review Gate",
+            "Status",
+            "Notes",
         ]
         normalized = [header]
         for row in rows:

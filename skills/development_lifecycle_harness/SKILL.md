@@ -13,7 +13,7 @@ description: Use when kh-uaf:always-on-front-door has already run and selected t
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
-This is a personal UAF development workflow. It packages the useful Plan -> Work -> Review loop with TDD, verification, and branch finishing without requiring any external workflow plugin at runtime. When the work produces a reusable lesson, hand off to `workflow-skill-distiller` for the Compound step.
+This is a personal UAF development workflow. It packages the useful Plan -> Work -> Review loop with TDD, verification, and branch finishing without requiring any external workflow plugin at runtime. When the work produces a reusable lesson, close `compound-engineering-harness` first; hand off to `workflow-skill-distiller` only when that Compound capture identifies a repeatable workflow worth publishing as a skill.
 
 ## Support files
 
@@ -80,7 +80,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 13. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
 14. Validate `skill_transition_handoff` for large work so required follow-up skills cannot be silently omitted.
 15. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
-16. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `workflow-skill-distiller`, `context-state-harness`, or a scenario regression.
+16. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `compound-engineering-harness` first, then route to `workflow-skill-distiller`, `context-state-harness`, or a scenario regression only when the Compound handoff requires it.
 
 ## Gate checks
 

@@ -125,8 +125,13 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertEqual(handoff["status"], "ready_for_system_update")
             self.assertIn("compound_artifacts_written", result.evidence)
 
-    def test_token_optimizer_provider_policy_supports_kh_rtk_hybrid_and_passthrough(self):
+    def test_token_optimizer_provider_policy_separates_provider_from_passthrough_status(self):
         self.assertTrue(validate_token_optimizer_provider("kh")["valid"])
+        invalid_passthrough = validate_token_optimizer_provider("passthrough")
+        self.assertFalse(invalid_passthrough["valid"])
+        self.assertEqual(invalid_passthrough["provider"], "kh")
+        self.assertEqual(invalid_passthrough["requested_provider"], "passthrough")
+        self.assertIn("passthrough", validate_token_optimizer_provider("kh")["decision_values"])
         self.assertFalse(validate_token_optimizer_provider("unknown")["valid"])
 
         kh = resolve_token_optimizer_provider("kh", command="python -m unittest")
@@ -149,8 +154,15 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         self.assertEqual(hybrid.provider, "rtk")
 
         passthrough = resolve_token_optimizer_provider("hybrid", content_kind="contract-sensitive")
-        self.assertEqual(passthrough.provider, "passthrough")
+        self.assertEqual(passthrough.provider, "kh")
+        self.assertEqual(passthrough.command_strategy, "quality-preserving-passthrough")
+        self.assertIn("quality-sensitive", passthrough.rationale)
         self.assertIn("token_optimizer_provider", passthrough.evidence)
+
+        legacy_passthrough = resolve_token_optimizer_provider("passthrough")
+        self.assertEqual(legacy_passthrough.provider, "kh")
+        self.assertEqual(legacy_passthrough.requested_provider, "passthrough")
+        self.assertEqual(legacy_passthrough.command_strategy, "quality-preserving-passthrough")
 
     def test_role_commands_are_simple_front_doors_to_kh_skills(self):
         commands = list_role_command_entrypoints()

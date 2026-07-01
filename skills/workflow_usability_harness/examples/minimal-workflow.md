@@ -24,7 +24,8 @@ The goal is not to run every KH skill heavily. The goal is to expose the right s
 - `actual_runtime_path`: `.kh/development/run-001/state/compound_handoff.json`.
 - `actual_runtime_path`: `.kh/development/run-001/state/compound_candidates.json`.
 - `actual_runtime_path`: `docs/kh/handoffs/run-001-compound.md`.
-- `token_optimizer_provider`: `kh`, `rtk`, `hybrid`, or `passthrough`.
+- `token_optimizer_provider`: `kh`, `rtk`, or `hybrid`.
+- `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 - `role_command_entrypoint`: `/kh:work`, `/kh:qa`, `/kh:ship`, `/kh:learn`, or `/kh:resume` when used.
 - `progress_panel`: user-visible status text.
 - `memory_candidates`: scoped candidate records, not automatic global memory.

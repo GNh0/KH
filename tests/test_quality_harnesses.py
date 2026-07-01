@@ -146,12 +146,12 @@ class QualityHarnessTests(unittest.TestCase):
             design,
             [
                 {
-                    "file_name": "요구정의서.docx",
+                    "file_name": "requirements_brief.docx",
                     "artifact_type": "requirements-brief",
                     "evidence_key": "requirements brief exported",
                 },
                 {
-                    "file_name": "기능정의서.docx",
+                    "file_name": "functional_specification.docx",
                     "artifact_type": "functional-specification",
                     "evidence_key": "functional specification exported",
                 },
@@ -163,13 +163,13 @@ class QualityHarnessTests(unittest.TestCase):
             [
                 "Trace ID",
                 "Requirement ID",
-                "요구사항",
-                "산출물",
-                "산출물 유형",
-                "증거 키",
-                "검토 게이트",
-                "상태",
-                "비고",
+                "Requirement",
+                "Deliverable",
+                "Deliverable Type",
+                "Evidence Key",
+                "Review Gate",
+                "Status",
+                "Notes",
             ],
         )
         self.assertGreaterEqual(len(rows), 3)
@@ -182,10 +182,10 @@ class QualityHarnessTests(unittest.TestCase):
 
     def test_deliverable_quality_blocks_missing_template_markers(self):
         with tempfile.TemporaryDirectory() as tmp:
-            docx_path = Path(tmp) / "요구정의서.docx"
+            docx_path = Path(tmp) / "requirements_brief.docx"
             _write_docx_xml(
                 docx_path,
-                "<w:document><w:body><w:p><w:r><w:t>요구사항</w:t></w:r></w:p></w:body></w:document>",
+                "<w:document><w:body><w:p><w:r><w:t>Requirements</w:t></w:r></w:p></w:body></w:document>",
             )
 
             result = evaluate_deliverable_quality(
@@ -194,7 +194,7 @@ class QualityHarnessTests(unittest.TestCase):
                     "deliverables": [
                         {
                             "path": str(docx_path),
-                            "file_name": "요구정의서.docx",
+                            "file_name": "requirements_brief.docx",
                             "artifact_type": "requirements-brief",
                             "evidence_key": "requirements brief exported",
                         }
@@ -204,7 +204,7 @@ class QualityHarnessTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertIn("deliverable template quality failed", result["evidence"])
-        self.assertTrue(any("문서 정보" in finding for finding in result["findings"]))
+        self.assertTrue(any("Document Info" in finding for finding in result["findings"]))
 
     def test_missing_artifact_does_not_emit_template_passed_evidence(self):
         result = evaluate_deliverable_quality(

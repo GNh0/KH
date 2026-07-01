@@ -403,7 +403,7 @@ def _scenario_candidates(workflow_id: str, workflow_success: bool) -> List[Dict[
 
 
 def _token_optimizer_status(token_decision: Dict[str, Any]) -> str:
-    if token_decision.get("provider") == "passthrough":
+    if token_decision.get("command_strategy") == "quality-preserving-passthrough":
         return "passthrough"
     if token_decision.get("status") == "blocked":
         return "blocked"

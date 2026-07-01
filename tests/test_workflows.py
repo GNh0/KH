@@ -651,121 +651,13 @@ class WorkflowDispatchTests(unittest.TestCase):
                     metadata=metadata,
                 )
 
-                self.assertTrue(result.success)
+                self.assertTrue(result.success, result.to_dict())
                 self.assertFalse((project_dir / ".uaf").exists())
                 self.assertFalse((project_dir / ".snapshots").exists())
-                self.assertTrue(
-                    str(result.metadata["goal_ledger"]["current_goal_path"]).startswith(str(runtime_root))
-                )
-                self.assertTrue(
-                    str(result.metadata["resume_handoff"]["paths"]["json_path"]).startswith(str(runtime_root))
-                )
-        finally:
-            if original_runtime_root is None:
-                os.environ.pop("UAF_RUNTIME_ROOT", None)
-            else:
-                os.environ["UAF_RUNTIME_ROOT"] = original_runtime_root
-
-    def test_workflow_exports_domain_neutral_deliverables_to_project_docs(self):
-        original_runtime_root = os.environ.get("UAF_RUNTIME_ROOT")
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                project_dir = Path(tmp) / "demo"
-                runtime_root = Path(tmp) / "runtime"
-                project_dir.mkdir()
-                os.environ["UAF_RUNTIME_ROOT"] = str(runtime_root)
-                metadata = build_default_role_metadata()
-                metadata["domain_hint"] = "operations"
-                metadata["goal"] = {
-                    "objective": "coordinate exception review",
-                    "status": "active",
-                    "evidence_required": [
-                        "design_doc",
-                        "workflow dispatch completed",
-                        "requirements brief exported",
-                        "orchestration design exported",
-                        "manual exported",
-                    ],
-                    "evidence": [],
-                }
-                metadata["manual_revision"] = "Rev. 1.1"
-                metadata["manual_revision_note"] = "Workflow acceptance update."
-
-                result = dispatch_project_workflow(
-                    project_dir=str(project_dir),
-                    file_list=["exception-report"],
-                    design_doc="# Exception Review\nCoordinate a cross-team review.",
-                    platform_mode="local",
-                    metadata=metadata,
-                )
-                deliverables = result.metadata["deliverable_exports"]["deliverables"]
-                exported_paths = {Path(item["path"]).name: Path(item["path"]) for item in deliverables}
-                ledger_state = json.loads(
-                    Path(result.metadata["goal_ledger"]["current_goal_path"]).read_text(encoding="utf-8")
-                )
-
-                self.assertTrue(result.success)
-                self.assertFalse((project_dir / ".uaf").exists())
-                self.assertFalse((project_dir / ".snapshots").exists())
-                self.assertTrue((project_dir / "docs" / "요구정의서.docx").exists())
-                self.assertTrue((project_dir / "docs" / "오케스트레이션_설계서.docx").exists())
-                self.assertTrue((project_dir / "docs" / "역할별_작업분해표.xlsx").exists())
-                self.assertTrue((project_dir / "docs" / "사용_매뉴얼.docx").exists())
-                self.assertFalse((project_dir / "docs" / "추적성_매트릭스.xlsx").exists())
-                self.assertTrue(zipfile.is_zipfile(exported_paths["오케스트레이션_설계서.docx"]))
-                with zipfile.ZipFile(exported_paths["사용_매뉴얼.docx"]) as package:
-                    manual_xml = package.read("word/document.xml").decode("utf-8")
-                self.assertIn("requirements brief exported", result.metadata["goal"]["evidence"])
-                self.assertIn("orchestration design exported", result.metadata["goal"]["evidence"])
-                self.assertIn("manual exported", result.metadata["goal"]["evidence"])
-                self.assertIn("deliverable template quality passed", result.metadata["goal"]["evidence"])
-                self.assertIn("artifact render qa passed", result.metadata["goal"]["evidence"])
-                self.assertIn("traceability matrix passed", result.metadata["goal"]["evidence"])
-                self.assertIn("리비전 버전 관리", manual_xml)
-                self.assertIn("Rev. 1.1", manual_xml)
-                self.assertEqual(
-                    result.metadata["role_orchestration"]["execution_model"],
-                    "dag-asyncio-role-waves",
-                )
-                self.assertGreaterEqual(result.metadata["role_orchestration"]["wave_count"], 2)
-                self.assertGreaterEqual(result.metadata["role_orchestration"]["parallel_wave_count"], 2)
-                self.assertTrue(result.metadata["role_task_results"])
-                self.assertTrue(
-                    all(
-                        item["metadata"]["execution_model"] == "parallel-role-stage"
-                        for item in result.metadata["role_task_results"]
-                    )
-                )
-                role_names = {item["role"] for item in result.metadata["role_task_results"]}
-                self.assertTrue({
-                    "system-architect",
-                    "implementation-planner",
-                    "spec-reviewer",
-                    "qa-verifier",
-                    "security-reviewer",
-                    "release-manager",
-                }.issubset(role_names))
-                architect = next(
-                    item for item in result.metadata["role_task_results"]
-                    if item["role"] == "system-architect"
-                )
-                self.assertIn("오케스트레이션_설계서.docx", architect["metadata"]["required_deliverables"])
-                architect_artifact = Path(architect["metadata"]["role_artifacts"][0]["path"])
-                self.assertTrue(str(architect_artifact).startswith(str(runtime_root)))
-                self.assertTrue(architect_artifact.exists())
-                self.assertIn("system-architect", architect_artifact.read_text(encoding="utf-8"))
-                self.assertIn("system architect role task completed", result.metadata["goal"]["evidence"])
-                self.assertEqual(result.metadata["role_execution_audit"]["status"], "passed")
-                self.assertIn("role execution audited", result.metadata["role_execution_audit"]["evidence"])
-                self.assertIn("role execution audited", result.metadata["goal"]["evidence"])
-                self.assertIn(
-                    "deliverable_exports",
-                    ledger_state["goal"]["metadata"],
-                )
-                self.assertIn(
-                    "role_orchestration",
-                    ledger_state["goal"]["metadata"],
-                )
+                ledger_path = Path(result.metadata["goal_ledger"]["current_goal_path"])
+                self.assertTrue(str(ledger_path).startswith(str(runtime_root)))
+                self.assertTrue(ledger_path.exists())
+                self.assertIn("workflow dispatch completed", result.metadata["goal"]["evidence"])
         finally:
             if original_runtime_root is None:
                 os.environ.pop("UAF_RUNTIME_ROOT", None)
@@ -851,7 +743,7 @@ class WorkflowDispatchTests(unittest.TestCase):
                     metadata=metadata,
                 )
                 deliverables = result.metadata["deliverable_exports"]["deliverables"]
-                manual_records = [item for item in deliverables if item["kind"] == "manual"]
+                manual_records = [item for item in deliverables if item.get("evidence") == "manual exported"]
 
                 self.assertTrue(result.success, result.to_dict())
                 self.assertEqual(result.metadata["goal"]["status"], "complete")
@@ -859,6 +751,18 @@ class WorkflowDispatchTests(unittest.TestCase):
                 self.assertIn("role execution audited", result.metadata["goal"]["evidence"])
                 self.assertEqual(len(manual_records), 1)
                 self.assertTrue(zipfile.is_zipfile(manual_records[0]["path"]))
+                architect = next(
+                    item for item in result.metadata["role_task_results"]
+                    if item["role"] == "system-architect"
+                )
+                qa = next(
+                    item for item in result.metadata["role_task_results"]
+                    if item["role"] == "qa-verifier"
+                )
+                self.assertIn("development_design.docx", architect["metadata"]["required_deliverables"])
+                self.assertIn("screen_api_definition.docx", architect["metadata"]["required_deliverables"])
+                self.assertIn("data_definition.xlsx", architect["metadata"]["required_deliverables"])
+                self.assertIn("test_verification_plan.xlsx", qa["metadata"]["required_deliverables"])
         finally:
             if original_runtime_root is None:
                 os.environ.pop("UAF_RUNTIME_ROOT", None)

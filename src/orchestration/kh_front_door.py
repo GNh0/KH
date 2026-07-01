@@ -1093,7 +1093,7 @@ def _required_next_actions(
     if sql_role_ids:
         formatted_roles = ", ".join(f"`{role_id}`" for role_id in _dedupe(sql_role_ids))
         actions.append(
-            f"SQL PRE-OUTPUT GATE: before emitting, rewriting, or correcting any SQL/T-SQL, apply selected provider {formatted_roles}; read the host-local sql-formatting SKILL.md, preserve literals/comments/Korean text, and record sql-formatting-style-harness verifier evidence or an explicit blocked reason."
+            f"SQL PRE-OUTPUT GATE: before emitting, rewriting, or correcting any SQL/T-SQL, apply selected provider {formatted_roles}; read the host-local sql-formatting SKILL.md, preserve literals/comments/localized business text, and record sql-formatting-style-harness verifier evidence or an explicit blocked reason."
         )
     if controller_id and controller_id not in {"kh", "none"}:
         actions.append(

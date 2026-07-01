@@ -33,7 +33,7 @@ Use this verifier when a SQL/T-SQL formatting result must prove that it preserve
 
 ## Preservation rules
 
-The verifier blocks when string literals, Korean literals, comment shape/count, predicates, JOIN conditions, calculations, or `ELSE` counts change mechanically. It permits alias-only identifier/casing updates inside still-commented SQL conditions, but removed, uncommented, or business-text-changing comments remain blocking.
+The verifier blocks when string literals, localized literals, comment shape/count, predicates, JOIN conditions, calculations, or `ELSE` counts change mechanically. It permits alias-only identifier/casing updates inside still-commented SQL conditions, but removed, uncommented, or business-text-changing comments remain blocking.
 
 ## Style rules
 
@@ -59,17 +59,17 @@ If the host-local `sql-formatting` skill is unavailable, the verifier records th
 
 ## Quality bar
 
-A passing result must preserve literals, Korean text, comments, predicates, JOIN conditions, calculations, and row-shape semantics; reject ad hoc outer aliases such as `T`, `TT`, or `YY`; keep wide `INSERT INTO ... SELECT` mappings horizontally grouped unless a single expression needs continuation; and block CTE or `#` temporary-table introductions unless the caller provides a concrete exception reason. Scalar-function-to-join rewrites are allowed only when the verifier can prove the lookup contract from host-local style guidance, source, or DB/MCP metadata.
+A passing result must preserve literals, localized text, comments, predicates, JOIN conditions, calculations, and row-shape semantics; reject ad hoc outer aliases such as `T`, `TT`, or `YY`; keep wide `INSERT INTO ... SELECT` mappings horizontally grouped unless a single expression needs continuation; and block CTE or `#` temporary-table introductions unless the caller provides a concrete exception reason. Scalar-function-to-join rewrites are allowed only when the verifier can prove the lookup contract from host-local style guidance, source, or DB/MCP metadata.
 
 ## PowerBuilder source validation hook
 
 For PowerBuilder/PBL validation, keep the sweep bounded and source-safe:
 
-1. Use `C:\PblScripter\Export-PBL.ps1` to export PBL objects into a caller-provided output directory, not into `C:\GWERP`.
+1. Use the user-provided or host-configured PBL export tool path, such as `C:\PblScripter\Export-PBL.ps1` in the local default environment, to export PBL objects into a caller-provided output directory, not into the source tree.
 2. Run `scripts/powerbuilder_sql_probe.py --source-root <exported-source> --output-dir <probe-output>`.
 3. The probe extracts SQL-looking fragments containing `SELECT`, `UPDATE`, `DELETE`, or `INSERT`.
 4. Format extracted fragments with host-local `sql-formatting`.
 5. Run `verify_sql_formatting_style` on each original/formatted pair.
 6. Report broad PBL sweep status separately from unit-test fixture coverage.
 
-The packaged implementation includes the bounded hook and fixture coverage. It does not perform a broad `C:\GWERP` sweep unless explicitly run with an external output directory.
+The packaged implementation includes the bounded hook and fixture coverage. It does not perform a broad source-tree sweep unless explicitly run with an external output directory.

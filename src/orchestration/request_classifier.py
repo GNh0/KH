@@ -1527,6 +1527,15 @@ PRODUCT_DISCOVERY_SPECIFICITY_TERMS = {
     "\uac80\uc99d",
     "\ud14c\uc2a4\ud2b8",
 }
+STACK_ONLY_DISCOVERY_SPECIFICITY_TERMS = {
+    "html",
+    "css",
+    "javascript",
+    "js",
+    "react",
+    "vue",
+    "index.html",
+}
 VAGUE_DISCOVERY_SPECIFICITY_TERMS = {
     "dashboard",
     "pdf",
@@ -1916,6 +1925,33 @@ LIGHT_DIRECT_TASK_TERMS = {
     "write the negotiation email",
     "what should i name",
     "\uc774 \uc774\uba54\uc77c \ub354 \uacf5\uc190\ud558\uac8c",
+}
+INLINE_TONE_TRANSFORM_INTENT_TERMS = {
+    "make this sentence",
+    "make this text",
+    "make this message",
+    "make this paragraph",
+    "make this note",
+    "rewrite this sentence",
+    "rewrite this message",
+    "rewrite this paragraph",
+    "clean up this sentence",
+    "clean up this message",
+    "polish this sentence",
+    "polish this message",
+}
+INLINE_TONE_TRANSFORM_QUALITY_TERMS = {
+    "less rude",
+    "less harsh",
+    "less blunt",
+    "more polite",
+    "more professional",
+    "more friendly",
+    "friendlier",
+    "softer",
+    "calmer",
+    "warmer",
+    "kinder",
 }
 DOCUMENT_TRANSFORM_TERMS = {
     "translate",
@@ -3291,7 +3327,20 @@ def _is_conceptual_request(normalized: str) -> bool:
 def _is_light_direct_task(normalized: str) -> bool:
     if _contains_any(normalized, LIGHT_DIRECT_TASK_TERMS):
         return True
+    if _is_short_inline_tone_transform(normalized):
+        return True
     return False
+
+
+def _is_short_inline_tone_transform(normalized: str) -> bool:
+    if not _has_inline_payload(normalized):
+        return False
+    if len(normalized.split()) > 36:
+        return False
+    return _contains_any(normalized, INLINE_TONE_TRANSFORM_INTENT_TERMS) and _contains_any(
+        normalized,
+        INLINE_TONE_TRANSFORM_QUALITY_TERMS,
+    )
 
 
 def _is_tiny_inline_transform(normalized: str) -> bool:
@@ -4116,6 +4165,9 @@ def _has_blocking_discovery_specificity(normalized: str) -> bool:
     if not _contains_any(normalized, PRODUCT_DISCOVERY_SPECIFICITY_TERMS):
         return False
     specificity_terms = PRODUCT_DISCOVERY_SPECIFICITY_TERMS - VAGUE_DISCOVERY_SPECIFICITY_TERMS
+    # A chosen implementation stack is not enough to prove that the product,
+    # workflow, data, or screen scope has already been approved.
+    specificity_terms = specificity_terms - STACK_ONLY_DISCOVERY_SPECIFICITY_TERMS
     if _contains_any(normalized, {"kpi", "metrics"}) and _is_vague_dashboard_or_report_discovery(normalized):
         specificity_terms = specificity_terms - {"kpi", "metrics"}
     return _contains_any(normalized, specificity_terms)
@@ -4129,10 +4181,6 @@ def _is_vague_dashboard_or_report_discovery(normalized: str) -> bool:
     return not _contains_any(
         normalized,
         {
-            "html",
-            "css",
-            "javascript",
-            "react",
             "api",
             "database",
             "table",

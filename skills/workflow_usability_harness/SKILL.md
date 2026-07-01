@@ -33,7 +33,7 @@ When `workflow_usability_auto` is present in AgentLoop, app bridge, or workflow 
 Use this harness when:
 
 - `.kh/development/<run-id>/state/progress.json` should produce a visible Compound handoff instead of ending as a private status file.
-- A large or long-running workflow needs `token_optimizer_provider` recorded as `kh`, `rtk`, `hybrid`, or `passthrough`.
+- A large or long-running workflow needs `token_optimizer_provider` recorded as `kh`, `rtk`, or `hybrid`, plus a separate `token_optimizer_status` such as `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 - A user asks for role-driven commands such as brainstorm, spec, work, QA, ship, learn, or resume without needing to know every underlying KH skill name.
 - A task-plan run should show a compact progress panel with task status, review status, token optimizer status, commit SHA, and next task.
 - Codex, Antigravity-style Agent Manager, CLI shells, or future hosts need a stable `host_panel.<host>.json` contract for their native progress surfaces.
@@ -41,7 +41,7 @@ Use this harness when:
 - A finished or interrupted Codex session must be checked for false completion, hidden verification failures, token-gate omissions, reviewer timeouts, subagent cleanup, secret exposure, and git integration.
 - A stopped or paused goal must prove that the user stop request overrode any later `goal_context` continuation.
 - A postmortem must distinguish skill inspection from skill application; reading a skill file is not runtime usage unless there is harness output, module execution, token-savings metadata, or explicit passthrough evidence.
-- Windows local app-server verification needs a reproducible launch plan with an explicit runtime entrypoint, normalized `Path`/`PATH`, redirected logs, and a separate HTTP health check.
+- Optional platform-specific app-server verification needs a reproducible launch plan with an explicit approved runtime entrypoint, normalized environment, redirected logs, and a separate health check. This is a narrow verification subpath, not a reason to choose Windows, Streamlit, or any web stack.
 
 Do not use this harness to skip planning, review, QA, or Compound. It exposes those steps; it does not replace them.
 
@@ -60,7 +60,7 @@ Do not use this harness to skip planning, review, QA, or Compound. It exposes th
 11. When reviewing a real Codex session log, call `src.orchestration.session_postmortem.analyze_codex_session_jsonl` and block final-health claims if `completion_guard`, `verification_claim_guard`, `scope_completion_delta`, or `user_stop_guard` is blocked.
 12. When a user stop is honored, call `src.orchestration.interruption_state.write_interruption_checkpoint` so `.kh` state and scoped durable memory both preserve what was done, what remains, and where to resume.
 13. For full-catalog skill usage review, call `src.orchestration.session_skill_audit.analyze_session_skills` or the module CLI so every KH packaged skill is classified as required, applied, inspected, mentioned, or missing.
-14. For Windows local dev-server checks, first identify the approved runtime and entrypoint. When the selected runtime is Streamlit, build a launch and health-check plan through `src.orchestration.windows_dev_server.build_streamlit_launch_plan` with an explicit `app_path` instead of retrying ad hoc `Start-Process` variants.
+14. For local dev-server checks, first identify the approved runtime and entrypoint. When the selected runtime is Streamlit on Windows, build a launch and health-check plan through `src.orchestration.windows_dev_server.build_streamlit_launch_plan` with an explicit `app_path` instead of retrying ad hoc `Start-Process` variants.
 15. Route any next skills from the Compound handoff into `workflow-skill-distiller`, `memory-state-harness`, `scenario-evaluation-harness`, or `context-state-harness`.
 
 ## Provider Policy
@@ -70,7 +70,7 @@ Do not use this harness to skip planning, review, QA, or Compound. It exposes th
 - `kh`: use KH's Python token optimizer.
 - `rtk`: use RTK-style command output optimization only when available; fall back to KH unless strict mode is requested.
 - `hybrid`: use RTK for high-noise command output when available and KH otherwise.
-- `passthrough`: preserve exact source-of-truth text without compression.
+`passthrough` is not a provider. It is a token optimizer status/decision that preserves exact source-of-truth text without compression.
 
 Quality-sensitive content such as requirements, security notes, review findings, and contract prose must prefer passthrough over lossy compression.
 
@@ -95,7 +95,7 @@ Each command resolves to a small set of roles, KH skills, and expected outputs. 
 - `session_start_context` when resuming or starting work in an existing project.
 - Visible progress panel for long task-plan runs.
 - Host progress panel JSON at `.kh/development/<run-id>/state/host_panel.<host>.json` when native host surfaces may display progress.
-- `token_optimizer_provider` decision with provider, status, strategy, fallback, and quality rationale.
+- `token_optimizer_provider` decision with provider, provider-selection status, strategy, fallback, and quality rationale, plus separate `token_optimizer_status` for used/considered/passthrough/blocked outcomes.
 - Runtime `token_optimization` summary with status, status reason, not-used reason for skipped/passthrough/blocked decisions, token usage savings, preserved command/subagent evidence, and RTK-style command-family statistics when task outputs cross the threshold.
 - Runtime `memory_state` summary with scoped candidate recording paths and promotion mode.
 - Runtime `active_memory_preflight` summary with scoped recall and bounded prompt snapshot paths.

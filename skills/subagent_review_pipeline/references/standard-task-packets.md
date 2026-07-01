@@ -22,7 +22,7 @@ Required fields:
 - `kh_front_door_evidence`: command, runtime-applied skills, execution gate, or explicit blocked/direct rationale
 - `selected_harness_evidence`: for every selected immediate harness, one of `applied`, `skipped_with_rationale`, `considered_not_needed`, or `blocked`
 - `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked` for task packet, command output, and transcript handling
-- `token_optimizer_provider`: `kh`, `rtk`, `hybrid`, or `passthrough` when relevant
+- `token_optimizer_provider`: `kh`, `rtk`, or `hybrid` when relevant; use `token_optimizer_status=passthrough` for exact no-compression decisions
 - `nested_subagents_available`: true, false, or not-applicable with host/runtime rationale
 - `final_user_language_policy`: final user-facing output should match the user's requested or apparent language; internal subagent reports may stay in English unless the user requests otherwise
 - `tdd_sequence`: RED command, GREEN command, broader verification command, or no-test rationale

@@ -227,14 +227,14 @@ def resolve_style_contract_source(
 
 def _check_preservation(original: str, formatted: str) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
-    korean_damage = _korean_text_damage_issue(original, formatted)
-    if korean_damage:
+    localized_damage = _localized_text_damage_issue(original, formatted)
+    if localized_damage:
         issues.append(
             SqlFormattingIssue(
-                code="korean_text_damaged",
+                code="localized_text_damaged",
                 severity="error",
-                message="Korean text from the original SQL appears to be damaged or replaced.",
-                evidence=korean_damage,
+                message="Localized business text from the original SQL appears to be damaged or replaced.",
+                evidence=localized_damage,
             )
         )
 
@@ -247,20 +247,20 @@ def _check_preservation(original: str, formatted: str) -> List[SqlFormattingIssu
             SqlFormattingIssue(
                 code="string_literals_changed",
                 severity="error",
-                message="String literal multiset changed; Korean and business values must be preserved exactly.",
+                message="String literal multiset changed; localized and business values must be preserved exactly.",
                 evidence=_diff_sample(original_literals, formatted_literals),
             )
         )
 
-    original_korean = [value for value in original_literals if _contains_korean(value)]
-    formatted_korean = [value for value in formatted_literals if _contains_korean(value)]
-    if sorted(original_korean) != sorted(formatted_korean):
+    original_localized = [value for value in original_literals if _contains_localized_text(value)]
+    formatted_localized = [value for value in formatted_literals if _contains_localized_text(value)]
+    if sorted(original_localized) != sorted(formatted_localized):
         issues.append(
             SqlFormattingIssue(
-                code="korean_literals_changed",
+                code="localized_literals_changed",
                 severity="error",
-                message="Korean string literals changed.",
-                evidence=_diff_sample(original_korean, formatted_korean),
+                message="Localized string literals changed.",
+                evidence=_diff_sample(original_localized, formatted_localized),
             )
         )
 
@@ -495,32 +495,32 @@ def _else_count(sql: str) -> int:
     return len(re.findall(r"\bELSE\b", _strip_literals_and_comments(sql), flags=re.IGNORECASE))
 
 
-def _contains_korean(value: str) -> bool:
-    return bool(re.search(r"[\uac00-\ud7a3]", value))
+def _contains_localized_text(value: str) -> bool:
+    return bool(re.search(r"[^\x00-\x7F]", value))
 
 
-def _korean_text_damage_issue(original: str, formatted: str) -> List[str]:
-    original_fragments = _extract_korean_fragments(original)
+def _localized_text_damage_issue(original: str, formatted: str) -> List[str]:
+    original_fragments = _extract_localized_fragments(original)
     if not original_fragments:
         return []
-    formatted_fragments = _extract_korean_fragments(formatted)
+    formatted_fragments = _extract_localized_fragments(formatted)
     original_text = " ".join(original_fragments)
     formatted_text = " ".join(formatted_fragments)
     evidence = []
     if original_fragments and not formatted_fragments and _has_replacement_damage_markers(formatted):
-        evidence.append("original contains Korean text but formatted output contains no Korean text and has replacement markers")
+        evidence.append("original contains localized text but formatted output contains no localized text and has replacement markers")
     for fragment in original_fragments[:12]:
         if fragment not in formatted_text:
-            evidence.append(f"missing_korean_fragment={fragment}")
+            evidence.append(f"missing_localized_fragment={fragment}")
         if len(evidence) >= 6:
             break
-    if _contains_korean(original_text) and "\ufffd" in formatted:
+    if _contains_localized_text(original_text) and "\ufffd" in formatted:
         evidence.append("formatted output contains Unicode replacement character")
     return evidence[:8]
 
 
-def _extract_korean_fragments(sql: str) -> List[str]:
-    return re.findall(r"[\uac00-\ud7a3]{2,}", sql)
+def _extract_localized_fragments(sql: str) -> List[str]:
+    return re.findall(r"[^\x00-\x7F]{2,}", sql)
 
 
 def _has_replacement_damage_markers(value: str) -> bool:

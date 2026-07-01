@@ -15,7 +15,7 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 - Current `DevelopmentRunProgress` or path to `.kh/development/<run-id>/state/progress.json`.
 - Task status, review status, commit SHA, active task, next task, and `token_optimizer_status`.
 - Expected command volume, broad file reads, subagent transcript size, and quality-sensitive content markers.
-- Optional `token_optimizer_provider`: `kh`, `rtk`, `hybrid`, or `passthrough`.
+- Optional `token_optimizer_provider`: `kh`, `rtk`, or `hybrid`. Use `token_optimizer_status=passthrough` when exact source-of-truth content must not be compressed.
 - Optional role command such as `/kh:work`, `/kh:qa`, or `/kh:learn`.
 - Existing `.kh` state, `docs/kh` handoffs, and scoped memory candidate store.
 - Optional Codex rollout JSONL path when reviewing a finished or interrupted session.
@@ -30,7 +30,7 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 2. If the context recommends progress, handoff, or memory files, inspect those before relying on chat recall.
 3. Resolve the token optimizer provider before reading or producing large content:
    `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider(...)`.
-4. Use `kh` by default. Use `hybrid` when RTK-style command optimization may be available. Use `passthrough` for exact evidence.
+4. Use `kh` by default. Use `hybrid` when RTK-style command optimization may be available. For exact evidence, keep the provider as `kh`, `rtk`, or `hybrid` and record `token_optimizer_status=passthrough`.
 5. When task results include command output or subagent transcripts, call:
    `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results(...)`.
    Runtime auto mode performs this during `apply_workflow_usability_runtime(...)`.
@@ -49,13 +49,13 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 14. When honoring a user stop, call `src.orchestration.interruption_state.write_interruption_checkpoint(...)` to save `.kh/development/<run-id>/state/interruption.json`, `.kh/development/<run-id>/content/interruption.md`, and a scoped durable `resume-checkpoint` memory record.
 15. For full skill usage review, call `src.orchestration.session_skill_audit.analyze_session_skills(...)` or `python -m src.orchestration.session_skill_audit --summary <jsonl>`.
 16. Treat skill-file reads and default-prompt mentions as inspection only. Token optimizer usage requires runtime evidence such as `src.skills.token_optimizer`, command-output summarization, token-savings metadata, or explicit passthrough evidence.
-17. For Windows local dev-server checks, identify the approved runtime and entrypoint first. When the selected runtime is Streamlit, use `src.orchestration.windows_dev_server.build_streamlit_launch_plan(..., app_path=\"<approved entrypoint>\")` to avoid repeated hidden-process failures caused by Path/PATH environment quirks without assuming a dashboard layout.
+17. For local dev-server checks, identify the approved runtime and entrypoint first. When the selected runtime is Streamlit on Windows, use `src.orchestration.windows_dev_server.build_streamlit_launch_plan(..., app_path=\"<approved entrypoint>\")` to avoid repeated hidden-process failures caused by Path/PATH environment quirks without assuming a dashboard layout.
 
 ## Evidence to produce
 
 - `session_start_context` with recommended reads.
 - `progress_panel` text or equivalent structured panel payload.
-- `token_optimizer_provider` decision with status and rationale.
+- `token_optimizer_provider` decision with provider-selection status and rationale, plus separate `token_optimizer_status`.
 - `token_optimization` summary with workflow status, aggregate savings, preserved command/subagent records, and RTK-style `by_command_family` savings when command output was optimized.
 - `memory_state` candidate recording summary with scoped store paths and promotion mode.
 - `role_command_entrypoint` when used.

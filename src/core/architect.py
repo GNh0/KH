@@ -1,98 +1,78 @@
-import os
 import csv
+import os
 from typing import Any, Dict, List
 
 from src.orchestration.artifacts import build_design_stage
-from src.skills.pattern_analyzer import analyze_design_pattern
 from src.skills.license_checker import check_license
+from src.skills.pattern_analyzer import analyze_design_pattern
+
 
 class SystemArchitect:
-    """
-    개발 설계자(Architect) 에이전트 파이프라인.
-    LLM을 활용하여 짧은 요구사항을 '상세 기능정의서(엑셀 호환 CSV)'로 변환하고, 코더 에이전트가 참조할 마크다운 설계 문서를 생성합니다.
-    """
+    """Generate a functional specification CSV and a compact architecture document."""
+
     def __init__(self, project_dir: str, llm_router=None):
         self.project_dir = project_dir
         self.llm = llm_router
 
     def _generate_functional_spec(self, requirements: str) -> str:
-        """LLM을 호출하여 상세 기능정의서를 생성하고 CSV로 저장합니다."""
+        """Ask the configured LLM for CSV content and save it as functional_spec.csv."""
         if not self.llm:
-            return f"(LLM이 연결되지 않아 요구사항 원본을 사용합니다)\n{requirements}"
-            
-        sys_prompt = "당신은 IT 서비스 기획자(Architect)입니다."
-        user_prompt = f"""
-다음 사용자의 요구사항을 분석하여 상세 기능정의서를 작성하세요.
-결과는 반드시 CSV 포맷으로 작성하고 마크다운 ```csv ... ``` 블록 안에 넣어주세요.
-첫 줄은 헤더(ID, 대분류, 기능명, 상세설명)여야 합니다. 쉼표(,)가 내용에 포함될 경우 반드시 쌍따옴표(")로 감싸세요.
+            csv_data = "ID,Category,Feature,Description\nF-001,General,Requested work," + _csv_escape(requirements)
+        else:
+            system_prompt = "You are an IT service planner and system architect."
+            user_prompt = f"""
+Analyze the user's requirements and write a detailed functional specification.
+Return only CSV content, optionally inside a Markdown csv code block.
+The first row must be: ID,Category,Feature,Description
+Quote fields when a comma appears inside a value.
 
-[요구사항]
+[Requirements]
 {requirements}
 """
-        try:
-            response = self.llm.chat(sys_prompt, user_prompt)
-            # 마크다운 블록 파싱
-            if "```csv" in response:
-                csv_data = response.split("```csv")[1].split("```")[0].strip()
-            elif "```" in response:
-                csv_data = response.split("```")[1].strip()
-            else:
-                csv_data = response.strip()
-                
-            # 엑셀(CSV) 파일 출력 (utf-8-sig로 저장하여 엑셀 한글 깨짐 방지)
-            csv_path = os.path.join(self.project_dir, "기능정의서.csv")
-            with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
-                f.write(csv_data)
-                
-            return f"기능정의서가 엑셀(CSV) 포맷으로 추출되었습니다: {csv_path}\n\n[상세 내역 요약]\n{csv_data}"
-        except Exception as e:
-            return f"[기능정의서 자동 생성 실패] {e}\n\n[원본 요구사항]\n{requirements}"
+            response = self.llm.chat(system_prompt, user_prompt)
+            csv_data = _extract_csv_block(response)
+
+        csv_path = os.path.join(self.project_dir, "functional_spec.csv")
+        os.makedirs(self.project_dir, exist_ok=True)
+        with open(csv_path, "w", encoding="utf-8-sig", newline="") as handle:
+            handle.write(csv_data)
+        return f"Functional specification CSV exported: {csv_path}\n\n[Summary]\n{csv_data}"
 
     def draft_architecture(self, requirements: str, framework: str, libraries: list, scale: str = "large") -> str:
-        """
-        요구사항을 분석하고 기능정의서 작성, 패턴 검사, 라이선스 검사 후 최종 설계 문서를 생성합니다.
-        """
+        """Create a Markdown architecture document from requirements, pattern advice, and license checks."""
         doc_path = os.path.join(self.project_dir, "design_doc.md")
         os.makedirs(self.project_dir, exist_ok=True)
-        
-        # 1. 상세 기능정의서 생성 (LLM 연동 및 엑셀 출력)
-        functional_spec_text = self._generate_functional_spec(requirements)
-        
-        # 2. 디자인 패턴 동적 분석
-        pattern_strategy = analyze_design_pattern.__skill_meta__.execute(
-            framework=framework, 
-            project_scale=scale, 
-            maintainability_priority="high"
-        )
-        
-        # 3. 라이선스 체크
-        license_reports = []
-        for lib in libraries:
-            report = check_license.__skill_meta__.execute(package_name=lib, registry="pypi")
-            license_reports.append(report)
-            
-        # 4. 마크다운 시스템 아키텍처 문서(design_doc.md) 조립
-        design_doc = f"""# 시스템 아키텍처 및 상세 기능정의서
 
-## 1. 요구사항 및 상세 기능정의 (기획서)
+        functional_spec_text = self._generate_functional_spec(requirements)
+        pattern_strategy = analyze_design_pattern.__skill_meta__.execute(
+            framework=framework,
+            project_scale=scale,
+            maintainability_priority="high",
+        )
+        license_reports = [
+            check_license.__skill_meta__.execute(package_name=library, registry="pypi")
+            for library in libraries
+        ]
+
+        design_doc = f"""# System Architecture and Functional Specification
+
+## 1. Requirements and Functional Specification
 {functional_spec_text}
 
-## 2. 아키텍처 및 디자인 패턴 정책 (유지보수성 중심)
+## 2. Architecture and Design Pattern Policy
 {pattern_strategy}
 
-## 3. 외부 라이브러리 라이선스 검토 결과
-{chr(10).join(license_reports)}
+## 3. External Library License Review
+{chr(10).join(license_reports) if license_reports else "No external libraries were requested."}
 
-## 4. 코더 에이전트 개발 지침 (중요)
-- 위 아키텍처 설계와 기능정의서를 철저히 준수할 것.
-- 라이선스 문제가 있는 라이브러리는 대체재를 탐색할 것.
-- 모든 비즈니스 로직은 향후 유지보수를 위해 철저히 분리할 것.
+## 4. Developer Agent Guidance
+- Follow the architecture design and functional specification.
+- Replace libraries that have incompatible licensing or unresolved policy risk.
+- Keep business logic separated for maintainability and testing.
 """
-        
-        # 파일 저장
-        with open(doc_path, 'w', encoding='utf-8') as f:
-            f.write(design_doc)
-            
+
+        with open(doc_path, "w", encoding="utf-8") as handle:
+            handle.write(design_doc)
         return doc_path
 
 
@@ -136,3 +116,17 @@ def run_architect_pipeline(
         "quality": design_stage.get("deliverable_exports", {}).get("quality", {}),
         "evidence": list(design_stage.get("evidence", [])),
     }
+
+
+def _extract_csv_block(response: str) -> str:
+    text = (response or "").strip()
+    if "```csv" in text:
+        return text.split("```csv", 1)[1].split("```", 1)[0].strip()
+    if "```" in text:
+        return text.split("```", 1)[1].split("```", 1)[0].strip()
+    return text
+
+
+def _csv_escape(value: str) -> str:
+    escaped = str(value).replace('"', '""')
+    return f'"{escaped}"'

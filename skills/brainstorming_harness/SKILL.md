@@ -165,9 +165,9 @@ Instead:
 3. Ask the next focused design/spec question that could change the output, such as stock calculation rule, required fields, screens/artifacts, non-goals, risks, acceptance criteria, approvals, locations, lots/serials, or export/output shape.
 4. Keep asking one focused question or presenting one review section at a time until the `BrainstormSession`, decision log, self-reviewed handoff/spec, and separate implementation approval exist.
 
-Example continuation after an inventory option choice:
+Example continuation after a domain option choice:
 
-"Option 1, the simple stock-ledger direction, is recorded. Implementation scope is not final yet. Next, how should current stock be calculated: A) transaction-derived only, B) editable current quantity with audit log, or C) hybrid with adjustment reasons?"
+"Option 1 is recorded as the direction. Implementation scope is not final yet. Next, which rule changes the output most: A) data source and authority, B) approval/review flow, or C) final artifact/output format?"
 
 ## Handoff Transition Gate
 
@@ -194,14 +194,16 @@ When the user later approves a recommended option, that approval opens the next 
 
 Do not read global Codex `%CODEX_HOME%/memories/MEMORY.md`, `%CODEX_HOME%/memories/skills/...`, sibling folders, old static-page preferences, or prior subagent outputs during this continuation unless the user explicitly asked to reuse or compare previous context. If the handoff cannot be produced, stop with the blocked reason instead of scaffolding from memory.
 
-For an inventory inbound/outbound request, a valid compact brainstorm should include:
+For any domain request, a valid compact brainstorm should include:
 
-1. Assumed objective and target operator, such as warehouse staff, purchasing, production, or management.
-2. Current workflow boundary, such as inbound receiving, outbound issue/shipment, transfer, adjustment, returns, stocktake, and shortage monitoring.
-3. 2-3 operating model choices with tradeoffs, such as simple ledger, location-controlled stock, lot/serial/expiry-controlled stock, or approval/ERP-linked stock flow.
-4. Required data records, such as item code/name, location, quantity, transaction type, date/time, owner, reason, memo, safety stock, and optional lot, serial, expiry, supplier, customer, or work order.
-5. Open questions, such as whether locations, approvals, ERP import/export, lots/serials, barcode scans, or stocktaking are required.
+1. Assumed objective and target operator, audience, or decision owner.
+2. Current boundary: what is in scope, what is out of scope, and what would change the result.
+3. 2-3 operating model choices with tradeoffs, framed in domain terms before technology terms.
+4. Required records, inputs, files, drawings, tables, screens, reports, or other artifact shapes.
+5. Open questions that could change the direction, risk, output format, or implementation stack.
 6. One recommended domain direction and one approval question before any implementation or artifact generation.
+
+Examples should adapt to the domain: inventory may ask about locations/lots/stock rules; product design may ask about dimensions/materials/tolerances; document work may ask about audience/approval/use; analysis may ask about data source/method/risk assumptions.
 
 Technical choices such as static HTML, React, WinForms, database, or deployment can appear only after the domain choices are framed, unless the user already supplied enough workflow, data, and approval detail. A "simple" request still needs this compact domain-first pass; simplicity changes the length, not the ordering.
 

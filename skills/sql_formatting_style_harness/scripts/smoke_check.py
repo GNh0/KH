@@ -11,6 +11,7 @@ REQUIRED_SUPPORT_FILES = [
     "examples/minimal-workflow.md",
     "scripts/smoke_check.py",
     "scripts/demo.py",
+    "scripts/powerbuilder_sql_probe.py",
 ]
 IMPLEMENTATION_TARGETS_PATTERN = re.compile(
     r"^## UAF implementation targets\s*(?P<body>.*?)(?:\n## |\Z)",

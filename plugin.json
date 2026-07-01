@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.98",
+  "version": "2.9.99",
   "description": "Pure Python UAF skillbook and orchestration runtime for Antigravity, Codex, Claude Code, and local workflows. It provides an auditable front-door intake contract for non-trivial requests before memory lookup, source exploration, subagents, or other work; packaged skills with usage references; Superpowers-style workflow patterns; Compound learning capture; RTK-style token gate telemetry; scoped OpenClaw/Hermes-style memory; role orchestration; plugin composition; runtime state; and packaging checks. KH can require and audit the intake path, but host and subagent compliance depends on the active installed plugin/session.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
@@ -117,7 +117,7 @@
     },
     {
       "name": "token-optimizer-provider",
-      "description": "Resolve `token_optimizer_provider` policy as kh, rtk, hybrid, or passthrough with RTK optional and KH as the safe fallback.",
+      "description": "Resolve `token_optimizer_provider` policy as kh, rtk, or hybrid with RTK optional and KH as the safe fallback; passthrough is reported as a separate token optimizer status when exact content must not be compressed.",
       "module": "src.orchestration.token_optimizer_provider"
     },
     {

@@ -6,7 +6,7 @@ This reference expands the portable operating contract for `domain-orchestration
 
 Use when a UAF workflow must handle a non-code or cross-domain objective, require a design stage, persist design artifacts, or route work through review, QA/QC, risk, policy, and final decision gates.
 
-Context summary: This harness makes UAF domain orchestration portable beyond software development. Every objective should be classified into a `DomainProfile`, converted into a mandatory `WorkDesign`, backed by internal design artifacts, and exported as user-facing deliverables that match the task type before execution or final release decisions.
+Context summary: This harness makes UAF domain orchestration portable beyond software development. Substantial objectives should be classified into a `DomainProfile`, converted into a `WorkDesign`, and backed by internal design artifacts. User-facing deliverables should be exported only when they are useful for the approved objective, requested by the user, or required for final release evidence; otherwise record a no-export rationale.
 
 Do not use this skill only because it is available. Use it when the current task needs the behavior named by the trigger, and state whether the skill was actually executed, applied procedurally, or only considered.
 

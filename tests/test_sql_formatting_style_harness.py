@@ -48,7 +48,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         issues = result.metadata["mechanical_checks"]["preservation_issues"]
         codes = {issue["code"] for issue in issues}
         self.assertIn("string_literals_changed", codes)
-        self.assertIn("korean_literals_changed", codes)
+        self.assertIn("localized_literals_changed", codes)
         self.assertIn("comments_changed", codes)
         self.assertIn("predicates_changed", codes)
         self.assertIn("arbitrary_else_added", codes)
@@ -347,7 +347,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["preservation_issues"]
         }
-        self.assertIn("korean_text_damaged", preservation_codes)
+        self.assertIn("localized_text_damaged", preservation_codes)
 
     def test_verifier_allows_wide_insert_select_grouped_layout(self):
         grouped = (
@@ -824,7 +824,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             for issue in result.metadata["mechanical_checks"]["preservation_issues"]
         }
         self.assertIn("string_literals_changed", codes)
-        self.assertIn("korean_literals_changed", codes)
+        self.assertIn("localized_literals_changed", codes)
         self.assertIn("comments_changed", codes)
 
     def test_style_contract_source_records_host_local_hash_when_available(self):

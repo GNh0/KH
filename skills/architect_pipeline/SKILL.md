@@ -27,7 +27,7 @@ When the user asks you to design or execute a substantial workflow, you MUST fol
 2. Run the architect pipeline using the terminal when CLI operation is preferred:
    `python -m src.core.runner --mode architect --project_dir ./workspace --reqs "<User Requirement>" --framework "<Framework Name>"`
 3. Read the generated `./workspace/design_doc.md` file carefully.
-4. Use the workflow design stage to create `DomainProfile`, `WorkDesign`, internal `ArtifactManifest`, and user-facing Office deliverables under the target project's `docs/` folder.
+4. Use the workflow design stage to create `DomainProfile`, `WorkDesign`, and an internal `ArtifactManifest`. Export user-facing Office or typed deliverables under the target project's `docs/` folder only when they are useful for the approved objective, explicitly requested, or required as release evidence.
 5. **Parallel Dispatching Note**: The design must clearly outline bounded target outputs. For software these may be files; for other domains they may be reports, checklists, plans, or decision artifacts.
 6. Follow the exact design patterns, orchestration boundaries, evidence requirements, and domain constraints written in the design outputs.
 7. If there are license, policy, safety, or missing-evidence warnings, do NOT proceed as complete until alternatives or blockers are recorded.

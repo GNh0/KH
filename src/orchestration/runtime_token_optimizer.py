@@ -57,7 +57,7 @@ def optimize_workflow_task_results(
             skipped_count=0,
             blocked_reason=provider.rationale,
         )
-    if provider.provider == "passthrough":
+    if provider.command_strategy == "quality-preserving-passthrough":
         all_records: List[Dict[str, Any]] = []
         optimized_results: List[WorkflowTaskResult] = []
         for result in task_results:

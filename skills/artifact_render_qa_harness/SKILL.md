@@ -41,7 +41,7 @@ This harness verifies that generated files can be opened or parsed enough for de
 - SVG must include an `<svg>` root and closing `</svg>`.
 - DXF must include `SECTION` and `ENTITIES`.
 - PDF uses a header/EOF sanity check only: it must start with the `%PDF-` file signature and include an EOF marker, but this is not full PDF structural validation.
-- HTML must include a document structure marker such as `<html`, `<!doctype html`, or an intentional fragment marker.
+- For HTML artifacts, the checker requires a document structure marker such as `<html`, `<!doctype html`, or an intentional fragment marker.
 - PNG must pass a minimal chunk check: PNG signature, IHDR as the first chunk, sane dimensions, valid chunk CRCs, and IEND presence.
 - A malformed-file probe should fail with `artifact render qa failed`, not a template pass.
 

@@ -13,7 +13,7 @@ description: Use when kh-uaf:always-on-front-door has already run and selected t
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
-This harness makes UAF domain orchestration portable beyond software development. Every objective should be classified into a `DomainProfile`, converted into a mandatory `WorkDesign`, backed by internal design artifacts, and exported as user-facing deliverables that match the task type before execution or final release decisions.
+This harness makes UAF domain orchestration portable beyond software development. Every substantial objective should be classified into a `DomainProfile`, converted into a `WorkDesign`, and backed by internal design artifacts. User-facing deliverables are exported only when they are useful for the approved objective, requested by the user, or required for final release evidence; brainstorming and direction-setting phases must not create files merely because this harness is available.
 
 ## Support files
 
@@ -37,14 +37,14 @@ Use this harness when:
 2. Build a `DomainProfile` with domain name, subdomains, required roles, required design artifact types, review gates, risk/policy gates, and evidence requirements.
 3. Create a `WorkDesign` before execution. The design must name scope, assumptions, constraints, deliverables, roles, required artifacts, review gates, and risk/policy checks.
 4. Persist the `WorkDesign` and all supplied design artifacts through `ArtifactStore` in the UAF runtime store.
-5. Export user-facing deliverables to the target project's `docs/` folder through the type-aware deliverable router.
+5. Export user-facing deliverables to the target project's `docs/` folder through the type-aware deliverable router only after the output type is approved or clearly required by the objective.
    - Use the general orchestration profile for broad planning/process work.
    - Use product/mechanical design artifacts for drawing-oriented work, including design notes, dimension/BOM tables, SVG concept drawings, and DXF CAD handoff files when the input supports them.
    - Use analysis/reporting artifacts for investment or research work, including analysis reports, scenario workbooks, and risk/policy workbooks.
    - Export `user_manual.docx` only when the workflow needs user/operations instructions, `export_manual` is true, or manual revision metadata is supplied.
    - Do not export a manual by default for analysis/reporting-only topics such as investment, valuation, portfolio review, research, or generic analysis.
    - When a manual is exported, put `Revision History` first and include `manual_revision` / `manual_revision_note` metadata when available.
-   - Record the selected profile, artifact type, format, path, and evidence in `deliverable_exports["plan"]`.
+   - Record the selected profile, artifact type, format, path, and evidence in `deliverable_exports["plan"]`; when no user-facing export is appropriate, record the no-export rationale instead of creating placeholder documents.
 6. Attach the resulting `ArtifactManifest` and `deliverable_exports` metadata to workflow metadata and `GoalState.metadata`.
 7. Dispatch bounded role tasks.
 8. Run review, analysis, QA/QC, risk, security, policy, and release gates against the manifest and export evidence.

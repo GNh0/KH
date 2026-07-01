@@ -105,6 +105,7 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
     def test_plan_work_review_compound_is_visible_to_plugin_users(self):
         readme = read_text("README.md")
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
+        compound = read_text("skills/compound_engineering_harness/SKILL.md")
         distiller = read_text("skills/workflow_skill_distiller/SKILL.md")
         plugin = json.loads(read_text(".codex-plugin/plugin.json"))
         prompts = "\n".join(plugin["interface"]["defaultPrompt"])
@@ -113,7 +114,9 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
             self.assertIn(stage, readme)
 
         self.assertIn("Plan -> Work -> Review", lifecycle)
-        self.assertIn("Compound step", distiller)
+        self.assertIn("explicit Compound step", compound)
+        self.assertIn("downstream distillation step", distiller)
+        self.assertIn("compound-engineering-harness", distiller)
         self.assertIn("KH brainstorming-harness", prompts)
         self.assertIn("KH workflow-skill-distiller", prompts)
         self.assertIn("Visible brainstorming output gate", prompts)

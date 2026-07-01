@@ -594,6 +594,31 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertEqual(result.domain, "software")
         self.assertNotIn("brainstorming-harness", result.recommended_skills)
 
+    def test_stack_choice_alone_does_not_bypass_brainstorming(self):
+        cases = [
+            (
+                r"C:\work\StockTool folder에 HTML/CSS/JS로 재고 입출고 관리 대시보드 개발해줘.",
+                "operations",
+            ),
+            (
+                "Create an inventory inbound/outbound dashboard app in static HTML/CSS/JS.",
+                "operations",
+            ),
+            (
+                "Build a React inventory workflow dashboard.",
+                "operations",
+            ),
+        ]
+
+        for prompt, domain in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.domain, domain)
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("brainstorming-harness", result.recommended_skills)
+                self.assertIn("early_domain_discovery_needs_brainstorming", result.reasons)
+
     def test_long_log_prompt_keeps_token_optimizer_cross_cutting(self):
         text = "이 긴 테스트 로그 핵심만 줄여줘\n" + "\n".join(
             f"ERROR line {index}: stack trace" for index in range(80)
@@ -892,6 +917,8 @@ class RequestClassifierTests(unittest.TestCase):
             ("fix the tone", "ambiguous", "general", "clarify", {}),
             ("write a polite email asking my landlord to fix the heater", "light", "general", "direct_answer", {}),
             ("make this email less rude: I need this by Friday", "light", "general", "direct_answer", {}),
+            ("make this sentence less rude: I need it by Friday", "light", "general", "direct_answer", {}),
+            ("polish this message so it sounds more professional: send the file today", "light", "general", "direct_answer", {}),
             ("summarize this", "ambiguous", "general", "clarify", {}),
             (
                 "summarize this article in three bullets: apples are fruits and bananas are yellow",

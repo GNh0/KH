@@ -22,25 +22,25 @@ class BuiltinSkillRuntimeTests(unittest.TestCase):
     def test_system_architect_writes_design_doc_and_functional_spec_csv(self):
         llm = FakeLLMRouter(
             "```csv\n"
-            "ID,대분류,기능명,상세설명\n"
-            "F-001,업무,대시보드,작업 상태를 표시한다\n"
+            "ID,Category,Feature,Description\n"
+            "F-001,Work,Dashboard,Display work status\n"
             "```"
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir)
             result_path = SystemArchitect(str(path), llm).draft_architecture(
-                requirements="작업 상태 대시보드",
+                requirements="Work status dashboard",
                 framework="winforms",
                 libraries=[],
             )
 
             design_doc = Path(result_path)
-            functional_spec = path / "기능정의서.csv"
+            functional_spec = path / "functional_spec.csv"
 
             self.assertTrue(design_doc.exists())
             self.assertTrue(functional_spec.exists())
-            self.assertIn("시스템 아키텍처", design_doc.read_text(encoding="utf-8"))
+            self.assertIn("System Architecture", design_doc.read_text(encoding="utf-8"))
             self.assertIn("F-001", functional_spec.read_text(encoding="utf-8-sig"))
             self.assertTrue(llm.calls)
 
@@ -52,7 +52,7 @@ class BuiltinSkillRuntimeTests(unittest.TestCase):
         )
 
         self.assertIn("MVP", result)
-        self.assertIn("유지보수성", result)
+        self.assertIn("maintainability", result)
 
     def test_license_checker_rejects_unsafe_package_names(self):
         result = check_license("../secret", registry="pypi")
@@ -93,13 +93,15 @@ def add_one(value):
 
     def test_truncate_logs_preserves_failure_context_from_middle(self):
         lines = [f"setup-line-{index}" for index in range(80)]
-        lines.extend([
-            "FAILED tests/test_token_optimizer.py::test_keeps_context",
-            "Traceback (most recent call last):",
-            "  File \"src/skills/token_optimizer.py\", line 44, in truncate_logs",
-            "ValueError: important middle failure",
-            "exit code: 1",
-        ])
+        lines.extend(
+            [
+                "FAILED tests/test_token_optimizer.py::test_keeps_context",
+                "Traceback (most recent call last):",
+                "  File \"src/skills/token_optimizer.py\", line 44, in truncate_logs",
+                "ValueError: important middle failure",
+                "exit code: 1",
+            ]
+        )
         lines.extend(f"tail-line-{index}" for index in range(80))
         log = "\n".join(lines)
 
