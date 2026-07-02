@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 Branch: `codex-runtime`
-Version: `2.9.107`
+Version: `2.9.108`
 
 ## Purpose
 
@@ -166,6 +166,20 @@ Subagent review evidence:
 - veteran QA/QC review: PASS, Designer/XML/evidence JSON match captions, `colList_*`, `grdList/gvwList`, DataWindowToXml defaults, and the integrated sample `sandbox` path.
 
 ## Token Optimizer Handling
+
+## 2.9.108 Detail Form Layout And Binding Refinement
+
+2.9.108 adds a detail-entry form layout contract for PB-to-C# migration work.
+
+Added runtime behavior:
+
+- `build_detail_form_layout_plan` produces SA100100-style aligned label/editor pairs in fixed rows and columns;
+- PB or source order and captions are preserved, but PB pixel coordinates are not copied blindly unless exact visual parity is requested;
+- generated detail editors include `field_name`, target-style control name, bounds, and `BindingField = "<FIELD>"` assignment evidence;
+- target project control names still override generated fallback names;
+- packaged fallback names follow observed target style such as `txtITEMNM`, `btnITEMCD`, `SpinQty`, `cboITEMACNT`, `chkUSEYN`, and `memREMARK`.
+
+This refinement addresses detail controls such as LabelControl, TextEdit, SpinEdit, ButtonEdit, DateEdit, LookUpEdit, CheckEdit, and MemoEdit. It keeps grid migration separate from detail-entry panel migration.
 
 For PB/C#/SQL source text, token optimizer status should normally be `passthrough` because source code, business literals, Korean text, and SQL contracts are source-of-truth content. Command output may still be filtered by `command-output-harness` when it is noisy and facts can be preserved.
 

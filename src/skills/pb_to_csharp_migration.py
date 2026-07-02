@@ -168,6 +168,40 @@ class DataWindowColumnSpec:
         }
 
 
+@dataclass(frozen=True)
+class DetailFormFieldSpec:
+    logical_name: str
+    field_name: str
+    caption: str
+    editor_type: str
+    csharp_label_name: str
+    csharp_editor_name: str
+    binding_property: str
+    binding_code: str
+    row: int
+    column: int
+    label_bounds: Dict[str, int]
+    editor_bounds: Dict[str, int]
+    source: str = "provided"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "logical_name": self.logical_name,
+            "field_name": self.field_name,
+            "caption": self.caption,
+            "editor_type": self.editor_type,
+            "csharp_label_name": self.csharp_label_name,
+            "csharp_editor_name": self.csharp_editor_name,
+            "binding_property": self.binding_property,
+            "binding_code": self.binding_code,
+            "row": self.row,
+            "column": self.column,
+            "label_bounds": dict(self.label_bounds),
+            "editor_bounds": dict(self.editor_bounds),
+            "source": self.source,
+        }
+
+
 def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None = None) -> Dict[str, Any]:
     """Classify whether the migration run is standalone, described-behavior, partial-reference, full-reference, or pasted-source."""
     input_state = _coerce_state(state)
@@ -302,6 +336,97 @@ def resolve_csharp_control_stack(
     }
 
 
+def build_detail_form_layout_plan(
+    fields: Iterable[Any],
+    *,
+    columns: int = 3,
+    section_caption: str = "detail",
+    data_source_name: str = "bindingSource1",
+    origin_x: int = 16,
+    origin_y: int = 30,
+    label_width: int = 90,
+    editor_width: int = 130,
+    editor_height: int = 24,
+    row_height: int = 28,
+    label_editor_gap: int = 8,
+    column_gap: int = 96,
+) -> HarnessResult:
+    """Build a clean SA100100-style detail form layout plan for label/editor pairs."""
+    normalized_fields = _normalize_detail_form_fields(fields)
+    if not normalized_fields:
+        return HarnessResult(
+            success=False,
+            stdout=json.dumps({"fields": [], "status": "blocked"}, ensure_ascii=False),
+            stderr="No detail form fields were provided.",
+            exit_code=1,
+            metadata={
+                "harness": "pb-to-csharp-migration-harness",
+                "status": "blocked",
+                "blocked_reason": "missing_detail_form_fields",
+            },
+        )
+
+    safe_columns = max(1, int(columns or 1))
+    data_source = str(data_source_name or "bindingSource1")
+    pitch = label_width + label_editor_gap + editor_width + column_gap
+    specs: List[DetailFormFieldSpec] = []
+    for index, field in enumerate(normalized_fields):
+        row = index // safe_columns
+        column = index % safe_columns
+        label_x = origin_x + column * pitch
+        y = origin_y + row * row_height
+        editor_x = label_x + label_width + label_editor_gap
+        logical_name = field["logical_name"]
+        field_name = field["field_name"]
+        caption = field["caption"] or field_name
+        editor_type = field["editor_type"]
+        editor_name = field.get("csharp_editor_name") or _build_editor_control_name(editor_type, logical_name, field_name)
+        binding_property = "BindingField"
+        specs.append(
+            DetailFormFieldSpec(
+                logical_name=logical_name,
+                field_name=field_name,
+                caption=caption,
+                editor_type=editor_type,
+                csharp_label_name=field.get("csharp_label_name") or f"lbl{_normalize_datawindow_field_name(field_name)}",
+                csharp_editor_name=editor_name,
+                binding_property=binding_property,
+                binding_code=f'this.{editor_name}.BindingField = "{field_name}";',
+                row=row,
+                column=column,
+                label_bounds={"x": label_x, "y": y + 3, "width": label_width, "height": editor_height},
+                editor_bounds={"x": editor_x, "y": y, "width": editor_width, "height": editor_height},
+                source=field["source"],
+            )
+        )
+
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "status": "passed",
+        "section_caption": str(section_caption or "detail"),
+        "data_source_name": data_source,
+        "field_count": len(specs),
+        "columns": safe_columns,
+        "layout_rule": (
+            "SA100100-style aligned detail form: place label/editor pairs in fixed rows and columns; "
+            "use PB/source order and captions, but do not copy PB pixel coordinates blindly."
+        ),
+        "control_pair_rule": "LabelControl + TextEdit/SpinEdit/DateEdit/LookUpEdit/ButtonEdit/CheckEdit by field type.",
+        "binding_rule": (
+            "Each editor carries the source field name and a target-project BindingField assignment. "
+            "Existing target control names override generated fallback names."
+        ),
+        "fields": [spec.to_dict() for spec in specs],
+    }
+    return HarnessResult(
+        success=True,
+        stdout=json.dumps(metadata, ensure_ascii=False, indent=2),
+        stderr="",
+        exit_code=0,
+        metadata=metadata,
+    )
+
+
 def build_pb_to_csharp_migration_plan(
     objective: str,
     state: MigrationInputState | Dict[str, Any] | None = None,
@@ -316,6 +441,7 @@ def build_pb_to_csharp_migration_plan(
         "Separate confirmed behavior from inferred behavior when PB source is absent.",
         "Trace SRU/SRW event flow before DataWindow SQL so popup/save behavior is not missed.",
         "Map DataWindow columns to target-project controls; fall back to DevExpress and then WinForms basics when needed.",
+        "For detail forms, lay out label/editor pairs in clean aligned rows and columns instead of blindly copying PB coordinates.",
         "Resolve the target-project control stack before generating C# so project-specific controls are not replaced by a fixed TY/KoneLib assumption.",
         "Draft C# flow by preserving existing target-project method paths such as CallViewQuery, CallProc, SelectType, DataTableToXml, and SetModified when present.",
         "Draft SELECT/SAVE stored procedures from the packaged KH SP style reference and host-local sql-formatting contract.",
@@ -326,6 +452,7 @@ def build_pb_to_csharp_migration_plan(
         "PB source analysis notes",
         "confirmed vs inferred behavior map",
         "DataWindow column/layout mapping",
+        "detail form label/editor layout and binding plan",
         "target-project control fallback map",
         "target C# implementation plan",
         "SELECT/SAVE SP plan",
@@ -663,6 +790,90 @@ def _normalize_grid_column_specs(columns: Iterable[Any], *, prefix: str) -> List
 
 def _normalize_datawindow_field_name(value: str) -> str:
     return str(value or "").strip().strip('"').upper()
+
+
+def _normalize_detail_form_fields(fields: Iterable[Any]) -> List[Dict[str, str]]:
+    normalized: List[Dict[str, str]] = []
+    for item in fields or []:
+        if isinstance(item, dict):
+            field_name = _normalize_datawindow_field_name(
+                item.get("field_name") or item.get("name") or item.get("column") or item.get("logical_name") or ""
+            )
+            if not field_name:
+                continue
+            logical_name = str(item.get("logical_name") or item.get("control_stem") or field_name).strip().strip('"')
+            normalized.append(
+                {
+                    "logical_name": logical_name,
+                    "field_name": field_name,
+                    "caption": str(item.get("caption") or item.get("label") or field_name),
+                    "editor_type": _normalize_editor_type(
+                        str(item.get("editor_type") or item.get("control_type") or item.get("type") or "")
+                    ),
+                    "csharp_label_name": str(item.get("csharp_label_name") or item.get("label_name") or ""),
+                    "csharp_editor_name": str(item.get("csharp_editor_name") or item.get("control_name") or ""),
+                    "source": str(item.get("source") or "provided"),
+                }
+            )
+            continue
+        field_name = _normalize_datawindow_field_name(str(item))
+        if field_name:
+            normalized.append(
+                {
+                    "logical_name": field_name,
+                    "field_name": field_name,
+                    "caption": field_name,
+                    "editor_type": "TextEdit",
+                    "csharp_label_name": "",
+                    "csharp_editor_name": "",
+                    "source": "provided",
+                }
+            )
+    return normalized
+
+
+def _normalize_editor_type(value: str) -> str:
+    lowered = str(value or "").strip().lower()
+    if lowered in {"spin", "spinedit", "spin_edit", "number", "numeric", "decimal", "int", "integer"}:
+        return "SpinEdit"
+    if lowered in {"date", "datetime", "dateedit", "date_edit", "calendar"}:
+        return "DateEdit"
+    if lowered in {"combo", "combobox", "lookup", "lookupedit", "look_up", "select"}:
+        return "LookUpEdit"
+    if lowered in {"button", "buttonedit", "search", "popup", "code"}:
+        return "ButtonEdit"
+    if lowered in {"check", "checkbox", "checkedit", "bool", "boolean", "yn"}:
+        return "CheckEdit"
+    if lowered in {"memo", "textarea", "multiline"}:
+        return "MemoEdit"
+    return "TextEdit"
+
+
+def _editor_prefix(editor_type: str) -> str:
+    mapping = {
+        "TextEdit": "txt",
+        "SpinEdit": "Spin",
+        "DateEdit": "dtp",
+        "LookUpEdit": "cbo",
+        "ButtonEdit": "btn",
+        "CheckEdit": "chk",
+        "MemoEdit": "mem",
+    }
+    return mapping.get(editor_type, "txt")
+
+
+def _build_editor_control_name(editor_type: str, logical_name: str, field_name: str) -> str:
+    prefix = _editor_prefix(editor_type)
+    if editor_type == "SpinEdit":
+        return f"{prefix}{_to_pascal_identifier(logical_name or field_name)}"
+    return f"{prefix}{_normalize_datawindow_field_name(field_name or logical_name)}"
+
+
+def _to_pascal_identifier(value: str) -> str:
+    parts = [part for part in re.split(r"[^A-Za-z0-9]+", str(value or "")) if part]
+    if not parts:
+        return "Field"
+    return "".join(part[:1].upper() + part[1:].lower() for part in parts)
 
 
 def _extract_visual_datawindow_columns(source: str) -> List[Dict[str, Any]]:

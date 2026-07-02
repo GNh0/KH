@@ -49,6 +49,8 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 5. Map DataWindow fields/layout:
    - use `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`, `resolve_csharp_grid_column_prefix`, `resolve_csharp_grid_control_names`, and `generate_devexpress_grid_xml` for DataWindowToXml-compatible grid columns, matched captions, C# grid names, C# column names, and converter GridView defaults;
    - treat that mapping as grid-column scaffolding, not full PB coordinate or control migration;
+   - for detail-entry areas, use `build_detail_form_layout_plan` to create SA100100-style clean label/editor rows and columns; preserve source order and captions, but do not copy PB pixel coordinates blindly;
+   - detail controls must carry the source `field_name`, target-project-style control name, and `BindingField = "<FIELD>"` assignment evidence;
    - when emitting C# Designer code, mirror `build_datawindow_gridview_designer_defaults` so the generated GridView keeps the converter's group-panel, filter-row, footer, auto-width, even-row, and view-caption defaults.
 6. Resolve the target C# control stack before drafting code:
    - prefer target-project/custom controls such as a project-owned `u_GridControl` when they exist;
@@ -73,6 +75,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Confirmed vs inferred behavior map when PB source is absent and the user provided only behavior descriptions.
 - DataWindow mapping summary: field names, generated grid column names, unsupported layout semantics, and converter fallback status.
 - DataWindow naming summary: selected `grd*/gvw*` names, selected `col*_<COLUMN>` prefix, matched captions, and fallback fields when captions were not provable.
+- Detail form layout summary: label/editor pair order, bounds, field names, generated or preserved control names, and `BindingField` assignments.
 - Target C# control fallback map: target-project/custom controls, DevExpress fallback, WinForms fallback, selected provider, and reason.
 - Target C# plan: screen path, event flow, select/save method path, XML serialization rule, and binding/result-contract expectations.
 - SP plan: SELECT/SAVE procedure names, `@WORKTYPE` branches, XML/table variable plan, transaction/error/logging plan, and formatting verifier status.
@@ -106,6 +109,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - `src.skills.pb_to_csharp_migration.generate_devexpress_grid_xml`
 - `src.skills.pb_to_csharp_migration.build_datawindow_gridview_designer_defaults`
 - `src.skills.pb_to_csharp_migration.build_datawindow_grid_layout`
+- `src.skills.pb_to_csharp_migration.build_detail_form_layout_plan`
 - `src.skills.pb_to_csharp_migration.resolve_csharp_control_stack`
 - `src.skills.sql_formatting_style.verify_sql_formatting_style`
 - `src.skills.sql_formatting_style.extract_powerbuilder_sql_fragments`

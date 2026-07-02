@@ -19,6 +19,14 @@ Resolve controls before drafting code:
 
 Record the selected provider and reason. Do not hard-code KoneLib or any project-specific wrapper unless it exists in the target project or was explicitly selected by the user.
 
+## Detail form layout style
+
+- For detail panels like SA100100, arrange labels and input editors as clean label/editor pairs in fixed rows and columns. The goal is readable alignment, not a pixel-for-pixel copy of PB coordinates.
+- Use the target project's existing control names when a matching screen or migrated control exists.
+- When generating fallback names, use field-based names seen in the target style: `txtFIELD` for text, `btnFIELD` for button/lookup editors, `SpinField` for SpinEdit, `cboFIELD` for combo/lookup editors, `chkFIELD` for checkbox/boolean fields, and `memFIELD` for memo fields.
+- Set each editor's `BindingField` to the source field name, for example `this.txtITEMNM.BindingField = "ITEMNM";` or `this.SpinQty.BindingField = "QTY";`.
+- Keep labels tied to captions from PB/DataWindow or user-provided Korean labels, but use field-based control names rather than deriving names from Korean caption text.
+
 ## Grid naming style
 
 - Main/list grid controls usually use `grdList` and `gvwList`.

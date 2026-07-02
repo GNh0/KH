@@ -51,7 +51,8 @@ When those matter, keep them as migration tasks and ask for SRD/source/screensho
 ## Layout decision rules
 
 - Grid screens: use SRD columns to create grid columns, then apply target-project control naming and binding. If no target grid wrapper exists, use DevExpress GridControl/GridView; if DevExpress is absent, use WinForms DataGridView.
-- Detail entry screens: derive fields and validation from DataWindow metadata, but choose controls from the target form style using the same fallback order.
+- Detail entry screens: derive fields, captions, editor type hints, and validation from DataWindow metadata or user-described behavior, but choose controls from the target form style using the same fallback order. Use SA100100-style clean alignment: label/editor pairs in fixed rows and columns, consistent label width, editor width, row height, and column gap. Do not copy PB x/y coordinates blindly unless the user asks for exact visual parity.
+- Detail editor names should follow the active target project first. Packaged fallback names are field-based: `txtITEMNM` for text, `btnITEMCD` for lookup/button editors, `SpinQty` for SpinEdit, `cboITEMACNT` for lookup/combo, and `chkUSEYN` for boolean fields. Every generated editor must carry the source field name and a `BindingField = "<FIELD>"` assignment.
 - Reports/print forms: use the existing report designer, output PDF, screenshot, or printed form as the visual contract when available.
 - Complex layouts: produce a wireframe or mapping table first. Do not pretend the XML helper is full layout migration.
 

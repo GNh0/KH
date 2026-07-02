@@ -8,6 +8,7 @@ from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.request_classifier import classify_request
 from src.skills.pb_to_csharp_migration import (
     MigrationInputState,
+    build_detail_form_layout_plan,
     build_csharp_grid_column_name,
     build_datawindow_grid_layout,
     build_datawindow_gridview_designer_defaults,
@@ -133,6 +134,42 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
 
         self.assertEqual(result["selection"]["grid"]["provider"], "target-project")
         self.assertEqual(result["selection"]["grid"]["type"], "KoneLib.Controls.u_GridControl")
+
+    def test_detail_form_layout_places_label_editor_pairs_with_binding_fields(self):
+        result = build_detail_form_layout_plan(
+            [
+                {"name": "ORDNUM", "caption": "수주번호", "editor_type": "text"},
+                {"name": "QTY", "caption": "수주수량", "editor_type": "number", "logical_name": "Qty"},
+                {"name": "ORDDT", "caption": "수주일자", "editor_type": "date"},
+                {"name": "CUSTCD", "caption": "고객코드", "editor_type": "button"},
+            ],
+            columns=3,
+            section_caption="기본 상세정보",
+        )
+        payload = json.loads(result.stdout)
+        fields = payload["fields"]
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(payload["columns"], 3)
+        self.assertIn("do not copy PB pixel coordinates blindly", payload["layout_rule"])
+        self.assertIn("BindingField", payload["binding_rule"])
+        self.assertEqual(fields[0]["caption"], "수주번호")
+        self.assertEqual(fields[0]["field_name"], "ORDNUM")
+        self.assertEqual(fields[0]["csharp_label_name"], "lblORDNUM")
+        self.assertEqual(fields[0]["csharp_editor_name"], "txtORDNUM")
+        self.assertEqual(fields[0]["binding_code"], 'this.txtORDNUM.BindingField = "ORDNUM";')
+        self.assertEqual(fields[1]["editor_type"], "SpinEdit")
+        self.assertEqual(fields[1]["csharp_editor_name"], "SpinQty")
+        self.assertEqual(fields[1]["binding_code"], 'this.SpinQty.BindingField = "QTY";')
+        self.assertEqual(fields[2]["editor_type"], "DateEdit")
+        self.assertEqual(fields[3]["editor_type"], "ButtonEdit")
+        self.assertEqual(fields[3]["csharp_editor_name"], "btnCUSTCD")
+        self.assertEqual(fields[0]["row"], 0)
+        self.assertEqual(fields[0]["column"], 0)
+        self.assertEqual(fields[3]["row"], 1)
+        self.assertEqual(fields[3]["column"], 0)
+        self.assertEqual(fields[0]["label_bounds"]["y"], fields[1]["label_bounds"]["y"])
+        self.assertLess(fields[0]["editor_bounds"]["x"], fields[1]["label_bounds"]["x"])
 
     def test_extracts_datawindow_columns_and_generates_devexpress_xml(self):
         source = """

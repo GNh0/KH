@@ -8,6 +8,7 @@ Use this checklist before handoff or completion.
 - Migration mode and evidence strength.
 - PB source trace summary.
 - DataWindow field/layout mapping.
+- Detail form label/editor layout, source field names, target control names, and `BindingField` assignments when the migrated screen has input controls.
 - Target C# implementation plan.
 - Target C# control fallback map.
 - SELECT/SAVE SP plan.
@@ -21,6 +22,7 @@ Use this checklist before handoff or completion.
 - No claim of full PB parity without exported or pasted source evidence.
 - No claim of DB semantic equivalence without DB-backed check.
 - No claim of layout fidelity without visual/layout source.
+- Detail form controls are aligned as readable label/editor pairs instead of blindly copying PB coordinates unless exact visual parity was explicitly requested.
 - No generated user-facing files outside the exact requested target path.
 - No hidden use of global memory as a substitute for current artifacts.
 - Token optimizer status is recorded.
