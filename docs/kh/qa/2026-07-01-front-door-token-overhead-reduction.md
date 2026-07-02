@@ -112,3 +112,33 @@ Source manifests are bumped to `2.9.102`. Installed Codex marketplace cache rema
 behind until the user upgrades the marketplace entry after this branch is pushed.
 `python -B -m src.orchestration.plugin_install_audit --summary` may therefore report
 `attention_required` until the installed cache catches up.
+
+## 2.9.103 Opt-In Micro Summary
+
+Reviewer pass before this patch agreed not to compress default `--summary` further:
+those fields are still needed for audit and debugging. Instead, `--micro-summary`
+is added as an opt-in machine-only packet for hard token budgets.
+
+Measured against local 2.9.103 source:
+
+| Scenario | 2.9.102 ultra-compact tokens | 2.9.103 micro-summary tokens | Reduction |
+|---|---:|---:|---:|
+| Light question | 108 | 51 | 52.8% |
+| SQL formatting route | 181 | 75 | 58.6% |
+| Heavy implementation preflight | 207 | 86 | 58.5% |
+
+Micro schema is versioned with `m=kh_fd_micro` and `v=1`. Its short keys map to
+the default summary as follows: `s` -> `front_door_status`, `cls.c` ->
+classification complexity, `cls.x` -> recommended execution, `r` -> plugin
+route, `g` -> execution gate, `auth` -> execution authorization, `next` ->
+immediate next skills, `act` -> required next action codes, `t` -> token
+optimizer status/reason, and `src` -> skill source type/version.
+Missing `auth` means no stop or pending immediate-skill gate. Missing `next` or
+`act` means there are no immediate next skills or required action codes to carry
+in the micro packet.
+
+Default `--summary` remains the recommended interactive host output. The micro
+packet is for host-to-host routing where the consumer already knows the schema.
+Regression tests now enforce both default summary budgets and micro-summary
+budgets. Repo-local source identity also reads `.codex-plugin/plugin.json` so
+the summary reports the source manifest version instead of a blank version.

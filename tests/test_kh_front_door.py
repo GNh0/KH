@@ -433,6 +433,22 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(version, "2.9.69")
         self.assertEqual(reason, "installed Codex plugin cache")
 
+    def test_repo_local_source_reports_manifest_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir = root / ".codex-plugin"
+            manifest_dir.mkdir()
+            (manifest_dir / "plugin.json").write_text(
+                json.dumps({"name": "kh-uaf", "version": "9.8.7"}),
+                encoding="utf-8",
+            )
+
+            source_type, version, reason = _source_identity_for_root(root)
+
+        self.assertEqual(source_type, "repo-local")
+        self.assertEqual(version, "9.8.7")
+        self.assertEqual(reason, "current module repository root")
+
     def test_heavy_route_selects_runtime_skills_without_claiming_they_ran(self):
         result = build_kh_front_door(
             "Use KH to implement this workflow and prove it with tests.",
@@ -585,15 +601,112 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertNotIn("skill_status_summary", payload)
         self.assertNotIn("token_optimizer_decision", payload)
 
+    def test_cli_micro_summary_outputs_versioned_machine_packet(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "src.orchestration.kh_front_door",
+                "--prompt",
+                "Build a small HTML todo tool and verify it.",
+                "--project",
+                ".",
+                "--host",
+                "codex",
+                "--micro-summary",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        payload = json.loads(completed.stdout)
+
+        self.assertEqual(payload["m"], "kh_fd_micro")
+        self.assertEqual(payload["v"], 1)
+        self.assertEqual(payload["s"], "ok")
+        self.assertEqual(payload["cls"]["c"], "h")
+        self.assertEqual(payload["cls"]["x"], "dag")
+        self.assertEqual(payload["g"], {"ok": False, "s": "preflight"})
+        self.assertEqual(payload["auth"], {"s": "gate_block", "stop": True})
+        self.assertEqual(payload["next"], ["goal", "workflow", "host", "parallel"])
+        self.assertEqual(payload["act"], ["stop", "next", "preflight"])
+        self.assertEqual(payload["t"]["s"], "not_needed")
+        self.assertEqual(payload["t"]["why"], "no_candidate_output")
+        self.assertNotIn("front_door_status", payload)
+        self.assertNotIn("execution_authorization", payload)
+
+    def test_cli_summary_modes_are_mutually_exclusive(self):
+        for flags in [
+            ["--summary", "--micro-summary"],
+            ["--summary", "--verbose-summary"],
+            ["--micro-summary", "--verbose-summary"],
+        ]:
+            with self.subTest(flags=flags):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-m",
+                        "src.orchestration.kh_front_door",
+                        "--prompt",
+                        "2+2?",
+                        "--project",
+                        ".",
+                        "--host",
+                        "codex",
+                        *flags,
+                    ],
+                    cwd=Path(__file__).resolve().parents[1],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn("choose only one", completed.stderr)
+
+    def test_cli_without_summary_flags_keeps_full_json_output(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-m",
+                "src.orchestration.kh_front_door",
+                "--prompt",
+                "2+2?",
+                "--project",
+                ".",
+                "--host",
+                "codex",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        payload = json.loads(completed.stdout)
+
+        self.assertEqual(payload["front_door_status"], "ok")
+        self.assertIn("skill_statuses", payload)
+        self.assertIn("recommended_skills", payload)
+        self.assertIn("token_optimizer_decision", payload)
+        self.assertNotIn("summary_mode", payload)
+        self.assertNotIn("m", payload)
+
     def test_cli_summary_stays_within_ultra_compact_token_budget(self):
         cases = [
-            ("2+2?", 130),
+            ("2+2?", 125),
             (
                 "SELECT A.ORDNUM,A.ORDSEQ,F_BA011T_FIND_SUBNM(A.ITEMCD) AS ITEMNM "
                 "FROM SA100T A WHERE A.ORGDIV=@ORGDIV",
-                230,
+                195,
             ),
-            ("Build a small HTML todo tool and verify it.", 260),
+            ("Build a small HTML todo tool and verify it.", 225),
         ]
         for prompt, token_budget in cases:
             with self.subTest(prompt=prompt):
@@ -620,6 +733,47 @@ class KhFrontDoorTests(unittest.TestCase):
                 payload = json.loads(completed.stdout)
 
                 self.assertEqual(payload["summary_mode"], "ultra_compact")
+                self.assertLessEqual(
+                    estimate_token_count(completed.stdout),
+                    token_budget,
+                    completed.stdout,
+                )
+
+    def test_cli_micro_summary_stays_within_machine_only_token_budget(self):
+        cases = [
+            ("2+2?", 60),
+            (
+                "SELECT A.ORDNUM,A.ORDSEQ,F_BA011T_FIND_SUBNM(A.ITEMCD) AS ITEMNM "
+                "FROM SA100T A WHERE A.ORGDIV=@ORGDIV",
+                125,
+            ),
+            ("Build a small HTML todo tool and verify it.", 160),
+        ]
+        for prompt, token_budget in cases:
+            with self.subTest(prompt=prompt):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-B",
+                        "-m",
+                        "src.orchestration.kh_front_door",
+                        "--prompt",
+                        prompt,
+                        "--project",
+                        ".",
+                        "--host",
+                        "codex",
+                        "--micro-summary",
+                    ],
+                    cwd=Path(__file__).resolve().parents[1],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                )
+                payload = json.loads(completed.stdout)
+
+                self.assertEqual(payload["m"], "kh_fd_micro")
                 self.assertLessEqual(
                     estimate_token_count(completed.stdout),
                     token_budget,

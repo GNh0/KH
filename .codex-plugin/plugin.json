@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.102",
+  "version": "2.9.103",
   "description": "KH Universal Agent Framework provides an auditable front-door intake contract for non-trivial Codex work before memory lookup, source exploration, subagents, or other plugin work. It packages UAF skills, evidence gates, scoped memory, token-gate telemetry, development progress state, Compound learning, role orchestration, deliverable exports, and local runtime contracts; host and subagent compliance is audited rather than assumed.",
   "author": {
     "name": "KH UAF",

@@ -214,6 +214,48 @@ class KhFrontDoorResult:
             payload["warnings"] = list(self.warnings)
         return payload
 
+    def to_micro_summary_dict(self) -> Dict[str, Any]:
+        """Return an opt-in machine-only routing packet for hard token budgets."""
+        route_controller = self.plugin_route.get("controller", {}) or {}
+        controller_id = route_controller.get("provider_id")
+        route: Dict[str, Any] = {"r": _micro_route(self.plugin_route.get("route"))}
+        if controller_id and controller_id != "none":
+            route["c"] = controller_id
+        payload: Dict[str, Any] = {
+            "m": "kh_fd_micro",
+            "v": 1,
+            "s": self.front_door_status,
+            "cls": {
+                "c": _micro_complexity(self.classification.get("complexity")),
+                "x": _micro_execution(self.classification.get("recommended_execution")),
+            },
+            "r": route,
+            "g": _micro_execution_gate(self.execution_gate),
+            "t": _micro_token_optimizer_decision(self.token_optimizer_decision),
+        }
+        domain = self.classification.get("domain")
+        if domain and domain != "general":
+            payload["cls"]["d"] = _micro_domain(domain)
+        source = _micro_skill_source(self.skill_source)
+        if source:
+            payload["src"] = source
+        if self.immediate_next_skills:
+            payload["next"] = _micro_skill_codes(self.immediate_next_skills)
+        action_codes = _compact_required_next_action_codes(
+            self.execution_authorization,
+            self.immediate_next_skills,
+            self.plugin_route,
+            self.execution_gate,
+        )
+        if action_codes:
+            payload["act"] = _micro_action_codes(action_codes)
+        authorization = _micro_execution_authorization(self.execution_authorization)
+        if authorization:
+            payload["auth"] = authorization
+        if self.warnings:
+            payload["warn"] = list(self.warnings)
+        return payload
+
 
 def build_kh_front_door(
     prompt: str,
@@ -371,7 +413,25 @@ def _source_identity_for_root(repo_root: Path) -> tuple[str, str, str]:
         if lowered[index : index + 4] == ["plugins", "cache", "kh-uaf-marketplace", "kh-uaf"]:
             version = parts[index + 4] if index + 4 < len(parts) else repo_root.name
             return "codex-plugin-cache", version, "installed Codex plugin cache"
-    return "repo-local", "", "current module repository root"
+    return "repo-local", _repo_manifest_version(repo_root), "current module repository root"
+
+
+def _repo_manifest_version(repo_root: Path) -> str:
+    for relative in (
+        Path(".codex-plugin") / "plugin.json",
+        Path("plugin.json"),
+        Path(".agents") / "plugins" / "kh-uaf" / "plugin.json",
+    ):
+        manifest = repo_root / relative
+        if not manifest.is_file():
+            continue
+        try:
+            version = json.loads(manifest.read_text(encoding="utf-8")).get("version")
+        except (OSError, json.JSONDecodeError):
+            continue
+        if version:
+            return str(version)
+    return ""
 
 
 def _discover_cache_sources() -> List[SkillSource]:
@@ -1023,6 +1083,157 @@ def _compact_execution_authorization(authorization: Dict[str, Any]) -> Dict[str,
     return payload
 
 
+def _micro_skill_source(skill_source: SkillSource) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    source_type = _micro_source_type(skill_source.source_type)
+    if source_type:
+        payload["t"] = source_type
+    if skill_source.version:
+        payload["v"] = skill_source.version
+    if not skill_source.exists:
+        payload["ok"] = False
+    return payload
+
+
+def _micro_execution_gate(execution_gate: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "s": _micro_gate_status(execution_gate.get("status")),
+        "ok": bool(execution_gate.get("can_execute")),
+    }
+
+
+def _micro_execution_authorization(authorization: Dict[str, Any]) -> Dict[str, Any]:
+    must_stop = bool(authorization.get("must_stop_before_execution"))
+    pending = bool(authorization.get("pending_immediate_next_skills"))
+    if not must_stop and not pending:
+        return {}
+    payload: Dict[str, Any] = {"stop": must_stop}
+    status = authorization.get("status")
+    if status and status != "allowed":
+        payload["s"] = _micro_authorization_status(status)
+    return payload
+
+
+def _micro_token_optimizer_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
+    used = bool(decision.get("optimization_applied") or decision.get("actual_optimization_used"))
+    payload: Dict[str, Any] = {
+        "s": _micro_token_status(decision.get("token_optimizer_status")),
+        "u": used,
+        "why": _compact_token_reason_code(decision),
+    }
+    if used:
+        payload["saved"] = int(decision.get("estimated_tokens_saved") or 0)
+        payload["ratio"] = float(decision.get("token_savings_ratio") or 0.0)
+    return payload
+
+
+def _micro_skill_codes(skills: Sequence[str]) -> List[str]:
+    mapping = {
+        "brainstorming-harness": "brainstorm",
+        "goal-state-harness": "goal",
+        "workflow-usability-harness": "workflow",
+        "host-agent-orchestration": "host",
+        "parallel-orchestration-harness": "parallel",
+        "sql-formatting-style-harness": "sql-style",
+        "review-gate-harness": "review",
+        "qa-gate-harness": "qa",
+        "verification-before-completion-harness": "verify",
+    }
+    return [mapping.get(str(skill), str(skill)) for skill in skills]
+
+
+def _micro_action_codes(actions: Sequence[str]) -> List[str]:
+    mapping = {
+        "stop_before_task_work": "stop",
+        "apply_immediate_next_skills": "next",
+        "large_work_preflight": "preflight",
+        "brainstorming_handoff": "brainstorm",
+        "apply_selected_provider": "provider",
+    }
+    return [mapping.get(str(action), str(action)) for action in actions]
+
+
+def _micro_source_type(value: Any) -> str:
+    mapping = {
+        "repo-local": "repo",
+        "codex-plugin-cache": "cache",
+        "missing": "missing",
+    }
+    return mapping.get(str(value or ""), str(value or ""))
+
+
+def _micro_complexity(value: Any) -> str:
+    mapping = {
+        "light": "l",
+        "medium": "m",
+        "heavy": "h",
+        "ambiguous": "a",
+    }
+    return mapping.get(str(value or ""), str(value or ""))
+
+
+def _micro_execution(value: Any) -> str:
+    mapping = {
+        "direct_answer": "direct",
+        "skill_read": "skill",
+        "role_dag": "dag",
+        "clarify": "clarify",
+    }
+    return mapping.get(str(value or ""), str(value or ""))
+
+
+def _micro_domain(value: Any) -> str:
+    mapping = {
+        "software": "sw",
+        "database": "db",
+        "product": "product",
+        "operations": "ops",
+        "document": "doc",
+        "general": "general",
+    }
+    return mapping.get(str(value or ""), str(value or ""))
+
+
+def _micro_route(value: Any) -> str:
+    mapping = {
+        "direct": "direct",
+        "single_provider": "single",
+        "hybrid": "hybrid",
+        "clarify": "clarify",
+    }
+    return mapping.get(str(value or ""), str(value or ""))
+
+
+def _micro_gate_status(value: Any) -> str:
+    mapping = {
+        "allowed": "ok",
+        "execution_allowed_after_selected_skill_setup": "ok",
+        "blocked_until_large_work_preflight": "preflight",
+        "blocked_until_brainstorming_handoff": "brainstorm",
+        "blocked_until_clarification": "clarify",
+    }
+    return mapping.get(str(value or ""), str(value or ""))
+
+
+def _micro_authorization_status(value: Any) -> str:
+    mapping = {
+        "blocked_by_execution_gate": "gate_block",
+        "blocked_by_pending_immediate_skill_gate": "next_block",
+        "allowed": "ok",
+    }
+    return mapping.get(str(value or ""), str(value or ""))
+
+
+def _micro_token_status(value: Any) -> str:
+    mapping = {
+        "used": "used",
+        "considered_not_needed": "not_needed",
+        "passthrough": "pass",
+        "blocked": "blocked",
+    }
+    return mapping.get(str(value or ""), str(value or ""))
+
+
 def _compact_token_optimizer_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
     used = bool(decision.get("optimization_applied") or decision.get("actual_optimization_used"))
     payload: Dict[str, Any] = {
@@ -1597,6 +1808,7 @@ def main() -> int:
     parser.add_argument("--context-file", default="", help="Optional UTF-8 JSON file containing request context.")
     parser.add_argument("--prefer-cache", action="store_true", help="Prefer the latest installed kh-uaf cache over repo-local skills.")
     parser.add_argument("--summary", action="store_true", help="Print a compact front-door summary.")
+    parser.add_argument("--micro-summary", action="store_true", help="Print an opt-in machine-only micro front-door summary.")
     parser.add_argument("--verbose-summary", action="store_true", help="Print the legacy detailed front-door summary.")
     parser.add_argument(
         "--strict-execution-gate",
@@ -1617,15 +1829,17 @@ def main() -> int:
         prefer_cache=args.prefer_cache,
         request_context=request_context,
     )
-    if args.summary and args.verbose_summary:
-        raise SystemExit("choose only one of --summary or --verbose-summary")
+    if sum(1 for flag in (args.summary, args.micro_summary, args.verbose_summary) if flag) > 1:
+        raise SystemExit("choose only one of --summary, --micro-summary, or --verbose-summary")
     if args.verbose_summary:
         payload = result.to_summary_dict()
+    elif args.micro_summary:
+        payload = result.to_micro_summary_dict()
     elif args.summary:
         payload = result.to_compact_summary_dict()
     else:
         payload = result.to_dict()
-    if args.summary:
+    if args.summary or args.micro_summary:
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     else:
         print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))

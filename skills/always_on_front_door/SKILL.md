@@ -25,6 +25,8 @@ python "<this skill folder>\scripts\front_door.py" --prompt-file $promptPath --p
 
 For short ASCII-only prompts, `--prompt "<user request>"` is accepted. If running from the KH repository root, `python -m src.orchestration.kh_front_door ...` is also valid. Keep `--strict-execution-gate` on normal host runs so a blocked execution gate returns a non-zero code instead of looking like successful task authorization.
 
+Use `--micro-summary` instead of `--summary` only for machine-only host handoff paths with a hard token budget. Normal interactive runs should keep `--summary` so audit keys such as `front_door_status`, `execution_gate`, `execution_authorization`, `immediate_next_skills`, `required_next_action_codes`, and `token_optimizer` remain human-readable.
+
 Only after the command returns should selected follow-up skills be read or applied.
 
 ## KH Entry Contract
