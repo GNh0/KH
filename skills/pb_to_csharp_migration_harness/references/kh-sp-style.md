@@ -13,6 +13,8 @@ This reference is intentionally bundled. Do not query live DB procedures only to
 - Keep formatting-only work separate from semantic/performance rewrites.
 - Avoid CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, and helper `@FIND...` variables by default.
 - Prefer direct joins, derived tables, aggregate subqueries, table variables, inline predicates, and existing stored-procedure style.
+- Do not present a full migration SELECT/SAVE SP body as complete from only a C# call signature, parameter list, or grid column list. Full SP output needs structured PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, DB schema evidence, or a clearly approved inferred-draft marker. Do not add source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks.
+- Generated migration SP text must pass `verify_pb_migration_sp_generation_contract` before completion claims, then pass the separate SQL formatting verifier when formatted output is shown.
 
 ## SELECT style
 
@@ -21,6 +23,7 @@ This reference is intentionally bundled. Do not query live DB procedures only to
 - Use `T`, `TA1`, `TB1` for internal derived-table aliases, not outer query aliases.
 - Use inline predicates such as `A.ITEMACNT LIKE ISNULL(@ITEMACNT, '') + '%'` when that is the target style.
 - Preserve UI binding columns exactly. If TreeList expects `ID` and `ParentID`, do not rename them.
+- Preserve C# grid binding columns exactly. If the C# screen expects fields such as `CUSTNM`, `PRNTITEMNM`, `AMT01`-`AMT12`, `AMTTOT`, `CUSTCD`, or `PRNTITEMCD`, treat missing or renamed result columns as a blocked contract until source evidence proves otherwise.
 
 ## SAVE style
 

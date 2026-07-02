@@ -26,6 +26,8 @@ The known converter is a narrow SRD column helper:
 - set top-level GridView serializer defaults from the attached `DataWindowToXml.html`: `BestFitMaxRowCount=-1`, `PreviewLineCount=-1`, `HorzScrollStep=3`, `FocusRectStyle=CellFocus`, `ScrollStyle=LiveVertScroll, LiveHorzScroll`, `PreviewIndent=-1`, empty `GroupPanelText`, empty `PreviewFieldName`, empty `VertScrollTipFieldName`, `LevelIndent=-1`, `GroupFooterShowMode=VisibleIfExpanded`, empty `NewItemRowText`, `SynchronizeClones=true`, `BorderStyle=Default`, empty `ViewCaption`, `DetailHeight=350`, target view `Name`, `DetailTabHeaderLocation=Top`, and `ActiveFilterEnabled=true`;
 - set `OptionsView.ShowViewCaption=false`, `OptionsView.EnableAppearanceEvenRow=true`, `OptionsView.ShowGroupPanel=false`, `OptionsView.ColumnAutoWidth=false`, `OptionsView.ShowFooter=true`, and `OptionsView.ShowAutoFilterRow=true`;
 - when generating C# Designer code instead of XML, apply the same safe `OptionsView` defaults to the target GridView so the group panel is hidden and the filter/footer/even-row behavior matches the converter.
+- when target Designer code exists, inspect it first with `extract_csharp_designer_control_specs`; preserve actual `u_GridControl`, `GridView`, `MainView`, `ViewCollection`, `GridControl`, and container `Controls.Add` evidence before adding or changing columns.
+- generated C# grid columns should be explicit Designer-level `GridColumn` members registered with `Columns.AddRange`, using `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>` names. Do not default to runtime `AddGridColumn`, `Columns.AddField`, or `view.Name + "_" + fieldName` helper generation.
 
 Use `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`, `resolve_csharp_grid_column_prefix`, `resolve_csharp_grid_control_names`, `build_csharp_grid_column_name`, and `generate_devexpress_grid_xml` for deterministic generation.
 
@@ -45,6 +47,7 @@ The narrow converter does not map:
 - retrieve SQL;
 - update metadata;
 - multi-grid or nested layouts.
+- target C# Designer-only custom flags such as `BindingField`, `_isAllowBlank`, `EnterMoveNextControl`, `Properties.*`, or project-specific grid setup unless target Designer code is inspected separately.
 
 When those matter, keep them as migration tasks and ask for SRD/source/screenshot evidence or a target C# layout decision.
 

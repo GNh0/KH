@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 Branch: `codex-runtime`
-Version: `2.9.109`
+Version: `2.9.110`
 
 ## Purpose
 
@@ -199,8 +199,39 @@ Runtime changes:
 - `build_detail_form_layout_plan` now emits `tab_index` and `tab_index_code` in left-to-right, top-to-bottom input order;
 - control-stack fallback detection now covers DateEdit, SpinEdit, ButtonEdit, combo/lookup, MemoEdit, CheckEdit, and TreeList in addition to grid/text/label/group/panel/tab.
 
+## 2.9.110 Designer Property, Grid Column, And SP Evidence Refinement
+
+2.9.110 fixes a follow-up issue found during the `SA900100` migration review: the harness had naming and TabIndex rules, but it did not yet preserve real C# Designer property evidence or block grid/SP generation patterns that looked valid syntactically but did not match the target style.
+
+Added runtime behavior:
+
+- `extract_csharp_designer_control_specs` extracts target Designer controls, types, parent/child containment, `BindingField`, `FieldName`, caption/text, `TabIndex`, `Location`, `Size`, `Properties.*`, custom flags such as `_isAllowBlank`, collection `AddRange` calls, `MainView`, `ViewCollection`, and GridView/GridControl links.
+- C# string extraction preserves Korean text without mojibake.
+- `build_csharp_grid_column_designer_plan` emits explicit Designer-style `GridColumn` declarations, `Columns.AddRange`, `FieldName`, `Caption`, `Name`, `Visible`, and `VisibleIndex` assignments with `colList_*`, `colDetail_*`, `col<TABLE>_*`, or `col<PURPOSE>_*` names.
+- `verify_migration_generated_csharp_style` blocks default runtime grid helper patterns: `AddGridColumn(...)`, `view.Columns.AddField(...)`, and `column.Name = view.Name + "_" + fieldName`.
+- `verify_pb_migration_sp_generation_contract` blocks completed migration SP claims when no PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, DB schema evidence, or explicit user-approved inferred-draft marker exists. It also blocks missing `@WORKTYPE` and default CTE/#temp/MERGE/NOT EXISTS introductions.
+
+Regression evidence:
+
+- `python -B -m unittest tests.test_pb_to_csharp_migration_harness`: 28 tests passed.
+- New regression cases cover target Designer property extraction, Korean string preservation, runtime grid helper blocking, explicit Designer GridColumn generation, missing SP text blocking, and unbacked generated SP blocking.
+
+Subagent review evidence:
+
+- veteran C#/DevExpress review identified missing Designer property extraction and flagged runtime `AddGridColumn`/`Columns.AddField`/`view.Name + "_" + fieldName` as style violations.
+- veteran SQL/SP review identified that a C# SP call signature is not enough evidence for a completed `sp_SA900100_SELECT` body and recommended explicit SP generation evidence gates.
+
 For PB/C#/SQL source text, token optimizer status should normally be `passthrough` because source code, business literals, Korean text, and SQL contracts are source-of-truth content. Command output may still be filtered by `command-output-harness` when it is noisy and facts can be preserved.
 
 ## Remaining Risk
 
 The harness is a migration planning and verification scaffold. It does not prove semantic parity without actual PB source, target C# files, SP definitions, or DB-backed verification. When local artifacts are absent, it must label output as standalone or fallback mode and avoid claiming full migration parity.
+
+
+## 2026-07-02 Follow-up: Numeric Grid Columns And SP Fallbacks
+
+- User feedback showed generated SA900100 numeric grid columns still used GridColumn `DisplayFormat` instead of repository Spin controls. The harness now treats AMT/QTY/UNP/WGT GridColumns as requiring `RepositoryItemSpinEdit` via `ColumnEdit` and blocks GridColumn `DisplayFormat`-only output.
+- `build_csharp_grid_column_designer_plan` now emits Spin repository declarations, registration, initialization, and ColumnEdit mappings for numeric generated columns.
+- `verify_pb_migration_sp_generation_contract` now rejects unstructured `source_evidence=True`; complete SP output needs structured evidence such as `pb_srd_sql`, verified `existing_sp` definition evidence, `pasted_sql`, `db_schema`, or an approved inferred draft marker.
+- The same verifier now rejects source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks and `;WITH` CTE introductions by default.
+- Regression coverage now includes runtime `new GridColumn` + `Columns.Add`, numeric DisplayFormat-only output, Spin ColumnEdit success, structured SP evidence, `;WITH`, and schema-only fallback blocks.

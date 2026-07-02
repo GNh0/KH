@@ -8,6 +8,7 @@ from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.request_classifier import classify_request
 from src.skills.pb_to_csharp_migration import (
     MigrationInputState,
+    build_csharp_grid_column_designer_plan,
     build_detail_form_layout_plan,
     build_csharp_control_name,
     build_csharp_grid_column_name,
@@ -17,7 +18,11 @@ from src.skills.pb_to_csharp_migration import (
     classify_migration_mode,
     extract_datawindow_column_specs,
     extract_datawindow_columns,
+    extract_csharp_designer_control_specs,
     generate_devexpress_grid_xml,
+    verify_migration_generated_csharp_style,
+    verify_pb_migration_sp_generation_contract,
+    verify_pb_migration_sp_with_sql_formatting,
     resolve_csharp_grid_control_names,
     resolve_csharp_grid_column_prefix,
     resolve_csharp_control_stack,
@@ -378,6 +383,441 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("this.gvwList.OptionsView.ColumnAutoWidth = false;", assignments)
         self.assertIn("this.gvwList.OptionsView.ShowFooter = true;", assignments)
         self.assertIn("this.gvwList.OptionsView.ShowAutoFilterRow = true;", assignments)
+
+    def test_extracts_csharp_designer_control_properties_from_target_style(self):
+        designer_source = '''
+            this.grpSearch = new DevExpress.XtraEditors.GroupControl();
+            this.radGUBUN = new KoneLib.Controls.u_RadioButton();
+            this.txtGIJUN = new KoneLib.Controls.u_TextEdit();
+            this.btnCUSTCD = new KoneLib.Controls.u_ButtonEdit();
+            this.lblGijun = new DevExpress.XtraEditors.LabelControl();
+            this.grdList = new KoneLib.Controls.u_GridControl();
+            this.gvwList = new DevExpress.XtraGrid.Views.Grid.GridView();
+            this.colList_AMTTOT = new DevExpress.XtraGrid.Columns.GridColumn();
+            this.Controls.Add(this.grpSearch);
+            this.grpSearch.Controls.Add(this.radGUBUN);
+            this.grpSearch.Controls.Add(this.txtGIJUN);
+            this.grpSearch.Controls.Add(this.btnCUSTCD);
+            this.radGUBUN._isAllowBlank = true;
+            this.radGUBUN._isPKValue = false;
+            this.radGUBUN.BindingField = "GUBUN";
+            this.radGUBUN.EditValue = "T";
+            this.radGUBUN.EnterMoveNextControl = true;
+            this.radGUBUN.Location = new System.Drawing.Point(733, 31);
+            this.radGUBUN.Properties.Items.AddRange(new DevExpress.XtraEditors.Controls.RadioGroupItem[] {
+            new DevExpress.XtraEditors.Controls.RadioGroupItem("T", "전체"),
+            new DevExpress.XtraEditors.Controls.RadioGroupItem("A", "출고")});
+            this.radGUBUN.Size = new System.Drawing.Size(260, 23);
+            this.radGUBUN.TabIndex = 7;
+            this.txtGIJUN._isAllowBlank = false;
+            this.txtGIJUN.BindingField = "GIJUN";
+            this.txtGIJUN.MaximumSize = new System.Drawing.Size(65535, 23);
+            this.txtGIJUN.MinimumSize = new System.Drawing.Size(0, 23);
+            this.txtGIJUN.Properties.AutoHeight = false;
+            this.txtGIJUN.Properties.Mask.EditMask = "0000";
+            this.txtGIJUN.Properties.Mask.MaskType = DevExpress.XtraEditors.Mask.MaskType.Simple;
+            this.btnCUSTCD.BindingField = "CUSTCD";
+            this.btnCUSTCD.Properties.Buttons.AddRange(new DevExpress.XtraEditors.Controls.EditorButton[] {
+            new DevExpress.XtraEditors.Controls.EditorButton(DevExpress.XtraEditors.Controls.ButtonPredefines.Search)});
+            this.grdList.MainView = this.gvwList;
+            this.grdList.ViewCollection.AddRange(new DevExpress.XtraGrid.Views.Base.BaseView[] {
+            this.gvwList});
+            this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
+            this.colList_AMTTOT});
+            this.gvwList.GridControl = this.grdList;
+            this.gvwList.Name = "gvwList";
+            this.colList_AMTTOT.FieldName = "AMTTOT";
+            private DevExpress.XtraEditors.GroupControl grpSearch;
+            private KoneLib.Controls.u_RadioButton radGUBUN;
+            private KoneLib.Controls.u_TextEdit txtGIJUN;
+            private KoneLib.Controls.u_ButtonEdit btnCUSTCD;
+            private DevExpress.XtraEditors.LabelControl lblGijun;
+            private KoneLib.Controls.u_GridControl grdList;
+            private DevExpress.XtraGrid.Views.Grid.GridView gvwList;
+            private DevExpress.XtraGrid.Columns.GridColumn colList_AMTTOT;
+        '''
+
+        result = extract_csharp_designer_control_specs(designer_source)
+        payload = json.loads(result.stdout)
+        controls = {item["name"]: item for item in payload["controls"]}
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(controls["radGUBUN"]["type_name"], "KoneLib.Controls.u_RadioButton")
+        self.assertEqual(controls["radGUBUN"]["binding_field"], "GUBUN")
+        self.assertEqual(controls["radGUBUN"]["properties"]["_isAllowBlank"], True)
+        self.assertEqual(controls["radGUBUN"]["properties"]["_isPKValue"], False)
+        self.assertEqual(controls["radGUBUN"]["properties"]["EditValue"], "T")
+        self.assertEqual(controls["radGUBUN"]["properties"]["EnterMoveNextControl"], True)
+        self.assertEqual(controls["radGUBUN"]["location"], {"x": 733, "y": 31})
+        self.assertEqual(controls["radGUBUN"]["size"], {"width": 260, "height": 23})
+        self.assertEqual(controls["radGUBUN"]["tab_index"], 7)
+        self.assertIn("Properties.Items.AddRange", controls["radGUBUN"]["collection_calls"])
+        self.assertEqual(controls["txtGIJUN"]["binding_field"], "GIJUN")
+        self.assertEqual(controls["txtGIJUN"]["properties"]["Properties.AutoHeight"], False)
+        self.assertEqual(controls["txtGIJUN"]["properties"]["Properties.Mask.EditMask"], "0000")
+        self.assertEqual(controls["txtGIJUN"]["properties"]["MaximumSize"], {"width": 65535, "height": 23})
+        self.assertIn("Properties.Buttons.AddRange", controls["btnCUSTCD"]["collection_calls"])
+        self.assertEqual(controls["btnCUSTCD"]["parent_name"], "grpSearch")
+        self.assertEqual(controls["grpSearch"]["parent_name"], "this")
+        self.assertEqual(controls["grpSearch"]["children"], ["radGUBUN", "txtGIJUN", "btnCUSTCD"])
+        self.assertEqual(payload["grid_columns_present"], True)
+        self.assertEqual(payload["grid_column_count"], 1)
+        self.assertEqual(payload["grid_columns"][0]["name"], "colList_AMTTOT")
+        self.assertEqual(controls["lblGijun"]["caption"], "")
+        self.assertEqual(controls["grdList"]["properties"]["MainView"], "this.gvwList")
+        self.assertIn("ViewCollection.AddRange", controls["grdList"]["collection_calls"])
+        self.assertEqual(controls["gvwList"]["properties"]["GridControl"], "this.grdList")
+
+    def test_csharp_designer_string_values_preserve_korean_text(self):
+        result = extract_csharp_designer_control_specs(
+            '''
+            this.lblGijun = new DevExpress.XtraEditors.LabelControl();
+            this.lblGijun.Text = "기준년도";
+            this.lblGijun.Name = "lblGijun";
+            '''
+        )
+        controls = {item["name"]: item for item in json.loads(result.stdout)["controls"]}
+
+        self.assertEqual(controls["lblGijun"]["caption"], "기준년도")
+        self.assertEqual(controls["lblGijun"]["properties"]["Text"], "기준년도")
+
+    def test_generated_csharp_style_blocks_runtime_columns_add_even_with_designer_members(self):
+        generated = '''
+        private DevExpress.XtraGrid.Columns.GridColumn colList_CUSTNM;
+        this.colList_CUSTNM = new DevExpress.XtraGrid.Columns.GridColumn();
+        this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
+        this.colList_CUSTNM});
+        DevExpress.XtraGrid.Columns.GridColumn runtimeColumn = new DevExpress.XtraGrid.Columns.GridColumn();
+        runtimeColumn.FieldName = "ITEMCD";
+        this.gvwList.Columns.Add(runtimeColumn);
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("runtime_columns_add_detected", issue_codes)
+        self.assertIn("runtime_gridcolumn_constructor_without_designer_contract", issue_codes)
+
+    def test_generated_csharp_style_blocks_runtime_grid_column_construction_and_add(self):
+        generated = '''
+        private void SetColumns()
+        {
+            DevExpress.XtraGrid.Columns.GridColumn column = new DevExpress.XtraGrid.Columns.GridColumn();
+            column.FieldName = "AMTTOT";
+            column.Name = "colList_AMTTOT";
+            gvwList.Columns.Add(column);
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("runtime_gridcolumn_constructor_without_designer_contract", issue_codes)
+        self.assertIn("runtime_columns_add_detected", issue_codes)
+
+    def test_generated_csharp_style_blocks_price_formatstring_only_without_spin_repository(self):
+        generated = '''
+        private DevExpress.XtraGrid.Columns.GridColumn colList_PRICE;
+        this.colList_PRICE = new DevExpress.XtraGrid.Columns.GridColumn();
+        this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
+        this.colList_PRICE});
+        this.colList_PRICE.FieldName = "PRICE";
+        this.colList_PRICE.Name = "colList_PRICE";
+        this.colList_PRICE.DisplayFormat.FormatString = "{0:#,##0.##}";
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("numeric_grid_column_missing_spin_repository", issue_codes)
+        self.assertIn("numeric_grid_column_displayformat_detected", issue_codes)
+
+    def test_generated_csharp_style_blocks_numeric_displayformat_without_spin_repository(self):
+        generated = '''
+        private DevExpress.XtraGrid.Columns.GridColumn colList_AMTTOT;
+        this.colList_AMTTOT = new DevExpress.XtraGrid.Columns.GridColumn();
+        this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
+        this.colList_AMTTOT});
+        this.colList_AMTTOT.FieldName = "AMTTOT";
+        this.colList_AMTTOT.Name = "colList_AMTTOT";
+        this.colList_AMTTOT.DisplayFormat.FormatString = "{0:#,##0}";
+        this.colList_AMTTOT.DisplayFormat.FormatType = DevExpress.Utils.FormatType.Numeric;
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("numeric_grid_column_missing_spin_repository", issue_codes)
+        self.assertIn("numeric_grid_column_displayformat_detected", issue_codes)
+
+    def test_generated_csharp_style_accepts_numeric_spin_repository_columnedit(self):
+        generated = '''
+        private DevExpress.XtraGrid.Columns.GridColumn colList_AMTTOT;
+        private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit rpsSpinAmt;
+        this.colList_AMTTOT = new DevExpress.XtraGrid.Columns.GridColumn();
+        this.rpsSpinAmt = new DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit();
+        this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
+        this.colList_AMTTOT});
+        this.colList_AMTTOT.FieldName = "AMTTOT";
+        this.colList_AMTTOT.Name = "colList_AMTTOT";
+        this.colList_AMTTOT.ColumnEdit = this.rpsSpinAmt;
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+
+        self.assertTrue(result.success, result.metadata["issues"])
+
+    def test_generated_csharp_style_blocks_undeclared_spin_repository_reference(self):
+        generated = '''
+        private DevExpress.XtraGrid.Columns.GridColumn colList_AMTTOT;
+        this.colList_AMTTOT = new DevExpress.XtraGrid.Columns.GridColumn();
+        this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
+        this.colList_AMTTOT});
+        this.colList_AMTTOT.FieldName = "AMTTOT";
+        this.colList_AMTTOT.Name = "colList_AMTTOT";
+        this.colList_AMTTOT.ColumnEdit = this.rpsSpinAmt;
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("numeric_grid_spin_repository_not_declared_or_initialized", issue_codes)
+
+    def test_generated_csharp_style_blocks_runtime_grid_column_helpers(self):
+        generated = '''
+        private void SetGridColumns()
+        {
+            AddGridColumn(gvwList, "CUSTNM", "고객", 160, true, false);
+        }
+        private GridColumn AddGridColumn(GridView view, string fieldName, string caption, int width, bool visible, bool numeric)
+        {
+            GridColumn column = view.Columns.AddField(fieldName);
+            column.Name = view.Name + "_" + fieldName;
+            return column;
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("runtime_add_grid_column_helper_detected", issue_codes)
+        self.assertIn("runtime_columns_addfield_detected", issue_codes)
+        self.assertIn("view_name_fieldname_column_name_detected", issue_codes)
+
+    def test_grid_column_designer_plan_uses_explicit_target_column_names(self):
+        result = build_csharp_grid_column_designer_plan(
+            [
+                {"field_name": "CUSTNM", "caption": "고객", "width": 160},
+                {"field_name": "AMTTOT", "caption": "합계", "width": 120},
+                {"field_name": "PRICE", "caption": "단가", "width": 100},
+            ],
+            input_format="list",
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertIn("private DevExpress.XtraGrid.Columns.GridColumn colList_CUSTNM;", result.stdout)
+        self.assertIn("this.gvwList.Columns.AddRange", result.stdout)
+        self.assertIn('this.colList_CUSTNM.FieldName = "CUSTNM";', result.stdout)
+        self.assertIn('this.colList_CUSTNM.Name = "colList_CUSTNM";', result.stdout)
+        self.assertIn("private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit rpsSpinAmt;", result.stdout)
+        self.assertIn("this.grdList.RepositoryItems.AddRange", result.stdout)
+        self.assertIn("this.colList_AMTTOT.ColumnEdit = this.rpsSpinAmt;", result.stdout)
+        self.assertIn("this.colList_PRICE.ColumnEdit = this.rpsSpinAmt;", result.stdout)
+        self.assertNotIn(".DisplayFormat.FormatString", result.stdout)
+        self.assertNotIn("AddGridColumn", result.stdout)
+        self.assertNotIn("Columns.AddField", result.stdout)
+
+    def test_sp_generation_contract_blocks_missing_sql_or_unbacked_full_sp(self):
+        missing = verify_pb_migration_sp_generation_contract("")
+        self.assertFalse(missing.success)
+        self.assertIn("missing_sql_text", {issue["code"] for issue in missing.metadata["issues"]})
+
+        unbacked = verify_pb_migration_sp_generation_contract(
+            """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS CUSTNM
+    END
+END
+""",
+            source_evidence=False,
+        )
+        issue_codes = {issue["code"] for issue in unbacked.metadata["issues"]}
+        self.assertFalse(unbacked.success)
+        self.assertIn("missing_pb_or_db_source_evidence_for_sp_generation", issue_codes)
+
+        bool_flag = verify_pb_migration_sp_generation_contract(
+            """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS CUSTNM
+    END
+END
+""",
+            source_evidence=True,
+        )
+        self.assertFalse(bool_flag.success)
+        self.assertIn("unstructured_source_evidence_flag", {issue["code"] for issue in bool_flag.metadata["issues"]})
+
+        allowed = verify_pb_migration_sp_generation_contract(
+            """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS CUSTNM
+    END
+END
+""",
+            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_1.srd", "summary": "retrieve SQL"},
+        )
+        self.assertTrue(allowed.success, allowed.metadata["issues"])
+
+        fake_existing_sp = verify_pb_migration_sp_generation_contract(
+            """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS CUSTNM
+    END
+END
+""",
+            source_evidence={"kind": "existing_sp", "object": "sp_FAKE"},
+        )
+        self.assertFalse(fake_existing_sp.success)
+        self.assertIn(
+            "missing_pb_or_db_source_evidence_for_sp_generation",
+            {issue["code"] for issue in fake_existing_sp.metadata["issues"]},
+        )
+
+        fake_existing_sp_summary = verify_pb_migration_sp_generation_contract(
+            """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS CUSTNM
+    END
+END
+""",
+            source_evidence={"kind": "existing_sp", "object": "sp_FAKE", "summary": "claimed existing procedure"},
+        )
+        self.assertFalse(fake_existing_sp_summary.success)
+        self.assertIn(
+            "missing_pb_or_db_source_evidence_for_sp_generation",
+            {issue["code"] for issue in fake_existing_sp_summary.metadata["issues"]},
+        )
+
+        verified_existing_sp = verify_pb_migration_sp_generation_contract(
+            """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS CUSTNM
+    END
+END
+""",
+            source_evidence={"kind": "existing_sp", "object": "sp_SA900100_SELECT", "verified": True},
+        )
+        self.assertTrue(verified_existing_sp.success, verified_existing_sp.metadata["issues"])
+
+        cte = verify_pb_migration_sp_generation_contract(
+            """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    ;WITH A AS (SELECT 1 AS X)
+    SELECT X FROM A
+END
+""",
+            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_1.srd"},
+        )
+        self.assertFalse(cte.success)
+        self.assertIn("cte_in_generated_sp", {issue["code"] for issue in cte.metadata["issues"]})
+
+        schema_fallback = verify_pb_migration_sp_generation_contract(
+            """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT TOP 0
+           CAST('' AS VARCHAR(20)) AS ORDNUM
+         , CAST(0 AS DECIMAL(18, 4)) AS QTY;
+END
+""",
+            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_2.srd"},
+        )
+        self.assertFalse(schema_fallback.success)
+        self.assertIn(
+            "schema_only_select_top_0_fallback_in_generated_sp",
+            {issue["code"] for issue in schema_fallback.metadata["issues"]},
+        )
+
+        schema_fallback_convert = verify_pb_migration_sp_generation_contract(
+            """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT TOP (0)
+           CONVERT(VARCHAR(20), '') AS ORDNUM
+         , TRY_CONVERT(DECIMAL(18, 4), 0) AS QTY;
+END
+""",
+            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_2.srd"},
+        )
+        self.assertFalse(schema_fallback_convert.success)
+        self.assertIn(
+            "schema_only_select_top_0_fallback_in_generated_sp",
+            {issue["code"] for issue in schema_fallback_convert.metadata["issues"]},
+        )
+
+    def test_composed_sp_and_sql_formatting_verifier_requires_both_gates(self):
+        sql = """CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE    VARCHAR(20) = NULL
+    , @ORGDIV      VARCHAR(2)  = NULL
+AS
+BEGIN
+    SELECT A.ORDNUM
+    FROM SA100T A
+    WHERE A.ORGDIV = @ORGDIV;
+END
+"""
+        result = verify_pb_migration_sp_with_sql_formatting(
+            sql,
+            sql,
+            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_1.srd"},
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["sp_generation_contract"]["status"], "passed")
+        self.assertEqual(result.metadata["sql_formatting_style"]["mechanical_checks"]["status"], "passed")
 
     def test_datawindow_layout_blocks_when_no_columns_exist(self):
         result = build_datawindow_grid_layout("datawindow(units=0)")

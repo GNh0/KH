@@ -23,6 +23,7 @@ Record the selected provider and reason. Do not hard-code KoneLib or any project
 
 - For detail panels like SA100100, arrange labels and input editors as clean label/editor pairs in fixed rows and columns. The goal is readable alignment, not a pixel-for-pixel copy of PB coordinates.
 - Use the target project's existing control names when a matching screen or migrated control exists.
+- When an existing `.Designer.cs` or pasted Designer snippet is available, extract its properties first and treat them as target-style evidence: `BindingField`, `_isAllowBlank`, `_isPKValue`, `EnterMoveNextControl`, `EditValue`, `Properties.*`, `Location`, `Size`, `Dock`, `Margin`, `MinimumSize`, `MaximumSize`, `Text`, `Caption`, and `TabIndex`.
 - When generating fallback names, use field-based names seen in the target style: `txtFIELD` for text, `btnFIELD` for button/search editors, `cboFIELD` for combo/lookup editors, `SpinFIELD` for SpinEdit, `ymdFIELD` for DateEdit, `ChkFIELD` for CheckEdit, and `memoFIELD` for MemoEdit.
 - RepositoryItem editors are separate from screen input controls. Grid repository names commonly use `rpsbtn*`, `rpscbo*`, `rpsSpin*`, or `rpsChk*`; do not use those prefixes for ordinary detail-panel input controls unless the target screen already does.
 - Use `pn<Area>` for panel containers, `grp<Area>` for groups, `grd<Area>/gvw<Area>` for grids/views, `treeList<Area>` for new TreeList fallbacks, and `tab<Area>` for tabs. Existing target names still win, including legacy `pan*`, `tree*`, `Tab`, or numbered designer names.
@@ -37,6 +38,8 @@ Record the selected provider and reason. Do not hard-code KoneLib or any project
 - If table naming is ambiguous, grids may use a business-purpose suffix such as `grdPOR/gvwPOR`, `grdBOM/gvwBOM`, `grdITEM/gvwITEM`, or `grdREQ/gvwREQ`.
 - Grid columns should follow the same target style: `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>`.
 - Preserve uppercase field names in `FieldName`; use matched Korean PB/DataWindow captions when available, otherwise fall back to the uppercase field name.
+- Prefer explicit Designer `GridColumn` members and `Columns.AddRange` over generated runtime helpers. Treat `AddGridColumn(...)`, `view.Columns.AddField(...)`, and `column.Name = view.Name + "_" + fieldName` as style violations unless the current target screen already uses that exact local pattern.
+- If the current Designer has grids but no explicit columns, record that as evidence instead of inventing columns from the Designer. Columns may still be generated from PB/DataWindow/SP evidence, but the evidence source must be named.
 
 ## Select flow
 
@@ -63,6 +66,8 @@ Typical save flow:
 
 - Does the migrated C# reuse the existing method path?
 - Did a copied PB behavior introduce duplicate helper methods?
+- Did generated grid code avoid ad hoc runtime column helpers and preserve `col*_<FIELD>` names?
+- Did Designer-derived controls preserve `BindingField`, project-specific flags, properties, bounds, and `TabIndex`?
 - Does XML serialization actually include the intended rows?
 - Did unchanged focused rows get `SetModified()` when needed?
 - Does the result shape match current bindings?

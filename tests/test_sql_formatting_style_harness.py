@@ -449,6 +449,40 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         }
         self.assertIn("cte_introduced_without_reason", codes)
 
+    def test_verifier_blocks_semicolon_prefixed_cte_introduction(self):
+        original = (
+            "SELECT A.ORDNUM\n"
+            "     , SUM(B.QTY) AS QTY\n"
+            "FROM SA100T A\n"
+            "        LEFT OUTER JOIN SA110T B\n"
+            "                     ON A.ORDNUM = B.ORDNUM\n"
+            "WHERE A.ORGDIV = @ORGDIV\n"
+            "GROUP BY A.ORDNUM;\n"
+        )
+        formatted = (
+            ";WITH ORDER_QTY AS (\n"
+            "    SELECT B.ORDNUM\n"
+            "         , SUM(B.QTY) AS QTY\n"
+            "    FROM SA110T B\n"
+            "    GROUP BY B.ORDNUM\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "     , C.QTY\n"
+            "FROM SA100T A\n"
+            "        LEFT OUTER JOIN ORDER_QTY C\n"
+            "                     ON A.ORDNUM = C.ORDNUM\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("cte_introduced_without_reason", codes)
+
     def test_verifier_blocks_new_temp_table_introduction_by_default(self):
         original = (
             "SELECT A.ORDNUM\n"

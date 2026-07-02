@@ -18,6 +18,47 @@ DATAWINDOW_ATTRIBUTE_PATTERN = re.compile(
     r"(?P<key>[A-Za-z0-9_.#]+)\s*=\s*(?:\"(?P<quoted>[^\"]*)\"|(?P<bare>[^\s)]+))",
     re.IGNORECASE,
 )
+CSHARP_NEW_CONTROL_PATTERN = re.compile(
+    r"^\s*this\.(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+(?P<type>[A-Za-z0-9_.]+)\s*\(",
+    re.MULTILINE,
+)
+CSHARP_FIELD_DECLARATION_PATTERN = re.compile(
+    r"^\s*private\s+(?P<type>[A-Za-z0-9_.<>]+)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;",
+    re.MULTILINE,
+)
+CSHARP_PROPERTY_ASSIGNMENT_PATTERN = re.compile(
+    r"^\s*this\.(?P<control>[A-Za-z_][A-Za-z0-9_]*)\.(?P<property>[A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(?P<value>.*?);\s*$"
+)
+CSHARP_CONTROLS_ADD_PATTERN = re.compile(
+    r"^\s*this(?:\.(?P<parent>[A-Za-z_][A-Za-z0-9_]*))?\.Controls\.Add\(this\.(?P<child>[A-Za-z_][A-Za-z0-9_]*)\);\s*$"
+)
+CSHARP_COLLECTION_ADD_RANGE_START_PATTERN = re.compile(
+    r"^\s*this\.(?P<control>[A-Za-z_][A-Za-z0-9_]*)\.(?P<method>[A-Za-z_][A-Za-z0-9_.]*AddRange)\s*\("
+)
+CSHARP_THIS_REFERENCE_PATTERN = re.compile(r"this\.([A-Za-z_][A-Za-z0-9_]*)")
+
+NUMERIC_GRID_FIELD_TOKENS = ("AMT", "QTY", "UNP", "WGT", "PRICE", "RATE", "COST", "TOTAL")
+NUMERIC_GRID_FIELD_SUFFIXES = ("TOT", "BAL")
+
+
+def _is_numeric_grid_field_name(field_name: str) -> bool:
+    normalized = re.sub(r"[^A-Z0-9_]", "", field_name.upper())
+    tokens = [token for token in re.split(r"[_0-9]+", normalized) if token]
+    if any(token in NUMERIC_GRID_FIELD_TOKENS for token in tokens):
+        return True
+    return any(
+        normalized.endswith(suffix)
+        or normalized.endswith(f"{suffix}AMT")
+        or normalized.endswith(f"{suffix}QTY")
+        for suffix in NUMERIC_GRID_FIELD_SUFFIXES
+    )
+
+
+def _display_format_string_looks_numeric(format_string: str) -> bool:
+    stripped = format_string.strip()
+    if not stripped:
+        return False
+    return bool(re.fullmatch(r"[#,0.]+", stripped))
 
 KONELIB_CONTROL_TYPES = {
     "grid": "KoneLib.Controls.u_GridControl",
@@ -245,6 +286,40 @@ class DetailFormFieldSpec:
             "label_bounds": dict(self.label_bounds),
             "editor_bounds": dict(self.editor_bounds),
             "source": self.source,
+        }
+
+
+@dataclass(frozen=True)
+class CSharpDesignerControlSpec:
+    name: str
+    type_name: str
+    parent_name: str = ""
+    children: List[str] = field(default_factory=list)
+    properties: Dict[str, Any] = field(default_factory=dict)
+    raw_properties: Dict[str, str] = field(default_factory=dict)
+    collection_calls: Dict[str, List[str]] = field(default_factory=dict)
+    field_name: str = ""
+    caption: str = ""
+    binding_field: str = ""
+    tab_index: int | None = None
+    location: Dict[str, int] | None = None
+    size: Dict[str, int] | None = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "type_name": self.type_name,
+            "parent_name": self.parent_name,
+            "children": list(self.children),
+            "properties": dict(self.properties),
+            "raw_properties": dict(self.raw_properties),
+            "collection_calls": {key: list(value) for key, value in self.collection_calls.items()},
+            "field_name": self.field_name,
+            "caption": self.caption,
+            "binding_field": self.binding_field,
+            "tab_index": self.tab_index,
+            "location": dict(self.location or {}),
+            "size": dict(self.size or {}),
         }
 
 
@@ -754,6 +829,625 @@ def build_datawindow_gridview_designer_defaults(view_name: str = "gvwList") -> L
         f"this.{view}.OptionsView.ShowAutoFilterRow = true;",
     ]
 
+
+def build_csharp_grid_column_designer_plan(
+    columns: Iterable[Any],
+    *,
+    prefix: str = "",
+    input_format: str = "list",
+    table_name: str = "",
+    purpose_name: str = "",
+    grid_view_name: str = "",
+    default_allow_edit: bool = False,
+) -> HarnessResult:
+    """Build explicit Designer-style GridColumn declarations and assignments."""
+    resolved_prefix = prefix or resolve_csharp_grid_column_prefix(
+        input_format, table_name=table_name, purpose_name=purpose_name
+    )
+    grid_names = resolve_csharp_grid_control_names(input_format, table_name=table_name, purpose_name=purpose_name)
+    view_name = str(grid_view_name or grid_names["grid_view_name"]).strip() or "gvwList"
+    normalized = _normalize_grid_column_specs(columns, prefix=resolved_prefix)
+    if not normalized:
+        return HarnessResult(
+            success=False,
+            stdout=json.dumps({"columns": [], "status": "blocked"}, ensure_ascii=False),
+            stderr="No grid columns were provided.",
+            exit_code=1,
+            metadata={
+                "harness": "pb-to-csharp-migration-harness",
+                "status": "blocked",
+                "blocked_reason": "missing_grid_columns",
+            },
+        )
+
+    numeric_repository_by_column: Dict[str, str] = {}
+    for column in normalized:
+        field_upper = str(column.field_name or "").upper()
+        if _is_numeric_grid_field_name(field_upper):
+            if "QTY" in field_upper or "WGT" in field_upper:
+                numeric_repository_by_column[column.csharp_name] = "rpsSpinQty"
+            else:
+                numeric_repository_by_column[column.csharp_name] = "rpsSpinAmt"
+    required_repositories = sorted(set(numeric_repository_by_column.values()))
+    declarations = [f"private DevExpress.XtraGrid.Columns.GridColumn {column.csharp_name};" for column in normalized]
+    declarations.extend(
+        f"private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit {repository_name};"
+        for repository_name in required_repositories
+    )
+    initializers = [
+        f"this.{column.csharp_name} = new DevExpress.XtraGrid.Columns.GridColumn();" for column in normalized
+    ]
+    initializers.extend(
+        f"this.{repository_name} = new DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit();"
+        for repository_name in required_repositories
+    )
+    add_range = [
+        f"this.{view_name}.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {{",
+        *[
+            f"    this.{column.csharp_name}{',' if index < len(normalized) - 1 else ''}"
+            for index, column in enumerate(normalized)
+        ],
+        "});",
+    ]
+    assignments: List[str] = []
+    for index, column in enumerate(normalized):
+        visible = "true"
+        assignments.extend(
+            [
+                f'this.{column.csharp_name}.Caption = "{_escape_csharp_string(column.caption or column.field_name)}";',
+                f'this.{column.csharp_name}.FieldName = "{_escape_csharp_string(column.field_name)}";',
+                f'this.{column.csharp_name}.Name = "{_escape_csharp_string(column.csharp_name)}";',
+                f"this.{column.csharp_name}.OptionsColumn.AllowEdit = {str(default_allow_edit).lower()};",
+                f"this.{column.csharp_name}.Visible = {visible};",
+                f"this.{column.csharp_name}.VisibleIndex = {index};",
+            ]
+        )
+        repository_name = numeric_repository_by_column.get(column.csharp_name, "")
+        if repository_name:
+            assignments.append(f"this.{column.csharp_name}.ColumnEdit = this.{repository_name};")
+        if column.width is not None:
+            assignments.append(f"this.{column.csharp_name}.Width = {column.width};")
+
+    repository_registration: List[str] = []
+    if required_repositories:
+        repository_registration = [
+            f"this.{grid_names['grid_control_name']}.RepositoryItems.AddRange(new DevExpress.XtraEditors.Repository.RepositoryItem[] {{",
+            *[
+                f"    this.{repository_name}{',' if index < len(required_repositories) - 1 else ''}"
+                for index, repository_name in enumerate(required_repositories)
+            ],
+            "});",
+        ]
+    repository_assignments: List[str] = []
+    for repository_name in required_repositories:
+        repository_assignments.extend(
+            [
+                f"this.{repository_name}.AutoHeight = false;",
+                f"this.{repository_name}.Buttons.AddRange(new DevExpress.XtraEditors.Controls.EditorButton[] {{",
+                "new DevExpress.XtraEditors.Controls.EditorButton(DevExpress.XtraEditors.Controls.ButtonPredefines.Combo)});",
+                f'this.{repository_name}.Name = "{repository_name}";',
+            ]
+        )
+    designer_lines = [
+        "// GridColumn field declarations",
+        *declarations,
+        "",
+        "// InitializeComponent GridColumn creation",
+        *initializers,
+        "",
+        "// GridView column registration",
+        *add_range,
+        "",
+        "// RepositoryItemSpinEdit registration",
+        *repository_registration,
+        "",
+        "// RepositoryItemSpinEdit properties",
+        *repository_assignments,
+        "",
+        "// GridColumn properties",
+        *assignments,
+    ]
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "status": "passed",
+        "columns": [column.to_dict() for column in normalized],
+        "csharp_column_prefix": resolved_prefix,
+        "csharp_grid_names": grid_names,
+        "grid_view_name": view_name,
+        "declarations": declarations,
+        "initializers": initializers,
+        "add_range": add_range,
+        "assignments": assignments,
+        "repository_registration": repository_registration,
+        "repository_assignments": repository_assignments,
+        "numeric_repository_by_column": numeric_repository_by_column,
+        "designer_contract": (
+            "Use explicit GridColumn members and Columns.AddRange with colList_/colDetail_/col<TABLE>_/col<PURPOSE>_ "
+            "names. Do not generate runtime AddGridColumn, Columns.AddField, or view.Name + \"_\" + fieldName helpers by default."
+        ),
+        "token_optimizer_status": "passthrough",
+        "token_optimizer_status_reason": "Generated Designer code is contract-sensitive and was not compressed.",
+    }
+    return HarnessResult(
+        success=True,
+        stdout="\n".join(designer_lines),
+        stderr="",
+        exit_code=0,
+        metadata=metadata,
+    )
+
+
+def extract_csharp_designer_control_specs(source_text: str) -> HarnessResult:
+    """Extract target C# Designer control/property evidence from pasted Designer code."""
+    source = str(source_text or "")
+    control_types: Dict[str, str] = {}
+    properties: Dict[str, Dict[str, Any]] = {}
+    raw_properties: Dict[str, Dict[str, str]] = {}
+    collection_calls: Dict[str, Dict[str, List[str]]] = {}
+    parent_by_child: Dict[str, str] = {}
+    children_by_parent: Dict[str, List[str]] = {}
+
+    for match in CSHARP_FIELD_DECLARATION_PATTERN.finditer(source):
+        control_types.setdefault(match.group("name"), match.group("type"))
+    for match in CSHARP_NEW_CONTROL_PATTERN.finditer(source):
+        control_types[match.group("name")] = match.group("type")
+
+    lines = source.splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        add_match = CSHARP_CONTROLS_ADD_PATTERN.match(line)
+        if add_match:
+            parent = add_match.group("parent") or "this"
+            child = add_match.group("child")
+            parent_by_child[child] = parent
+            children_by_parent.setdefault(parent, []).append(child)
+            index += 1
+            continue
+
+        assign_match = CSHARP_PROPERTY_ASSIGNMENT_PATTERN.match(line)
+        if assign_match:
+            control = assign_match.group("control")
+            property_path = assign_match.group("property")
+            raw_value = assign_match.group("value").strip()
+            properties.setdefault(control, {})[property_path] = _parse_csharp_designer_value(raw_value)
+            raw_properties.setdefault(control, {})[property_path] = raw_value
+            index += 1
+            continue
+
+        add_range_match = CSHARP_COLLECTION_ADD_RANGE_START_PATTERN.match(line)
+        if add_range_match:
+            statement_lines = [line]
+            while index < len(lines) - 1 and ";" not in lines[index]:
+                index += 1
+                statement_lines.append(lines[index])
+            statement = "\n".join(statement_lines)
+            control = add_range_match.group("control")
+            method_path = add_range_match.group("method")
+            collection_calls.setdefault(control, {}).setdefault(method_path, []).append(statement.strip())
+            for child in CSHARP_THIS_REFERENCE_PATTERN.findall(statement):
+                if child != control:
+                    parent_by_child.setdefault(child, control)
+                    children_by_parent.setdefault(control, []).append(child)
+            index += 1
+            continue
+
+        index += 1
+
+    specs: List[CSharpDesignerControlSpec] = []
+    for name in sorted(control_types.keys(), key=lambda item: _csharp_designer_order_key(item, source)):
+        prop_map = properties.get(name, {})
+        raw_map = raw_properties.get(name, {})
+        binding_field = _string_property(prop_map.get("BindingField"))
+        field_name = _string_property(prop_map.get("FieldName")) or binding_field
+        caption = _string_property(prop_map.get("Caption")) or _string_property(prop_map.get("Text"))
+        tab_index = _int_property(prop_map.get("TabIndex"))
+        location = _point_or_size_property(prop_map.get("Location"))
+        size = _point_or_size_property(prop_map.get("Size"))
+        children = _dedupe_preserve_order(children_by_parent.get(name, []))
+        specs.append(
+            CSharpDesignerControlSpec(
+                name=name,
+                type_name=control_types.get(name, ""),
+                parent_name=parent_by_child.get(name, ""),
+                children=children,
+                properties=prop_map,
+                raw_properties=raw_map,
+                collection_calls=collection_calls.get(name, {}),
+                field_name=field_name,
+                caption=caption,
+                binding_field=binding_field,
+                tab_index=tab_index,
+                location=location,
+                size=size,
+            )
+        )
+
+    grid_columns = [
+        spec.to_dict()
+        for spec in specs
+        if spec.type_name.endswith(".GridColumn") or spec.type_name == "GridColumn" or spec.name.startswith("col")
+    ]
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "status": "passed" if specs else "blocked",
+        "control_count": len(specs),
+        "controls": [spec.to_dict() for spec in specs],
+        "grid_columns_present": bool(grid_columns),
+        "grid_column_count": len(grid_columns),
+        "grid_columns": grid_columns,
+        "property_contract": (
+            "Designer evidence preserves target control type, parent/child containment, BindingField/FieldName, "
+            "caption/text, TabIndex, bounds, project-specific flags, Properties.* assignments, and AddRange calls."
+        ),
+        "token_optimizer_status": "passthrough",
+        "token_optimizer_status_reason": (
+            "C# Designer source is contract-sensitive style evidence and was not compressed."
+        ),
+    }
+    return HarnessResult(
+        success=bool(specs),
+        stdout=json.dumps(metadata, ensure_ascii=False, indent=2),
+        stderr="" if specs else "No C# Designer controls were found.",
+        exit_code=0 if specs else 1,
+        metadata=metadata,
+    )
+
+
+def verify_migration_generated_csharp_style(source_text: str) -> HarnessResult:
+    """Block generated C# patterns that do not match the target Designer/grid style."""
+    source = str(source_text or "")
+    issues: List[Dict[str, Any]] = []
+
+    has_designer_grid_column_members = bool(
+        re.search(r"\bprivate\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s+col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\s*;", source)
+        and re.search(r"this\.col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\s*=\s*new\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s*\(\s*\)\s*;", source)
+        and re.search(r"\.Columns\.AddRange\s*\([\s\S]*this\.col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+", source)
+    )
+
+    if re.search(r"\bAddGridColumn\s*\(", source):
+        issues.append(
+            {
+                "code": "runtime_add_grid_column_helper_detected",
+                "severity": "error",
+                "message": (
+                    "Migration-generated grid columns should be explicit Designer/GridColumn members or "
+                    "DataWindowToXml layout artifacts, not a runtime AddGridColumn helper by default."
+                ),
+            }
+        )
+    if re.search(r"\.Columns\.AddField\s*\(", source):
+        issues.append(
+            {
+                "code": "runtime_columns_addfield_detected",
+                "severity": "error",
+                "message": (
+                    "Generated columns should preserve names such as colList_FIELD or colDetail_FIELD; "
+                    "Columns.AddField hides that Designer naming contract."
+                ),
+            }
+        )
+    if re.search(r"\.Columns\.Add\s*\(", source):
+        issues.append(
+            {
+                "code": "runtime_columns_add_detected",
+                "severity": "error",
+                "message": "Generated grid columns must not be registered through runtime Columns.Add; use explicit Designer Columns.AddRange registration.",
+            }
+        )
+    for constructor_match in re.finditer(r"(?m)^.*new\s+(?:DevExpress\.XtraGrid\.Columns\.)?GridColumn\s*\(\s*\)\s*;", source):
+        statement = constructor_match.group(0)
+        is_designer_member_initializer = bool(
+            re.match(
+                r"\s*this\.col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\s*=\s*new\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s*\(\s*\)\s*;\s*$",
+                statement,
+            )
+        )
+        if not is_designer_member_initializer:
+            issues.append(
+                {
+                    "code": "runtime_gridcolumn_constructor_without_designer_contract",
+                    "severity": "error",
+                    "message": "Generated GridColumn construction must be a this.col*_<FIELD> Designer member initializer, not local runtime construction.",
+                }
+            )
+            break
+    if re.search(r"\.Name\s*=\s*[^;\n]*view\.Name\s*\+\s*\"_\"\s*\+\s*fieldName", source):
+        issues.append(
+            {
+                "code": "view_name_fieldname_column_name_detected",
+                "severity": "error",
+                "message": (
+                    "Column Name must follow colList_<COLUMN>, colDetail_<COLUMN>, col<TABLE>_<COLUMN>, "
+                    "or col<PURPOSE>_<COLUMN>, not view.Name + \"_\" + fieldName."
+                ),
+            }
+        )
+    if "GridColumn" in source and not re.search(r"\bcol(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\b", source):
+        issues.append(
+            {
+                "code": "missing_target_grid_column_name_pattern",
+                "severity": "warning",
+                "message": (
+                    "GridColumn generation did not expose target-style column names such as colList_ITEMCD."
+                ),
+            }
+        )
+
+    numeric_column_names = set()
+    for column_name in re.findall(r"this\.(col(?:List|Detail|[A-Za-z0-9]+)_([A-Z0-9_]+))\.", source):
+        full_name, field_name = column_name
+        if _is_numeric_grid_field_name(field_name):
+            numeric_column_names.add(full_name)
+    numeric_column_names.update(
+        re.findall(
+            r"this\.(col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+)\.DisplayFormat\.FormatType\s*=\s*DevExpress\.Utils\.FormatType\.Numeric",
+            source,
+        )
+    )
+    for match in re.finditer(
+        r'this\.(col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+)\.DisplayFormat\.FormatString\s*=\s*"([^"]+)"',
+        source,
+    ):
+        if _display_format_string_looks_numeric(match.group(2)):
+            numeric_column_names.add(match.group(1))
+    for column_name in sorted(numeric_column_names):
+        spin_repository_match = re.search(
+            rf"this\.{re.escape(column_name)}\.ColumnEdit\s*=\s*this\.(rpsSpin[A-Za-z0-9_]*)\s*;",
+            source,
+        )
+        has_spin_repository = bool(spin_repository_match)
+        has_column_numeric_display = bool(
+            re.search(rf"this\.{re.escape(column_name)}\.DisplayFormat\.Format(?:String|Type)\s*=", source)
+        )
+        if not has_spin_repository:
+            issues.append(
+                {
+                    "code": "numeric_grid_column_missing_spin_repository",
+                    "severity": "error",
+                    "message": f"Numeric GridColumn {column_name} must use a RepositoryItemSpinEdit via ColumnEdit, not column DisplayFormat-only output.",
+                }
+            )
+        else:
+            repository_name = spin_repository_match.group(1)
+            repository_declared = bool(
+                re.search(
+                    rf"(?:private\s+)?(?:DevExpress\.XtraEditors\.Repository\.)?RepositoryItemSpinEdit\s+{re.escape(repository_name)}\s*;",
+                    source,
+                )
+            )
+            repository_initialized = bool(
+                re.search(
+                    rf"this\.{re.escape(repository_name)}\s*=\s*new\s+(?:DevExpress\.XtraEditors\.Repository\.)?RepositoryItemSpinEdit\s*\(",
+                    source,
+                )
+            )
+            if not repository_declared or not repository_initialized:
+                issues.append(
+                    {
+                        "code": "numeric_grid_spin_repository_not_declared_or_initialized",
+                        "severity": "error",
+                        "message": (
+                            f"Numeric GridColumn {column_name} references {repository_name}, but that repository must be "
+                            "declared and initialized as RepositoryItemSpinEdit in Designer-style code."
+                        ),
+                    }
+                )
+        if has_column_numeric_display:
+            issues.append(
+                {
+                    "code": "numeric_grid_column_displayformat_detected",
+                    "severity": "error",
+                    "message": f"Numeric GridColumn {column_name} should not carry GridColumn.DisplayFormat as the primary numeric formatting path; use a Spin repository control.",
+                }
+            )
+
+    passed = not any(issue["severity"] == "error" for issue in issues)
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "status": "passed" if passed else "blocked",
+        "issues": issues,
+        "column_style_contract": (
+            "Generated grid columns must use explicit target-style names, Designer/AddRange registration, "
+            "and RepositoryItemSpinEdit ColumnEdit for numeric AMT/QTY/UNP/WGT/PRICE/RATE/COST/TOTAL columns instead of GridColumn DisplayFormat."
+        ),
+        "token_optimizer_status": "passthrough",
+        "token_optimizer_status_reason": (
+            "Generated C# source is contract-sensitive style evidence and was not compressed."
+        ),
+    }
+    return HarnessResult(
+        success=passed,
+        stdout=json.dumps({"status": metadata["status"], "issue_count": len(issues)}, ensure_ascii=False, sort_keys=True),
+        stderr="" if passed else "Generated C# style verification blocked by grid column issues.",
+        exit_code=0 if passed else 1,
+        metadata=metadata,
+    )
+
+def verify_pb_migration_sp_generation_contract(
+    sql_text: str,
+    *,
+    source_evidence: Any = None,
+    allow_inferred_draft: bool = False,
+) -> HarnessResult:
+    """Check that generated SELECT/SAVE SP work is evidence-gated before it is presented as migration output."""
+    sql = str(sql_text or "")
+    issues: List[Dict[str, Any]] = []
+    upper_unprotected = _strip_sql_literals_and_comments_for_pb_contract(sql).upper()
+    normalized_source_evidence: List[Dict[str, Any]] = []
+    unstructured_source_evidence = False
+    if isinstance(source_evidence, dict):
+        normalized_source_evidence = [dict(source_evidence)]
+    elif isinstance(source_evidence, (list, tuple)):
+        normalized_source_evidence = [dict(item) for item in source_evidence if isinstance(item, dict)]
+    elif source_evidence is True:
+        unstructured_source_evidence = True
+    elif source_evidence:
+        unstructured_source_evidence = True
+    allowed_evidence_kinds = {"pb_srd_sql", "existing_sp", "pasted_sql", "db_schema", "approved_inferred_draft"}
+    accepted_source_evidence = []
+    for item in normalized_source_evidence:
+        kind = str(item.get("kind") or "")
+        if kind not in allowed_evidence_kinds:
+            continue
+        path_or_summary = bool(str(item.get("path") or item.get("summary") or "").strip())
+        path_only = bool(str(item.get("path") or "").strip())
+        object_name = bool(str(item.get("object") or "").strip())
+        hash_or_definition = bool(
+            str(item.get("sha256") or item.get("definition_hash") or item.get("definition_path") or "").strip()
+        )
+        verified = bool(item.get("verified"))
+        if kind == "existing_sp":
+            has_detail = hash_or_definition or (verified and (object_name or path_only))
+        elif kind == "approved_inferred_draft":
+            has_detail = bool(item.get("approved") and path_or_summary)
+        elif kind == "db_schema":
+            has_detail = path_or_summary or hash_or_definition or (object_name and verified)
+        else:
+            has_detail = path_or_summary or hash_or_definition
+        if has_detail:
+            accepted_source_evidence.append(item)
+
+    if unstructured_source_evidence:
+        issues.append(
+            {
+                "code": "unstructured_source_evidence_flag",
+                "severity": "error",
+                "message": "source_evidence=True is not enough. Record structured evidence with kind plus path/object/summary.",
+            }
+        )
+    if not sql.strip():
+        issues.append({"code": "missing_sql_text", "severity": "error", "message": "No SQL text was provided."})
+    if sql.strip() and not accepted_source_evidence:
+        issues.append(
+            {
+                "code": "inferred_draft_not_complete" if allow_inferred_draft else "missing_pb_or_db_source_evidence_for_sp_generation",
+                "severity": "error",
+                "message": (
+                    "Do not present a full migration SELECT/SAVE procedure as completed unless PB/DataWindow SQL, "
+                    "verified existing SP, pasted SQL, DB schema, or explicit user-approved inferred draft evidence is recorded."
+                ),
+            }
+        )
+    if "@WORKTYPE" not in upper_unprotected:
+        issues.append(
+            {
+                "code": "missing_worktype_contract",
+                "severity": "error",
+                "message": "Migration SELECT/SAVE procedures must expose the @WORKTYPE branch contract.",
+            }
+        )
+    if re.search(r"(^|[;\s])WITH\s+(?:\[[^\]]+\]|[A-Z0-9_]+)\s+AS\s*\(", upper_unprotected):
+        issues.append(
+            {
+                "code": "cte_in_generated_sp",
+                "severity": "error",
+                "message": "Do not introduce CTEs in migration SP generation by default.",
+            }
+        )
+    if re.search(r"SELECT\s+TOP\s*\(?\s*0\s*\)?[\s\S]{0,800}(?:CAST|CONVERT|TRY_CONVERT)\s*\(", upper_unprotected):
+        issues.append(
+            {
+                "code": "schema_only_select_top_0_fallback_in_generated_sp",
+                "severity": "error",
+                "message": "Do not add source-unbacked SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...) schema-only fallback blocks to migration SP output.",
+            }
+        )
+    if re.search(r"#[A-Z0-9_]+", upper_unprotected):
+        issues.append(
+            {
+                "code": "temp_table_in_generated_sp",
+                "severity": "error",
+                "message": "Do not introduce # temporary tables in migration SP generation by default.",
+            }
+        )
+    if "MERGE " in upper_unprotected:
+        issues.append(
+            {
+                "code": "merge_in_generated_sp",
+                "severity": "error",
+                "message": "Do not introduce MERGE in migration SP generation by default.",
+            }
+        )
+    if "NOT EXISTS" in upper_unprotected:
+        issues.append(
+            {
+                "code": "not_exists_in_generated_sp",
+                "severity": "error",
+                "message": "Do not introduce NOT EXISTS in migration SP generation by default.",
+            }
+        )
+
+    passed = not any(issue["severity"] == "error" for issue in issues)
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "status": "passed" if passed else "blocked",
+        "source_evidence": accepted_source_evidence,
+        "source_evidence_count": len(accepted_source_evidence),
+        "allow_inferred_draft": bool(allow_inferred_draft),
+        "issues": issues,
+        "sp_generation_contract": (
+            "Full migration SP output must be backed by structured PB/DataWindow SQL, existing SP, pasted SQL, DB evidence, "
+            "or an explicit approved inferred-draft marker; object-only existing_sp evidence is not enough. SQL style verification remains separate."
+        ),
+        "token_optimizer_status": "passthrough",
+        "token_optimizer_status_reason": "SQL/stored procedure text is contract-sensitive and was not compressed.",
+    }
+    return HarnessResult(
+        success=passed,
+        stdout=json.dumps({"status": metadata["status"], "issue_count": len(issues)}, ensure_ascii=False, sort_keys=True),
+        stderr="" if passed else "SP generation contract verification blocked by missing evidence or style issues.",
+        exit_code=0 if passed else 1,
+        metadata=metadata,
+    )
+
+def verify_pb_migration_sp_with_sql_formatting(
+    original_sql_text: str,
+    formatted_sql_text: str,
+    *,
+    source_evidence: Any = None,
+    allow_inferred_draft: bool = False,
+    cte_temp_table_reason: str = "",
+) -> HarnessResult:
+    """Verify migration SP evidence and host-local SQL formatting style as one composed gate."""
+    from src.skills.sql_formatting_style import verify_sql_formatting_style
+
+    contract_result = verify_pb_migration_sp_generation_contract(
+        formatted_sql_text,
+        source_evidence=source_evidence,
+        allow_inferred_draft=allow_inferred_draft,
+    )
+    style_result = verify_sql_formatting_style(
+        original_sql_text,
+        formatted_sql_text,
+        cte_temp_table_reason=cte_temp_table_reason,
+    )
+    success = bool(contract_result.success and style_result.success)
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "status": "passed" if success else "blocked",
+        "sp_generation_contract": contract_result.metadata,
+        "sql_formatting_style": style_result.metadata,
+        "token_optimizer_status": "passthrough",
+        "token_optimizer_status_reason": "SQL/stored procedure text is contract-sensitive and was not compressed.",
+    }
+    return HarnessResult(
+        success=success,
+        stdout=json.dumps(
+            {
+                "status": metadata["status"],
+                "sp_contract_status": contract_result.metadata.get("status"),
+                "sql_formatting_status": style_result.metadata.get("mechanical_checks", {}).get("status"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        stderr="" if success else "Composed PB migration SP and SQL formatting verification failed.",
+        exit_code=0 if success else 1,
+        metadata=metadata,
+    )
+
+
 def build_datawindow_grid_layout(
     source_text: str,
     *,
@@ -852,6 +1546,100 @@ def _normalize_grid_column_specs(columns: Iterable[Any], *, prefix: str) -> List
                 )
             )
     return specs
+
+
+def _csharp_designer_order_key(name: str, source: str) -> int:
+    index = source.find(f"this.{name} = new ")
+    if index >= 0:
+        return index
+    index = source.find(f"private ")
+    declaration_index = source.find(f" {name};", index if index >= 0 else 0)
+    return declaration_index if declaration_index >= 0 else len(source)
+
+
+def _parse_csharp_designer_value(raw_value: str) -> Any:
+    value = str(raw_value or "").strip()
+    string_match = re.fullmatch(r"\"(?P<value>(?:\\.|[^\"])*)\"", value)
+    if string_match:
+        return _unescape_csharp_string_literal(string_match.group("value"))
+    if value in {"true", "false"}:
+        return value == "true"
+    if re.fullmatch(r"-?\d+", value):
+        return int(value)
+    point_match = re.search(r"System\.Drawing\.Point\((?P<x>-?\d+),\s*(?P<y>-?\d+)\)", value)
+    if point_match:
+        return {"x": int(point_match.group("x")), "y": int(point_match.group("y"))}
+    size_match = re.search(r"System\.Drawing\.Size\((?P<width>-?\d+),\s*(?P<height>-?\d+)\)", value)
+    if size_match:
+        return {"width": int(size_match.group("width")), "height": int(size_match.group("height"))}
+    padding_match = re.search(
+        r"System\.Windows\.Forms\.Padding\((?P<values>-?\d+(?:\s*,\s*-?\d+)*)\)",
+        value,
+    )
+    if padding_match:
+        parts = [int(part.strip()) for part in padding_match.group("values").split(",")]
+        if len(parts) == 1:
+            return {"all": parts[0]}
+        if len(parts) == 4:
+            return {"left": parts[0], "top": parts[1], "right": parts[2], "bottom": parts[3]}
+        return {"values": parts}
+    return value
+
+
+def _unescape_csharp_string_literal(value: str) -> str:
+    return (
+        str(value or "")
+        .replace(r"\\", "\\")
+        .replace(r"\"", '"')
+        .replace(r"\n", "\n")
+        .replace(r"\r", "\r")
+        .replace(r"\t", "\t")
+    )
+
+
+def _string_property(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _int_property(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _point_or_size_property(value: Any) -> Dict[str, int] | None:
+    if isinstance(value, dict) and all(isinstance(item, int) for item in value.values()):
+        return dict(value)
+    return None
+
+
+def _dedupe_preserve_order(values: Iterable[str]) -> List[str]:
+    seen: set[str] = set()
+    result: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _escape_csharp_string(value: str) -> str:
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _strip_sql_literals_and_comments_for_pb_contract(sql: str) -> str:
+    text = re.sub(r"'(?:''|[^'])*'", "''", str(sql or ""))
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+    text = re.sub(r"--.*?$", " ", text, flags=re.MULTILINE)
+    return text
 
 
 def _normalize_datawindow_field_name(value: str) -> str:

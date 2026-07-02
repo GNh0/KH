@@ -53,6 +53,8 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - detail controls must carry the source `field_name`, target-project-style control name, `BindingField = "<FIELD>"`, and left-to-right/top-to-bottom `TabIndex` assignment evidence;
    - generated detail and container names must follow target evidence first, then packaged fallbacks: `txt`, `btn`, `cbo`, `Spin`, `ymd`, `Chk`, `memo`, `lbl`, `pn`, `grp`, `grd/gvw`, `treeList`, and `tab`;
    - when emitting C# Designer code, mirror `build_datawindow_gridview_designer_defaults` so the generated GridView keeps the converter's group-panel, filter-row, footer, auto-width, even-row, and view-caption defaults.
+   - when target C# Designer code is available, use `extract_csharp_designer_control_specs` to preserve actual control types, `BindingField`, `TabIndex`, bounds, containment, `Properties.*`, and collection calls before generating or reviewing new code;
+   - when generating grid columns, use explicit GridColumn members and `Columns.AddRange` with `colList_*`, `colDetail_*`, `col<TABLE>_*`, or `col<PURPOSE>_*` names; block default `AddGridColumn`, `Columns.AddField`, and `view.Name + "_" + fieldName` helper patterns unless the existing target screen already proves that style.
 6. Resolve the target C# control stack before drafting code:
    - prefer target-project/custom controls such as a project-owned `u_GridControl` when they exist;
    - fall back to DevExpress controls only when the target project has no matching custom control;
@@ -64,6 +66,8 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 8. Draft SELECT/SAVE SP work from the fixed packaged KH SP style:
    - preserve procedure names, parameters, Korean literals, comments, and result contracts;
    - avoid new CTEs, `#` temporary tables, `MERGE`, and `NOT EXISTS` by default;
+   - do not present a full generated SELECT/SAVE SP as complete unless structured PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, DB schema, or an explicit user-approved inferred draft marker is recorded;
+   - run `verify_pb_migration_sp_generation_contract` before completion claims for generated migration SP text;
    - use host-local `sql-formatting` for formatting and `sql-formatting-style-harness` for verification.
 9. Separate formatting-only work from semantic rewrites. Require DB/MCP/source evidence for schema-dependent joins, scalar-function conversion, result parity, transaction behavior, or performance claims.
 10. Produce the migration checklist, traceability, blockers, and verification plan before implementation or completion claims.
@@ -77,9 +81,12 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - DataWindow mapping summary: field names, generated grid column names, unsupported layout semantics, and converter fallback status.
 - DataWindow naming summary: selected `grd*/gvw*` names, selected `col*_<COLUMN>` prefix, matched captions, and fallback fields when captions were not provable.
 - Detail form layout summary: label/editor pair order, bounds, field names, generated or preserved control names, `BindingField` assignments, and `TabIndex` order.
+- Target Designer evidence summary: extracted control types, parent/child containment, `BindingField`/`FieldName`, captions, `TabIndex`, bounds, `Properties.*`, collection calls, and whether grid columns were explicitly present or absent.
+- Grid column generation summary: explicit GridColumn names and `Columns.AddRange` output, or a blocked reason if the proposed C# uses runtime `AddGridColumn`/`Columns.AddField` helper style without target evidence.
 - Target C# control fallback map: target-project/custom controls, DevExpress fallback, WinForms fallback, selected provider, and reason.
 - Target C# plan: screen path, event flow, select/save method path, XML serialization rule, and binding/result-contract expectations.
 - SP plan: SELECT/SAVE procedure names, `@WORKTYPE` branches, XML/table variable plan, transaction/error/logging plan, and formatting verifier status.
+- SP generation evidence: source evidence or explicit inferred-draft marker, `@WORKTYPE` contract, forbidden CTE/#temp/MERGE/NOT EXISTS scan, and SQL formatter/verifier status.
 - SQL formatter composition: host-local `sql-formatting` applied or explicitly unavailable, plus KH verifier result when applicable.
 - Token optimizer status: `passthrough` for source-of-truth SQL/C#/PB text, or `used` only for safe noisy command output/transcripts.
 - Completion checklist with blocked items and next evidence required.
@@ -93,6 +100,9 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not treat TY/C_KONE110, KoneLib, or any other project name as the universal C# baseline. They are sample references only when the target project provides them.
 - Do not replace a target project's custom controls with DevExpress just because DevExpress is known; target-project controls win first.
 - Do not add CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, helper `@FIND...` variables, or scalar-function join rewrites by default.
+- Do not invent completed SELECT/SAVE SP bodies from only a C# call signature. If only parameters and expected grid columns are known, output a blocked SP contract or clearly labeled inferred draft.
+- Do not add source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks to generated migration procedures; return from known branches or report a blocked contract instead.
+- Do not generate grid columns through ad hoc runtime helpers when the target style expects Designer-level `GridColumn` members and `col*_<FIELD>` names.
 - Do not format SQL without preserving uppercase identifiers, Korean literals, comments, aliases, predicates, calculations, and row-shape contracts.
 - Do not add a separate C# helper when the existing screen already has the correct `CallProc` or `CallViewQuery` path.
 - Do not claim the harness ran because references were read; record module output, converter output, verifier output, or an explicit blocked/passthrough rationale.
@@ -108,6 +118,11 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - `src.skills.pb_to_csharp_migration.resolve_csharp_grid_control_names`
 - `src.skills.pb_to_csharp_migration.build_csharp_grid_column_name`
 - `src.skills.pb_to_csharp_migration.build_csharp_control_name`
+- `src.skills.pb_to_csharp_migration.extract_csharp_designer_control_specs`
+- `src.skills.pb_to_csharp_migration.build_csharp_grid_column_designer_plan`
+- `src.skills.pb_to_csharp_migration.verify_migration_generated_csharp_style`
+- `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_generation_contract`
+- `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_with_sql_formatting`
 - `src.skills.pb_to_csharp_migration.generate_devexpress_grid_xml`
 - `src.skills.pb_to_csharp_migration.build_datawindow_gridview_designer_defaults`
 - `src.skills.pb_to_csharp_migration.build_datawindow_grid_layout`
