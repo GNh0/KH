@@ -1,0 +1,75 @@
+# PB-to-C# Migration Harness Release Evidence
+
+Date: 2026-07-02
+Branch: `codex-runtime`
+Version: `2.9.104`
+
+## Purpose
+
+Add a packaged KH UAF harness for PowerBuilder/PBL/SRU/SRW/SRD/DataWindow/GWERP to TY/C_KONE110 C# WinForms/DevExpress and SQL Server SELECT/SAVE stored procedure migration.
+
+The harness must work without local host assets. It uses bundled references when `PblScripter`, GWERP sources, TY C# samples, `DataWindowToXml.html`, live DB access, or MCP access are absent.
+
+## Evidence Sources
+
+- Prior GWERP/PB memory: PBL export, PB7 runtime PATH, SRU/SRW/SRD trace order, `sale_001.pbl`, `saord_001.sru`, `w_copy.srw`, `maot_001.pbl`, and `maot_003.sru`.
+- Prior TY/C_KONE110 memory: C# `CallViewQuery`, `CallProc`, `SelectType`, `DataTableToXml`, `SetModified`, DevExpress binding, and SQL style constraints.
+- Attached `DataWindowToXml.html`: narrow SRD `column=(...) name=...` to DevExpress GridView XML behavior.
+- Host-local `sql-formatting` skill contract: formatting style is delegated to that formatter and verified by KH, not replaced by this harness.
+
+## Implemented Runtime Surface
+
+- New skill folder: `skills/pb_to_csharp_migration_harness/`
+- New Python module: `src.skills.pb_to_csharp_migration`
+- New runnable demo: `skills/pb_to_csharp_migration_harness/scripts/demo.py`
+- New smoke check: `skills/pb_to_csharp_migration_harness/scripts/smoke_check.py`
+- New tests: `tests/test_pb_to_csharp_migration_harness.py`
+- Catalog, quality gate, demo scenario, front-door routing, plugin manifests, and README files updated.
+
+## Subagent Review
+
+Veteran PB/DataWindow analyst identified reusable GWERP/PBL export and DataWindow mapping behavior.
+
+Veteran TY C#/SP reviewer identified the TY C# save/select contracts and SQL formatting boundaries.
+
+Veteran skill/harness reviewer initially blocked release on two issues:
+
+- DataWindow parsing matched `name=` inside `dbname=`.
+- PB migration harness was included in the shared complex extraction bundle and could over-route unrelated non-PB requests.
+
+Both blockers were fixed:
+
+- `DATAWINDOW_NAME_PATTERN` now avoids matching `dbname=`.
+- `pb-to-csharp-migration-harness` is added only by the PB migration-specific route through `extra_harnesses`.
+- Tests now cover `dbname` before `name` and a non-PB stored-procedure/report-image/bound-column prompt that must not route to the PB harness.
+
+QA/QC review found no release-blocking failures after the focused runtime, catalog, demo, and manifest checks.
+
+## Verification
+
+Passed:
+
+- `python -B skills\pb_to_csharp_migration_harness\scripts\smoke_check.py`
+- `python -B -m unittest tests.test_pb_to_csharp_migration_harness`
+- `python -B -m src.skills.uaf_skill_catalog --check`
+- `python -B -m src.skills.uaf_skill_quality`
+- `python -B -m unittest tests.test_skill_demos tests.test_uaf_skill_catalog tests.test_uaf_skill_quality`
+- `python -B -m unittest tests.test_request_classifier`
+- `python -B -m unittest tests.test_kh_front_door`
+- `python -B -m json.tool plugin.json`
+- `python -B -m json.tool .codex-plugin\plugin.json`
+- `python -B -m json.tool .agents\plugins\kh-uaf\plugin.json`
+
+Observed quality gate:
+
+- `total_skills`: 42
+- `min_score`: 9.3
+- `low_quality`: []
+
+## Token Optimizer Handling
+
+For PB/C#/SQL source text, token optimizer status should normally be `passthrough` because source code, business literals, Korean text, and SQL contracts are source-of-truth content. Command output may still be filtered by `command-output-harness` when it is noisy and facts can be preserved.
+
+## Remaining Risk
+
+The harness is a migration planning and verification scaffold. It does not prove semantic parity without actual PB source, TY target files, SP definitions, or DB-backed verification. When local artifacts are absent, it must label output as standalone or fallback mode and avoid claiming full migration parity.
