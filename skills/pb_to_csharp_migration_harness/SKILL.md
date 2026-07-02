@@ -25,6 +25,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Read `references/datawindow-layout-mapping.md` when converting DataWindow columns or layout into DevExpress/WinForms structure.
 - Read `references/ty-csharp-style.md` before drafting or reviewing target C# screen logic; TY/C_KONE110 is a sample style, not a universal baseline.
 - Read `references/kh-sp-style.md` before drafting or reviewing SELECT/SAVE stored procedures.
+- Read `references/author-tagged-style-baseline.md` when the target is the user's C_KONE110/KH style or when asked to follow KH/근호/장근호-authored C#/SP style; this file is the bundled evidence snapshot and must not be skipped for generated C# or SP work in that style.
 - Read `references/sql-formatting-bridge.md` when SQL formatting, scalar function conversion, or verifier composition is involved.
 - Read `references/migration-output-checklist.md` before claiming completion or handoff.
 - Use `examples/minimal-workflow.md` as the compact success/blocked scenario.
@@ -63,9 +64,12 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 7. Draft target C# flow from the style reference:
    - preserve existing method paths such as `CallViewQuery`, `CallProc`, `SelectType`, `DataUtil.DataTableToXml`, `SetModified`, `grd*`, `gvw*`, `tree*`, and current event paths when the target project has them;
    - do not invent parallel helper methods when the current class already has the correct stored-procedure call path.
+   - for C_KONE110/KH-style migration, compare the target against every program listed in `references/author-tagged-style-baseline.md`; do not generate internal DTO/context classes, generic value-reading helpers, or runtime grid helpers when that baseline shows direct local-variable/procedure-call flow.
 8. Draft SELECT/SAVE SP work from the fixed packaged KH SP style:
    - preserve procedure names, parameters, Korean literals, comments, and result contracts;
    - avoid new CTEs, `#` temporary tables, `MERGE`, and `NOT EXISTS` by default;
+   - do not generate empty-string/wildcard/status parameter defaults such as `@WORKTYPE = ''`, `@CUSTCD = '%'`, `@GUBUN = 'T'`, or `@GB = '1'` unless existing verified target SP evidence uses that exact contract;
+   - do not add an up-front parameter normalization block such as `SET @WORKTYPE = ISNULL(...)` or `SET @PARAM = (CASE WHEN ISNULL(...) THEN ... END)` unless verified existing SP evidence for that same procedure branch already has it;
    - do not present a full generated SELECT/SAVE SP as complete unless structured PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, DB schema, or an explicit user-approved inferred draft marker is recorded;
    - run `verify_pb_migration_sp_generation_contract` before completion claims for generated migration SP text;
    - use host-local `sql-formatting` for formatting and `sql-formatting-style-harness` for verification.
@@ -86,6 +90,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Target C# control fallback map: target-project/custom controls, DevExpress fallback, WinForms fallback, selected provider, and reason.
 - Target C# plan: screen path, event flow, select/save method path, XML serialization rule, and binding/result-contract expectations.
 - SP plan: SELECT/SAVE procedure names, `@WORKTYPE` branches, XML/table variable plan, transaction/error/logging plan, and formatting verifier status.
+- Author-tagged style baseline summary for C_KONE110/KH-style work: number of SPs/programs checked, mapped C# files, unmatched/exception programs, common style patterns, and generated-pattern violations blocked.
 - SP generation evidence: source evidence or explicit inferred-draft marker, `@WORKTYPE` contract, forbidden CTE/#temp/MERGE/NOT EXISTS scan, and SQL formatter/verifier status.
 - SQL formatter composition: host-local `sql-formatting` applied or explicitly unavailable, plus KH verifier result when applicable.
 - Token optimizer status: `passthrough` for source-of-truth SQL/C#/PB text, or `used` only for safe noisy command output/transcripts.
@@ -101,8 +106,10 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not replace a target project's custom controls with DevExpress just because DevExpress is known; target-project controls win first.
 - Do not add CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, helper `@FIND...` variables, or scalar-function join rewrites by default.
 - Do not invent completed SELECT/SAVE SP bodies from only a C# call signature. If only parameters and expected grid columns are known, output a blocked SP contract or clearly labeled inferred draft.
+- Do not add default parameter values or parameter-normalization `SET` blocks just to make generated SQL defensive. Follow the verified SP contract or keep defaults as `NULL`/required parameters.
 - Do not add source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks to generated migration procedures; return from known branches or report a blocked contract instead.
 - Do not generate grid columns through ad hoc runtime helpers when the target style expects Designer-level `GridColumn` members and `col*_<FIELD>` names.
+- Do not generate internal request/context DTOs such as `RetrieveContext`, `GetRetrieveContext`, `GetEditValue`, or `GetColumnText` for ordinary screen retrieval code unless the target source already proves that pattern.
 - Do not format SQL without preserving uppercase identifiers, Korean literals, comments, aliases, predicates, calculations, and row-shape contracts.
 - Do not add a separate C# helper when the existing screen already has the correct `CallProc` or `CallViewQuery` path.
 - Do not claim the harness ran because references were read; record module output, converter output, verifier output, or an explicit blocked/passthrough rationale.

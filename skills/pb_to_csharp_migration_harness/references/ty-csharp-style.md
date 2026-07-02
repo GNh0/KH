@@ -2,10 +2,14 @@
 
 Use this reference before drafting or reviewing target-project C# migration code. TY/C_KONE110 examples are packaged sample evidence only; the active target project's real controls, base forms, method paths, and naming conventions override this baseline.
 
+When the requested target is the user's C_KONE110/KH-style migration output, read `author-tagged-style-baseline.md` together with this file. That baseline fixes the complete author-tagged SP/program dataset used for this style, including the absence of generated context DTOs, generic value helpers, and runtime grid helper generation in the sampled C# programs.
+
 ## Core style
 
 - Preserve the existing class, namespace, control names, event handler names, and method names unless the user asks for refactoring.
 - Reuse existing screen flow. Do not create a parallel helper method if `CallViewQuery`, `CallProc`, or another current method already owns the same stored-procedure path.
+- Keep ordinary procedure parameters near the procedure call as local variables when the target baseline shows that pattern. Do not introduce generated internal DTO/context classes such as `RetrieveContext` for simple retrieve state.
+- Do not add generic local helpers such as `GetEditValue(...)`, `GetColumnText(...)`, or runtime `SetVisibleIndex(...)` unless the current target screen already proves that exact helper style.
 - Prefer small, same-shape patches over broad redesign.
 - Treat the active checkout and active screen binding as source of truth. Duplicate project trees are common; verify the target tree before applying style.
 

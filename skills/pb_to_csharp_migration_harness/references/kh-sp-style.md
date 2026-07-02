@@ -4,12 +4,18 @@ Use this fixed packaged style before drafting or reviewing SQL Server SELECT/SAV
 
 This reference is intentionally bundled. Do not query live DB procedures only to discover the style on every run. Refresh this document only when the user explicitly asks to update the style baseline.
 
+When the requested style is the user's C_KONE110/KH/Geunho-authored output, read `author-tagged-style-baseline.md` with this file. That baseline captures the complete 61-procedure author-tagged dataset and the 40 normalized program mappings used to block shallow generated defaults.
+
 ## General rules
 
 - Return full paste-ready SQL when the user asks for a procedure or rewrite.
 - Preserve procedure names, parameter names, comments, Korean text, literals, table names, and business keys.
 - Keep identifiers uppercase outside string literals/comments.
 - Use leading commas for procedure parameters and SELECT columns.
+- Use `@WORKTYPE VARCHAR(20) = NULL` or a required `@WORKTYPE` parameter for C_KONE110/KH-style output. Do not generate `@WORKTYPE = ''`.
+- Do not default business filter parameters to `''`, `'%'`, `'T'`, or `'1'` unless verified target procedure evidence uses those exact defaults.
+- Do not add up-front `SET @WORKTYPE = ISNULL(...)` or `SET @PARAM = (CASE WHEN ISNULL(...) THEN ... END)` normalization blocks unless verified target procedure evidence already uses that pattern.
+- For C_KONE110/KH-style SELECT procedures, include `SET NOCOUNT ON;` and prefer `SET ARITHABORT ON;` unless current target evidence proves otherwise.
 - Keep formatting-only work separate from semantic/performance rewrites.
 - Avoid CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, and helper `@FIND...` variables by default.
 - Prefer direct joins, derived tables, aggregate subqueries, table variables, inline predicates, and existing stored-procedure style.

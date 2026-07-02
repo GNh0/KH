@@ -610,6 +610,76 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("runtime_columns_addfield_detected", issue_codes)
         self.assertIn("view_name_fieldname_column_name_detected", issue_codes)
 
+    def test_generated_csharp_style_blocks_context_dto_and_generic_value_helpers(self):
+        generated = '''
+        private sealed class RetrieveContext
+        {
+            public string YYYY { get; set; }
+        }
+
+        private RetrieveContext GetRetrieveContext()
+        {
+            return new RetrieveContext();
+        }
+
+        private string GetEditValue(DevExpress.XtraEditors.BaseEdit edit, string defaultValue)
+        {
+            return defaultValue;
+        }
+
+        private string GetColumnText(System.Data.DataRow row, string columnName)
+        {
+            return string.Empty;
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_internal_dto_class_detected", issue_codes)
+        self.assertIn("generated_context_flow_detected", issue_codes)
+        self.assertIn("generated_get_edit_value_helper_detected", issue_codes)
+        self.assertIn("generated_get_column_text_helper_detected", issue_codes)
+
+    def test_generated_csharp_style_blocks_helper_variants_and_visible_index_helper(self):
+        generated = '''
+        private static string GetEditValue(DevExpress.XtraEditors.BaseEdit edit, string defaultValue)
+        {
+            return defaultValue;
+        }
+
+        private object GetColumnText(System.Data.DataRow row, string columnName)
+        {
+            return string.Empty;
+        }
+
+        private void SetVisibleIndex(DevExpress.XtraGrid.Columns.GridColumn column, bool visible, ref int visibleIndex)
+        {
+            column.Visible = visible;
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_get_edit_value_helper_detected", issue_codes)
+        self.assertIn("generated_get_column_text_helper_detected", issue_codes)
+        self.assertIn("generated_set_visible_index_helper_detected", issue_codes)
+
+    def test_generated_csharp_style_blocks_name_text_field_as_dateedit(self):
+        generated = '''
+        private KoneLib.Controls.u_DateEdit txtCUSTNM;
+        this.txtCUSTNM = new KoneLib.Controls.u_DateEdit();
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("text_name_field_generated_as_dateedit", issue_codes)
+
     def test_grid_column_designer_plan_uses_explicit_target_column_names(self):
         result = build_csharp_grid_column_designer_plan(
             [
@@ -797,6 +867,42 @@ END
             "schema_only_select_top_0_fallback_in_generated_sp",
             {issue["code"] for issue in schema_fallback_convert.metadata["issues"]},
         )
+
+    def test_sp_generation_contract_blocks_generated_parameter_defaults_and_normalization(self):
+        generated = """
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE VARCHAR(20) = ''
+    , @ORGDIV   VARCHAR(2)  = ''
+    , @CUSTCD   VARCHAR(20) = '%'
+    , @GUBUN    VARCHAR(1)  = 'T'
+    , @GB       VARCHAR(1)  = '1'
+    , @ITEMCD   VARCHAR(30) = '%'
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SET @WORKTYPE = ISNULL(@WORKTYPE, '');
+    SET @CUSTCD = (CASE WHEN ISNULL(@CUSTCD, '') = '' THEN '%' ELSE @CUSTCD END);
+
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT A.CUSTNM
+        FROM BA020T A;
+    END
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence={"kind": "existing_sp", "object": "sp_SA900100_SELECT", "verified": True},
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("worktype_empty_string_default_detected", issue_codes)
+        self.assertIn("wildcard_filter_parameter_default_detected", issue_codes)
+        self.assertIn("business_flag_parameter_default_detected", issue_codes)
+        self.assertIn("worktype_isnull_normalization_detected", issue_codes)
+        self.assertIn("case_isnull_parameter_normalization_detected", issue_codes)
 
     def test_composed_sp_and_sql_formatting_verifier_requires_both_gates(self):
         sql = """CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]

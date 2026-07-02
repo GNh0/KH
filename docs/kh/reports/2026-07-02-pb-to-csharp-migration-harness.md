@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 Branch: `codex-runtime`
-Version: `2.9.110`
+Version: `2.9.111`
 
 ## Purpose
 
@@ -235,3 +235,44 @@ The harness is a migration planning and verification scaffold. It does not prove
 - `verify_pb_migration_sp_generation_contract` now rejects unstructured `source_evidence=True`; complete SP output needs structured evidence such as `pb_srd_sql`, verified `existing_sp` definition evidence, `pasted_sql`, `db_schema`, or an approved inferred draft marker.
 - The same verifier now rejects source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks and `;WITH` CTE introductions by default.
 - Regression coverage now includes runtime `new GridColumn` + `Columns.Add`, numeric DisplayFormat-only output, Spin ColumnEdit success, structured SP evidence, `;WITH`, and schema-only fallback blocks.
+
+## 2.9.111 Follow-up: Author-Tagged C_KONE110 Baseline And SA900100 Repair
+
+User feedback clarified that "analyze every program" means no omission from the source dataset used to define the style baseline, not simply checking a few representative examples.
+
+Evidence added:
+
+- `author-tagged-style-baseline.md` records 61 `C_KONE110` procedures whose definitions contain `KH`, `근호`, or `장근호` and normalizes them into 40 program keys.
+- 39 program keys were mapped to C# source-bearing programs under `C_KONE110_1`; `SA116T` is recorded as SP-only/unmapped local evidence.
+- The baseline records that author-tagged C# samples use direct procedure-call/local-variable flow and do not use generated `RetrieveContext`, `GetEditValue`, or `GetColumnText` helpers.
+- The SP baseline records 0/61 occurrences of `SET @WORKTYPE = ISNULL(...)` and 0/61 occurrences of `@WORKTYPE VARCHAR(20) = ''`.
+
+Runtime gates added:
+
+- `verify_migration_generated_csharp_style` now blocks generated internal DTO/context classes, generic value/column helper methods, and `txt*NM` fields generated as `u_DateEdit`.
+- Follow-up QA broadened helper detection so `GetEditValue(...)` and `GetColumnText(...)` are blocked regardless of access modifier, `static`, or return type. `SetVisibleIndex(...)` helper generation is also blocked.
+- `verify_pb_migration_sp_generation_contract` now blocks generated empty-string `@WORKTYPE` defaults, wildcard parameter defaults, business selector literal defaults, and generated CASE/ISNULL parameter normalization blocks.
+- `ty-csharp-style.md`, `kh-sp-style.md`, `usage.md`, and `SKILL.md` all point C_KONE110/KH-style work back to the full author-tagged baseline instead of a few examples.
+
+SA900100 applied fixes:
+
+- `SA900100.cs` no longer contains `RetrieveContext`, `GetEditValue`, `GetColumnText`, or `SetVisibleIndex` helper flow.
+- `CallSelectProcedure` now builds retrieve parameters directly near the stored-procedure call.
+- `txtCUSTNM` is `u_TextEdit`, not `u_DateEdit`.
+- `PRNTITEMNM` runtime caption is restored to `부문` / `제품명`.
+- `verify_migration_generated_csharp_style` on `SA900100.cs` + `SA900100.Designer.cs`: `issue_count=0`.
+
+DB applied fixes:
+
+- Live MCP DB object: `C_KONE110.dbo.SP_SA900100_SELECT`.
+- Definition was altered to `CREATE PROCEDURE [dbo].[sp_SA900100_SELECT]` text with all listed parameters defaulting to `NULL`.
+- Removed generated `SET @WORKTYPE = ISNULL(...)` and generated CASE/ISNULL parameter normalization block.
+- Added `SET ARITHABORT ON;`.
+- Post-change DB checks: bad `@WORKTYPE=''` default 0, bad wildcard/default selector defaults 0, bad normalization block 0, `SET ARITHABORT ON` 1.
+- No-data execution checks passed for both `LIST` and `DETAIL` branches.
+
+Verification evidence:
+
+- `python -B skills\pb_to_csharp_migration_harness\scripts\smoke_check.py`: passed.
+- `python -B -m unittest tests.test_pb_to_csharp_migration_harness`: 39 tests passed.
+- `python -B -m src.skills.uaf_skill_catalog --check`: 42 valid skills, 0 invalid.

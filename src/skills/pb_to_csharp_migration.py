@@ -1174,6 +1174,70 @@ def verify_migration_generated_csharp_style(source_text: str) -> HarnessResult:
             }
         )
 
+    if re.search(r"\bprivate\s+sealed\s+class\s+[A-Za-z_][A-Za-z0-9_]*\s*", source):
+        issues.append(
+            {
+                "code": "generated_internal_dto_class_detected",
+                "severity": "error",
+                "message": (
+                    "C_KONE110/KH-style screen retrieval code should not invent private sealed DTO/context "
+                    "classes such as RetrieveContext. Keep ordinary retrieve parameters as local variables "
+                    "near the procedure call unless the target source already proves this pattern."
+                ),
+            }
+        )
+    if re.search(r"\bclass\s+[A-Za-z_][A-Za-z0-9_]*Context\b", source) or re.search(
+        r"\bGet[A-Za-z_][A-Za-z0-9_]*Context\s*\(", source
+    ):
+        issues.append(
+            {
+                "code": "generated_context_flow_detected",
+                "severity": "error",
+                "message": (
+                    "Generated C# should not create a context object flow for ordinary screen retrieve "
+                    "parameters unless the target program already uses that style."
+                ),
+            }
+        )
+    if re.search(
+        r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?[A-Za-z0-9_.<>?]+\s+GetEditValue\s*\(",
+        source,
+    ):
+        issues.append(
+            {
+                "code": "generated_get_edit_value_helper_detected",
+                "severity": "error",
+                "message": "Do not generate a generic GetEditValue helper for ordinary C_KONE110/KH-style screen code.",
+            }
+        )
+    if re.search(
+        r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?[A-Za-z0-9_.<>?]+\s+GetColumnText\s*\(",
+        source,
+    ):
+        issues.append(
+            {
+                "code": "generated_get_column_text_helper_detected",
+                "severity": "error",
+                "message": "Do not generate a generic GetColumnText helper for ordinary C_KONE110/KH-style screen code.",
+            }
+        )
+    if re.search(r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+SetVisibleIndex\s*\(", source):
+        issues.append(
+            {
+                "code": "generated_set_visible_index_helper_detected",
+                "severity": "error",
+                "message": "Do not generate a runtime SetVisibleIndex helper when the target style expects explicit Designer columns and direct column property assignments.",
+            }
+        )
+    if re.search(r"KoneLib\.Controls\.u_DateEdit\s+txt[A-Z0-9_]*NM\b", source):
+        issues.append(
+            {
+                "code": "text_name_field_generated_as_dateedit",
+                "severity": "error",
+                "message": "Name/display fields such as txtCUSTNM should use a text edit, not u_DateEdit.",
+            }
+        )
+
     numeric_column_names = set()
     for column_name in re.findall(r"this\.(col(?:List|Detail|[A-Za-z0-9]+)_([A-Z0-9_]+))\.", source):
         full_name, field_name = column_name
@@ -1274,6 +1338,9 @@ def verify_pb_migration_sp_generation_contract(
     sql = str(sql_text or "")
     issues: List[Dict[str, Any]] = []
     upper_unprotected = _strip_sql_literals_and_comments_for_pb_contract(sql).upper()
+    comments_stripped = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
+    comments_stripped = re.sub(r"--.*?$", " ", comments_stripped, flags=re.MULTILINE)
+    upper_comments_stripped = comments_stripped.upper()
     normalized_source_evidence: List[Dict[str, Any]] = []
     unstructured_source_evidence = False
     if isinstance(source_evidence, dict):
@@ -1335,6 +1402,46 @@ def verify_pb_migration_sp_generation_contract(
                 "code": "missing_worktype_contract",
                 "severity": "error",
                 "message": "Migration SELECT/SAVE procedures must expose the @WORKTYPE branch contract.",
+            }
+        )
+    if re.search(r"@WORKTYPE\s+VARCHAR\s*\(\s*20\s*\)\s*=\s*''", upper_comments_stripped):
+        issues.append(
+            {
+                "code": "worktype_empty_string_default_detected",
+                "severity": "error",
+                "message": "C_KONE110/KH-style procedures do not default @WORKTYPE to an empty string; use NULL or the verified required parameter contract.",
+            }
+        )
+    if re.search(r"@(CUSTCD|ITEMCD)\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'%'", upper_comments_stripped):
+        issues.append(
+            {
+                "code": "wildcard_filter_parameter_default_detected",
+                "severity": "error",
+                "message": "Do not default filter parameters such as @CUSTCD or @ITEMCD to '%' unless verified target SP evidence uses that exact contract.",
+            }
+        )
+    if re.search(r"@(GUBUN|GB)\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'(?:T|1)'", upper_comments_stripped):
+        issues.append(
+            {
+                "code": "business_flag_parameter_default_detected",
+                "severity": "error",
+                "message": "Do not default business selector parameters such as @GUBUN or @GB to generated literals unless verified target SP evidence uses them.",
+            }
+        )
+    if re.search(r"SET\s+@WORKTYPE\s*=\s*ISNULL\s*\(", upper_comments_stripped):
+        issues.append(
+            {
+                "code": "worktype_isnull_normalization_detected",
+                "severity": "error",
+                "message": "Do not add SET @WORKTYPE = ISNULL(...) normalization in generated KH-style SP output.",
+            }
+        )
+    if re.search(r"SET\s+@[A-Z0-9_]+\s*=\s*\(\s*CASE\s+WHEN\s+ISNULL\s*\(", upper_comments_stripped):
+        issues.append(
+            {
+                "code": "case_isnull_parameter_normalization_detected",
+                "severity": "error",
+                "message": "Do not add generated CASE/ISNULL parameter normalization blocks unless verified target SP evidence already uses that pattern.",
             }
         )
     if re.search(r"(^|[;\s])WITH\s+(?:\[[^\]]+\]|[A-Z0-9_]+)\s+AS\s*\(", upper_unprotected):
