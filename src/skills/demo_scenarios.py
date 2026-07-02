@@ -69,6 +69,11 @@ from src.skills.command_policy import (
 )
 from src.skills.token_optimizer import optimize_context_content
 from src.skills.sql_formatting_style import verify_sql_formatting_style
+from src.skills.pb_to_csharp_migration import (
+    MigrationInputState,
+    build_datawindow_grid_layout,
+    build_pb_to_csharp_migration_plan,
+)
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 from src.skills.workflow_distiller import build_skill_scaffold, should_distill_workflow
 from src.core.snapshot_manager import SnapshotManager
@@ -209,6 +214,8 @@ def main(default_skill_name: str | None = None) -> int:
 
 
 def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]]:
+    if skill_name == "pb-to-csharp-migration-harness":
+        return _pb_to_csharp_migration_scenario
     if skill_name == "sql-formatting-style-harness":
         return _sql_formatting_style_scenario
     if skill_name == "brainstorming-harness":
@@ -238,6 +245,92 @@ def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]
             return _scenario_evaluation_scenario
         return _routing_scenario
     return _gate_scenario
+
+
+def _pb_to_csharp_migration_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    state = MigrationInputState(
+        has_exported_pb_sources=False,
+        has_datawindow_converter=False,
+        has_ty_csharp_samples=False,
+        has_sp_style_reference=True,
+        has_live_db_access=False,
+        has_pasted_source=True,
+        notes=["demo uses pasted SRD text plus packaged references"],
+    )
+    plan = build_pb_to_csharp_migration_plan(
+        "Migrate a PowerBuilder order-copy DataWindow into TY/C_KONE110 C# and SELECT/SAVE SP style.",
+        state,
+    )
+    srd_text = """
+release 7;
+datawindow(units=0)
+table(column=(type=char(20) updatewhereclause=yes name=ordnum dbname="sa110t.ordnum")
+column=(type=char(10) updatewhereclause=yes name=itemcd dbname="sa110t.itemcd")
+column=(type=decimal(18) updatewhereclause=yes name=qty dbname="sa110t.qty"))
+"""
+    layout = build_datawindow_grid_layout(srd_text)
+    blocked_layout = build_datawindow_grid_layout("datawindow(units=0)")
+    plan_path = output_dir / "pb_to_csharp_migration_plan.json"
+    layout_path = output_dir / "datawindow_grid_layout.xml"
+    plan_path.write_text(plan.stdout, encoding="utf-8")
+    layout_path.write_text(layout.stdout, encoding="utf-8")
+    dispatch = _dispatch_for(skill_name, [plan.to_dict(), layout.to_dict()], success=plan.success and layout.success)
+    contracts = [
+        _dataclass_contract(state),
+        _dataclass_contract(plan),
+        _dataclass_contract(layout),
+        _dataclass_contract(dispatch),
+        _mapping_contract(
+            "MigrationMode",
+            "src.skills.pb_to_csharp_migration",
+            plan.metadata.get("mode", {}),
+            "policy-result",
+        ),
+    ]
+    return _scenario_result(
+        success_contract="HarnessResult",
+        success_payload={
+            "plan": plan.to_dict(),
+            "layout": {
+                "success": layout.success,
+                "metadata": layout.metadata,
+            },
+            "dispatch": dispatch.to_dict(),
+        },
+        success_evidence=[
+            "migration plan produced",
+            "standalone/pasted-source mode captured",
+            "DataWindow columns extracted",
+            "DevExpress GridView XML generated",
+            "source text marked as token passthrough",
+        ],
+        success_behavior="Plan PB-to-C# migration from bundled references and generate deterministic DataWindow grid XML when SRD columns are available.",
+        success_side_effects=[
+            "writes pb_to_csharp_migration_plan.json under the demo output directory",
+            "writes datawindow_grid_layout.xml under the demo output directory",
+        ],
+        blocked_contract="HarnessResult",
+        blocked_payload=blocked_layout.to_dict(),
+        blocked_reason=blocked_layout.stderr,
+        missing_inputs=["DataWindow column=(...) name=... entries"],
+        contracts=contracts,
+        artifacts=[
+            _artifact_record_from_file(
+                plan_path,
+                "pb-to-csharp-migration-plan-json",
+                output_dir,
+                ["json readable", "migration mode captured", "steps listed"],
+                created_by_case="success",
+            ),
+            _artifact_record_from_file(
+                layout_path,
+                "datawindow-grid-layout-xml",
+                output_dir,
+                ["xml readable", "FieldName entries generated", "colList_ names generated"],
+                created_by_case="success",
+            ),
+        ],
+    )
 
 
 def _brainstorming_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:

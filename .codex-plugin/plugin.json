@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.103",
+  "version": "2.9.104",
   "description": "KH Universal Agent Framework provides an auditable front-door intake contract for non-trivial Codex work before memory lookup, source exploration, subagents, or other plugin work. It packages UAF skills, evidence gates, scoped memory, token-gate telemetry, development progress state, Compound learning, role orchestration, deliverable exports, and local runtime contracts; host and subagent compliance is audited rather than assumed.",
   "author": {
     "name": "KH UAF",
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "KH UAF",
     "shortDescription": "Personal UAF skillbook with auditable front-door intake.",
-    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, and a front-door bootstrap contract for ordinary non-trivial requests. It integrates Superpowers-style work control, Compound learning capture, RTK-style token gate telemetry, OpenClaw/Hermes-style scoped memory, capability-based plugin composition, role orchestration, GoalState, progress panels, deliverable exports, session audits, and practical quality gates. KH requires and audits the intake path, but it does not claim every host or subagent will adopt it automatically; stale sessions and missing plugin injection must be verified through session logs and installed cache paths.",
+    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, and a front-door bootstrap contract for ordinary non-trivial requests. It integrates Superpowers-style work control, Compound learning capture, RTK-style token gate telemetry, OpenClaw/Hermes-style scoped memory, capability-based plugin composition, role orchestration, GoalState, progress panels, deliverable exports, PB-to-C# migration support, session audits, and practical quality gates. KH requires and audits the intake path, but it does not claim every host or subagent will adopt it automatically; stale sessions and missing plugin injection must be verified through session logs and installed cache paths.",
     "developerName": "KH UAF",
     "category": "Productivity",
     "capabilities": [
@@ -32,6 +32,7 @@
       "Progress Compound Bridge",
       "Workflow Usability Runtime",
       "Runtime Token Optimization",
+      "PB To C# Migration",
       "Runtime Memory Candidates",
       "Active Memory Preflight",
       "Explicit Memory Import",

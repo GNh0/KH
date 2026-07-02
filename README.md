@@ -39,11 +39,12 @@ Internal skill/harness instructions and subagent packets can stay in English. Fi
 
 ## What It Includes
 
-- 41 packaged skills/harnesses with support files, smoke checks, and runnable demos.
+- 42 packaged skills/harnesses with support files, smoke checks, and runnable demos.
 - `always-on-front-door` as the host-visible bootstrap skill and auditable intake contract that should run before other work-bearing skills or plugins.
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - `brainstorming-harness` for early product, project, workflow, analysis, research, process, document, specification, operations, investment, and design discovery before execution, artifact generation, architecture, or implementation.
+- `pb-to-csharp-migration-harness` for PowerBuilder/PBL/DataWindow/GWERP to TY/C_KONE110 C# and SELECT/SAVE stored-procedure migration workflows that still work without local PB tools or live DB access.
 - `compound-engineering-harness` for mandatory post-review learning capture, scoped memory candidates, system updates, and regression checks.
 - KH-native replacements for Superpowers-style worktree isolation, task-plan execution, systematic debugging, verification-before-completion, and branch finishing.
 - Runtime token optimization for workflow command output and subagent transcripts, including RTK-style command-family savings statistics without requiring RTK as a dependency.

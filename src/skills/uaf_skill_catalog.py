@@ -52,6 +52,7 @@ SKILL_EXECUTION_LEVELS = {
     "memory-state-harness": "python-module",
     "orchestration-role-graph": "python-module",
     "parallel-orchestration-harness": "python-module",
+    "pb-to-csharp-migration-harness": "python-module",
     "plugin-composition-policy": "python-module",
     "plan-execution-harness": "hybrid-harness",
     "role-execution-audit-harness": "python-module",

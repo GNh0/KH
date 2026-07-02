@@ -793,6 +793,7 @@ def _immediate_next_skills(
     if status == "blocked_until_large_work_preflight":
         ordered = [
             "goal-state-harness",
+            "pb-to-csharp-migration-harness",
             "workflow-usability-harness",
             "host-agent-orchestration",
             "parallel-orchestration-harness",
@@ -1134,6 +1135,7 @@ def _micro_skill_codes(skills: Sequence[str]) -> List[str]:
         "workflow-usability-harness": "workflow",
         "host-agent-orchestration": "host",
         "parallel-orchestration-harness": "parallel",
+        "pb-to-csharp-migration-harness": "pb2cs",
         "sql-formatting-style-harness": "sql-style",
         "review-gate-harness": "review",
         "qa-gate-harness": "qa",

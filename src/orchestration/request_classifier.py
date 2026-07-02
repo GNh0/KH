@@ -1039,6 +1039,35 @@ COMPLEX_EXTRACTION_REQUIRED_HARNESSES = [
     "deliverable-template-quality-harness",
     "traceability-matrix-harness",
 ]
+PB_TO_CSHARP_MIGRATION_SOURCE_TERMS = {
+    "pb",
+    "pbl",
+    "pbd",
+    "pblscripter",
+    "powerbuilder",
+    "datawindow",
+    "sru",
+    "srw",
+    "srd",
+    "gwerp",
+}
+PB_TO_CSHARP_MIGRATION_TARGET_TERMS = {
+    "c#",
+    "csharp",
+    "c sharp",
+    "winforms",
+    "devexpress",
+    "ty",
+    "c_kone110",
+    "c_kone110_1",
+    "select/save",
+    "select save",
+    "stored procedure",
+    "sp_",
+    "migration",
+    "migrate",
+    "\ub9c8\uc774\uadf8\ub808\uc774\uc158",
+}
 LIGHT_TERMS = {
     "what is",
     "what does",
@@ -2251,6 +2280,15 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_high_risk(normalized, domain, context):
         return _high_risk_classification(domain, cross_cutting, evidence_required, reasons)
 
+    if _is_pb_to_csharp_migration_request(normalized):
+        return _complex_extraction_deliverable_classification(
+            "software",
+            cross_cutting,
+            evidence_required,
+            [*reasons, "pb_to_csharp_migration_request"],
+            extra_harnesses=["pb-to-csharp-migration-harness"],
+        )
+
     if _is_provider_meta_review_request(normalized):
         return _classification(
             complexity="medium",
@@ -2692,8 +2730,15 @@ def _complex_extraction_deliverable_classification(
     cross_cutting: List[str],
     evidence_required: List[str],
     reasons: List[str],
+    extra_harnesses: List[str] | None = None,
 ) -> RequestClassification:
     routed_domain = "software" if domain == "general" else domain
+    requested_harnesses = _dedupe(
+        [
+            *COMPLEX_EXTRACTION_REQUIRED_HARNESSES,
+            *(extra_harnesses or []),
+        ]
+    )
     return _classification(
         complexity="heavy",
         domain=routed_domain,
@@ -2702,13 +2747,13 @@ def _complex_extraction_deliverable_classification(
         recommended_skills=_dedupe(
             [
                 *LARGE_WORK_BUNDLE_SKILLS,
-                *COMPLEX_EXTRACTION_REQUIRED_HARNESSES,
+                *requested_harnesses,
             ]
         ),
         required_harnesses=_dedupe(
             [
                 *LARGE_WORK_REQUIRED_HARNESSES,
-                *COMPLEX_EXTRACTION_REQUIRED_HARNESSES,
+                *requested_harnesses,
             ]
         ),
         evidence_required=_dedupe(
@@ -2729,6 +2774,14 @@ def _complex_extraction_deliverable_classification(
         reasons=[*reasons, "complex_source_extraction_deliverable"],
         confidence=0.88,
     )
+
+
+def _is_pb_to_csharp_migration_request(normalized: str) -> bool:
+    if not _contains_any(normalized, PB_TO_CSHARP_MIGRATION_SOURCE_TERMS):
+        return False
+    if _contains_any(normalized, PB_TO_CSHARP_MIGRATION_TARGET_TERMS):
+        return True
+    return _contains_any(normalized, {"converter", "layout", "grid", "retrieve", "update", "save"})
 
 
 def _memory_state_classification(

@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.103",
+  "version": "2.9.104",
   "description": "Pure Python UAF skillbook and orchestration runtime for Antigravity, Codex, Claude Code, and local workflows. It provides an auditable front-door intake contract for non-trivial requests before memory lookup, source exploration, subagents, or other work; packaged skills with usage references; Superpowers-style workflow patterns; Compound learning capture; RTK-style token gate telemetry; scoped OpenClaw/Hermes-style memory; role orchestration; plugin composition; runtime state; and packaging checks. KH can require and audit the intake path, but host and subagent compliance depends on the active installed plugin/session.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
@@ -324,6 +324,11 @@
       "name": "sql-formatting-style-harness",
       "description": "Verify SQL/T-SQL formatting output against the host-local sql-formatting style contract without replacing the host-local skill.",
       "usage": "python -m src.skills.uaf_skill_catalog --read sql-formatting-style-harness"
+    },
+    {
+      "name": "pb-to-csharp-migration-harness",
+      "description": "Plan and verify PowerBuilder/PBL/DataWindow/GWERP migration work into TY/C_KONE110 C# WinForms/DevExpress screens and SELECT/SAVE SQL Server stored procedures without requiring local PB tools or live DB access.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read pb-to-csharp-migration-harness"
     },
     {
       "name": "worktree-isolation-harness",

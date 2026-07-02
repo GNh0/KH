@@ -37,6 +37,7 @@ CORE_SKILLS = {
     "memory-state-harness",
     "orchestration-role-graph",
     "parallel-orchestration-harness",
+    "pb-to-csharp-migration-harness",
     "plugin-composition-policy",
     "plan-execution-harness",
     "role-execution-audit-harness",

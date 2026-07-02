@@ -1,0 +1,57 @@
+# KH Stored Procedure Style
+
+Use this fixed packaged style before drafting or reviewing SELECT/SAVE stored procedures for TY/C_KONE110 migrations.
+
+This reference is intentionally bundled. Do not query live DB procedures only to discover the style on every run. Refresh this document only when the user explicitly asks to update the style baseline.
+
+## General rules
+
+- Return full paste-ready SQL when the user asks for a procedure or rewrite.
+- Preserve procedure names, parameter names, comments, Korean text, literals, table names, and business keys.
+- Keep identifiers uppercase outside string literals/comments.
+- Use leading commas for procedure parameters and SELECT columns.
+- Keep formatting-only work separate from semantic/performance rewrites.
+- Avoid CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, and helper `@FIND...` variables by default.
+- Prefer direct joins, derived tables, aggregate subqueries, table variables, inline predicates, and existing stored-procedure style.
+
+## SELECT style
+
+- Use branch-based `IF @WORKTYPE = 'LIST'` / `ELSE IF` structure when the source procedure already uses it.
+- Use flow aliases such as `A`, `B`, `B1`, `C1`, `C2`; restart aliases per branch where appropriate.
+- Use `T`, `TA1`, `TB1` for internal derived-table aliases, not outer query aliases.
+- Use inline predicates such as `A.ITEMACNT LIKE ISNULL(@ITEMACNT, '') + '%'` when that is the target style.
+- Preserve UI binding columns exactly. If TreeList expects `ID` and `ParentID`, do not rename them.
+
+## SAVE style
+
+- Parse XML with `sp_xml_preparedocument` and `OPENXML` when matching current repo patterns.
+- Use `DECLARE @tmp... TABLE (...)` or a table variable for XML rows.
+- Validate duplicates and simple blocking conditions before opening a transaction when possible.
+- Use transaction only for the real write path.
+- Use direct `UPDATE` followed by `INSERT` with `LEFT OUTER JOIN ... IS NULL` anti-match when syncing rows.
+- Use logical disable/delete when that is the existing business convention.
+- Use the standard logging pattern when available: procedure name, worktype, user, and XML payload through the existing log procedure.
+
+## INSERT INTO ... SELECT layout
+
+For wide ERP insert-select mappings, prefer grouped horizontal layout:
+
+```sql
+INSERT INTO SA130T
+(
+    ORGDIV          , ORDNUM        , ORDSEQ        , PORSEQ
+  , PRNTITEMCD      , SPECNUM       , CHLDITEMCD    , CHLDITEMNM
+  , REGDT           , REGEMPNO      , REGIP
+)
+SELECT @ORGDIV      , A.ORDNUM      , A.ORDSEQ      , A.PORSEQ
+     , A.PRNTITEMCD , A.SPECNUM     , A.CHLDITEMCD  , A.CHLDITEMNM
+     , GETDATE()    , @USERID       , @USERIP
+FROM SA130T A
+WHERE A.ORGDIV = @ORGDIV;
+```
+
+If a single source expression is long because of `CASE`, `ROW_NUMBER`, `ISNULL`, arithmetic, concatenation, or function calls, wrap that expression onto continuation lines while keeping the target/source mapping readable.
+
+## Scalar function rule
+
+Convert scalar functions to joins only when the lookup contract is verified from DB/MCP, source, or host-local style guidance. A known lookup function can become a join only if inputs, output column, and null/default behavior are proven. Unknown functions remain unchanged. Stateful sequence procedures or functions with side effects are never join candidates.
