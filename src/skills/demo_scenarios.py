@@ -73,6 +73,7 @@ from src.skills.pb_to_csharp_migration import (
     MigrationInputState,
     build_datawindow_grid_layout,
     build_pb_to_csharp_migration_plan,
+    resolve_csharp_control_stack,
 )
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 from src.skills.workflow_distiller import build_skill_scaffold, should_distill_workflow
@@ -251,15 +252,28 @@ def _pb_to_csharp_migration_scenario(skill_name: str, output_dir: Path, repo_roo
     state = MigrationInputState(
         has_exported_pb_sources=False,
         has_datawindow_converter=False,
-        has_ty_csharp_samples=False,
+        has_target_csharp_samples=False,
         has_sp_style_reference=True,
         has_live_db_access=False,
         has_pasted_source=True,
+        has_behavior_description=True,
         notes=["demo uses pasted SRD text plus packaged references"],
     )
     plan = build_pb_to_csharp_migration_plan(
-        "Migrate a PowerBuilder order-copy DataWindow into TY/C_KONE110 C# and SELECT/SAVE SP style.",
-        state,
+        "Migrate a PowerBuilder order-copy DataWindow into the target C# project and SELECT/SAVE SP style.",
+        {
+            **state.to_dict(),
+            "available_controls": {
+                "target_project_controls": {"grid": "SampleProject.Controls.u_GridControl"},
+                "has_devexpress": True,
+            },
+        },
+    )
+    control_stack = resolve_csharp_control_stack(
+        {
+            "target_project_controls": {"grid": "SampleProject.Controls.u_GridControl"},
+            "has_devexpress": True,
+        }
     )
     srd_text = """
 release 7;
@@ -286,6 +300,12 @@ column=(type=decimal(18) updatewhereclause=yes name=qty dbname="sa110t.qty"))
             plan.metadata.get("mode", {}),
             "policy-result",
         ),
+        _mapping_contract(
+            "ControlFallbackMap",
+            "src.skills.pb_to_csharp_migration",
+            control_stack,
+            "policy-result",
+        ),
     ]
     return _scenario_result(
         success_contract="HarnessResult",
@@ -299,9 +319,10 @@ column=(type=decimal(18) updatewhereclause=yes name=qty dbname="sa110t.qty"))
         },
         success_evidence=[
             "migration plan produced",
-            "standalone/pasted-source mode captured",
+            "standalone/described-behavior/pasted-source mode captured",
             "DataWindow columns extracted",
             "DevExpress GridView XML generated",
+            "target-project control fallback selected before DevExpress fallback",
             "source text marked as token passthrough",
         ],
         success_behavior="Plan PB-to-C# migration from bundled references and generate deterministic DataWindow grid XML when SRD columns are available.",

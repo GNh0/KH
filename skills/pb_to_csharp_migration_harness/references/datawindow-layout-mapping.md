@@ -1,6 +1,6 @@
 # DataWindow Layout Mapping
 
-This reference captures the packaged DataWindow-to-DevExpress grid behavior.
+This reference captures the packaged DataWindow-to-grid behavior. DevExpress XML is the deterministic converter output, but generated C# controls must still follow the target-project/custom -> DevExpress -> WinForms fallback order.
 
 ## DataWindowToXml-compatible rule
 
@@ -10,7 +10,7 @@ The known converter is a narrow SRD column helper:
 - split on `column=(...)`;
 - read `name=...`;
 - uppercase the column name;
-- generate DevExpress `XtraSerializer` GridView XML;
+- generate DevExpress `XtraSerializer` GridView XML as a portable column layout artifact;
 - use `FieldName=<COLUMN>`, `Caption=<COLUMN>`, and `Name=<prefix><COLUMN>`;
 - default prefix is `colList_`;
 - default GridView name is `gridView1`;
@@ -42,8 +42,8 @@ When those matter, keep them as migration tasks and ask for SRD/source/screensho
 
 ## Layout decision rules
 
-- Grid screens: use SRD columns to create GridView columns, then apply TY control naming and binding.
-- Detail entry screens: derive fields and validation from DataWindow metadata, but choose TY controls from the target form style.
+- Grid screens: use SRD columns to create grid columns, then apply target-project control naming and binding. If no target grid wrapper exists, use DevExpress GridControl/GridView; if DevExpress is absent, use WinForms DataGridView.
+- Detail entry screens: derive fields and validation from DataWindow metadata, but choose controls from the target form style using the same fallback order.
 - Reports/print forms: use the existing report designer, output PDF, screenshot, or printed form as the visual contract when available.
 - Complex layouts: produce a wireframe or mapping table first. Do not pretend the XML helper is full layout migration.
 

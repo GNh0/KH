@@ -13,6 +13,7 @@ from src.skills.pb_to_csharp_migration import (
     classify_migration_mode,
     extract_datawindow_columns,
     generate_devexpress_grid_xml,
+    resolve_csharp_control_stack,
 )
 from src.skills.uaf_skill_catalog import read_packaged_skill
 
@@ -33,11 +34,23 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertFalse(mode["runtime_lookup_required"])
         self.assertIn("bundled references", mode["fallback_policy"])
 
+    def test_described_behavior_mode_when_pb_source_is_absent(self):
+        mode = classify_migration_mode(
+            MigrationInputState(
+                has_behavior_description=True,
+                notes=["User described the old PB lookup and save behavior."],
+            )
+        )
+
+        self.assertEqual(mode["mode"], "described-behavior")
+        self.assertFalse(mode["runtime_lookup_required"])
+        self.assertTrue(any("user-described PB behavior" in item for item in mode["weak_evidence"]))
+
     def test_full_reference_mode_uses_available_evidence(self):
         mode = classify_migration_mode(
             {
                 "has_exported_pb_sources": True,
-                "has_ty_csharp_samples": True,
+                "has_target_csharp_samples": True,
                 "has_sp_style_reference": True,
                 "has_live_db_access": True,
             }
@@ -49,8 +62,15 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
 
     def test_plan_returns_harness_result_with_passthrough_token_policy(self):
         result = build_pb_to_csharp_migration_plan(
-            "Migrate PB DataWindow search/save screen into TY C# and SP style.",
-            {"has_pasted_source": True, "has_sp_style_reference": True},
+            "Migrate PB DataWindow search/save screen into target C# and SP style.",
+            {
+                "has_pasted_source": True,
+                "has_sp_style_reference": True,
+                "available_controls": {
+                    "target_project_controls": {"grid": "Acme.Controls.u_GridControl"},
+                    "has_devexpress": True,
+                },
+            },
         )
         payload = json.loads(result.stdout)
 
@@ -58,6 +78,56 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertEqual(payload["harness"], "pb-to-csharp-migration-harness")
         self.assertEqual(payload["token_optimizer_status"], "passthrough")
         self.assertIn("DataWindow", " ".join(payload["steps"]))
+        self.assertIn("confirmed vs inferred behavior map", payload["deliverables"])
+        self.assertIn("target-project control fallback map", payload["deliverables"])
+        self.assertEqual(payload["control_stack"]["selection"]["grid"]["provider"], "target-project")
+        self.assertEqual(payload["control_stack"]["selection"]["grid"]["type"], "Acme.Controls.u_GridControl")
+
+    def test_plan_records_described_behavior_as_inferred_rebuild(self):
+        result = build_pb_to_csharp_migration_plan(
+            "Rebuild a described PB inventory screen in a new C# project.",
+            {"has_behavior_description": True, "has_sp_style_reference": True},
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(payload["mode"]["mode"], "described-behavior")
+        self.assertIn("inferred behavior", " ".join(payload["steps"]))
+        self.assertIn("confirmed vs inferred behavior map", payload["deliverables"])
+
+    def test_control_stack_prefers_target_project_controls(self):
+        result = resolve_csharp_control_stack(
+            {
+                "project_name": "AnyProject",
+                "control_types": [
+                    "Company.Ui.u_GridControl",
+                    "Company.Ui.u_TextEdit",
+                    "Company.Ui.u_Label",
+                ],
+                "has_devexpress": True,
+            }
+        )
+
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["selection"]["grid"]["provider"], "target-project")
+        self.assertEqual(result["selection"]["grid"]["type"], "Company.Ui.u_GridControl")
+        self.assertEqual(result["selection"]["text"]["provider"], "target-project")
+        self.assertEqual(result["selection"]["group"]["provider"], "devexpress")
+
+    def test_control_stack_falls_back_to_devexpress_then_winforms(self):
+        devexpress = resolve_csharp_control_stack({"has_devexpress": True})
+        winforms = resolve_csharp_control_stack({})
+
+        self.assertEqual(devexpress["selection"]["grid"]["provider"], "devexpress")
+        self.assertEqual(devexpress["selection"]["grid"]["type"], "DevExpress.XtraGrid.GridControl")
+        self.assertEqual(winforms["selection"]["grid"]["provider"], "winforms")
+        self.assertEqual(winforms["selection"]["grid"]["type"], "System.Windows.Forms.DataGridView")
+
+    def test_konelib_is_treated_as_target_project_inventory_not_global_baseline(self):
+        result = resolve_csharp_control_stack({"has_konelib": True, "has_devexpress": True})
+
+        self.assertEqual(result["selection"]["grid"]["provider"], "target-project")
+        self.assertEqual(result["selection"]["grid"]["type"], "KoneLib.Controls.u_GridControl")
 
     def test_extracts_datawindow_columns_and_generates_devexpress_xml(self):
         source = """
@@ -85,7 +155,7 @@ column=(type=char(30) dbname="sa110t.itemcd" name=itemcd))
     def test_front_door_routes_pb_to_csharp_migration_to_harness(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             result = build_kh_front_door(
-                "Migrate this PowerBuilder PBL/DataWindow flow into TY C# WinForms and C_KONE110 SELECT/SAVE SP style.",
+                "Migrate this PowerBuilder PBL/DataWindow flow into a C# WinForms and SQL Server SELECT/SAVE SP style.",
                 project=Path(temp_dir),
                 host="codex",
             )

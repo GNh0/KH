@@ -1,6 +1,6 @@
 # KH Stored Procedure Style
 
-Use this fixed packaged style before drafting or reviewing SELECT/SAVE stored procedures for TY/C_KONE110 migrations.
+Use this fixed packaged style before drafting or reviewing SQL Server SELECT/SAVE stored procedures for PB-to-C# migrations. Project-specific procedure names and contracts override this packaged baseline.
 
 This reference is intentionally bundled. Do not query live DB procedures only to discover the style on every run. Refresh this document only when the user explicitly asks to update the style baseline.
 

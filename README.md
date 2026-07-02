@@ -44,7 +44,7 @@ Internal skill/harness instructions and subagent packets can stay in English. Fi
 - Codex plugin manifests: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`.
 - Antigravity workspace/global plugin bootstrap files.
 - `brainstorming-harness` for early product, project, workflow, analysis, research, process, document, specification, operations, investment, and design discovery before execution, artifact generation, architecture, or implementation.
-- `pb-to-csharp-migration-harness` for PowerBuilder/PBL/DataWindow/GWERP to TY/C_KONE110 C# and SELECT/SAVE stored-procedure migration workflows that still work without local PB tools or live DB access.
+- `pb-to-csharp-migration-harness` for PowerBuilder/PBL/DataWindow/GWERP to target-project C# and SELECT/SAVE stored-procedure migration workflows that still work without local PB tools or live DB access.
 - `compound-engineering-harness` for mandatory post-review learning capture, scoped memory candidates, system updates, and regression checks.
 - KH-native replacements for Superpowers-style worktree isolation, task-plan execution, systematic debugging, verification-before-completion, and branch finishing.
 - Runtime token optimization for workflow command output and subagent transcripts, including RTK-style command-family savings statistics without requiring RTK as a dependency.

@@ -8,7 +8,8 @@ Use this checklist before handoff or completion.
 - Migration mode and evidence strength.
 - PB source trace summary.
 - DataWindow field/layout mapping.
-- TY C# implementation plan.
+- Target C# implementation plan.
+- Target C# control fallback map.
 - SELECT/SAVE SP plan.
 - SQL formatting/verifier status.
 - Traceability from PB behavior to C# method and SP branch.
@@ -24,6 +25,7 @@ Use this checklist before handoff or completion.
 - No hidden use of global memory as a substitute for current artifacts.
 - Token optimizer status is recorded.
 - SQL formatter and verifier roles are separated.
+- Project-specific controls are not hard-coded from a sample project. The selected control provider is target-project/custom, DevExpress, or WinForms with a reason.
 - Remaining assumptions are visible.
 
 ## User-facing output

@@ -13,6 +13,48 @@ DATAWINDOW_NAME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+KONELIB_CONTROL_TYPES = {
+    "grid": "KoneLib.Controls.u_GridControl",
+    "text": "KoneLib.Controls.u_TextEdit",
+    "label": "KoneLib.Controls.u_Label",
+    "group": "KoneLib.Controls.u_GroupControl",
+    "panel": "KoneLib.Controls.u_Panel",
+    "tab": "KoneLib.Controls.u_TabControl",
+}
+CONTROL_FALLBACKS = {
+    "grid": {
+        "target_suffixes": ("u_gridcontrol", "gridcontrol"),
+        "devexpress": "DevExpress.XtraGrid.GridControl",
+        "winforms": "System.Windows.Forms.DataGridView",
+        "devexpress_view": "DevExpress.XtraGrid.Views.Grid.GridView",
+    },
+    "text": {
+        "target_suffixes": ("u_textedit", "u_textbox", "textedit", "textbox"),
+        "devexpress": "DevExpress.XtraEditors.TextEdit",
+        "winforms": "System.Windows.Forms.TextBox",
+    },
+    "label": {
+        "target_suffixes": ("u_label", "labelcontrol", "label"),
+        "devexpress": "DevExpress.XtraEditors.LabelControl",
+        "winforms": "System.Windows.Forms.Label",
+    },
+    "group": {
+        "target_suffixes": ("u_groupcontrol", "groupcontrol", "groupbox"),
+        "devexpress": "DevExpress.XtraEditors.GroupControl",
+        "winforms": "System.Windows.Forms.GroupBox",
+    },
+    "panel": {
+        "target_suffixes": ("u_panel", "panelcontrol", "panel"),
+        "devexpress": "DevExpress.XtraEditors.PanelControl",
+        "winforms": "System.Windows.Forms.Panel",
+    },
+    "tab": {
+        "target_suffixes": ("u_tabcontrol", "xtratabcontrol", "tabcontrol"),
+        "devexpress": "DevExpress.XtraTab.XtraTabControl",
+        "winforms": "System.Windows.Forms.TabControl",
+    },
+}
+
 
 @dataclass(frozen=True)
 class MigrationInputState:
@@ -21,10 +63,13 @@ class MigrationInputState:
     has_pblscripter: bool = False
     has_exported_pb_sources: bool = False
     has_datawindow_converter: bool = False
+    has_target_csharp_samples: bool = False
     has_ty_csharp_samples: bool = False
     has_sp_style_reference: bool = False
     has_live_db_access: bool = False
     has_pasted_source: bool = False
+    has_behavior_description: bool = False
+    target_project_name: str = ""
     notes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -32,10 +77,13 @@ class MigrationInputState:
             "has_pblscripter": self.has_pblscripter,
             "has_exported_pb_sources": self.has_exported_pb_sources,
             "has_datawindow_converter": self.has_datawindow_converter,
+            "has_target_csharp_samples": self.has_target_csharp_samples or self.has_ty_csharp_samples,
             "has_ty_csharp_samples": self.has_ty_csharp_samples,
             "has_sp_style_reference": self.has_sp_style_reference,
             "has_live_db_access": self.has_live_db_access,
             "has_pasted_source": self.has_pasted_source,
+            "has_behavior_description": self.has_behavior_description,
+            "target_project_name": self.target_project_name,
             "notes": list(self.notes),
         }
 
@@ -45,29 +93,38 @@ class MigrationInputState:
             has_pblscripter=bool(data.get("has_pblscripter", False)),
             has_exported_pb_sources=bool(data.get("has_exported_pb_sources", False)),
             has_datawindow_converter=bool(data.get("has_datawindow_converter", False)),
+            has_target_csharp_samples=bool(
+                data.get("has_target_csharp_samples", data.get("has_ty_csharp_samples", False))
+            ),
             has_ty_csharp_samples=bool(data.get("has_ty_csharp_samples", False)),
             has_sp_style_reference=bool(data.get("has_sp_style_reference", False)),
             has_live_db_access=bool(data.get("has_live_db_access", False)),
             has_pasted_source=bool(data.get("has_pasted_source", False)),
+            has_behavior_description=bool(data.get("has_behavior_description", False)),
+            target_project_name=str(data.get("target_project_name", "")),
             notes=[str(item) for item in data.get("notes", [])],
         )
 
 
 def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None = None) -> Dict[str, Any]:
-    """Classify whether the migration run is standalone, partial-reference, full-reference, or pasted-source."""
+    """Classify whether the migration run is standalone, described-behavior, partial-reference, full-reference, or pasted-source."""
     input_state = _coerce_state(state)
-    if input_state.has_exported_pb_sources and input_state.has_ty_csharp_samples and input_state.has_sp_style_reference:
+    has_csharp_reference = input_state.has_target_csharp_samples or input_state.has_ty_csharp_samples
+    if input_state.has_exported_pb_sources and has_csharp_reference and input_state.has_sp_style_reference:
         mode = "full-reference"
         confidence = 0.9 if input_state.has_live_db_access else 0.82
     elif input_state.has_pasted_source:
         mode = "pasted-source"
         confidence = 0.74
+    elif input_state.has_behavior_description and not input_state.has_exported_pb_sources:
+        mode = "described-behavior"
+        confidence = 0.62
     elif any(
         [
             input_state.has_pblscripter,
             input_state.has_exported_pb_sources,
             input_state.has_datawindow_converter,
-            input_state.has_ty_csharp_samples,
+            has_csharp_reference,
             input_state.has_sp_style_reference,
         ]
     ):
@@ -81,8 +138,8 @@ def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None =
     weak_evidence = []
     if input_state.has_exported_pb_sources:
         strong_evidence.append("exported .sru/.srw/.srd source")
-    if input_state.has_ty_csharp_samples:
-        strong_evidence.append("representative TY/C_KONE110 C# samples")
+    if has_csharp_reference:
+        strong_evidence.append("target-project C# samples")
     if input_state.has_sp_style_reference:
         strong_evidence.append("packaged KH SP style reference")
     if input_state.has_live_db_access:
@@ -93,6 +150,8 @@ def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None =
         weak_evidence.append("DataWindowToXml-style grid column conversion available")
     if input_state.has_pasted_source:
         weak_evidence.append("pasted source can drive a bounded migration pass")
+    if input_state.has_behavior_description and not input_state.has_exported_pb_sources:
+        weak_evidence.append("user-described PB behavior can drive an inferred rebuild; source parity is unverified")
 
     return {
         "mode": mode,
@@ -102,9 +161,82 @@ def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None =
         "weak_evidence": weak_evidence,
         "runtime_lookup_required": False,
         "fallback_policy": (
-            "Use bundled references first. Use live PBL, source, converter, C# samples, or DB access only when "
-            "the user provides them or explicitly asks for refresh/verification."
+            "Use bundled references first. Use user-provided behavior descriptions as inferred requirements, not "
+            "source parity. Use live PBL, source, converter, C# samples, or DB access only when the user provides "
+            "them or explicitly asks for refresh/verification."
         ),
+    }
+
+
+def resolve_csharp_control_stack(
+    available_controls: Dict[str, Any] | Iterable[str] | None = None,
+    required_controls: Iterable[str] = ("grid", "text", "label", "group", "panel", "tab"),
+) -> Dict[str, Any]:
+    """Choose target-project controls first, then DevExpress, then WinForms basics."""
+    inventory = _normalize_control_inventory(available_controls)
+    selections: Dict[str, Dict[str, Any]] = {}
+    missing: List[str] = []
+    notes: List[str] = []
+
+    for logical_name in required_controls:
+        spec = CONTROL_FALLBACKS.get(str(logical_name).lower())
+        if not spec:
+            missing.append(str(logical_name))
+            continue
+
+        project_control = _find_project_control(str(logical_name).lower(), inventory)
+        if project_control:
+            selection = {
+                "provider": "target-project",
+                "type": project_control,
+                "fallback_level": 0,
+                "reason": "matched target-project/custom control inventory",
+            }
+            if str(logical_name).lower() == "grid" and inventory["has_devexpress"]:
+                selection["view_type"] = spec["devexpress_view"]
+            selections[str(logical_name)] = selection
+            continue
+
+        if inventory["has_devexpress"]:
+            selection = {
+                "provider": "devexpress",
+                "type": spec["devexpress"],
+                "fallback_level": 1,
+                "reason": "target-project/custom control was not available",
+            }
+            if str(logical_name).lower() == "grid":
+                selection["view_type"] = spec["devexpress_view"]
+            selections[str(logical_name)] = selection
+            notes.append(f"{logical_name}: used DevExpress fallback")
+            continue
+
+        if inventory["has_winforms"]:
+            selections[str(logical_name)] = {
+                "provider": "winforms",
+                "type": spec["winforms"],
+                "fallback_level": 2,
+                "reason": "target-project/custom and DevExpress controls were not available",
+            }
+            notes.append(f"{logical_name}: used WinForms fallback")
+            continue
+
+        missing.append(str(logical_name))
+
+    return {
+        "status": "passed" if not missing else "blocked",
+        "strategy": "target-project-controls-first",
+        "project_name": inventory["project_name"],
+        "required_controls": [str(item) for item in required_controls],
+        "selection": selections,
+        "missing_controls": missing,
+        "available_control_types": sorted(inventory["types"]),
+        "providers_available": {
+            "target_project_controls": bool(inventory["types"] or inventory["target_project_controls"]),
+            "devexpress": inventory["has_devexpress"],
+            "winforms": inventory["has_winforms"],
+        },
+        "fallback_order": ["target-project/custom controls", "DevExpress controls", "WinForms basic controls"],
+        "notes": notes,
     }
 
 
@@ -112,22 +244,28 @@ def build_pb_to_csharp_migration_plan(
     objective: str,
     state: MigrationInputState | Dict[str, Any] | None = None,
 ) -> HarnessResult:
-    """Build a deterministic migration plan that works without host-local PB/TY/DB assets."""
+    """Build a deterministic migration plan that works without host-local PB/C#/DB assets."""
     mode = classify_migration_mode(state)
+    input_state = _coerce_state(state)
+    control_stack = resolve_csharp_control_stack(dict(state or {}).get("available_controls") if isinstance(state, dict) else None)
     steps = [
-        "Frame the PB screen/program objective, operator workflow, and TY target surface.",
-        "Collect PB evidence from exported .sru/.srw/.srd files, pasted source, or bundled fallback references.",
+        "Frame the PB screen/program objective, operator workflow, and target C# surface.",
+        "Collect PB evidence from exported .sru/.srw/.srd files, pasted source, user-described behavior, or bundled fallback references.",
+        "Separate confirmed behavior from inferred behavior when PB source is absent.",
         "Trace SRU/SRW event flow before DataWindow SQL so popup/save behavior is not missed.",
-        "Map DataWindow columns to DevExpress GridView columns or a TY form layout using the packaged rules.",
-        "Draft TY C# flow by preserving existing CallViewQuery, CallProc, SelectType, DataTableToXml, and SetModified patterns.",
+        "Map DataWindow columns to target-project controls; fall back to DevExpress and then WinForms basics when needed.",
+        "Resolve the target-project control stack before generating C# so project-specific controls are not replaced by a fixed TY/KoneLib assumption.",
+        "Draft C# flow by preserving existing target-project method paths such as CallViewQuery, CallProc, SelectType, DataTableToXml, and SetModified when present.",
         "Draft SELECT/SAVE stored procedures from the packaged KH SP style reference and host-local sql-formatting contract.",
         "Separate formatting-only cleanup from semantic/performance rewrites; require DB-backed evidence for semantic changes.",
         "Produce a migration checklist, traceability table, and verification plan before implementation claims.",
     ]
     deliverables = [
         "PB source analysis notes",
+        "confirmed vs inferred behavior map",
         "DataWindow column/layout mapping",
-        "TY C# implementation plan",
+        "target-project control fallback map",
+        "target C# implementation plan",
         "SELECT/SAVE SP plan",
         "SQL formatting verification checklist",
         "migration traceability matrix",
@@ -139,6 +277,8 @@ def build_pb_to_csharp_migration_plan(
         "mode": mode,
         "steps": steps,
         "deliverables": deliverables,
+        "target_project_name": input_state.target_project_name,
+        "control_stack": control_stack,
         "token_optimizer_status": "passthrough",
         "token_optimizer_status_reason": (
             "PB source, SQL, C# style rules, and business literals are source-of-truth content; do not compress them."
@@ -281,9 +421,73 @@ def _coerce_state(state: MigrationInputState | Dict[str, Any] | None) -> Migrati
         has_pblscripter=bool(data.get("has_pblscripter", False)),
         has_exported_pb_sources=bool(data.get("has_exported_pb_sources", False)),
         has_datawindow_converter=bool(data.get("has_datawindow_converter", False)),
+        has_target_csharp_samples=bool(data.get("has_target_csharp_samples", data.get("has_ty_csharp_samples", False))),
         has_ty_csharp_samples=bool(data.get("has_ty_csharp_samples", False)),
         has_sp_style_reference=bool(data.get("has_sp_style_reference", False)),
         has_live_db_access=bool(data.get("has_live_db_access", False)),
         has_pasted_source=bool(data.get("has_pasted_source", False)),
+        has_behavior_description=bool(data.get("has_behavior_description", False)),
+        target_project_name=str(data.get("target_project_name", "")),
         notes=[str(item) for item in data.get("notes", [])],
     )
+
+
+def _normalize_control_inventory(available_controls: Dict[str, Any] | Iterable[str] | None) -> Dict[str, Any]:
+    inventory: Dict[str, Any] = {
+        "types": set(),
+        "target_project_controls": {},
+        "has_devexpress": False,
+        "has_winforms": True,
+        "project_name": "",
+    }
+    if available_controls is None:
+        return inventory
+
+    if isinstance(available_controls, dict):
+        inventory["project_name"] = str(available_controls.get("project_name", ""))
+        inventory["has_winforms"] = bool(available_controls.get("has_winforms", True))
+        inventory["has_devexpress"] = bool(
+            available_controls.get("has_devexpress", available_controls.get("devexpress", False))
+        )
+        for key in ("control_types", "types", "available_types"):
+            for type_name in available_controls.get(key, []) or []:
+                inventory["types"].add(str(type_name))
+        for logical_name, type_name in (available_controls.get("target_project_controls") or {}).items():
+            inventory["target_project_controls"][str(logical_name).lower()] = str(type_name)
+            inventory["types"].add(str(type_name))
+        if available_controls.get("has_konelib") or available_controls.get("konelib"):
+            inventory["types"].update(KONELIB_CONTROL_TYPES.values())
+        if available_controls.get("has_devexpress") or available_controls.get("devexpress"):
+            inventory["types"].update(
+                [
+                    "DevExpress.XtraGrid.GridControl",
+                    "DevExpress.XtraEditors.TextEdit",
+                    "DevExpress.XtraEditors.LabelControl",
+                    "DevExpress.XtraEditors.GroupControl",
+                    "DevExpress.XtraEditors.PanelControl",
+                    "DevExpress.XtraTab.XtraTabControl",
+                ]
+            )
+    else:
+        for type_name in available_controls:
+            inventory["types"].add(str(type_name))
+
+    if any("devexpress." in item.lower() for item in inventory["types"]):
+        inventory["has_devexpress"] = True
+    return inventory
+
+
+def _find_project_control(logical_name: str, inventory: Dict[str, Any]) -> str:
+    explicit = inventory["target_project_controls"].get(logical_name)
+    if explicit:
+        return explicit
+
+    spec = CONTROL_FALLBACKS[logical_name]
+    for type_name in sorted(inventory["types"]):
+        lowered = type_name.lower()
+        if lowered.startswith("devexpress.") or lowered.startswith("system.windows.forms."):
+            continue
+        tail = lowered.rsplit(".", 1)[-1]
+        if any(tail == suffix or tail.endswith(suffix) for suffix in spec["target_suffixes"]):
+            return type_name
+    return ""
