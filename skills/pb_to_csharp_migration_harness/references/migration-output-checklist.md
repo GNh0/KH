@@ -8,7 +8,8 @@ Use this checklist before handoff or completion.
 - Migration mode and evidence strength.
 - PB source trace summary.
 - DataWindow field/layout mapping.
-- Detail form label/editor layout, source field names, target control names, and `BindingField` assignments when the migrated screen has input controls.
+- Detail form label/editor layout, source field names, target control names, `BindingField` assignments, and left-to-right/top-to-bottom `TabIndex` assignments when the migrated screen has input controls.
+- Control naming evidence for generated controls: `txt`, `btn`, `cbo`, `Spin`, `ymd`, `Chk`, `memo`, `lbl`, `pn`, `grp`, `grd/gvw`, `treeList`, and `tab` prefixes, with target-project existing names taking precedence.
 - Target C# implementation plan.
 - Target C# control fallback map.
 - SELECT/SAVE SP plan.

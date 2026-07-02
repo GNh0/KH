@@ -9,6 +9,7 @@ from src.orchestration.request_classifier import classify_request
 from src.skills.pb_to_csharp_migration import (
     MigrationInputState,
     build_detail_form_layout_plan,
+    build_csharp_control_name,
     build_csharp_grid_column_name,
     build_datawindow_grid_layout,
     build_datawindow_gridview_designer_defaults,
@@ -134,6 +135,13 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
 
         self.assertEqual(result["selection"]["grid"]["provider"], "target-project")
         self.assertEqual(result["selection"]["grid"]["type"], "KoneLib.Controls.u_GridControl")
+        self.assertEqual(result["selection"]["date"]["type"], "KoneLib.Controls.u_DateEdit")
+        self.assertEqual(result["selection"]["spin"]["type"], "KoneLib.Controls.u_SpinEdit")
+        self.assertEqual(result["selection"]["button"]["type"], "KoneLib.Controls.u_ButtonEdit")
+        self.assertEqual(result["selection"]["combo"]["type"], "KoneLib.Controls.u_ComboBox")
+        self.assertEqual(result["selection"]["memo"]["type"], "KoneLib.Controls.u_MemoEdit")
+        self.assertEqual(result["selection"]["check"]["type"], "KoneLib.Controls.u_CheckEdit")
+        self.assertEqual(result["selection"]["tree"]["type"], "KoneLib.Controls.u_TreeList")
 
     def test_detail_form_layout_places_label_editor_pairs_with_binding_fields(self):
         result = build_detail_form_layout_plan(
@@ -142,6 +150,8 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
                 {"name": "QTY", "caption": "수주수량", "editor_type": "number", "logical_name": "Qty"},
                 {"name": "ORDDT", "caption": "수주일자", "editor_type": "date"},
                 {"name": "CUSTCD", "caption": "고객코드", "editor_type": "button"},
+                {"name": "REMARK", "caption": "REMARK", "editor_type": "memo"},
+                {"name": "USEYN", "caption": "USEYN", "editor_type": "check"},
             ],
             columns=3,
             section_caption="기본 상세정보",
@@ -159,17 +169,43 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertEqual(fields[0]["csharp_editor_name"], "txtORDNUM")
         self.assertEqual(fields[0]["binding_code"], 'this.txtORDNUM.BindingField = "ORDNUM";')
         self.assertEqual(fields[1]["editor_type"], "SpinEdit")
-        self.assertEqual(fields[1]["csharp_editor_name"], "SpinQty")
-        self.assertEqual(fields[1]["binding_code"], 'this.SpinQty.BindingField = "QTY";')
+        self.assertEqual(fields[1]["csharp_editor_name"], "SpinQTY")
+        self.assertEqual(fields[1]["binding_code"], 'this.SpinQTY.BindingField = "QTY";')
         self.assertEqual(fields[2]["editor_type"], "DateEdit")
+        self.assertEqual(fields[2]["csharp_editor_name"], "ymdORDDT")
+        self.assertEqual(fields[2]["binding_code"], 'this.ymdORDDT.BindingField = "ORDDT";')
         self.assertEqual(fields[3]["editor_type"], "ButtonEdit")
         self.assertEqual(fields[3]["csharp_editor_name"], "btnCUSTCD")
+        self.assertEqual(fields[4]["editor_type"], "MemoEdit")
+        self.assertEqual(fields[4]["csharp_editor_name"], "memoREMARK")
+        self.assertEqual(fields[5]["editor_type"], "CheckEdit")
+        self.assertEqual(fields[5]["csharp_editor_name"], "ChkUSEYN")
+        self.assertEqual(fields[0]["tab_index"], 0)
+        self.assertEqual(fields[0]["tab_index_code"], "this.txtORDNUM.TabIndex = 0;")
+        self.assertEqual(fields[5]["tab_index"], 5)
+        self.assertEqual(fields[5]["tab_index_code"], "this.ChkUSEYN.TabIndex = 5;")
         self.assertEqual(fields[0]["row"], 0)
         self.assertEqual(fields[0]["column"], 0)
         self.assertEqual(fields[3]["row"], 1)
         self.assertEqual(fields[3]["column"], 0)
         self.assertEqual(fields[0]["label_bounds"]["y"], fields[1]["label_bounds"]["y"])
         self.assertLess(fields[0]["editor_bounds"]["x"], fields[1]["label_bounds"]["x"])
+
+    def test_control_name_fallbacks_match_observed_csharp_prefixes(self):
+        self.assertEqual(build_csharp_control_name("TextEdit", field_name="ITEMNM"), "txtITEMNM")
+        self.assertEqual(build_csharp_control_name("ButtonEdit", field_name="CUSTCD"), "btnCUSTCD")
+        self.assertEqual(build_csharp_control_name("LookUpEdit", field_name="ITEMACNT"), "cboITEMACNT")
+        self.assertEqual(build_csharp_control_name("ComboBoxEdit", field_name="ITEMACNT"), "cboITEMACNT")
+        self.assertEqual(build_csharp_control_name("SpinEdit", field_name="QTY"), "SpinQTY")
+        self.assertEqual(build_csharp_control_name("DateEdit", field_name="ORDDT"), "ymdORDDT")
+        self.assertEqual(build_csharp_control_name("MemoEdit", field_name="REMARK"), "memoREMARK")
+        self.assertEqual(build_csharp_control_name("CheckEdit", field_name="USEYN"), "ChkUSEYN")
+        self.assertEqual(build_csharp_control_name("PanelControl", logical_name="Detail"), "pnDetail")
+        self.assertEqual(build_csharp_control_name("GroupControl", logical_name="Search"), "grpSearch")
+        self.assertEqual(build_csharp_control_name("GridControl", logical_name="List"), "grdList")
+        self.assertEqual(build_csharp_control_name("GridView", logical_name="List"), "gvwList")
+        self.assertEqual(build_csharp_control_name("TreeList", logical_name="BOM"), "treeListBOM")
+        self.assertEqual(build_csharp_control_name("TabControl", logical_name="List"), "tabList")
 
     def test_extracts_datawindow_columns_and_generates_devexpress_xml(self):
         source = """

@@ -14,7 +14,7 @@ The correct behavior is not to fail because local tools are absent. The harness 
 4. If SRD text is present, call `build_datawindow_grid_layout` or `extract_datawindow_column_specs` plus `generate_devexpress_grid_xml`.
    The output should preserve visual column order, matched DataWindow captions, C# column names such as `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>`, and grid names such as `grdList/gvwList`, `grdDetail/gvwDetail`, `grd<TABLE>/gvw<TABLE>`, or `grd<PURPOSE>/gvw<PURPOSE>`.
    When the table name is awkward or ambiguous, use a business purpose suffix such as `POR`, `BOM`, `ITEM`, or `REQ`.
-5. If the target screen has detail-entry controls, call `build_detail_form_layout_plan` or follow the same SA100100-style rule manually: aligned label/editor pairs, target-style names such as `txtITEMNM`, `btnITEMCD`, or `SpinQty`, and `BindingField = "<FIELD>"` evidence.
+5. If the target screen has detail-entry controls, call `build_detail_form_layout_plan` or follow the same SA100100-style rule manually: aligned label/editor pairs, target-style names such as `txtITEMNM`, `btnITEMCD`, `cboITEMACNT`, `SpinQTY`, `ymdORDDT`, `ChkUSEYN`, or `memoREMARK`, plus `BindingField = "<FIELD>"` and left-to-right/top-to-bottom `TabIndex` evidence.
 6. Read only the needed references:
    - `pbl-export-process.md` for PBL export;
    - `powerbuilder-source-analysis.md` for SRU/SRW/SRD tracing;
@@ -33,7 +33,7 @@ The correct behavior is not to fail because local tools are absent. The harness 
 - `mode=standalone`, `described-behavior`, `pasted-source`, `partial-reference`, or `full-reference`.
 - Confirmed vs inferred behavior is visible when no PB source exists.
 - `DataWindow` conversion evidence when SRD columns are available, including captions, C# column names, selected grid names, and table-or-purpose fallback.
-- Detail form layout evidence when input controls are generated, including field names, control names, bounds, and `BindingField` assignments.
+- Detail form layout evidence when input controls are generated, including field names, control names, bounds, `BindingField` assignments, and TabIndex order.
 - Target C# control fallback map is visible, including selected provider and fallback reason.
 - SQL text marked as passthrough, not compressed.
 - Missing local PBL/C#/DB artifacts listed as blocked or lower-confidence evidence.

@@ -23,8 +23,10 @@ Record the selected provider and reason. Do not hard-code KoneLib or any project
 
 - For detail panels like SA100100, arrange labels and input editors as clean label/editor pairs in fixed rows and columns. The goal is readable alignment, not a pixel-for-pixel copy of PB coordinates.
 - Use the target project's existing control names when a matching screen or migrated control exists.
-- When generating fallback names, use field-based names seen in the target style: `txtFIELD` for text, `btnFIELD` for button/lookup editors, `SpinField` for SpinEdit, `cboFIELD` for combo/lookup editors, `chkFIELD` for checkbox/boolean fields, and `memFIELD` for memo fields.
-- Set each editor's `BindingField` to the source field name, for example `this.txtITEMNM.BindingField = "ITEMNM";` or `this.SpinQty.BindingField = "QTY";`.
+- When generating fallback names, use field-based names seen in the target style: `txtFIELD` for text, `btnFIELD` for button/search editors, `cboFIELD` for combo/lookup editors, `SpinFIELD` for SpinEdit, `ymdFIELD` for DateEdit, `ChkFIELD` for CheckEdit, and `memoFIELD` for MemoEdit.
+- RepositoryItem editors are separate from screen input controls. Grid repository names commonly use `rpsbtn*`, `rpscbo*`, `rpsSpin*`, or `rpsChk*`; do not use those prefixes for ordinary detail-panel input controls unless the target screen already does.
+- Use `pn<Area>` for panel containers, `grp<Area>` for groups, `grd<Area>/gvw<Area>` for grids/views, `treeList<Area>` for new TreeList fallbacks, and `tab<Area>` for tabs. Existing target names still win, including legacy `pan*`, `tree*`, `Tab`, or numbered designer names.
+- Set each editor's `BindingField` to the source field name and `TabIndex` in left-to-right, top-to-bottom input order, for example `this.txtITEMNM.BindingField = "ITEMNM";`, `this.SpinQTY.BindingField = "QTY";`, and `this.ymdORDDT.TabIndex = 2;`.
 - Keep labels tied to captions from PB/DataWindow or user-provided Korean labels, but use field-based control names rather than deriving names from Korean caption text.
 
 ## Grid naming style

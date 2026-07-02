@@ -26,6 +26,13 @@ KONELIB_CONTROL_TYPES = {
     "group": "KoneLib.Controls.u_GroupControl",
     "panel": "KoneLib.Controls.u_Panel",
     "tab": "KoneLib.Controls.u_TabControl",
+    "date": "KoneLib.Controls.u_DateEdit",
+    "spin": "KoneLib.Controls.u_SpinEdit",
+    "button": "KoneLib.Controls.u_ButtonEdit",
+    "combo": "KoneLib.Controls.u_ComboBox",
+    "memo": "KoneLib.Controls.u_MemoEdit",
+    "check": "KoneLib.Controls.u_CheckEdit",
+    "tree": "KoneLib.Controls.u_TreeList",
 }
 CONTROL_FALLBACKS = {
     "grid": {
@@ -58,6 +65,41 @@ CONTROL_FALLBACKS = {
         "target_suffixes": ("u_tabcontrol", "xtratabcontrol", "tabcontrol"),
         "devexpress": "DevExpress.XtraTab.XtraTabControl",
         "winforms": "System.Windows.Forms.TabControl",
+    },
+    "date": {
+        "target_suffixes": ("u_dateedit", "dateedit", "datetimepicker"),
+        "devexpress": "DevExpress.XtraEditors.DateEdit",
+        "winforms": "System.Windows.Forms.DateTimePicker",
+    },
+    "spin": {
+        "target_suffixes": ("u_spinedit", "spinedit", "numericupdown"),
+        "devexpress": "DevExpress.XtraEditors.SpinEdit",
+        "winforms": "System.Windows.Forms.NumericUpDown",
+    },
+    "button": {
+        "target_suffixes": ("u_buttonedit", "buttonedit", "button"),
+        "devexpress": "DevExpress.XtraEditors.ButtonEdit",
+        "winforms": "System.Windows.Forms.Button",
+    },
+    "combo": {
+        "target_suffixes": ("u_lookupedit", "u_combobox", "lookupedit", "comboboxedit", "combobox"),
+        "devexpress": "DevExpress.XtraEditors.LookUpEdit",
+        "winforms": "System.Windows.Forms.ComboBox",
+    },
+    "memo": {
+        "target_suffixes": ("u_memoedit", "memoedit", "memoexedit"),
+        "devexpress": "DevExpress.XtraEditors.MemoEdit",
+        "winforms": "System.Windows.Forms.TextBox",
+    },
+    "check": {
+        "target_suffixes": ("u_checkedit", "checkedit", "checkbox"),
+        "devexpress": "DevExpress.XtraEditors.CheckEdit",
+        "winforms": "System.Windows.Forms.CheckBox",
+    },
+    "tree": {
+        "target_suffixes": ("u_treelist", "treelist", "treeview"),
+        "devexpress": "DevExpress.XtraTreeList.TreeList",
+        "winforms": "System.Windows.Forms.TreeView",
     },
 }
 
@@ -178,6 +220,8 @@ class DetailFormFieldSpec:
     csharp_editor_name: str
     binding_property: str
     binding_code: str
+    tab_index: int
+    tab_index_code: str
     row: int
     column: int
     label_bounds: Dict[str, int]
@@ -194,6 +238,8 @@ class DetailFormFieldSpec:
             "csharp_editor_name": self.csharp_editor_name,
             "binding_property": self.binding_property,
             "binding_code": self.binding_code,
+            "tab_index": self.tab_index,
+            "tab_index_code": self.tab_index_code,
             "row": self.row,
             "column": self.column,
             "label_bounds": dict(self.label_bounds),
@@ -266,7 +312,21 @@ def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None =
 
 def resolve_csharp_control_stack(
     available_controls: Dict[str, Any] | Iterable[str] | None = None,
-    required_controls: Iterable[str] = ("grid", "text", "label", "group", "panel", "tab"),
+    required_controls: Iterable[str] = (
+        "grid",
+        "text",
+        "label",
+        "group",
+        "panel",
+        "tab",
+        "date",
+        "spin",
+        "button",
+        "combo",
+        "memo",
+        "check",
+        "tree",
+    ),
 ) -> Dict[str, Any]:
     """Choose target-project controls first, then DevExpress, then WinForms basics."""
     inventory = _normalize_control_inventory(available_controls)
@@ -392,6 +452,8 @@ def build_detail_form_layout_plan(
                 csharp_editor_name=editor_name,
                 binding_property=binding_property,
                 binding_code=f'this.{editor_name}.BindingField = "{field_name}";',
+                tab_index=index,
+                tab_index_code=f"this.{editor_name}.TabIndex = {index};",
                 row=row,
                 column=column,
                 label_bounds={"x": label_x, "y": y + 3, "width": label_width, "height": editor_height},
@@ -411,11 +473,15 @@ def build_detail_form_layout_plan(
             "SA100100-style aligned detail form: place label/editor pairs in fixed rows and columns; "
             "use PB/source order and captions, but do not copy PB pixel coordinates blindly."
         ),
-        "control_pair_rule": "LabelControl + TextEdit/SpinEdit/DateEdit/LookUpEdit/ButtonEdit/CheckEdit by field type.",
+        "control_pair_rule": (
+            "LabelControl + TextEdit/SpinEdit/DateEdit/LookUpEdit/ButtonEdit/CheckEdit/MemoEdit by field type; "
+            "fallback names use observed prefixes txt/btn/cbo/Spin/ymd/Chk/memo plus pn/grp/grd/gvw/treeList/tab for containers."
+        ),
         "binding_rule": (
             "Each editor carries the source field name and a target-project BindingField assignment. "
             "Existing target control names override generated fallback names."
         ),
+        "tab_order_rule": "Input editor TabIndex follows the generated left-to-right, top-to-bottom row/column order.",
         "fields": [spec.to_dict() for spec in specs],
     }
     return HarnessResult(
@@ -834,18 +900,44 @@ def _normalize_detail_form_fields(fields: Iterable[Any]) -> List[Dict[str, str]]
 
 def _normalize_editor_type(value: str) -> str:
     lowered = str(value or "").strip().lower()
-    if lowered in {"spin", "spinedit", "spin_edit", "number", "numeric", "decimal", "int", "integer"}:
+    if lowered in {"spin", "spinedit", "spin_edit", "u_spinedit", "number", "numeric", "decimal", "int", "integer"}:
         return "SpinEdit"
-    if lowered in {"date", "datetime", "dateedit", "date_edit", "calendar"}:
+    if lowered in {"date", "datetime", "dateedit", "date_edit", "u_dateedit", "calendar"}:
         return "DateEdit"
-    if lowered in {"combo", "combobox", "lookup", "lookupedit", "look_up", "select"}:
+    if lowered in {
+        "combo",
+        "combobox",
+        "comboboxedit",
+        "combo_box",
+        "combo_box_edit",
+        "u_combobox",
+        "lookup",
+        "lookupedit",
+        "u_lookupedit",
+        "look_up",
+        "select",
+    }:
         return "LookUpEdit"
-    if lowered in {"button", "buttonedit", "search", "popup", "code"}:
+    if lowered in {"button", "buttonedit", "u_buttonedit", "search", "popup", "code"}:
         return "ButtonEdit"
-    if lowered in {"check", "checkbox", "checkedit", "bool", "boolean", "yn"}:
+    if lowered in {"check", "checkbox", "checkedit", "u_checkedit", "bool", "boolean", "yn"}:
         return "CheckEdit"
-    if lowered in {"memo", "textarea", "multiline"}:
+    if lowered in {"memo", "memoedit", "memo_edit", "memoexedit", "u_memoedit", "textarea", "multiline"}:
         return "MemoEdit"
+    if lowered in {"panel", "panelcontrol", "u_panel"}:
+        return "PanelControl"
+    if lowered in {"group", "groupcontrol", "groupbox"}:
+        return "GroupControl"
+    if lowered in {"grid", "gridcontrol", "u_gridcontrol"}:
+        return "GridControl"
+    if lowered in {"gridview", "view"}:
+        return "GridView"
+    if lowered in {"treelist", "tree", "treeview"}:
+        return "TreeList"
+    if lowered in {"tab", "tabcontrol", "xtratabcontrol"}:
+        return "TabControl"
+    if lowered in {"label", "labelcontrol", "u_label"}:
+        return "LabelControl"
     return "TextEdit"
 
 
@@ -853,20 +945,38 @@ def _editor_prefix(editor_type: str) -> str:
     mapping = {
         "TextEdit": "txt",
         "SpinEdit": "Spin",
-        "DateEdit": "dtp",
+        "DateEdit": "ymd",
         "LookUpEdit": "cbo",
         "ButtonEdit": "btn",
-        "CheckEdit": "chk",
-        "MemoEdit": "mem",
+        "CheckEdit": "Chk",
+        "MemoEdit": "memo",
+        "PanelControl": "pn",
+        "GroupControl": "grp",
+        "GridControl": "grd",
+        "GridView": "gvw",
+        "TreeList": "treeList",
+        "TabControl": "tab",
+        "LabelControl": "lbl",
     }
     return mapping.get(editor_type, "txt")
 
 
+def build_csharp_control_name(control_type: str, logical_name: str = "", field_name: str = "") -> str:
+    """Build a fallback target-style C# control name from observed WinForms conventions."""
+    normalized_type = _normalize_editor_type(control_type)
+    prefix = _editor_prefix(normalized_type)
+    logical = str(logical_name or "").strip()
+    field = _normalize_datawindow_field_name(field_name or logical)
+
+    if normalized_type in {"PanelControl", "GroupControl", "GridControl", "GridView", "TreeList", "TabControl"}:
+        return f"{prefix}{_to_control_suffix(logical or field)}"
+    if normalized_type == "SpinEdit":
+        return f"{prefix}{field}"
+    return f"{prefix}{field}"
+
+
 def _build_editor_control_name(editor_type: str, logical_name: str, field_name: str) -> str:
-    prefix = _editor_prefix(editor_type)
-    if editor_type == "SpinEdit":
-        return f"{prefix}{_to_pascal_identifier(logical_name or field_name)}"
-    return f"{prefix}{_normalize_datawindow_field_name(field_name or logical_name)}"
+    return build_csharp_control_name(editor_type, logical_name=logical_name, field_name=field_name)
 
 
 def _to_pascal_identifier(value: str) -> str:
@@ -874,6 +984,14 @@ def _to_pascal_identifier(value: str) -> str:
     if not parts:
         return "Field"
     return "".join(part[:1].upper() + part[1:].lower() for part in parts)
+
+
+def _to_control_suffix(value: str) -> str:
+    parts = [part for part in re.split(r"[^A-Za-z0-9]+", str(value or "")) if part]
+    if not parts:
+        return "Field"
+    suffix = "".join(part[:1].upper() + part[1:] for part in parts)
+    return suffix or "Field"
 
 
 def _extract_visual_datawindow_columns(source: str) -> List[Dict[str, Any]]:
@@ -1039,10 +1157,19 @@ def _normalize_control_inventory(available_controls: Dict[str, Any] | Iterable[s
             inventory["types"].update(
                 [
                     "DevExpress.XtraGrid.GridControl",
+                    "DevExpress.XtraGrid.Views.Grid.GridView",
+                    "DevExpress.XtraGrid.Columns.GridColumn",
                     "DevExpress.XtraEditors.TextEdit",
                     "DevExpress.XtraEditors.LabelControl",
                     "DevExpress.XtraEditors.GroupControl",
                     "DevExpress.XtraEditors.PanelControl",
+                    "DevExpress.XtraEditors.DateEdit",
+                    "DevExpress.XtraEditors.SpinEdit",
+                    "DevExpress.XtraEditors.ButtonEdit",
+                    "DevExpress.XtraEditors.LookUpEdit",
+                    "DevExpress.XtraEditors.MemoEdit",
+                    "DevExpress.XtraEditors.CheckEdit",
+                    "DevExpress.XtraTreeList.TreeList",
                     "DevExpress.XtraTab.XtraTabControl",
                 ]
             )

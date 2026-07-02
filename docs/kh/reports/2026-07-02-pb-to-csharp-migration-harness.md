@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 Branch: `codex-runtime`
-Version: `2.9.108`
+Version: `2.9.109`
 
 ## Purpose
 
@@ -177,9 +177,27 @@ Added runtime behavior:
 - PB or source order and captions are preserved, but PB pixel coordinates are not copied blindly unless exact visual parity is requested;
 - generated detail editors include `field_name`, target-style control name, bounds, and `BindingField = "<FIELD>"` assignment evidence;
 - target project control names still override generated fallback names;
-- packaged fallback names follow observed target style such as `txtITEMNM`, `btnITEMCD`, `SpinQty`, `cboITEMACNT`, `chkUSEYN`, and `memREMARK`.
+- packaged fallback names follow observed target style such as `txtITEMNM`, `btnITEMCD`, `cboITEMACNT`, `SpinQTY`, `ymdORDDT`, `ChkUSEYN`, and `memoREMARK`.
 
 This refinement addresses detail controls such as LabelControl, TextEdit, SpinEdit, ButtonEdit, DateEdit, LookUpEdit, CheckEdit, and MemoEdit. It keeps grid migration separate from detail-entry panel migration.
+
+## 2.9.109 Detail Control Naming And Tab Order Refinement
+
+2.9.109 tightens the detail-control and container naming contract after a full target-project naming audit.
+
+Observed target-project evidence from `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_codex\Programs`:
+
+- `DateEdit`: standard screen prefix is `ymd`, for example `ymdORDDT`, `ymdFRDT`, and `ymdTODT`;
+- `Panel/u_Panel`: common container prefixes are `pn` and legacy `pan`, with packaged fallback set to `pn`, for example `pnMaster`, `pnDetail`, and `pnGridList`;
+- screen input fallbacks: `txtFIELD`, `btnFIELD`, `cboFIELD`, `SpinFIELD`, `ymdFIELD`, `ChkFIELD`, and `memoFIELD`;
+- repository-item editors stay separate: `rpsbtn*`, `rpscbo*`, `rpsSpin*`, and `rpsChk*` are not normal detail-panel input names;
+- containers use `lbl`, `pn`, `grp`, `grd/gvw`, `treeList`, and `tab` fallback prefixes while preserving existing target names first.
+
+Runtime changes:
+
+- `build_csharp_control_name` now centralizes fallback control-name generation;
+- `build_detail_form_layout_plan` now emits `tab_index` and `tab_index_code` in left-to-right, top-to-bottom input order;
+- control-stack fallback detection now covers DateEdit, SpinEdit, ButtonEdit, combo/lookup, MemoEdit, CheckEdit, and TreeList in addition to grid/text/label/group/panel/tab.
 
 For PB/C#/SQL source text, token optimizer status should normally be `passthrough` because source code, business literals, Korean text, and SQL contracts are source-of-truth content. Command output may still be filtered by `command-output-harness` when it is noisy and facts can be preserved.
 
