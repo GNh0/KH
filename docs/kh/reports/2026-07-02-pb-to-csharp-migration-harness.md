@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 Branch: `codex-runtime`
-Version: `2.9.112`
+Version: `2.9.113`
 
 ## Purpose
 
@@ -300,3 +300,32 @@ Runtime gate added:
 DB applied fix:
 
 - Live MCP DB object `C_KONE110.dbo.SP_SA900100_SELECT` was updated so the module definition begins with the standard metadata header above the stored procedure declaration.
+
+## 2.9.113 Follow-up: Program-Specific DESCRIPTION And SA900100 C# Style Guard
+
+User feedback clarified two remaining gaps:
+
+- The SP metadata `DESCRIPTION` must match the target program/screen. Reusing another program's description such as `총괄조회 조회` on unrelated procedures is blocked.
+- The C# style gate still allowed generated helper wrappers and runtime month-column layout patterns that did not match the author-tagged C_KONE110/KH baseline.
+
+Runtime gates added:
+
+- `verify_pb_migration_sp_generation_contract` now captures the metadata `DESCRIPTION`, extracts the target procedure name, rejects placeholder/sample descriptions, and blocks mismatch against structured source evidence such as `program_description`, `screen_name`, `program_name`, or `description`.
+- `verify_migration_generated_csharp_style` now blocks generated `SetDefaultSearchValues`, `ApplyListColumnLayout`, `GetBasisYear`, `GetCustomerLike`, `ValidateSearch`, runtime monthly `VisibleIndex` loops, `PopCustFrm` `DialogResult.Yes || DialogResult.OK` broadening without evidence, and mojibake Korean literals.
+- `ty-csharp-style.md`, `author-tagged-style-baseline.md`, and `SKILL.md` now document these rejected generated patterns.
+
+SA900100 local applied fix:
+
+- Target file: `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_1\Programs\20.영업(SA)\Konesystem.SA02\SA900100.cs`.
+- Removed generated helper wrappers and mojibake validation messages.
+- Reworked search/default/popup/detail flow into the existing C_KONE110 screen shape: direct `Load`, `SearchCommand`, `ClearCommand`, `CallSelectProcedure`, `FocusedRowChanged`, and explicit column visibility adjustment.
+- Kept Designer-level grid columns and monthly amount order; no runtime monthly `VisibleIndex` loop remains.
+- `PopCustFrm` now accepts the existing popup contract `DialogResult.OK` only.
+
+Verification evidence:
+
+- `python -B -m unittest tests.test_pb_to_csharp_migration_harness`: 40 tests passed.
+- `verify_migration_generated_csharp_style` on `SA900100.cs` + `SA900100.Designer.cs`: `issue_count=0`.
+- `rg` scan for rejected helper/mojibake patterns in `SA900100.cs` + `SA900100.Designer.cs`: no matches.
+- Visual Studio MSBuild 2022 command on `Konesystem.SA02.csproj` with `Configuration=Debug`, `Platform=AnyCPU`: succeeded and produced `Konesystem.SA02.dll`; existing platform warnings remain unrelated.
+- `dotnet build --no-restore` was also tried, but .NET SDK build failed before target compilation on existing non-string resource handling in `KoneLib.DevBase`. VS MSBuild is the valid verification path for this legacy project.

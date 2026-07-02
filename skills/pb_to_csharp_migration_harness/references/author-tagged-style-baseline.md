@@ -150,17 +150,25 @@ Primary C# files analyzed: 39.
 | `class *Context` / `Get*Context(...)` | 0 |
 | local `GetEditValue(...)` helper | 0 |
 | local `GetColumnText(...)` helper | 0 |
+| generated `SetDefaultSearchValues(...)` helper | 0 |
+| generated `ApplyListColumnLayout(...)` helper | 0 |
+| generated `GetBasisYear(...)` / `GetCustomerLike(...)` helper | 0 |
+| generated runtime monthly `VisibleIndex` loop | 0 |
 
 ## C# Generation Rules From This Baseline
 
 - Prefer the existing screen's direct event flow: constructor event wiring, `SearchCommand`, `SaveCommand`, `ClearCommand`, local procedure-call methods, and direct grid binding.
 - Keep ordinary retrieve parameters as local variables near the procedure call. Do not generate internal DTO/context classes such as `RetrieveContext`.
 - Do not generate generic local helpers such as `GetEditValue(...)` or `GetColumnText(...)` for ordinary screen code. Use the target's existing direct access style unless the current screen already proves such helpers.
+- Do not generate generic search/default/layout wrappers such as `SetDefaultSearchValues(...)`, `ApplyListColumnLayout(...)`, `GetBasisYear(...)`, `GetCustomerLike(...)`, or `ValidateSearch(...)` for ordinary C_KONE110/KH-style screens unless the active target screen already owns that exact pattern.
 - Preserve project controls before generic DevExpress controls. In C_KONE110-like targets, `u_GridControl`, `u_TextEdit`, `u_ButtonEdit`, `u_DateEdit`, `u_RadioButton`, and repository controls must be preserved when present.
 - A name field such as `txtCUSTNM` is a text edit by default. Do not infer a date control from `txt*`.
 - Date/year fields use the target date-edit convention such as `ymd*` when the target source proves it.
 - Use explicit Designer grid column members and `Columns.AddRange` with `colList_*`, `colDetail_*`, `col<TABLE>_*`, or `col<PURPOSE>_*` names. Runtime column helper generation is not the C_KONE110 baseline.
+- Preserve explicit Designer month/amount column order. Do not replace `colList_AMT01` ... `colList_AMTTOT` order with a generated runtime `for` loop and `VisibleIndex` assignments.
 - Numeric grid columns such as AMT/QTY/UNP/WGT/PRICE/RATE/COST/TOTAL should use `RepositoryItemSpinEdit` through `ColumnEdit`. Do not rely on `GridColumn.DisplayFormat` as the primary numeric formatting path.
+- Popup result checks must follow the existing popup contract. Do not widen a `PopCustFrm` selection path to `DialogResult.Yes || DialogResult.OK` unless the target source proves that popup returns both.
+- Korean captions/messages must remain readable UTF-8 text. Mojibake literals are not valid style evidence.
 
 ## SP Style Frequency Summary
 

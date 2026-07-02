@@ -111,6 +111,9 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not add source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks to generated migration procedures; return from known branches or report a blocked contract instead.
 - Do not generate grid columns through ad hoc runtime helpers when the target style expects Designer-level `GridColumn` members and `col*_<FIELD>` names.
 - Do not generate internal request/context DTOs such as `RetrieveContext`, `GetRetrieveContext`, `GetEditValue`, or `GetColumnText` for ordinary screen retrieval code unless the target source already proves that pattern.
+- Do not generate generic search/default/layout wrappers such as `SetDefaultSearchValues`, `ApplyListColumnLayout`, `GetBasisYear`, `GetCustomerLike`, or `ValidateSearch` for ordinary screens unless the active target source already proves that pattern.
+- Do not replace explicit Designer month/amount columns with runtime `for` loops and `VisibleIndex` assignments.
+- Do not broaden popup result handling or emit mojibake Korean captions/messages without current source evidence.
 - Do not format SQL without preserving uppercase identifiers, Korean literals, comments, aliases, predicates, calculations, and row-shape contracts.
 - Do not add a separate C# helper when the existing screen already has the correct `CallProc` or `CallViewQuery` path.
 - Do not claim the harness ran because references were read; record module output, converter output, verifier output, or an explicit blocked/passthrough rationale.

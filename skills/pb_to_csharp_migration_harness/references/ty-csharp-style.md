@@ -10,6 +10,7 @@ When the requested target is the user's C_KONE110/KH-style migration output, rea
 - Reuse existing screen flow. Do not create a parallel helper method if `CallViewQuery`, `CallProc`, or another current method already owns the same stored-procedure path.
 - Keep ordinary procedure parameters near the procedure call as local variables when the target baseline shows that pattern. Do not introduce generated internal DTO/context classes such as `RetrieveContext` for simple retrieve state.
 - Do not add generic local helpers such as `GetEditValue(...)`, `GetColumnText(...)`, or runtime `SetVisibleIndex(...)` unless the current target screen already proves that exact helper style.
+- Do not invent generic generated helpers such as `SetDefaultSearchValues(...)`, `ApplyListColumnLayout(...)`, `GetBasisYear(...)`, `GetCustomerLike(...)`, or `ValidateSearch(...)` for ordinary search screens. If default values, popup values, or year/date values are simple, keep them directly in `Load`, `ClearCommand`, event handlers, or the procedure-call method in the same shape as the target source.
 - Prefer small, same-shape patches over broad redesign.
 - Treat the active checkout and active screen binding as source of truth. Duplicate project trees are common; verify the target tree before applying style.
 
@@ -43,6 +44,7 @@ Record the selected provider and reason. Do not hard-code KoneLib or any project
 - Grid columns should follow the same target style: `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>`.
 - Preserve uppercase field names in `FieldName`; use matched Korean PB/DataWindow captions when available, otherwise fall back to the uppercase field name.
 - Prefer explicit Designer `GridColumn` members and `Columns.AddRange` over generated runtime helpers. Treat `AddGridColumn(...)`, `view.Columns.AddField(...)`, and `column.Name = view.Name + "_" + fieldName` as style violations unless the current target screen already uses that exact local pattern.
+- Do not lay out monthly or repeated amount columns through a generated runtime `for` loop that assigns `VisibleIndex`. Preserve explicit Designer order such as `colList_AMT01`, `colList_AMT02`, ..., `colList_AMTTOT`, then use narrow direct visibility/caption changes only when the current business branch requires them.
 - If the current Designer has grids but no explicit columns, record that as evidence instead of inventing columns from the Designer. Columns may still be generated from PB/DataWindow/SP evidence, but the evidence source must be named.
 
 ## Select flow
@@ -76,6 +78,8 @@ Typical save flow:
 - Did unchanged focused rows get `SetModified()` when needed?
 - Does the result shape match current bindings?
 - Are popup, lookup, attachment, and child-grid paths preserved?
+- Did popup result handling follow the existing target popup contract instead of broadening `DialogResult` values without evidence?
+- Did all Korean captions/messages stay readable, not mojibake?
 - Are user-specified object names and business keys unchanged?
 
 ## Migration boundary

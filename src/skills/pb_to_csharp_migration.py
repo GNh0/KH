@@ -43,9 +43,14 @@ SP_METADATA_HEADER_PATTERN = re.compile(
     r"^\s*--\s*=+\s*\r?\n"
     r"--\s*AUTHOR\s*:\s*.*\r?\n"
     r"--\s*CREATE\s+DATE\s*:\s*\d{4}-\d{2}-\d{2}\s*\r?\n"
-    r"--\s*DESCRIPTION\s*:\s*\S.*\r?\n"
+    r"--\s*DESCRIPTION\s*:\s*(?P<description>\S.*)\r?\n"
     r"--\s*=+\s*\r?\n"
     r"\s*(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE\b",
+    re.IGNORECASE,
+)
+SP_PROCEDURE_NAME_PATTERN = re.compile(
+    r"\b(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE\s+"
+    r"(?:\[[^\]]+\]|\w+)?\s*\.?\s*(?:\[(?P<bracketed>SP_[A-Z0-9_]+)\]|(?P<plain>SP_[A-Z0-9_]+))",
     re.IGNORECASE,
 )
 
@@ -61,6 +66,13 @@ def _is_numeric_grid_field_name(field_name: str) -> bool:
         or normalized.endswith(f"{suffix}QTY")
         for suffix in NUMERIC_GRID_FIELD_SUFFIXES
     )
+
+
+def _extract_sp_procedure_name(sql_text: str) -> str:
+    match = SP_PROCEDURE_NAME_PATTERN.search(sql_text or "")
+    if not match:
+        return ""
+    return str(match.group("bracketed") or match.group("plain") or "").upper()
 
 
 def _display_format_string_looks_numeric(format_string: str) -> bool:
@@ -1238,6 +1250,56 @@ def verify_migration_generated_csharp_style(source_text: str) -> HarnessResult:
                 "message": "Do not generate a runtime SetVisibleIndex helper when the target style expects explicit Designer columns and direct column property assignments.",
             }
         )
+    generated_helper_patterns = {
+        "generated_default_search_values_helper_detected": (
+            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+SetDefaultSearchValues\s*\(",
+            "Do not invent SetDefaultSearchValues for ordinary C_KONE110/KH screens; set default control values directly in Load/Clear unless a target file proves that helper.",
+        ),
+        "generated_list_column_layout_helper_detected": (
+            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+ApplyListColumnLayout\s*\(",
+            "Do not invent ApplyListColumnLayout/runtime column-layout helpers; preserve Designer columns and use narrow direct assignments only when required.",
+        ),
+        "generated_basis_year_helper_detected": (
+            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?string\s+GetBasisYear\s*\(",
+            "Do not invent GetBasisYear for u_DateEdit year inputs; read the date control near the procedure call in the same style as existing screens.",
+        ),
+        "generated_customer_like_helper_detected": (
+            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?string\s+GetCustomerLike\s*\(",
+            "Do not invent GetCustomerLike wrappers; keep simple LIKE parameter composition near the SP call unless target code already has the helper.",
+        ),
+        "generated_validate_search_helper_detected": (
+            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?bool\s+ValidateSearch\s*\(",
+            "Do not add generic ValidateSearch helpers for simple search screens; use existing required-control behavior or proven local validation patterns.",
+        ),
+    }
+    for code, (pattern, message) in generated_helper_patterns.items():
+        if re.search(pattern, source):
+            issues.append({"code": code, "severity": "error", "message": message})
+    if re.search(r"for\s*\(\s*int\s+\w+\s*=\s*1\s*;\s*\w+\s*<=\s*12\s*;[\s\S]{0,500}\.VisibleIndex\s*=", source):
+        issues.append(
+            {
+                "code": "generated_month_column_visibleindex_loop_detected",
+                "severity": "error",
+                "message": "Do not lay out monthly AMT columns through a runtime VisibleIndex loop; preserve explicit Designer column order.",
+            }
+        )
+    if "PopCustFrm" in source and re.search(r"DialogResult\.Yes\s*\|\|\s*di\s*==\s*DialogResult\.OK|DialogResult\.OK\s*\|\|\s*di\s*==\s*DialogResult\.Yes", source):
+        issues.append(
+            {
+                "code": "popcust_dialogresult_yes_or_ok_detected",
+                "severity": "error",
+                "message": "PopCustFrm selection should follow the target popup contract; do not broaden it to DialogResult.Yes || DialogResult.OK without source evidence.",
+            }
+        )
+    mojibake_tokens = ("湲곗", "遺臾", "?쒗", "怨꾩", "怨좉", "議고", "留ㅼ", "誘몃")
+    if any(token in source for token in mojibake_tokens):
+        issues.append(
+            {
+                "code": "mojibake_korean_literal_detected",
+                "severity": "error",
+                "message": "Generated C# contains mojibake Korean text; preserve Korean captions/messages as readable UTF-8 text.",
+            }
+        )
     if re.search(r"KoneLib\.Controls\.u_DateEdit\s+txt[A-Z0-9_]*NM\b", source):
         issues.append(
             {
@@ -1394,7 +1456,8 @@ def verify_pb_migration_sp_generation_contract(
         )
     if not sql.strip():
         issues.append({"code": "missing_sql_text", "severity": "error", "message": "No SQL text was provided."})
-    elif not SP_METADATA_HEADER_PATTERN.search(sql):
+    header_match = SP_METADATA_HEADER_PATTERN.search(sql)
+    if sql.strip() and not header_match:
         issues.append(
             {
                 "code": "missing_sp_metadata_header",
@@ -1405,6 +1468,50 @@ def verify_pb_migration_sp_generation_contract(
                 ),
             }
         )
+    elif header_match:
+        header_description = str(header_match.group("description") or "").strip()
+        procedure_name = _extract_sp_procedure_name(sql)
+        expected_descriptions = [
+            str(item.get(key) or "").strip()
+            for item in normalized_source_evidence
+            for key in ("program_description", "screen_name", "program_name", "description")
+            if str(item.get(key) or "").strip()
+        ]
+        if re.search(r"<[^>]+>|TODO|SAMPLE|PROGRAM\s*NAME", header_description, flags=re.IGNORECASE):
+            issues.append(
+                {
+                    "code": "sp_metadata_description_placeholder",
+                    "severity": "error",
+                    "message": "DESCRIPTION must be the target program/screen description, not a placeholder or sample text.",
+                }
+            )
+        if expected_descriptions and not any(
+            expected in header_description or header_description in expected
+            for expected in expected_descriptions
+        ):
+            issues.append(
+                {
+                    "code": "sp_metadata_description_mismatch",
+                    "severity": "error",
+                    "message": "DESCRIPTION must match the target program/screen name recorded in source evidence.",
+                    "expected_descriptions": expected_descriptions,
+                    "actual_description": header_description,
+                }
+            )
+        if (
+            header_description == "총괄조회 조회"
+            and procedure_name
+            and not procedure_name.startswith("SP_SA900100_")
+        ):
+            issues.append(
+                {
+                    "code": "sp_metadata_description_not_program_specific",
+                    "severity": "error",
+                    "message": "Do not reuse another program's DESCRIPTION; set it for the target program/screen.",
+                    "procedure_name": procedure_name,
+                    "actual_description": header_description,
+                }
+            )
     if sql.strip() and not accepted_source_evidence:
         issues.append(
             {

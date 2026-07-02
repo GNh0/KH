@@ -30,10 +30,11 @@ from src.skills.pb_to_csharp_migration import (
 from src.skills.uaf_skill_catalog import read_packaged_skill
 
 
-SP_METADATA_HEADER = """-- =============================================
+def sp_metadata_header(description="총괄조회 조회"):
+    return f"""-- =============================================
 -- AUTHOR:      근호
 -- CREATE DATE: 2026-06-15
--- DESCRIPTION: 총괄조회 조회
+-- DESCRIPTION: {description}
 -- =============================================
 """
 
@@ -676,6 +677,65 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("generated_get_column_text_helper_detected", issue_codes)
         self.assertIn("generated_set_visible_index_helper_detected", issue_codes)
 
+    def test_generated_csharp_style_blocks_sa900100_followup_generated_helpers(self):
+        generated = '''
+        private void SA900100_Load(object sender, EventArgs e)
+        {
+            SetDefaultSearchValues();
+            ApplyListColumnLayout();
+        }
+
+        private bool ValidateSearch()
+        {
+            ShowMessageError("湲곗??꾨룄瑜??낅젰?섏떆??");
+            return true;
+        }
+
+        private string GetBasisYear()
+        {
+            return ymdGIJUN.Text.Trim();
+        }
+
+        private string GetCustomerLike()
+        {
+            return btnCUSTCD.Text.Trim() + "%";
+        }
+
+        private void SetDefaultSearchValues(bool force = false)
+        {
+        }
+
+        private void ApplyListColumnLayout()
+        {
+            for (int i = 1; i <= 12; i++)
+            {
+                gvwList.Columns["AMT" + i.ToString("00")].VisibleIndex = i + 1;
+            }
+        }
+
+        private void BtnCUSTCD_ButtonClick(object sender, DevExpress.XtraEditors.Controls.ButtonPressedEventArgs e)
+        {
+            PopCustFrm pop = new PopCustFrm();
+            DialogResult di = pop.ShowDialog();
+            if (di == DialogResult.Yes || di == DialogResult.OK)
+            {
+            }
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_default_search_values_helper_detected", issue_codes)
+        self.assertIn("generated_list_column_layout_helper_detected", issue_codes)
+        self.assertIn("generated_basis_year_helper_detected", issue_codes)
+        self.assertIn("generated_customer_like_helper_detected", issue_codes)
+        self.assertIn("generated_validate_search_helper_detected", issue_codes)
+        self.assertIn("generated_month_column_visibleindex_loop_detected", issue_codes)
+        self.assertIn("popcust_dialogresult_yes_or_ok_detected", issue_codes)
+        self.assertIn("mojibake_korean_literal_detected", issue_codes)
+
     def test_generated_csharp_style_blocks_name_text_field_as_dateedit(self):
         generated = '''
         private KoneLib.Controls.u_DateEdit txtCUSTNM;
@@ -768,8 +828,55 @@ END
         self.assertFalse(no_header.success)
         self.assertIn("missing_sp_metadata_header", {issue["code"] for issue in no_header.metadata["issues"]})
 
+        copied_wrong_description = verify_pb_migration_sp_generation_contract(
+            sp_metadata_header("총괄조회 조회")
+            + """
+CREATE OR ALTER PROCEDURE [dbo].[sp_DE000600_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS DWGNO
+    END
+END
+""",
+            source_evidence={
+                "kind": "existing_sp",
+                "object": "sp_DE000600_SELECT",
+                "verified": True,
+                "program_description": "설계조회",
+            },
+        )
+        copied_issue_codes = {issue["code"] for issue in copied_wrong_description.metadata["issues"]}
+        self.assertFalse(copied_wrong_description.success)
+        self.assertIn("sp_metadata_description_mismatch", copied_issue_codes)
+        self.assertIn("sp_metadata_description_not_program_specific", copied_issue_codes)
+
+        matched_program_description = verify_pb_migration_sp_generation_contract(
+            sp_metadata_header("설계조회 조회")
+            + """
+CREATE OR ALTER PROCEDURE [dbo].[sp_DE000600_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS DWGNO
+    END
+END
+""",
+            source_evidence={
+                "kind": "existing_sp",
+                "object": "sp_DE000600_SELECT",
+                "verified": True,
+                "program_description": "설계조회",
+            },
+        )
+        self.assertTrue(matched_program_description.success, matched_program_description.metadata["issues"])
+
         allowed = verify_pb_migration_sp_generation_contract(
-            SP_METADATA_HEADER
+            sp_metadata_header()
             + """
 CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
     @WORKTYPE VARCHAR(20)
@@ -826,7 +933,7 @@ END
         )
 
         verified_existing_sp = verify_pb_migration_sp_generation_contract(
-            SP_METADATA_HEADER
+            sp_metadata_header()
             + """
 CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
     @WORKTYPE VARCHAR(20)
@@ -896,7 +1003,7 @@ END
         )
 
     def test_sp_generation_contract_blocks_generated_parameter_defaults_and_normalization(self):
-        generated = SP_METADATA_HEADER + """
+        generated = sp_metadata_header() + """
 CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
       @WORKTYPE VARCHAR(20) = ''
     , @ORGDIV   VARCHAR(2)  = ''
@@ -932,7 +1039,7 @@ END
         self.assertIn("case_isnull_parameter_normalization_detected", issue_codes)
 
     def test_composed_sp_and_sql_formatting_verifier_requires_both_gates(self):
-        sql = SP_METADATA_HEADER + """CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
       @WORKTYPE    VARCHAR(20) = NULL
     , @ORGDIV      VARCHAR(2)  = NULL
 AS
