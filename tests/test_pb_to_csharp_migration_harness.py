@@ -8,11 +8,16 @@ from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.request_classifier import classify_request
 from src.skills.pb_to_csharp_migration import (
     MigrationInputState,
+    build_csharp_grid_column_name,
     build_datawindow_grid_layout,
+    build_datawindow_gridview_designer_defaults,
     build_pb_to_csharp_migration_plan,
     classify_migration_mode,
+    extract_datawindow_column_specs,
     extract_datawindow_columns,
     generate_devexpress_grid_xml,
+    resolve_csharp_grid_control_names,
+    resolve_csharp_grid_column_prefix,
     resolve_csharp_control_stack,
 )
 from src.skills.uaf_skill_catalog import read_packaged_skill
@@ -143,7 +148,163 @@ column=(type=char(30) dbname="sa110t.itemcd" name=itemcd))
         self.assertEqual(root.tag, "XtraSerializer")
         self.assertIn("<property name=\"FieldName\">ORDNUM</property>", xml_text)
         self.assertIn("<property name=\"Name\">colList_ITEMCD</property>", xml_text)
+        expected_grid_defaults = [
+            "BestFitMaxRowCount",
+            "PreviewLineCount",
+            "HorzScrollStep",
+            "FocusRectStyle",
+            "ScrollStyle",
+            "PreviewIndent",
+            "GroupPanelText",
+            "PreviewFieldName",
+            "VertScrollTipFieldName",
+            "LevelIndent",
+            "GroupFooterShowMode",
+            "NewItemRowText",
+            "SynchronizeClones",
+            "BorderStyle",
+            "ViewCaption",
+            "DetailHeight",
+            "DetailTabHeaderLocation",
+            "ActiveFilterEnabled",
+        ]
+        for property_name in expected_grid_defaults:
+            self.assertIn(f"<property name=\"{property_name}\"", xml_text)
+        self.assertIn("<property name=\"VisibleIndex\">1</property>", xml_text)
+        self.assertIn("<property name=\"VisibleIndex\">2</property>", xml_text)
+        self.assertIn("<property name=\"ShowViewCaption\">false</property>", xml_text)
+        self.assertIn("<property name=\"EnableAppearanceEvenRow\">true</property>", xml_text)
+        self.assertIn("<property name=\"ShowGroupPanel\">false</property>", xml_text)
+        self.assertIn("<property name=\"ColumnAutoWidth\">false</property>", xml_text)
+        self.assertIn("<property name=\"ShowFooter\">true</property>", xml_text)
         self.assertIn("<property name=\"ShowAutoFilterRow\">true</property>", xml_text)
+
+    def test_extracts_visual_order_csharp_names_and_matched_captions(self):
+        source = """
+datawindow(units=0)
+table(column=(type=char(10) updatewhereclause=no name=as_itemnm dbname="as_itemnm" )
+ column=(type=char(10) updatewhereclause=no name=as_itemcd dbname="as_itemcd" )
+ )
+column(band=detail id=2 x="178" y="12" height="60" width="699" name=as_itemcd )
+column(band=detail id=1 x="1056" y="12" height="60" width="686" name=as_itemnm )
+text(band=detail text="코드" x="18" y="12" height="60" width="133" name=t_1 )
+text(band=detail text="품명" x="901" y="12" height="60" width="133" name=as_item_t )
+"""
+        specs = extract_datawindow_column_specs(source)
+        xml_text = generate_devexpress_grid_xml(specs)
+
+        self.assertEqual([spec.field_name for spec in specs], ["AS_ITEMCD", "AS_ITEMNM"])
+        self.assertEqual([spec.caption for spec in specs], ["코드", "품명"])
+        self.assertEqual([spec.csharp_name for spec in specs], ["colList_AS_ITEMCD", "colList_AS_ITEMNM"])
+        self.assertIn("<property name=\"Caption\">코드</property>", xml_text)
+        self.assertIn("<property name=\"Caption\">품명</property>", xml_text)
+        self.assertIn("<property name=\"Name\">colList_AS_ITEMCD</property>", xml_text)
+
+    def test_matches_header_band_captions_to_detail_columns(self):
+        source = """
+datawindow(units=0)
+header(height=80)
+detail(height=70)
+table(column=(type=char(10) name=itemcd dbname="itemcd" )
+ column=(type=char(10) name=itemnm dbname="itemnm" ))
+text(band=header text="품목코드" x="100" y="8" height="40" width="220" name=t_itemcd )
+text(band=header text="품목명" x="340" y="8" height="40" width="260" name=t_itemnm )
+column(band=detail x="100" y="12" height="50" width="220" name=itemcd )
+column(band=detail x="340" y="12" height="50" width="260" name=itemnm )
+"""
+        specs = extract_datawindow_column_specs(source)
+
+        self.assertEqual([spec.field_name for spec in specs], ["ITEMCD", "ITEMNM"])
+        self.assertEqual([spec.caption for spec in specs], ["품목코드", "품목명"])
+
+    def test_resolves_csharp_grid_column_prefix_variants(self):
+        self.assertEqual(resolve_csharp_grid_column_prefix("list"), "colList_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("detail"), "colDetail_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("table", table_name="SA110T"), "colSA110T_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("purpose", purpose_name="POR"), "colPOR_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("table", purpose_name="BOM"), "colBOM_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("colCustom_"), "colCustom_")
+        self.assertEqual(build_csharp_grid_column_name("itemcd", prefix="colDetail_"), "colDetail_ITEMCD")
+
+    def test_resolves_csharp_grid_control_name_variants(self):
+        self.assertEqual(
+            resolve_csharp_grid_control_names("list"),
+            {"grid_control_name": "grdList", "grid_view_name": "gvwList"},
+        )
+        self.assertEqual(
+            resolve_csharp_grid_control_names("detail"),
+            {"grid_control_name": "grdDetail", "grid_view_name": "gvwDetail"},
+        )
+        self.assertEqual(
+            resolve_csharp_grid_control_names("table", table_name="SA110T"),
+            {"grid_control_name": "grdSA110T", "grid_view_name": "gvwSA110T"},
+        )
+        self.assertEqual(
+            resolve_csharp_grid_control_names("purpose", purpose_name="POR"),
+            {"grid_control_name": "grdPOR", "grid_view_name": "gvwPOR"},
+        )
+        self.assertEqual(
+            resolve_csharp_grid_control_names("table", purpose_name="BOM"),
+            {"grid_control_name": "grdBOM", "grid_view_name": "gvwBOM"},
+        )
+
+    def test_datawindow_layout_metadata_records_column_prefix_and_captions(self):
+        source = """
+datawindow(units=0)
+column(band=detail x="100" y="10" height="50" width="200" name=itemcd )
+text(band=detail text="품목코드" x="10" y="10" height="50" width="80" name=t_itemcd )
+"""
+        result = build_datawindow_grid_layout(source, input_format="table", table_name="BA030T")
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["csharp_column_prefix"], "colBA030T_")
+        self.assertEqual(
+            result.metadata["csharp_grid_names"],
+            {"grid_control_name": "grdBA030T", "grid_view_name": "gvwBA030T"},
+        )
+        self.assertEqual(result.metadata["column_specs"][0]["csharp_name"], "colBA030T_ITEMCD")
+        self.assertEqual(result.metadata["column_specs"][0]["caption"], "품목코드")
+        self.assertIn("<property name=\"Name\">gvwBA030T</property>", result.stdout)
+        self.assertIn("<property name=\"Name\">colBA030T_ITEMCD</property>", result.stdout)
+        self.assertIn("<property name=\"Caption\">품목코드</property>", result.stdout)
+
+    def test_datawindow_layout_uses_purpose_name_when_table_name_is_ambiguous(self):
+        source = """
+datawindow(units=0)
+column(band=detail x="100" y="10" height="50" width="200" name=porseq )
+text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t_porseq )
+"""
+        result = build_datawindow_grid_layout(source, input_format="purpose", purpose_name="POR")
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["csharp_column_prefix"], "colPOR_")
+        self.assertEqual(
+            result.metadata["csharp_grid_names"],
+            {"grid_control_name": "grdPOR", "grid_view_name": "gvwPOR"},
+        )
+        self.assertEqual(result.metadata["column_specs"][0]["csharp_name"], "colPOR_PORSEQ")
+        self.assertEqual(result.metadata["column_specs"][0]["caption"], "발주순번")
+        self.assertIn("<property name=\"Name\">gvwPOR</property>", result.stdout)
+        self.assertIn("<property name=\"Name\">colPOR_PORSEQ</property>", result.stdout)
+        self.assertIn("<property name=\"Caption\">발주순번</property>", result.stdout)
+
+    def test_raw_converter_name_default_is_distinct_from_target_csharp_layout_name(self):
+        xml_text = generate_devexpress_grid_xml(["ITEMCD"])
+        layout = build_datawindow_grid_layout("column(band=detail x=\"1\" y=\"1\" width=\"10\" height=\"10\" name=itemcd )")
+
+        self.assertIn("<property name=\"Name\">gridView1</property>", xml_text)
+        self.assertEqual(layout.metadata["csharp_grid_names"]["grid_view_name"], "gvwList")
+        self.assertIn("<property name=\"Name\">gvwList</property>", layout.stdout)
+
+    def test_gridview_designer_defaults_match_datawindow_to_xml_options_view(self):
+        assignments = build_datawindow_gridview_designer_defaults("gvwList")
+
+        self.assertIn("this.gvwList.OptionsView.ShowViewCaption = false;", assignments)
+        self.assertIn("this.gvwList.OptionsView.EnableAppearanceEvenRow = true;", assignments)
+        self.assertIn("this.gvwList.OptionsView.ShowGroupPanel = false;", assignments)
+        self.assertIn("this.gvwList.OptionsView.ColumnAutoWidth = false;", assignments)
+        self.assertIn("this.gvwList.OptionsView.ShowFooter = true;", assignments)
+        self.assertIn("this.gvwList.OptionsView.ShowAutoFilterRow = true;", assignments)
 
     def test_datawindow_layout_blocks_when_no_columns_exist(self):
         result = build_datawindow_grid_layout("datawindow(units=0)")

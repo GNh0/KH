@@ -34,7 +34,7 @@ Do not use this harness as the SQL formatter. SQL formatting belongs to the host
    - SQL formatter/verifier composition: `sql-formatting-bridge.md`.
    - Completion/handoff: `migration-output-checklist.md`.
 4. If a PBL/tool/source exists, inspect the real artifact first and keep exports outside the PB source tree. If not, use `described-behavior` when the user explained the old screen/workflow, or `standalone` when even that behavior is not known. State which claims cannot be proven.
-5. For DataWindow column conversion, call `extract_datawindow_columns` and `generate_devexpress_grid_xml` or follow the same narrow rule manually. This reproduces the packaged DataWindowToXml-compatible behavior.
+5. For DataWindow column conversion, call `extract_datawindow_column_specs`, `resolve_csharp_grid_column_prefix`, `resolve_csharp_grid_control_names`, and `generate_devexpress_grid_xml` or follow the same rule manually. This reproduces the packaged DataWindowToXml-compatible behavior, including visual column order, matched PB captions, C# column names like `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>`, grid names like `grdList/gvwList`, `grdDetail/gvwDetail`, `grd<TABLE>/gvw<TABLE>`, or `grd<PURPOSE>/gvw<PURPOSE>`, and the attached converter's GridView defaults. When table naming is ambiguous, use the business purpose suffix such as `POR`, `BOM`, `ITEM`, or `REQ`. When generating C# Designer code, call or mirror `build_datawindow_gridview_designer_defaults` so `ShowGroupPanel=false`, `EnableAppearanceEvenRow=true`, `ColumnAutoWidth=false`, `ShowFooter=true`, and `ShowAutoFilterRow=true` are not lost.
 6. For C# work, resolve the control stack first: target-project/custom controls -> DevExpress controls -> WinForms basic controls. Preserve the current screen flow rather than adding a separate parallel helper. Reuse existing `CallViewQuery` and `CallProc` paths whenever they already match the target procedure.
 7. For SQL work, keep original SQL uncompressed, apply host-local `sql-formatting`, and run `sql-formatting-style-harness` verification when proof is required.
 8. Mark token optimizer as `passthrough` for PB/C#/SQL source text. Use optimization only for noisy command output or subagent transcripts where required facts are preserved.
@@ -47,7 +47,7 @@ Do not use this harness as the SQL formatter. SQL formatting belongs to the host
 - `strong_evidence` and `weak_evidence` explaining what was actually available.
 - Confirmed vs inferred behavior map when no PB source exists but user-described workflow is available.
 - PB trace summary: object names, source files, event flow, DataWindows, retrieve/update/save paths, and gaps.
-- DataWindow mapping: extracted columns, generated grid XML shape, unsupported visual/layout features, and fallback status.
+- DataWindow mapping: extracted columns, matched captions, generated C# column/grid names, generated grid XML shape, unsupported visual/layout features, and fallback status.
 - Target C# control fallback map: selected provider for each logical control, target-project/custom matches, DevExpress fallback, WinForms fallback, and reason.
 - Target C# plan: target class, existing method path, controls, XML serialization rule, and result-binding expectations.
 - SP plan: SELECT/SAVE procedures, XML/table variable shape, transaction boundary, logging, duplicate checks, and formatting verification.

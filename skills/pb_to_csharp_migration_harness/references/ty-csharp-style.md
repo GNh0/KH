@@ -19,6 +19,15 @@ Resolve controls before drafting code:
 
 Record the selected provider and reason. Do not hard-code KoneLib or any project-specific wrapper unless it exists in the target project or was explicitly selected by the user.
 
+## Grid naming style
+
+- Main/list grid controls usually use `grdList` and `gvwList`.
+- Detail/child grid controls usually use `grdDetail` and `gvwDetail`.
+- Table-bound grids may use the source table suffix, such as `grdSA110T` and `gvwSA110T`.
+- If table naming is ambiguous, grids may use a business-purpose suffix such as `grdPOR/gvwPOR`, `grdBOM/gvwBOM`, `grdITEM/gvwITEM`, or `grdREQ/gvwREQ`.
+- Grid columns should follow the same target style: `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>`.
+- Preserve uppercase field names in `FieldName`; use matched Korean PB/DataWindow captions when available, otherwise fall back to the uppercase field name.
+
 ## Select flow
 
 Typical select flow:

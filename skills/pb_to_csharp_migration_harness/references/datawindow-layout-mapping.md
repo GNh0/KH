@@ -9,17 +9,25 @@ The known converter is a narrow SRD column helper:
 - read `.srd`, `.sru`, or `.txt` as UTF-8 or EUC-KR;
 - split on `column=(...)`;
 - read `name=...`;
+- prefer visual `column(...)` entries when present so column order follows the DataWindow layout (`y`, then `x`) instead of blindly trusting `table(column=...)` declaration order;
+- match nearby `text(...)` controls to each visual column when possible and use the matched DataWindow caption;
+- fall back to the uppercase field name as the caption when no safe caption match exists;
 - uppercase the column name;
 - generate DevExpress `XtraSerializer` GridView XML as a portable column layout artifact;
-- use `FieldName=<COLUMN>`, `Caption=<COLUMN>`, and `Name=<prefix><COLUMN>`;
-- default prefix is `colList_`;
-- default GridView name is `gridView1`;
+- use `FieldName=<COLUMN>`, `Caption=<MATCHED_PB_CAPTION_OR_COLUMN>`, and `Name=<C# column name>`;
+- target C# column names follow the existing Designer style: `colList_<COLUMN>` for list/main grids, `colDetail_<COLUMN>` for detail grids, `col<TABLE>_<COLUMN>` when the active screen/table convention uses the source table name, such as `colSA110T_ORDNUM`, or `col<PURPOSE>_<COLUMN>` when table naming is ambiguous and the grid is organized by a business purpose such as `POR`, `BOM`, `ITEM`, or `REQ`;
+- target grid control/view names follow the same convention: `grdList/gvwList`, `grdDetail/gvwDetail`, `grd<TABLE>/gvw<TABLE>`, or `grd<PURPOSE>/gvw<PURPOSE>`, such as `grdSA110T/gvwSA110T` or `grdBOM/gvwBOM`;
+- default prefix is `colList_`, but generated code must switch to `colDetail_`, `col<TABLE>_`, or `col<PURPOSE>_` when the target screen/input format proves that convention;
+- raw DataWindowToXml-style XML helper default GridView name is `gridView1` when no target C# naming context is supplied;
+- KH target layout generation should pass the resolved C# view name such as `gvwList`, `gvwDetail`, `gvwSA110T`, or `gvwBOM`;
 - set header and cell font to `Tahoma, 9pt`;
 - set header alignment center;
 - set `Visible=true`, `VisibleIndex=index`;
-- set `ColumnAutoWidth=false`, `ShowFooter=true`, and `ShowAutoFilterRow=true`.
+- set top-level GridView serializer defaults from the attached `DataWindowToXml.html`: `BestFitMaxRowCount=-1`, `PreviewLineCount=-1`, `HorzScrollStep=3`, `FocusRectStyle=CellFocus`, `ScrollStyle=LiveVertScroll, LiveHorzScroll`, `PreviewIndent=-1`, empty `GroupPanelText`, empty `PreviewFieldName`, empty `VertScrollTipFieldName`, `LevelIndent=-1`, `GroupFooterShowMode=VisibleIfExpanded`, empty `NewItemRowText`, `SynchronizeClones=true`, `BorderStyle=Default`, empty `ViewCaption`, `DetailHeight=350`, target view `Name`, `DetailTabHeaderLocation=Top`, and `ActiveFilterEnabled=true`;
+- set `OptionsView.ShowViewCaption=false`, `OptionsView.EnableAppearanceEvenRow=true`, `OptionsView.ShowGroupPanel=false`, `OptionsView.ColumnAutoWidth=false`, `OptionsView.ShowFooter=true`, and `OptionsView.ShowAutoFilterRow=true`;
+- when generating C# Designer code instead of XML, apply the same safe `OptionsView` defaults to the target GridView so the group panel is hidden and the filter/footer/even-row behavior matches the converter.
 
-Use `src.skills.pb_to_csharp_migration.extract_datawindow_columns` and `generate_devexpress_grid_xml` for deterministic generation.
+Use `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`, `resolve_csharp_grid_column_prefix`, `resolve_csharp_grid_control_names`, `build_csharp_grid_column_name`, and `generate_devexpress_grid_xml` for deterministic generation.
 
 ## What it does not do
 
@@ -27,7 +35,7 @@ The narrow converter does not map:
 
 - PB x/y/w/h coordinate geometry;
 - band/header/detail/footer layout;
-- text labels;
+- text labels that cannot be matched by position;
 - computed fields;
 - DDDW/dropdowns;
 - edit masks;
@@ -49,4 +57,4 @@ When those matter, keep them as migration tasks and ask for SRD/source/screensho
 
 ## Naming rule
 
-Grid columns should preserve uppercase field names and use the configured prefix for control `Name`. If the target screen already has a prefix convention, use that convention. Otherwise use `colList_`.
+Grid columns should preserve uppercase field names and use the configured prefix for control `Name`. If the target screen already has a prefix convention, use that convention. Otherwise use `colList_`. Common column conventions are `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, and `col<PURPOSE>_<COLUMN>`. Common grid conventions are `grdList/gvwList`, `grdDetail/gvwDetail`, `grd<TABLE>/gvw<TABLE>`, and `grd<PURPOSE>/gvw<PURPOSE>`.

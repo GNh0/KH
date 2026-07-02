@@ -516,6 +516,16 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         _skill_turn(
             "routing-evaluation",
             6,
+            "Migrate this PowerBuilder DataWindow screen into a target C# project without assuming local PblScripter or live DB access.",
+            "Use PowerBuilder PB-to-C# migration harness: classify the migration mode, keep PB/C#/SQL source text as passthrough, map DataWindow columns to target C# grid names and captions, resolve target-project/custom controls before DevExpress fallback, and record blocked evidence when local PB or DB artifacts are absent.",
+            "pb-to-csharp-migration-harness",
+            ["migration_mode", "datawindow_mapping", "control_fallback"],
+            "workflow_harness",
+            ["PowerBuilder", "DataWindow", "C#", "migration"],
+        ),
+        _skill_turn(
+            "routing-evaluation",
+            7,
             "Run many SIDE-style human scenarios and check routing, evidence, gates, and resume.",
             "Use scenario evaluation with SIDE transcripts, classification checks, evidence expectations, gate decisions, and resume handoff coverage.",
             "scenario-evaluation-harness",
@@ -525,7 +535,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            7,
+            8,
             "The work passed review; now capture what the system should learn for next time.",
             "Use compound engineering to record review learning, scoped memory candidates, system updates, and regression checks before finishing.",
             "compound-engineering-harness",
@@ -535,7 +545,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            8,
+            9,
             "We keep repeating this workflow; turn it into a reusable skill folder.",
             "Use workflow skill distillation to identify the repeatable workflow, extract contracts, and scaffold a reusable skill with examples and smoke checks.",
             "workflow-skill-distiller",
@@ -545,7 +555,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            8,
+            10,
             "Show the CEO, advisor, architect, implementer, QA, security, and release roles for this workflow.",
             "Use the orchestration role graph to inspect roles, handoffs, ownership, and required artifacts across CEO, advisors, architect, implementers, reviewers, QA, security, and release.",
             "orchestration-role-graph",

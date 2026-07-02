@@ -11,7 +11,9 @@ The correct behavior is not to fail because local tools are absent. The harness 
 1. Run KH intake first and select `pb-to-csharp-migration-harness` for the migration slice.
 2. Record `token_optimizer_status=passthrough` for PB/C#/SQL source text.
 3. Call `build_pb_to_csharp_migration_plan` with the objective and available evidence state.
-4. If SRD text is present, call `build_datawindow_grid_layout` or `extract_datawindow_columns` plus `generate_devexpress_grid_xml`.
+4. If SRD text is present, call `build_datawindow_grid_layout` or `extract_datawindow_column_specs` plus `generate_devexpress_grid_xml`.
+   The output should preserve visual column order, matched DataWindow captions, C# column names such as `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>`, and grid names such as `grdList/gvwList`, `grdDetail/gvwDetail`, `grd<TABLE>/gvw<TABLE>`, or `grd<PURPOSE>/gvw<PURPOSE>`.
+   When the table name is awkward or ambiguous, use a business purpose suffix such as `POR`, `BOM`, `ITEM`, or `REQ`.
 5. Read only the needed references:
    - `pbl-export-process.md` for PBL export;
    - `powerbuilder-source-analysis.md` for SRU/SRW/SRD tracing;
@@ -29,7 +31,7 @@ The correct behavior is not to fail because local tools are absent. The harness 
 - `HarnessResult.success=true` for a non-empty objective.
 - `mode=standalone`, `described-behavior`, `pasted-source`, `partial-reference`, or `full-reference`.
 - Confirmed vs inferred behavior is visible when no PB source exists.
-- `DataWindow` conversion evidence when SRD columns are available.
+- `DataWindow` conversion evidence when SRD columns are available, including captions, C# column names, selected grid names, and table-or-purpose fallback.
 - Target C# control fallback map is visible, including selected provider and fallback reason.
 - SQL text marked as passthrough, not compressed.
 - Missing local PBL/C#/DB artifacts listed as blocked or lower-confidence evidence.
@@ -49,5 +51,5 @@ The correct behavior is not to fail because local tools are absent. The harness 
 - The migration plan can run without local PblScripter, GWERP, target C# source, converter HTML, or live DB access.
 - Available artifacts are used when present, and absent artifacts are not fabricated.
 - C# and SP guidance follows target-project evidence first, then packaged C#/KH style references.
-- DataWindow mapping is deterministic for SRD columns.
+- DataWindow mapping is deterministic for SRD columns, matched captions, and target C# grid/column naming.
 - The final response distinguishes proven facts, packaged-style defaults, and unresolved evidence.

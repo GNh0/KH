@@ -8,8 +8,14 @@ from src.contracts import HarnessResult
 
 
 DATAWINDOW_COLUMN_PATTERN = re.compile(r"column\s*=\s*\(", re.IGNORECASE)
+DATAWINDOW_VISUAL_COLUMN_PATTERN = re.compile(r"^\s*column\s*\(", re.IGNORECASE)
+DATAWINDOW_TEXT_PATTERN = re.compile(r"^\s*text\s*\(", re.IGNORECASE)
 DATAWINDOW_NAME_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_])name\s*=\s*\"?(?P<name>[a-zA-Z0-9_#$]+)\"?",
+    re.IGNORECASE,
+)
+DATAWINDOW_ATTRIBUTE_PATTERN = re.compile(
+    r"(?P<key>[A-Za-z0-9_.#]+)\s*=\s*(?:\"(?P<quoted>[^\"]*)\"|(?P<bare>[^\s)]+))",
     re.IGNORECASE,
 )
 
@@ -53,6 +59,38 @@ CONTROL_FALLBACKS = {
         "devexpress": "DevExpress.XtraTab.XtraTabControl",
         "winforms": "System.Windows.Forms.TabControl",
     },
+}
+
+
+DATAWINDOW_TO_XML_GRIDVIEW_TOP_LEVEL_PROPERTIES = [
+    ("#LayoutVersion", ""),
+    ("BestFitMaxRowCount", "-1"),
+    ("PreviewLineCount", "-1"),
+    ("HorzScrollStep", "3"),
+    ("FocusRectStyle", "CellFocus"),
+    ("ScrollStyle", "LiveVertScroll, LiveHorzScroll"),
+    ("PreviewIndent", "-1"),
+    ("GroupPanelText", ""),
+    ("PreviewFieldName", ""),
+    ("VertScrollTipFieldName", ""),
+    ("LevelIndent", "-1"),
+    ("GroupFooterShowMode", "VisibleIfExpanded"),
+    ("NewItemRowText", ""),
+    ("SynchronizeClones", "true"),
+    ("BorderStyle", "Default"),
+    ("ViewCaption", ""),
+    ("DetailHeight", "350"),
+    ("DetailTabHeaderLocation", "Top"),
+    ("ActiveFilterEnabled", "true"),
+]
+
+DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS = {
+    "ShowViewCaption": "false",
+    "EnableAppearanceEvenRow": "true",
+    "ShowGroupPanel": "false",
+    "ColumnAutoWidth": "false",
+    "ShowFooter": "true",
+    "ShowAutoFilterRow": "true",
 }
 
 
@@ -104,6 +142,30 @@ class MigrationInputState:
             target_project_name=str(data.get("target_project_name", "")),
             notes=[str(item) for item in data.get("notes", [])],
         )
+
+
+@dataclass(frozen=True)
+class DataWindowColumnSpec:
+    field_name: str
+    caption: str
+    csharp_name: str
+    source: str = "table-column"
+    x: int | None = None
+    y: int | None = None
+    width: int | None = None
+    height: int | None = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "field_name": self.field_name,
+            "caption": self.caption,
+            "csharp_name": self.csharp_name,
+            "source": self.source,
+            "x": self.x,
+            "y": self.y,
+            "width": self.width,
+            "height": self.height,
+        }
 
 
 def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None = None) -> Dict[str, Any]:
@@ -295,96 +357,227 @@ def build_pb_to_csharp_migration_plan(
 
 def extract_datawindow_columns(source_text: str) -> List[str]:
     """Extract SRD column names using the same narrow column=(... name=...) rule as the local HTML helper."""
+    return [spec.field_name for spec in extract_datawindow_column_specs(source_text)]
+
+
+def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_") -> List[DataWindowColumnSpec]:
+    """Extract DataWindow grid columns, C# column names, and best-effort captions from SRD text."""
     source = str(source_text or "")
     starts = [match.start() for match in DATAWINDOW_COLUMN_PATTERN.finditer(source)]
-    columns: List[str] = []
+    table_columns: List[str] = []
     for index, start in enumerate(starts):
         end = starts[index + 1] if index + 1 < len(starts) else len(source)
         name_match = DATAWINDOW_NAME_PATTERN.search(source[start:end])
         if name_match:
-            columns.append(name_match.group("name").upper())
-    return columns
+            table_columns.append(_normalize_datawindow_field_name(name_match.group("name")))
+
+    visual_columns = _extract_visual_datawindow_columns(source)
+    text_controls = _extract_datawindow_text_controls(source)
+    specs: List[DataWindowColumnSpec] = []
+    seen: set[str] = set()
+
+    for column in visual_columns:
+        field_name = column["field_name"]
+        if not field_name or field_name in seen:
+            continue
+        caption = _match_datawindow_caption(column, text_controls) or field_name
+        specs.append(
+            DataWindowColumnSpec(
+                field_name=field_name,
+                caption=caption,
+                csharp_name=build_csharp_grid_column_name(field_name, prefix=prefix),
+                source="visual-column",
+                x=column.get("x"),
+                y=column.get("y"),
+                width=column.get("width"),
+                height=column.get("height"),
+            )
+        )
+        seen.add(field_name)
+
+    for field_name in table_columns:
+        if field_name in seen:
+            continue
+        specs.append(
+            DataWindowColumnSpec(
+                field_name=field_name,
+                caption=field_name,
+                csharp_name=build_csharp_grid_column_name(field_name, prefix=prefix),
+            )
+        )
+        seen.add(field_name)
+    return specs
+
+
+def build_csharp_grid_column_name(field_name: str, *, prefix: str = "colList_") -> str:
+    """Build a target C# GridColumn member/control name such as colList_ITEMCD."""
+    normalized = _normalize_datawindow_field_name(field_name)
+    safe = re.sub(r"[^A-Z0-9_]", "_", normalized)
+    if safe and safe[0].isdigit():
+        safe = f"_{safe}"
+    return f"{prefix}{safe}"
+
+
+def resolve_csharp_grid_column_prefix(
+    input_format: str = "list",
+    *,
+    table_name: str = "",
+    purpose_name: str = "",
+) -> str:
+    """Resolve common target C# GridColumn prefixes: colList_, colDetail_, col<TABLE>_, or col<PURPOSE>_."""
+    raw_format = str(input_format or "").strip()
+    if raw_format.startswith("col") and raw_format.endswith("_"):
+        return raw_format
+    lowered = raw_format.lower()
+    if lowered in {"", "list", "main", "master"}:
+        return "colList_"
+    if lowered in {"detail", "line", "child"}:
+        return "colDetail_"
+    if lowered in {"table", "dbtable", "source-table", "source_table"}:
+        table = re.sub(r"[^A-Za-z0-9_]", "", str(table_name or "")).upper()
+        purpose = re.sub(r"[^A-Za-z0-9_]", "", str(purpose_name or "")).upper()
+        return f"col{table}_" if table else (f"col{purpose}_" if purpose else "colList_")
+    if lowered in {"purpose", "domain", "role", "logical"}:
+        purpose = re.sub(r"[^A-Za-z0-9_]", "", str(purpose_name or table_name or "")).upper()
+        return f"col{purpose}_" if purpose else "colList_"
+    if raw_format:
+        safe = re.sub(r"[^A-Za-z0-9_]", "", raw_format)
+        return f"col{safe}_" if safe.lower().startswith("list") or safe.lower().startswith("detail") else f"col{safe}_"
+    return "colList_"
+
+
+def resolve_csharp_grid_control_names(
+    input_format: str = "list",
+    *,
+    table_name: str = "",
+    purpose_name: str = "",
+) -> Dict[str, str]:
+    """Resolve common GridControl/GridView names: grdList/gvwList, grdDetail/gvwDetail, grd<TABLE>/gvw<TABLE>, or grd<PURPOSE>/gvw<PURPOSE>."""
+    raw_format = str(input_format or "").strip()
+    lowered = raw_format.lower()
+    if lowered in {"", "list", "main", "master"}:
+        suffix = "List"
+    elif lowered in {"detail", "line", "child"}:
+        suffix = "Detail"
+    elif lowered in {"table", "dbtable", "source-table", "source_table"}:
+        suffix = (
+            re.sub(r"[^A-Za-z0-9_]", "", str(table_name or "")).upper()
+            or re.sub(r"[^A-Za-z0-9_]", "", str(purpose_name or "")).upper()
+            or "List"
+        )
+    elif lowered in {"purpose", "domain", "role", "logical"}:
+        suffix = re.sub(r"[^A-Za-z0-9_]", "", str(purpose_name or table_name or "")).upper() or "List"
+    else:
+        suffix = re.sub(r"[^A-Za-z0-9_]", "", raw_format) or "List"
+        suffix = suffix[0].upper() + suffix[1:] if suffix and not suffix.isupper() else suffix
+    return {
+        "grid_control_name": f"grd{suffix}",
+        "grid_view_name": f"gvw{suffix}",
+    }
 
 
 def generate_devexpress_grid_xml(
-    columns: Iterable[str],
+    columns: Iterable[Any],
     *,
     prefix: str = "colList_",
     grid_view_name: str = "gridView1",
 ) -> str:
-    """Generate the portable DevExpress GridView XML core produced by the DataWindowToXml helper."""
-    normalized = [str(column).strip().upper() for column in columns if str(column).strip()]
+    """Generate the DevExpress GridView XML produced by the attached DataWindowToXml helper."""
+    normalized = _normalize_grid_column_specs(columns, prefix=prefix)
     lines = [
         '<XtraSerializer version="1.0" application="View">',
-        '  <property name="#LayoutVersion" />',
-        "  <property name=\"BestFitMaxRowCount\">-1</property>",
-        "  <property name=\"PreviewLineCount\">-1</property>",
-        "  <property name=\"HorzScrollStep\">3</property>",
-        "  <property name=\"FocusRectStyle\">CellFocus</property>",
-        "  <property name=\"ScrollStyle\">LiveVertScroll, LiveHorzScroll</property>",
-        "  <property name=\"PreviewIndent\">-1</property>",
-        "  <property name=\"GroupPanelText\" />",
-        "  <property name=\"GroupFooterShowMode\">VisibleIfExpanded</property>",
-        "  <property name=\"SynchronizeClones\">true</property>",
-        "  <property name=\"BorderStyle\">Default</property>",
-        "  <property name=\"DetailHeight\">350</property>",
-        f"  <property name=\"Name\">{escape(grid_view_name)}</property>",
-        "  <property name=\"ActiveFilterEnabled\">true</property>",
-        f"  <property name=\"Columns\" iskey=\"true\" value=\"{len(normalized)}\">",
     ]
+    for name, value in DATAWINDOW_TO_XML_GRIDVIEW_TOP_LEVEL_PROPERTIES:
+        if name == "#LayoutVersion" or value == "":
+            lines.append(f'  <property name="{name}" />')
+        elif name == "Name":
+            lines.append(f'  <property name="Name">{escape(grid_view_name)}</property>')
+        else:
+            lines.append(f'  <property name="{name}">{escape(value)}</property>')
+    lines.insert(
+        next(index for index, line in enumerate(lines) if 'DetailTabHeaderLocation' in line),
+        f'  <property name="Name">{escape(grid_view_name)}</property>',
+    )
+    lines.append(f'  <property name="Columns" iskey="true" value="{len(normalized)}">')
     for index, column in enumerate(normalized, start=1):
-        escaped_column = escape(column)
-        escaped_name = escape(f"{prefix}{column}")
+        escaped_field_name = escape(column.field_name)
+        escaped_name = escape(column.csharp_name)
+        escaped_caption = escape(column.caption or column.field_name)
         lines.extend(
             [
-                f"    <property name=\"Item{index}\" isnull=\"true\" iskey=\"true\">",
-                "      <property name=\"AppearanceHeader\" isnull=\"true\" iskey=\"true\">",
-                "        <property name=\"Options\" isnull=\"true\" iskey=\"true\">",
-                "          <property name=\"UseTextOptions\">true</property>",
-                "          <property name=\"UseFont\">true</property>",
-                "        </property>",
-                "        <property name=\"TextOptions\" isnull=\"true\" iskey=\"true\">",
-                "          <property name=\"HAlignment\">Center</property>",
-                "          <property name=\"VAlignment\">Center</property>",
-                "        </property>",
-                "        <property name=\"Font\">Tahoma, 9pt</property>",
-                "      </property>",
-                "      <property name=\"AppearanceCell\" isnull=\"true\" iskey=\"true\">",
-                "        <property name=\"Options\" isnull=\"true\" iskey=\"true\">",
-                "          <property name=\"UseFont\">true</property>",
-                "        </property>",
-                "        <property name=\"Font\">Tahoma, 9pt</property>",
-                "      </property>",
-                "      <property name=\"Visible\">true</property>",
-                f"      <property name=\"VisibleIndex\">{index}</property>",
-                f"      <property name=\"FieldName\">{escaped_column}</property>",
-                f"      <property name=\"Name\">{escaped_name}</property>",
-                f"      <property name=\"Caption\">{escaped_column}</property>",
-                "      <property name=\"ColumnEditName\" />",
-                "    </property>",
+                f'    <property name="Item{index}" isnull="true" iskey="true">',
+                '      <property name="AppearanceHeader" isnull="true" iskey="true">',
+                '        <property name="Options" isnull="true" iskey="true">',
+                '          <property name="UseTextOptions">true</property>',
+                '          <property name="UseFont">true</property>',
+                '        </property>',
+                '        <property name="TextOptions" isnull="true" iskey="true">',
+                '          <property name="HAlignment">Center</property>',
+                '          <property name="VAlignment">Center</property>',
+                '        </property>',
+                '        <property name="Font">Tahoma, 9pt</property>',
+                '      </property>',
+                '      <property name="AppearanceCell" isnull="true" iskey="true">',
+                '        <property name="Options" isnull="true" iskey="true">',
+                '          <property name="UseFont">true</property>',
+                '        </property>',
+                '        <property name="Font">Tahoma, 9pt</property>',
+                '      </property>',
+                '      <property name="Visible">true</property>',
+                f'      <property name="VisibleIndex">{index}</property>',
+                f'      <property name="FieldName">{escaped_field_name}</property>',
+                f'      <property name="Name">{escaped_name}</property>',
+                f'      <property name="Caption">{escaped_caption}</property>',
+                '      <property name="ColumnEditName" />',
+                '    </property>',
             ]
         )
     lines.extend(
         [
-            "  </property>",
-            "  <property name=\"OptionsView\" isnull=\"true\" iskey=\"true\">",
-            "    <property name=\"ShowViewCaption\">false</property>",
-            "    <property name=\"EnableAppearanceEvenRow\">true</property>",
-            "    <property name=\"ShowGroupPanel\">false</property>",
-            "    <property name=\"ColumnAutoWidth\">false</property>",
-            "    <property name=\"ShowFooter\">true</property>",
-            "    <property name=\"ShowAutoFilterRow\">true</property>",
-            "  </property>",
-            "</XtraSerializer>",
+            '  </property>',
+            '  <property name="OptionsView" isnull="true" iskey="true">',
+        ]
+    )
+    for name, value in DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS.items():
+        lines.append(f'    <property name="{name}">{value}</property>')
+    lines.extend(
+        [
+            '  </property>',
+            '</XtraSerializer>',
         ]
     )
     return "\n".join(lines)
 
 
-def build_datawindow_grid_layout(source_text: str, *, prefix: str = "colList_") -> HarnessResult:
+def build_datawindow_gridview_designer_defaults(view_name: str = "gvwList") -> List[str]:
+    """Return safe C# GridView OptionsView assignments matching DataWindowToXml defaults."""
+    view = str(view_name or "gvwList").strip() or "gvwList"
+    return [
+        f"this.{view}.OptionsView.ShowViewCaption = false;",
+        f"this.{view}.OptionsView.EnableAppearanceEvenRow = true;",
+        f"this.{view}.OptionsView.ShowGroupPanel = false;",
+        f"this.{view}.OptionsView.ColumnAutoWidth = false;",
+        f"this.{view}.OptionsView.ShowFooter = true;",
+        f"this.{view}.OptionsView.ShowAutoFilterRow = true;",
+    ]
+
+def build_datawindow_grid_layout(
+    source_text: str,
+    *,
+    prefix: str = "",
+    input_format: str = "list",
+    table_name: str = "",
+    purpose_name: str = "",
+    grid_view_name: str = "",
+) -> HarnessResult:
     """Build grid XML from SRD text and return contract-shaped evidence."""
-    columns = extract_datawindow_columns(source_text)
-    if not columns:
+    resolved_prefix = prefix or resolve_csharp_grid_column_prefix(
+        input_format, table_name=table_name, purpose_name=purpose_name
+    )
+    grid_names = resolve_csharp_grid_control_names(input_format, table_name=table_name, purpose_name=purpose_name)
+    resolved_grid_view_name = grid_view_name or grid_names["grid_view_name"]
+    column_specs = extract_datawindow_column_specs(source_text, prefix=resolved_prefix)
+    if not column_specs:
         return HarnessResult(
             success=False,
             stdout=json.dumps({"columns": [], "status": "blocked"}, ensure_ascii=False),
@@ -396,13 +589,22 @@ def build_datawindow_grid_layout(source_text: str, *, prefix: str = "colList_") 
                 "blocked_reason": "missing_datawindow_columns",
             },
         )
-    xml = generate_devexpress_grid_xml(columns, prefix=prefix)
+    xml = generate_devexpress_grid_xml(column_specs, prefix=resolved_prefix, grid_view_name=resolved_grid_view_name)
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
         "status": "passed",
-        "columns": columns,
-        "column_count": len(columns),
-        "converter_contract": "DataWindowToXml-compatible narrow SRD column-name to DevExpress GridView XML mapping",
+        "columns": [spec.field_name for spec in column_specs],
+        "column_specs": [spec.to_dict() for spec in column_specs],
+        "column_count": len(column_specs),
+        "csharp_column_prefix": resolved_prefix,
+        "csharp_column_prefix_rule": "{input_format}_{column}: colList_, colDetail_, col<TABLE>_, or col<PURPOSE>_",
+        "csharp_grid_names": grid_names,
+        "csharp_grid_name_rule": "grdList/gvwList, grdDetail/gvwDetail, grd<TABLE>/gvw<TABLE>, or grd<PURPOSE>/gvw<PURPOSE>",
+        "converter_contract": (
+            "DataWindowToXml-compatible SRD visual-column/table-column to DevExpress GridView XML mapping "
+            "with target C# column names and matched DataWindow captions when available"
+        ),
+        "gridview_defaults": DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS,
     }
     return HarnessResult(
         success=True,
@@ -411,6 +613,171 @@ def build_datawindow_grid_layout(source_text: str, *, prefix: str = "colList_") 
         exit_code=0,
         metadata=metadata,
     )
+
+
+def _normalize_grid_column_specs(columns: Iterable[Any], *, prefix: str) -> List[DataWindowColumnSpec]:
+    specs: List[DataWindowColumnSpec] = []
+    for item in columns:
+        if isinstance(item, DataWindowColumnSpec):
+            if item.field_name:
+                specs.append(
+                    DataWindowColumnSpec(
+                        field_name=_normalize_datawindow_field_name(item.field_name),
+                        caption=str(item.caption or item.field_name),
+                        csharp_name=item.csharp_name
+                        or build_csharp_grid_column_name(item.field_name, prefix=prefix),
+                        source=item.source,
+                        x=item.x,
+                        y=item.y,
+                        width=item.width,
+                        height=item.height,
+                    )
+                )
+            continue
+        if isinstance(item, dict):
+            field_name = _normalize_datawindow_field_name(
+                item.get("field_name") or item.get("field") or item.get("name") or ""
+            )
+            if field_name:
+                specs.append(
+                    DataWindowColumnSpec(
+                        field_name=field_name,
+                        caption=str(item.get("caption") or field_name),
+                        csharp_name=str(item.get("csharp_name") or build_csharp_grid_column_name(field_name, prefix=prefix)),
+                        source=str(item.get("source") or "provided"),
+                    )
+                )
+            continue
+        field_name = _normalize_datawindow_field_name(str(item))
+        if field_name:
+            specs.append(
+                DataWindowColumnSpec(
+                    field_name=field_name,
+                    caption=field_name,
+                    csharp_name=build_csharp_grid_column_name(field_name, prefix=prefix),
+                    source="provided",
+                )
+            )
+    return specs
+
+
+def _normalize_datawindow_field_name(value: str) -> str:
+    return str(value or "").strip().strip('"').upper()
+
+
+def _extract_visual_datawindow_columns(source: str) -> List[Dict[str, Any]]:
+    columns: List[Dict[str, Any]] = []
+    for line_index, line in enumerate(source.splitlines()):
+        if not DATAWINDOW_VISUAL_COLUMN_PATTERN.search(line):
+            continue
+        attrs = _parse_datawindow_attributes(line)
+        field_name = _normalize_datawindow_field_name(attrs.get("name", ""))
+        if not field_name:
+            continue
+        columns.append(
+            {
+                "field_name": field_name,
+                "band": str(attrs.get("band", "")).lower(),
+                "x": _parse_optional_int(attrs.get("x")),
+                "y": _parse_optional_int(attrs.get("y")),
+                "width": _parse_optional_int(attrs.get("width")),
+                "height": _parse_optional_int(attrs.get("height")),
+                "line_index": line_index,
+            }
+        )
+    return sorted(columns, key=lambda item: (_sort_int(item.get("y")), _sort_int(item.get("x")), item["line_index"]))
+
+
+def _extract_datawindow_text_controls(source: str) -> List[Dict[str, Any]]:
+    controls: List[Dict[str, Any]] = []
+    for line_index, line in enumerate(source.splitlines()):
+        if not DATAWINDOW_TEXT_PATTERN.search(line):
+            continue
+        attrs = _parse_datawindow_attributes(line)
+        caption = str(attrs.get("text", "")).strip()
+        if not caption:
+            continue
+        controls.append(
+            {
+                "caption": caption,
+                "name": str(attrs.get("name", "")),
+                "band": str(attrs.get("band", "")).lower(),
+                "x": _parse_optional_int(attrs.get("x")),
+                "y": _parse_optional_int(attrs.get("y")),
+                "width": _parse_optional_int(attrs.get("width")),
+                "height": _parse_optional_int(attrs.get("height")),
+                "line_index": line_index,
+            }
+        )
+    return controls
+
+
+def _parse_datawindow_attributes(text: str) -> Dict[str, str]:
+    attrs: Dict[str, str] = {}
+    for match in DATAWINDOW_ATTRIBUTE_PATTERN.finditer(text):
+        attrs[match.group("key").lower()] = match.group("quoted") if match.group("quoted") is not None else match.group("bare")
+    return attrs
+
+
+def _match_datawindow_caption(column: Dict[str, Any], text_controls: List[Dict[str, Any]]) -> str:
+    column_x = column.get("x")
+    column_y = column.get("y")
+    column_width = column.get("width") or 0
+    column_height = column.get("height") or 0
+    if column_x is None or column_y is None:
+        return ""
+
+    candidates = []
+    column_right = column_x + column_width
+    column_center = column_x + (column_width / 2)
+    column_band = str(column.get("band") or "").lower()
+    column_token = re.sub(r"[^a-z0-9]", "", str(column.get("field_name") or "").lower())
+    for text in text_controls:
+        text_x = text.get("x")
+        text_y = text.get("y")
+        text_width = text.get("width") or 0
+        text_height = text.get("height") or 0
+        if text_x is None or text_y is None:
+            continue
+        text_right = text_x + text_width
+        text_center = text_x + (text_width / 2)
+        text_band = str(text.get("band") or "").lower()
+        same_row = _ranges_overlap(column_y, column_y + column_height, text_y, text_y + text_height)
+        same_band = bool(column_band and text_band and column_band == text_band)
+        header_band = text_band == "header"
+        name_hint = bool(column_token and column_token in re.sub(r"[^a-z0-9]", "", str(text.get("name") or "").lower()))
+        if same_row and text_right <= column_x and (same_band or not header_band):
+            score = (0 if same_band else 5) + (column_x - text_right) / 1000
+            if name_hint:
+                score -= 2
+            candidates.append((score, text["caption"]))
+
+        horizontal_overlap = _ranges_overlap(column_x, column_right, text_x, text_x + text_width)
+        vertical_gap = abs(column_y - (text_y + text_height)) if text_y <= column_y else 10_000
+        if horizontal_overlap and text_y <= column_y:
+            score = (8 if header_band else 12) + vertical_gap / 1000 + abs(column_center - text_center) / 10_000
+            if name_hint:
+                score -= 2
+            candidates.append((score, text["caption"]))
+
+    if candidates:
+        return sorted(candidates, key=lambda item: item[0])[0][1]
+    return ""
+
+
+def _ranges_overlap(start_a: int, end_a: int, start_b: int, end_b: int) -> bool:
+    return max(start_a, start_b) <= min(end_a, end_b)
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _sort_int(value: int | None) -> int:
+    return value if value is not None else 1_000_000
 
 
 def _coerce_state(state: MigrationInputState | Dict[str, Any] | None) -> MigrationInputState:

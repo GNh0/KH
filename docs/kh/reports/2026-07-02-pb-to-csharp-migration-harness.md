@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 Branch: `codex-runtime`
-Version: `2.9.105`
+Version: `2.9.107`
 
 ## Purpose
 
@@ -117,6 +117,53 @@ Observed quality gate:
 - `total_skills`: 42
 - `min_score`: 9.3
 - `low_quality`: []
+
+## 2.9.107 DataWindow Grid Naming And Caption Refinement
+
+2.9.107 tightens the DataWindow-to-C# grid contract after a live migration review found that the initial scaffold still left important Designer conventions implicit.
+
+Added runtime behavior:
+
+- visual `column(...)` entries are preferred over `table(column=...)` declaration order when layout coordinates exist;
+- PB `text(...)` captions are matched to DataWindow columns by position, including the common `header` caption + `detail` column layout;
+- generated column names follow the target C# conventions: `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>`;
+- generated grid/view names follow the paired conventions: `grdList/gvwList`, `grdDetail/gvwDetail`, `grd<TABLE>/gvw<TABLE>`, or `grd<PURPOSE>/gvw<PURPOSE>`;
+- business-purpose suffixes such as `POR`, `BOM`, `ITEM`, and `REQ` are supported when table naming is ambiguous;
+- raw DataWindowToXml XML generation still defaults to `gridView1`, while KH target-layout generation passes the resolved C# view name such as `gvwList`.
+
+Applied verification on `d_ba_item3_get.srd`:
+
+- field order: `AS_ITEMCD`, `AS_ITEMNM`;
+- matched captions: `코드`, `품명`;
+- C# grid names: `grdList`, `gvwList`;
+- C# column names: `colList_AS_ITEMCD`, `colList_AS_ITEMNM`;
+- DataWindowToXml OptionsView defaults preserved, including `ShowGroupPanel=false`.
+
+Generated sample project verification:
+
+- `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\KoneSystem.SYS\PBMigrationAgentTest_20260702_115825\PBMIG_D_BA_ITEM3_GET.Designer.cs`
+- `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\KoneSystem.SYS\PBMigrationAgentTest_20260702_115825\layout\PBMIG_D_BA_ITEM3_GET_datawindow.xml`
+- `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_codex\Programs\99.System\KoneSystem.SYS\PBMigrationAgentTest_20260702_115825\evidence\verification.json`
+
+The sample project builds successfully. Remaining compiler warnings are pre-existing warnings in `CR100130.cs`, `CR100140.cs`, `SystemUserSearch.cs`, and `SystemCustList.cs`, not PBMIG compile failures.
+
+Final 2.9.107 regression evidence:
+
+- `python -m unittest tests.test_pb_to_csharp_migration_harness tests.test_plugin_packaging tests.test_uaf_skill_audit tests.test_session_skill_audit tests.test_superpowers_replacement_layer`: 164 tests passed.
+- `python -m unittest tests.test_interactive_side_evaluator tests.test_pb_to_csharp_migration_harness tests.test_plugin_packaging tests.test_uaf_skill_audit tests.test_session_skill_audit tests.test_superpowers_replacement_layer`: 172 tests passed.
+- `python -m src.orchestration.interactive_side_evaluator --summary --skills`: 42/42 packaged skills covered, `unexpected_failures=[]`.
+- `python -m src.skills.uaf_skill_catalog --check`: 42 valid skills, 0 invalid.
+- `python skills\pb_to_csharp_migration_harness\scripts\smoke_check.py`: all implementation targets resolved.
+- `python skills\pb_to_csharp_migration_harness\scripts\demo.py --output-dir <tmp>`: success and blocked demo cases produced valid contract-shaped evidence.
+- `python -m unittest discover -s tests -p "test_*.py" -v`: 813 tests passed.
+- `MSBuild.exe ...\Konesystem.SYS.csproj /t:Build /p:Configuration=Debug /nologo /v:minimal`: build passed.
+
+The full regression initially exposed a SIDE catalog coverage gap: `pb-to-csharp-migration-harness` was present in the package catalog but absent from `default_skill_side_turns()`. The evaluator now includes a PowerBuilder/DataWindow/C# migration SIDE case so all packaged skills are covered by the default SIDE transcript check.
+
+Subagent review evidence:
+
+- veteran skill/harness code review: PASS, no blocking findings after header/detail caption matching and raw-vs-target GridView naming were fixed.
+- veteran QA/QC review: PASS, Designer/XML/evidence JSON match captions, `colList_*`, `grdList/gvwList`, DataWindowToXml defaults, and the integrated sample `sandbox` path.
 
 ## Token Optimizer Handling
 

@@ -8,12 +8,14 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 ## KH Entry Contract
 
 - Start through `always-on-front-door` for non-trivial migration work before source exploration, memory lookup, target-folder inspection, DB access, file writes, or subagent dispatch.
+- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing migration requests as KH-routed even when KH names are omitted.
 - Use this harness after intake when the request involves PowerBuilder source, PBL export, DataWindow layout, target-project C# style, SELECT/SAVE stored procedure drafting, or PB-to-C# migration review.
 - Treat local PB tools, GWERP source trees, target C# samples, converter HTML, and live DB access as optional evidence, not runtime dependencies.
 - Use bundled references as the portable baseline when local evidence is absent.
 - Use host-local `sql-formatting` as the SQL formatter when SQL is formatted or generated; this harness owns migration flow and verification expectations.
 - Treat PB source, SQL, C# code, Korean literals, comments, and business rules as source-of-truth passthrough content. Do not token-compress them.
 - Report this skill as applied only when the migration plan module, DataWindow layout module, reference-guided procedure, smoke script, demo, or explicit passthrough/blocked rationale produced evidence.
+- A SKILL.md read, marketplace listing, or `selected_not_executed_skills` entry is not execution evidence.
 
 ## Support files
 
@@ -45,8 +47,9 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - never write exports into the source PBL tree.
 4. If only bundled references are available, use the packaged PB export and analysis rules to produce a bounded plan, not a false claim of source parity.
 5. Map DataWindow fields/layout:
-   - use `src.skills.pb_to_csharp_migration.extract_datawindow_columns` and `generate_devexpress_grid_xml` for DataWindowToXml-compatible grid columns;
-   - treat that mapping as grid-column scaffolding, not full PB coordinate or control migration.
+   - use `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`, `resolve_csharp_grid_column_prefix`, `resolve_csharp_grid_control_names`, and `generate_devexpress_grid_xml` for DataWindowToXml-compatible grid columns, matched captions, C# grid names, C# column names, and converter GridView defaults;
+   - treat that mapping as grid-column scaffolding, not full PB coordinate or control migration;
+   - when emitting C# Designer code, mirror `build_datawindow_gridview_designer_defaults` so the generated GridView keeps the converter's group-panel, filter-row, footer, auto-width, even-row, and view-caption defaults.
 6. Resolve the target C# control stack before drafting code:
    - prefer target-project/custom controls such as a project-owned `u_GridControl` when they exist;
    - fall back to DevExpress controls only when the target project has no matching custom control;
@@ -69,6 +72,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - PB source trace summary: PBL/object, `.sru`, `.srw`, linked `.srd`, event/retrieve/update/save paths, and missing evidence.
 - Confirmed vs inferred behavior map when PB source is absent and the user provided only behavior descriptions.
 - DataWindow mapping summary: field names, generated grid column names, unsupported layout semantics, and converter fallback status.
+- DataWindow naming summary: selected `grd*/gvw*` names, selected `col*_<COLUMN>` prefix, matched captions, and fallback fields when captions were not provable.
 - Target C# control fallback map: target-project/custom controls, DevExpress fallback, WinForms fallback, selected provider, and reason.
 - Target C# plan: screen path, event flow, select/save method path, XML serialization rule, and binding/result-contract expectations.
 - SP plan: SELECT/SAVE procedure names, `@WORKTYPE` branches, XML/table variable plan, transaction/error/logging plan, and formatting verifier status.
@@ -94,8 +98,13 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - `src.skills.pb_to_csharp_migration.MigrationInputState`
 - `src.skills.pb_to_csharp_migration.classify_migration_mode`
 - `src.skills.pb_to_csharp_migration.build_pb_to_csharp_migration_plan`
+- `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`
 - `src.skills.pb_to_csharp_migration.extract_datawindow_columns`
+- `src.skills.pb_to_csharp_migration.resolve_csharp_grid_column_prefix`
+- `src.skills.pb_to_csharp_migration.resolve_csharp_grid_control_names`
+- `src.skills.pb_to_csharp_migration.build_csharp_grid_column_name`
 - `src.skills.pb_to_csharp_migration.generate_devexpress_grid_xml`
+- `src.skills.pb_to_csharp_migration.build_datawindow_gridview_designer_defaults`
 - `src.skills.pb_to_csharp_migration.build_datawindow_grid_layout`
 - `src.skills.pb_to_csharp_migration.resolve_csharp_control_stack`
 - `src.skills.sql_formatting_style.verify_sql_formatting_style`
