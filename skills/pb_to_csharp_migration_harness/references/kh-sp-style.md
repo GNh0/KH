@@ -12,6 +12,8 @@ When the requested style is the user's C_KONE110/KH/Geunho-authored output, read
 - Preserve procedure names, parameter names, comments, Korean text, literals, table names, and business keys.
 - Keep identifiers uppercase outside string literals/comments.
 - Use leading commas for procedure parameters and SELECT columns.
+- Put the standard metadata comment block immediately above `CREATE/ALTER PROCEDURE`.
+  Keep `AUTHOR`, `CREATE DATE`, and `DESCRIPTION` lines in the block; the author value may follow the target procedure evidence, but the block itself is mandatory.
 - Use `@WORKTYPE VARCHAR(20) = NULL` or a required `@WORKTYPE` parameter for C_KONE110/KH-style output. Do not generate `@WORKTYPE = ''`.
 - Do not default business filter parameters to `''`, `'%'`, `'T'`, or `'1'` unless verified target procedure evidence uses those exact defaults.
 - Do not add up-front `SET @WORKTYPE = ISNULL(...)` or `SET @PARAM = (CASE WHEN ISNULL(...) THEN ... END)` normalization blocks unless verified target procedure evidence already uses that pattern.
@@ -23,6 +25,18 @@ When the requested style is the user's C_KONE110/KH/Geunho-authored output, read
 - Generated migration SP text must pass `verify_pb_migration_sp_generation_contract` before completion claims, then pass the separate SQL formatting verifier when formatted output is shown.
 
 ## SELECT style
+
+Required header shape:
+
+```sql
+-- =============================================
+-- AUTHOR:      근호
+-- CREATE DATE: 2026-06-15
+-- DESCRIPTION: 총괄조회 조회
+-- =============================================
+ALTER PROCEDURE [DBO].[SP_SAMPLE_SELECT]
+      @WORKTYPE    VARCHAR(20) = NULL
+```
 
 - Use branch-based `IF @WORKTYPE = 'LIST'` / `ELSE IF` structure when the source procedure already uses it.
 - Use flow aliases such as `A`, `B`, `B1`, `C1`, `C2`; restart aliases per branch where appropriate.

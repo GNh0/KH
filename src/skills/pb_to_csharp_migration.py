@@ -39,6 +39,15 @@ CSHARP_THIS_REFERENCE_PATTERN = re.compile(r"this\.([A-Za-z_][A-Za-z0-9_]*)")
 
 NUMERIC_GRID_FIELD_TOKENS = ("AMT", "QTY", "UNP", "WGT", "PRICE", "RATE", "COST", "TOTAL")
 NUMERIC_GRID_FIELD_SUFFIXES = ("TOT", "BAL")
+SP_METADATA_HEADER_PATTERN = re.compile(
+    r"^\s*--\s*=+\s*\r?\n"
+    r"--\s*AUTHOR\s*:\s*.*\r?\n"
+    r"--\s*CREATE\s+DATE\s*:\s*\d{4}-\d{2}-\d{2}\s*\r?\n"
+    r"--\s*DESCRIPTION\s*:\s*\S.*\r?\n"
+    r"--\s*=+\s*\r?\n"
+    r"\s*(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE\b",
+    re.IGNORECASE,
+)
 
 
 def _is_numeric_grid_field_name(field_name: str) -> bool:
@@ -1385,6 +1394,17 @@ def verify_pb_migration_sp_generation_contract(
         )
     if not sql.strip():
         issues.append({"code": "missing_sql_text", "severity": "error", "message": "No SQL text was provided."})
+    elif not SP_METADATA_HEADER_PATTERN.search(sql):
+        issues.append(
+            {
+                "code": "missing_sp_metadata_header",
+                "severity": "error",
+                "message": (
+                    "C_KONE110/KH-style procedure output must include the standard metadata comment block "
+                    "immediately above CREATE/ALTER PROCEDURE: AUTHOR, CREATE DATE, and DESCRIPTION."
+                ),
+            }
+        )
     if sql.strip() and not accepted_source_evidence:
         issues.append(
             {

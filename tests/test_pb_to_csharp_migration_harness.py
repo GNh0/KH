@@ -30,6 +30,14 @@ from src.skills.pb_to_csharp_migration import (
 from src.skills.uaf_skill_catalog import read_packaged_skill
 
 
+SP_METADATA_HEADER = """-- =============================================
+-- AUTHOR:      근호
+-- CREATE DATE: 2026-06-15
+-- DESCRIPTION: 총괄조회 조회
+-- =============================================
+"""
+
+
 class PbToCSharpMigrationHarnessTests(unittest.TestCase):
     def test_packaged_skill_is_readable_and_standalone(self):
         content = read_packaged_skill("pb-to-csharp-migration-harness")
@@ -743,8 +751,26 @@ END
         self.assertFalse(bool_flag.success)
         self.assertIn("unstructured_source_evidence_flag", {issue["code"] for issue in bool_flag.metadata["issues"]})
 
-        allowed = verify_pb_migration_sp_generation_contract(
+        no_header = verify_pb_migration_sp_generation_contract(
             """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS CUSTNM
+    END
+END
+""",
+            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_1.srd", "summary": "retrieve SQL"},
+        )
+        self.assertFalse(no_header.success)
+        self.assertIn("missing_sp_metadata_header", {issue["code"] for issue in no_header.metadata["issues"]})
+
+        allowed = verify_pb_migration_sp_generation_contract(
+            SP_METADATA_HEADER
+            + """
 CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
@@ -800,7 +826,8 @@ END
         )
 
         verified_existing_sp = verify_pb_migration_sp_generation_contract(
-            """
+            SP_METADATA_HEADER
+            + """
 CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
@@ -869,7 +896,7 @@ END
         )
 
     def test_sp_generation_contract_blocks_generated_parameter_defaults_and_normalization(self):
-        generated = """
+        generated = SP_METADATA_HEADER + """
 CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
       @WORKTYPE VARCHAR(20) = ''
     , @ORGDIV   VARCHAR(2)  = ''
@@ -905,7 +932,7 @@ END
         self.assertIn("case_isnull_parameter_normalization_detected", issue_codes)
 
     def test_composed_sp_and_sql_formatting_verifier_requires_both_gates(self):
-        sql = """CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+        sql = SP_METADATA_HEADER + """CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
       @WORKTYPE    VARCHAR(20) = NULL
     , @ORGDIV      VARCHAR(2)  = NULL
 AS

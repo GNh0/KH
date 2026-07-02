@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 Branch: `codex-runtime`
-Version: `2.9.111`
+Version: `2.9.112`
 
 ## Purpose
 
@@ -276,3 +276,27 @@ Verification evidence:
 - `python -B skills\pb_to_csharp_migration_harness\scripts\smoke_check.py`: passed.
 - `python -B -m unittest tests.test_pb_to_csharp_migration_harness`: 39 tests passed.
 - `python -B -m src.skills.uaf_skill_catalog --check`: 42 valid skills, 0 invalid.
+
+## 2.9.112 Follow-up: Stored Procedure Metadata Header Contract
+
+User feedback clarified that C_KONE110/KH-style stored procedures must keep the standard metadata comment block immediately above `CREATE/ALTER PROCEDURE`, even when the author value itself follows target evidence.
+
+Required shape:
+
+```sql
+-- =============================================
+-- AUTHOR:      <author>
+-- CREATE DATE: <yyyy-mm-dd>
+-- DESCRIPTION: <description>
+-- =============================================
+ALTER PROCEDURE [DBO].[SP_SAMPLE_SELECT]
+```
+
+Runtime gate added:
+
+- `verify_pb_migration_sp_generation_contract` now blocks generated procedure output without that metadata block via `missing_sp_metadata_header`.
+- `kh-sp-style.md`, `author-tagged-style-baseline.md`, `usage.md`, and `SKILL.md` now state that the header belongs directly above `CREATE/ALTER PROCEDURE`.
+
+DB applied fix:
+
+- Live MCP DB object `C_KONE110.dbo.SP_SA900100_SELECT` was updated so the module definition begins with the standard metadata header above the stored procedure declaration.

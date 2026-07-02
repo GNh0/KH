@@ -67,6 +67,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - for C_KONE110/KH-style migration, compare the target against every program listed in `references/author-tagged-style-baseline.md`; do not generate internal DTO/context classes, generic value-reading helpers, or runtime grid helpers when that baseline shows direct local-variable/procedure-call flow.
 8. Draft SELECT/SAVE SP work from the fixed packaged KH SP style:
    - preserve procedure names, parameters, Korean literals, comments, and result contracts;
+   - include the standard procedure metadata header immediately above `CREATE/ALTER PROCEDURE` with `AUTHOR`, `CREATE DATE`, and `DESCRIPTION`;
    - avoid new CTEs, `#` temporary tables, `MERGE`, and `NOT EXISTS` by default;
    - do not generate empty-string/wildcard/status parameter defaults such as `@WORKTYPE = ''`, `@CUSTCD = '%'`, `@GUBUN = 'T'`, or `@GB = '1'` unless existing verified target SP evidence uses that exact contract;
    - do not add an up-front parameter normalization block such as `SET @WORKTYPE = ISNULL(...)` or `SET @PARAM = (CASE WHEN ISNULL(...) THEN ... END)` unless verified existing SP evidence for that same procedure branch already has it;

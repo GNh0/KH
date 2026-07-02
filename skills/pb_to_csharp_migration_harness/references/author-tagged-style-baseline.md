@@ -177,6 +177,7 @@ Representative parameter snippets from `sp_SA100100_SELECT`, `sp_MA100100_SELECT
 ## SP Generation Rules From This Baseline
 
 - Preserve existing procedure names, parameter names, branch names, Korean literals, comments, table names, aliases, calculations, and row contracts.
+- Keep the standard metadata comment block immediately above `CREATE/ALTER PROCEDURE`: `AUTHOR`, `CREATE DATE`, `DESCRIPTION`, and the separator lines. The author value can follow current target evidence, but the block must not be omitted.
 - Use `@WORKTYPE VARCHAR(20) = NULL` or a required `@WORKTYPE` parameter when matching this baseline. Do not default `@WORKTYPE` to `''`.
 - Do not add broad parameter defaults such as `@CUSTCD = '%'`, `@ITEMCD = '%'`, `@GUBUN = 'T'`, or `@GB = '1'` unless verified existing target procedure evidence uses those exact defaults.
 - Do not add up-front parameter normalization blocks such as `SET @WORKTYPE = ISNULL(@WORKTYPE, '')` or `SET @PARAM = (CASE WHEN ISNULL(@PARAM, '') = '' THEN ... END)` unless verified target procedure evidence already uses the same pattern for that branch.
