@@ -6,6 +6,7 @@ Use this checklist before handoff or completion.
 
 - Objective and target operator.
 - Migration mode and evidence strength.
+- PBL export provider and PB version strategy: selected provider, provider order, PB version, ORCA/runtime confidence, runtime lookup requirement, blocked export conditions, and source-parity confidence.
 - PB source trace summary.
 - DataWindow field/layout mapping.
 - Target Designer extraction summary when `.Designer.cs` or pasted Designer exists: control types, parent/child containment, `BindingField`, project flags, `Properties.*`, bounds, captions, `TabIndex`, grid/view links, collection calls, and explicit absent GridColumn evidence.
@@ -13,6 +14,7 @@ Use this checklist before handoff or completion.
 - Control naming evidence for generated controls: `txt`, `btn`, `cbo`, `Spin`, `ymd`, `Chk`, `memo`, `lbl`, `pn`, `grp`, `grd/gvw`, `treeList`, and `tab` prefixes, with target-project existing names taking precedence.
 - Grid column generation evidence: explicit `GridColumn` declarations, `Columns.AddRange`, `FieldName`, `Caption`, `Name`, `VisibleIndex`, and `RepositoryItemSpinEdit` `ColumnEdit` evidence for numeric columns, or a blocked reason. Do not accept default `AddGridColumn`/`Columns.AddField` helper output unless local target evidence proves that style.
 - Target C# implementation plan.
+- Author-tagged per-program style profile when C_KONE110/KH style applies: matched program key, source/designer hashes, method path, SP calls, parameters, grid/view names, BindingField samples, repository controls, and fallback program key if the active target is excluded.
 - Target C# control fallback map.
 - SELECT/SAVE SP plan.
 - SP generation evidence: source SQL/PB/DB evidence or approved inferred-draft marker, `@WORKTYPE` branch contract, CTE/#temp/MERGE/NOT EXISTS scan, and SQL formatting verifier status.
@@ -24,6 +26,8 @@ Use this checklist before handoff or completion.
 ## Completion criteria
 
 - No claim of full PB parity without exported or pasted source evidence.
+- No claim of full PB parity from ORCA/PblScripter availability alone when PB version/runtime has not been confirmed.
+- Missing PblScripter does not block the workflow when direct ORCA, pre-exported source, pasted source, described behavior, or bundled baseline can still be used with lower confidence.
 - No claim of DB semantic equivalence without DB-backed check.
 - No claim of layout fidelity without visual/layout source.
 - No claim of correct Designer style without property extraction or explicit fallback assumptions.
@@ -35,6 +39,7 @@ Use this checklist before handoff or completion.
 - Token optimizer status is recorded.
 - SQL formatter and verifier roles are separated.
 - Project-specific controls are not hard-coded from a sample project. The selected control provider is target-project/custom, DevExpress, or WinForms with a reason.
+- Existing DevExpress/KoneLib references are not upgraded, re-targeted, or replaced with latest-version examples.
 - Remaining assumptions are visible.
 
 ## User-facing output

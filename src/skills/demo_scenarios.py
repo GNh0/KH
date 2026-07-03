@@ -1246,7 +1246,7 @@ def _scenario_result(
         "success_case": {
             "status": "passed",
             "contract_type": success_contract,
-            "payload": success_payload,
+            "payload": _compact_demo_sample(success_payload),
             "evidence": list(success_evidence),
             "expected_behavior": success_behavior,
             "side_effects": list(success_side_effects),
@@ -1254,7 +1254,7 @@ def _scenario_result(
         "blocked_or_failure_case": {
             "status": "failed" if blocked_payload.get("status") == "failed" else "blocked",
             "contract_type": blocked_contract,
-            "payload": blocked_payload,
+            "payload": _compact_demo_sample(blocked_payload),
             "blocked_reason": blocked_reason,
             "missing_inputs": list(missing_inputs),
             "expected_behavior": "Stop or downgrade the claim until the missing input or failed evidence is resolved.",
@@ -1296,7 +1296,7 @@ def _dataclass_contract(instance: Any) -> Dict[str, Any]:
         "fields_checked": list(payload.keys()),
         "roundtrip_checked": bool(roundtrip),
         "source": "dataclass" if is_dataclass(instance) else "policy-result",
-        "sample": payload,
+        "sample": _compact_demo_sample(payload),
     }
 
 
@@ -1307,7 +1307,65 @@ def _mapping_contract(name: str, module: str, payload: Dict[str, Any], source: s
         "fields_checked": list(payload.keys()),
         "roundtrip_checked": bool(payload),
         "source": source,
-        "sample": payload,
+        "sample": _compact_demo_sample(payload),
+    }
+
+
+def _compact_demo_sample(value: Any, *, max_string: int = 500, max_items: int = 12, depth: int = 0) -> Any:
+    """Keep demo stdout contract-shaped without dumping generated artifacts inline."""
+    if depth >= 5:
+        return _compact_leaf(value, max_string=max_string)
+    if isinstance(value, dict):
+        compacted: Dict[str, Any] = {}
+        for index, (key, item) in enumerate(value.items()):
+            if index >= max_items:
+                compacted["_omitted_keys"] = len(value) - max_items
+                break
+            key_text = str(key)
+            if key_text in {"stdout", "stderr"} and isinstance(item, str):
+                compacted[key_text] = _summarize_text_blob(item, max_string=max_string)
+            elif key_text in {"gate_results", "task_results"} and isinstance(item, list):
+                compacted[key_text] = [
+                    _compact_demo_sample(entry, max_string=max_string, max_items=max_items, depth=depth + 1)
+                    for entry in item[: min(len(item), 3)]
+                ]
+                if len(item) > 3:
+                    compacted[f"{key_text}_omitted"] = len(item) - 3
+            else:
+                compacted[key_text] = _compact_demo_sample(
+                    item,
+                    max_string=max_string,
+                    max_items=max_items,
+                    depth=depth + 1,
+                )
+        return compacted
+    if isinstance(value, list):
+        compacted_list = [
+            _compact_demo_sample(item, max_string=max_string, max_items=max_items, depth=depth + 1)
+            for item in value[:max_items]
+        ]
+        if len(value) > max_items:
+            compacted_list.append({"_omitted_items": len(value) - max_items})
+        return compacted_list
+    return _compact_leaf(value, max_string=max_string)
+
+
+def _compact_leaf(value: Any, *, max_string: int) -> Any:
+    if isinstance(value, str):
+        return _summarize_text_blob(value, max_string=max_string)
+    return value
+
+
+def _summarize_text_blob(text: str, *, max_string: int) -> str | Dict[str, Any]:
+    if len(text) <= max_string and text.count("\n") <= 12:
+        return text
+    checksum = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return {
+        "summary": text[:max_string],
+        "chars": len(text),
+        "lines": text.count("\n") + (1 if text else 0),
+        "sha256": checksum,
+        "truncated": True,
     }
 
 

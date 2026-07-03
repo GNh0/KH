@@ -2,9 +2,18 @@
 
 This reference captures the portable PowerBuilder export procedure used by the migration harness. It is written as a fallback guide; local tools may not exist.
 
-## Preferred route
+## Provider order
 
-Use a PBL export tool such as `Export-PBL.ps1` or an equivalent ORCA/PblScripter wrapper when it is available. The useful operations are:
+Use a PBL export provider in this order:
+
+1. PblScripter or an equivalent `Export-PBL.ps1` wrapper.
+2. Direct ORCA, when the wrapper is missing but the matching PB runtime/ORCA libraries are installed.
+3. Already exported `.sru`, `.srw`, `.srd`, or `.srm` source files.
+4. Pasted PB source text.
+5. User-described PB behavior.
+6. Bundled reference baseline only.
+
+The useful operations are the same for PblScripter and direct ORCA:
 
 - list objects in a PBL before export;
 - export the named screen/user object first;
@@ -12,11 +21,21 @@ Use a PBL export tool such as `Export-PBL.ps1` or an equivalent ORCA/PblScripter
 - export into a separate output directory, never into the source PBL tree;
 - preserve original encoding when reading exported text.
 
-Known local example commands from prior sessions used `-Version 70`, `-Action list`, `-Action export`, `-ObjectName <object>`, and a target output folder beside or outside the source tree. These are examples only; the harness must not require that path to exist.
+Known local example commands from prior sessions used `-Version 70`, `-Action list`, `-Action export`, `-ObjectName <object>`, and a target output folder beside or outside the source tree. These are examples only; the harness must not require that path to exist. When using direct ORCA instead of the wrapper, preserve the same sequence: open session, open library, list entries, export selected object, close library/session.
+
+## Version matching
+
+Match the ORCA/runtime major version to the PBL lineage before opening or exporting:
+
+- PB 7.0 PBL: use PB 7.0 ORCA/runtime.
+- PB 12.5 PBL: use PB 12.5 ORCA/runtime.
+- Unknown version: probe/list only, record the suspected version, and do not claim full source parity until the version/runtime is confirmed.
+
+Do not treat a failed export as proof that the PBL is corrupt until the PB version, runtime DLL path, and ORCA/license state are checked.
 
 ## Runtime prerequisites
 
-PowerBuilder 7 libraries may require PB shared runtime paths before ORCA can open older PBLs. If export fails with messages like `Session open failed` or `Bad library`, check runtime DLL path and PB version before concluding that the PBL is corrupt.
+PowerBuilder libraries may require PB shared runtime paths before ORCA can open older PBLs. If export fails with messages like `Session open failed` or `Bad library`, check runtime DLL path and PB version before concluding that the PBL is corrupt.
 
 If licensing/SySAM blocks ORCA export, stop claiming full source evidence. Use pasted source, previously exported files, screenshots, report designer, or binary strings only as lower-confidence evidence.
 

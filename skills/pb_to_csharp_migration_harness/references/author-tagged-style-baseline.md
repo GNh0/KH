@@ -209,6 +209,17 @@ Designer files analyzed: 37.
 | `RepositoryItemSpinEdit` | 27 | 791 |
 | `TabIndex = ...` | 37 | 1911 |
 
+
+## Per-Program Profile File
+
+`author-tagged-program-style-profiles.json` is part of this baseline and must be read for C_KONE110/KH-style C# generation or review. The table and counts in this Markdown file explain the basis, but the JSON file is the portable generation profile.
+
+The profile stores 37 same-program C#/Designer pairs. For each program key it records source and Designer paths, SHA-256 hashes, line counts, base class, command/select/focused-row method names, `dbClient` SP calls, `DbParameter` names, XML save sources, grid/control/view names, sample `GridColumn` names, `BindingField` names, repository spin controls, and style flags for `DataUtil.DataTableToXml`, `ExecSPTrn`, `GetFocusedDataRow`, `devFnc.InitControl`, `Columns.AddRange`, header/cell appearance, and `TabIndex`.
+
+Use the profile as the generation guide. Use aggregate counts only as release/evidence checks. For excluded current repair targets such as `SA900100`, choose an explicit fallback program key from the profile and record why that fallback is valid.
+
+Do not add or upgrade DevExpress packages while using this profile. When DevExpress exists in the target project, the target project's installed references and existing API surface are the dependency contract.
+
 ## C# Generation Rules From The Analysis
 
 - Use same-program matched source first. For `sp_SA800100_SELECT`, use `SA800100.cs` and `SA800100.Designer.cs`, not an arbitrary C# file.

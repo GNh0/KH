@@ -14,6 +14,7 @@ REQUIRED_SUPPORT_FILES = [
     "references/ty-csharp-style.md",
     "references/kh-sp-style.md",
     "references/author-tagged-style-baseline.md",
+    "references/author-tagged-program-style-profiles.json",
     "references/sql-formatting-bridge.md",
     "references/migration-output-checklist.md",
     "examples/minimal-workflow.md",

@@ -25,7 +25,8 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Read `references/datawindow-layout-mapping.md` when converting DataWindow columns or layout into DevExpress/WinForms structure.
 - Read `references/ty-csharp-style.md` before drafting or reviewing target C# screen logic; TY/C_KONE110 is a sample style, not a universal baseline.
 - Read `references/kh-sp-style.md` before drafting or reviewing SELECT/SAVE stored procedures.
-- Read `references/author-tagged-style-baseline.md` when the target is the user's C_KONE110/KH style or when asked to follow KH/근호/장근호-authored C#/SP style; this file contains the analyzed `author-tagged SP -> program key -> matching C# screen source` baseline and must not be skipped for generated C# or SP work in that style.
+- Read `references/author-tagged-style-baseline.md` when the target is the user's C_KONE110/KH style or when asked to follow KH/Geunho/Jang-Geunho-authored C#/SP style; this file contains the analyzed `author-tagged SP -> program key -> matching C# screen source` baseline and must not be skipped for generated C# or SP work in that style.
+- Read `references/author-tagged-program-style-profiles.json` together with the baseline for C_KONE110/KH-style generation or review. It is the portable per-program profile built from 37 matched primary C# and Designer pairs and includes source hashes, base class, method names, SP calls, DbParameter names, grid/view names, BindingField samples, repository controls, and style flags.
 - Read `references/sql-formatting-bridge.md` when SQL formatting, scalar function conversion, or verifier composition is involved.
 - Read `references/migration-output-checklist.md` before claiming completion or handoff.
 - Use `examples/minimal-workflow.md` as the compact success/blocked scenario.
@@ -42,6 +43,8 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - `full-reference`: exported PB source, target C# samples, SP style reference, and optional DB verification are available.
 2. Build a `pb-to-csharp` migration plan with `src.skills.pb_to_csharp_migration.build_pb_to_csharp_migration_plan`.
 3. If PB assets exist, export or inspect safely:
+   - select the export provider in this order: PblScripter or equivalent wrapper, direct ORCA, pre-exported `.sru/.srw/.srd/.srm`, pasted source, described behavior, bundled baseline;
+   - when using ORCA directly, match the PB runtime/ORCA version to the PBL lineage, for example PB 7.0 PBL with PB 7.0 ORCA/runtime and PB 12.5 PBL with PB 12.5 ORCA/runtime;
    - list PBL objects first;
    - export named objects into an external output directory;
    - trace `.sru` entrypoints, `.srw` window logic, and linked `.srd` DataWindows;
@@ -59,12 +62,13 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 6. Resolve the target C# control stack before drafting code:
    - prefer target-project/custom controls such as a project-owned `u_GridControl` when they exist;
    - fall back to DevExpress controls only when the target project has no matching custom control;
+   - when DevExpress is present, use the target project's existing references and API surface; do not add NuGet packages, upgrade assemblies, or generate code from the latest DevExpress version by default;
    - fall back to WinForms basic controls when neither target-project controls nor DevExpress are available;
    - record the selected provider and fallback reason in the migration evidence.
 7. Draft target C# flow from the style reference:
    - preserve existing method paths such as `CallViewQuery`, `CallProc`, `SelectType`, `DataUtil.DataTableToXml`, `SetModified`, `grd*`, `gvw*`, `tree*`, and current event paths when the target project has them;
    - do not invent parallel helper methods when the current class already has the correct stored-procedure call path.
-   - for C_KONE110/KH-style migration, compare the target against the analyzed author-tagged baseline in `references/author-tagged-style-baseline.md`; use same-program matched C# evidence first, exclude current generated repair targets from seed evidence, and block zero-hit generated patterns such as internal DTO/context classes, generic value helpers, invented `CallDetailQuery` detail helpers, `DBNull.Value ?` row wrappers, `_selectType == SelectType.DETAIL ?` routing, `?? "%"` wildcard coalescing, `btn*.EditValue == null ? string.Empty`, and `Convert.ToString(rad*.EditValue)` radio locals.
+   - for C_KONE110/KH-style migration, compare the target against `references/author-tagged-style-baseline.md` and `references/author-tagged-program-style-profiles.json`; use same-program matched C# and Designer evidence first, require a fallback program key for excluded/current repair targets, and block zero-hit generated patterns such as internal DTO/context classes, generic value helpers, invented `CallDetailQuery` detail helpers, `DBNull.Value ?` row wrappers, `_selectType == SelectType.DETAIL ?` routing, `?? "%"` wildcard coalescing, `btn*.EditValue == null ? string.Empty`, and `Convert.ToString(rad*.EditValue)` radio locals.
 8. Draft SELECT/SAVE SP work from the fixed packaged KH SP style:
    - preserve procedure names, parameters, Korean literals, comments, and result contracts;
    - include the standard procedure metadata header immediately above `CREATE/ALTER PROCEDURE` with `AUTHOR`, `CREATE DATE`, and `DESCRIPTION`;
@@ -80,6 +84,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 ## Required outputs
 
 - `HarnessResult` from `build_pb_to_csharp_migration_plan` or `build_datawindow_grid_layout`, or a documented procedural handoff when source access is absent.
+- PBL export provider and PB version strategy: PblScripter wrapper, direct ORCA, pre-exported source, pasted source, described behavior, or bundled fallback; include version/runtime confidence for PB 7.0, PB 12.5, or unknown lineage.
 - Migration mode and evidence strength: `standalone`, `described-behavior`, `pasted-source`, `partial-reference`, or `full-reference`.
 - PB source trace summary: PBL/object, `.sru`, `.srw`, linked `.srd`, event/retrieve/update/save paths, and missing evidence.
 - Confirmed vs inferred behavior map when PB source is absent and the user provided only behavior descriptions.
@@ -92,6 +97,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Target C# plan: screen path, event flow, select/save method path, XML serialization rule, and binding/result-contract expectations.
 - SP plan: SELECT/SAVE procedure names, `@WORKTYPE` branches, XML/table variable plan, transaction/error/logging plan, and formatting verifier status.
 - Author-tagged style baseline summary for C_KONE110/KH-style work: number of SPs/programs checked, mapped C# files, unmatched/exception programs, common style patterns, and generated-pattern violations blocked.
+- Author-tagged per-program profile summary for C_KONE110/KH-style work: matched program key, source and Designer hash, base class, command/select/focused-row method names, SP calls, DbParameter names, grid/view names, BindingField samples, repository controls, dependency/version notes, and fallback program key when the active target is excluded.
 - SP generation evidence: source evidence or explicit inferred-draft marker, `@WORKTYPE` contract, forbidden CTE/#temp/MERGE/NOT EXISTS scan, and SQL formatter/verifier status.
 - SQL formatter composition: host-local `sql-formatting` applied or explicitly unavailable, plus KH verifier result when applicable.
 - Token optimizer status: `passthrough` for source-of-truth SQL/C#/PB text, or `used` only for safe noisy command output/transcripts.
@@ -100,10 +106,13 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 ## Common mistakes
 
 - Do not require local PblScripter, GWERP source trees, target C# source trees, `DataWindowToXml.html`, or live DB access for the skill to start.
+- Do not treat missing PblScripter as missing export capability when direct ORCA is available. Direct ORCA is a first-class export provider, but it must use a matching PB runtime/ORCA version.
+- Do not open or export an unknown-version PBL as if source evidence is proven. Probe/list first, record the suspected PB version, and block full source parity until the version/runtime is confirmed.
 - Do not claim full PB behavior parity from binary strings or file names alone.
 - Do not treat DataWindowToXml-style output as a full visual layout migration; it is a column-to-grid XML helper.
 - Do not search the DB for KH-authored procedures on every run; use the fixed packaged SP style unless the user explicitly asks to refresh it.
 - Do not treat TY/C_KONE110, KoneLib, or any other project name as the universal C# baseline. They are sample references only when the target project provides them.
+- Do not add, upgrade, or re-target DevExpress packages or assemblies during migration generation. Existing target project references and controls are the dependency contract.
 - Do not replace a target project's custom controls with DevExpress just because DevExpress is known; target-project controls win first.
 - Do not add CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, helper `@FIND...` variables, or scalar-function join rewrites by default.
 - Do not invent completed SELECT/SAVE SP bodies from only a C# call signature. If only parameters and expected grid columns are known, output a blocked SP contract or clearly labeled inferred draft.
@@ -112,6 +121,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not generate grid columns through ad hoc runtime helpers when the target style expects Designer-level `GridColumn` members and `col*_<FIELD>` names.
 - Do not generate internal request/context DTOs such as `RetrieveContext`, `GetRetrieveContext`, `GetEditValue`, or `GetColumnText` for ordinary screen retrieval code unless the target source already proves that pattern.
 - Do not use arbitrary same-project C# files as the style basis when an author-tagged SP can be mapped to a same-program C# source. The bundled baseline is built from 62 author-tagged SPs, 41 program keys, 37 primary C# files, and 37 Designer files.
+- Do not ignore `author-tagged-program-style-profiles.json`; aggregate counts alone are not enough for C_KONE110/KH-style generation.
 - Do not let current generated repair targets teach the style back to the harness. Treat them as targets to verify, not baseline evidence.
 - Do not generate generic search/default/layout wrappers such as `SetDefaultSearchValues`, `ApplyListColumnLayout`, `GetBasisYear`, `GetCustomerLike`, or `ValidateSearch` for ordinary screens unless the active target source already proves that pattern.
 - Do not invent `CallDetailQuery` for list-focused detail loading. Use the active target event shape directly or a proven local helper name such as `fnFocusedRowChanged` / `CallViewQuery` when the matched source family uses it.
@@ -130,6 +140,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 ## UAF implementation targets
 
 - `src.skills.pb_to_csharp_migration.MigrationInputState`
+- `src.skills.pb_to_csharp_migration.build_pbl_export_strategy`
 - `src.skills.pb_to_csharp_migration.classify_migration_mode`
 - `src.skills.pb_to_csharp_migration.build_pb_to_csharp_migration_plan`
 - `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`

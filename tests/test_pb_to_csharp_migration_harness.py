@@ -8,6 +8,7 @@ from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.request_classifier import classify_request
 from src.skills.pb_to_csharp_migration import (
     MigrationInputState,
+    build_pbl_export_strategy,
     build_csharp_grid_column_designer_plan,
     build_detail_form_layout_plan,
     build_csharp_control_name,
@@ -84,6 +85,48 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertGreaterEqual(mode["confidence"], 0.9)
         self.assertIn("exported .sru/.srw/.srd source", mode["strong_evidence"])
 
+    def test_orca_is_direct_pbl_export_provider_without_pblscripter(self):
+        strategy = build_pbl_export_strategy({"has_orca": True, "pb_version": "12.5"})
+        mode = classify_migration_mode({"has_orca": True, "pb_version": "12.5"})
+
+        self.assertEqual(strategy["provider"], "orca")
+        self.assertEqual(strategy["status"], "available")
+        self.assertEqual(strategy["pb_version"], "12.5")
+        self.assertIn("PB 12.5 ORCA/runtime", strategy["version_policy"])
+        self.assertEqual(mode["mode"], "partial-reference")
+        self.assertIn("ORCA available but export not attached yet", mode["weak_evidence"])
+
+    def test_orca_without_pb_version_is_probe_only(self):
+        strategy = build_pbl_export_strategy({"has_orca": True})
+        mode = classify_migration_mode({"has_orca": True})
+
+        self.assertEqual(strategy["provider"], "orca")
+        self.assertEqual(strategy["status"], "available_with_version_probe")
+        self.assertEqual(strategy["confidence"], "bounded")
+        self.assertTrue(strategy["runtime_lookup_required"])
+        self.assertIn("full source parity", strategy["reason"])
+        self.assertTrue(mode["runtime_lookup_required"])
+        self.assertTrue(mode["pbl_export_strategy"]["runtime_lookup_required"])
+        self.assertEqual(mode["pbl_export_strategy"]["status"], "available_with_version_probe")
+
+    def test_pblscripter_without_pb_version_is_probe_only(self):
+        strategy = build_pbl_export_strategy({"pbl_export_tool": "Export-PBL.ps1"})
+        mode = classify_migration_mode({"pbl_export_tool": "Export-PBL.ps1"})
+
+        self.assertEqual(strategy["provider"], "pblscripter")
+        self.assertEqual(strategy["status"], "available_with_version_probe")
+        self.assertTrue(strategy["runtime_lookup_required"])
+        self.assertTrue(mode["runtime_lookup_required"])
+
+    def test_export_provider_priority_falls_back_to_pasted_source_and_bundled_reference(self):
+        pasted = build_pbl_export_strategy({"has_pasted_source": True})
+        bundled = build_pbl_export_strategy({})
+
+        self.assertEqual(pasted["provider"], "pasted_source")
+        self.assertEqual(pasted["confidence"], "bounded")
+        self.assertEqual(bundled["provider"], "bundled_reference")
+        self.assertEqual(bundled["confidence"], "low")
+
     def test_plan_returns_harness_result_with_passthrough_token_policy(self):
         result = build_pb_to_csharp_migration_plan(
             "Migrate PB DataWindow search/save screen into target C# and SP style.",
@@ -103,9 +146,25 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertEqual(payload["token_optimizer_status"], "passthrough")
         self.assertIn("DataWindow", " ".join(payload["steps"]))
         self.assertIn("confirmed vs inferred behavior map", payload["deliverables"])
+        self.assertIn("PBL export provider and PB version strategy", payload["deliverables"])
         self.assertIn("target-project control fallback map", payload["deliverables"])
+        self.assertEqual(payload["pbl_export_strategy"]["provider"], "pasted_source")
         self.assertEqual(payload["control_stack"]["selection"]["grid"]["provider"], "target-project")
         self.assertEqual(payload["control_stack"]["selection"]["grid"]["type"], "Acme.Controls.u_GridControl")
+
+    def test_plan_records_orca_version_strategy(self):
+        result = build_pb_to_csharp_migration_plan(
+            "Export PB 7.0 PBL with ORCA and migrate the screen.",
+            {"has_orca": True, "pb_version": "7.0", "has_sp_style_reference": True},
+        )
+        payload = json.loads(result.stdout)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(payload["pbl_export_strategy"]["provider"], "orca")
+        self.assertEqual(payload["pbl_export_strategy"]["pb_version"], "7.0")
+        self.assertIn("PB 7.0 ORCA/runtime", payload["pbl_export_strategy"]["version_policy"])
+        self.assertIn("PblScripter", payload["pbl_export_strategy"]["provider_priority"][0])
+        self.assertIn("wrapper", payload["pbl_export_strategy"]["provider_priority"][0])
 
     def test_plan_records_described_behavior_as_inferred_rebuild(self):
         result = build_pb_to_csharp_migration_plan(
@@ -761,6 +820,24 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertEqual(0, baseline["zero_hit_generated_patterns"]["generated_date_boundary_DateTime_block"])
         self.assertEqual(0, baseline["zero_hit_generated_patterns"]["direct_grid_datasource_null_reset"])
         self.assertEqual(0, baseline["zero_hit_generated_patterns"]["CallDetailQuery_generated_method"])
+        recipe = baseline["positive_generation_recipe"]
+        self.assertIn("same-program primary C# file", recipe["source_priority"])
+        self.assertEqual("FrmDevBase", recipe["screen_base"]["normal_screen"])
+        self.assertIn("prefer the matched source's CallSelectProcedure or CallViewQuery shape", recipe["select_flow"])
+        self.assertIn("use RepositoryItemSpinEdit through ColumnEdit for numeric grid columns instead of DisplayFormat-only output", recipe["designer_flow"])
+
+    def test_author_tagged_program_style_profiles_are_packaged(self):
+        profile_path = Path("skills/pb_to_csharp_migration_harness/references/author-tagged-program-style-profiles.json")
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(37, payload["program_count"])
+        self.assertIn("SA800100", payload["profiles"])
+        sa800100 = payload["profiles"]["SA800100"]
+        self.assertEqual("FrmDevBase", sa800100["base_class"])
+        self.assertIn("CallSelectProcedure", sa800100["select_methods"])
+        self.assertIn("sp_SA800100_SELECT", {item["procedure"] for item in sa800100["sp_calls"]})
+        self.assertIn("@WORKTYPE", sa800100["db_parameters"])
+        self.assertTrue(sa800100["style_flags"]["has_columns_addrange"])
 
     def test_author_tagged_style_evidence_resolves_sp_to_program_key(self):
         self.assertEqual("SA800100", normalize_author_tagged_program_key("dbo.sp_SA800100_SELECT"))
@@ -776,6 +853,84 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertEqual("excluded", excluded.metadata["status"])
         self.assertIn("repair target", excluded.metadata["exclusion_reason"])
 
+    def test_author_tagged_style_evidence_discovers_same_program_files_under_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            screen_dir = root / "20.영업(SA)" / "Konesystem.SA02"
+            screen_dir.mkdir(parents=True)
+            (screen_dir / "SA800100.cs").write_text(
+                """
+                public partial class SA800100 : FrmDevBase
+                {
+                    protected override void SearchCommand(object sender, EventArgs e) {}
+                    private DataSet CallSelectProcedure()
+                    {
+                        return dbClient.GetDataSetFromSP("sp_SA800100_SELECT"
+                            , new DbParameter("@WORKTYPE", "LIST"));
+                    }
+                }
+                """,
+                encoding="utf-8",
+            )
+            (screen_dir / "SA800100.Designer.cs").write_text(
+                """
+                private DevExpress.XtraGrid.Columns.GridColumn colList_ITEMCD;
+                this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
+                    this.colList_ITEMCD});
+                this.colList_ITEMCD.BindingField = "ITEMCD";
+                this.colList_ITEMCD.AppearanceHeader.Options.UseFont = true;
+                this.colList_ITEMCD.AppearanceHeader.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.Center;
+                this.colList_ITEMCD.AppearanceCell.Options.UseFont = true;
+                """,
+                encoding="utf-8",
+            )
+
+            resolved = resolve_author_tagged_style_evidence("sp_SA800100_SELECT", csharp_root=str(root))
+
+        self.assertTrue(resolved.success, resolved.to_dict())
+        self.assertTrue(all(resolved.metadata["path_exists"]))
+        self.assertEqual("FrmDevBase", resolved.metadata["style_profile"]["base_class"])
+        self.assertIn("SearchCommand", resolved.metadata["style_profile"]["command_handlers"])
+        self.assertIn("@WORKTYPE", resolved.metadata["style_profile"]["db_parameters"])
+
+    def test_author_tagged_style_evidence_blocks_stale_root_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            resolved = resolve_author_tagged_style_evidence("sp_SA800100_SELECT", csharp_root=temp_dir)
+
+        self.assertFalse(resolved.success)
+        self.assertEqual("stale_or_missing", resolved.metadata["status"])
+        self.assertGreaterEqual(len(resolved.metadata["missing_style_evidence_paths"]), 1)
+
+    def test_author_tagged_style_evidence_uses_bundled_program_profile_without_live_root(self):
+        resolved = resolve_author_tagged_style_evidence("sp_SA800100_SELECT")
+
+        self.assertTrue(resolved.success, resolved.to_dict())
+        self.assertEqual("SA800100", resolved.metadata["program_key"])
+        profile = resolved.metadata["style_profile"]
+        self.assertEqual("FrmDevBase", profile["base_class"])
+        self.assertIn("SA800100_SearchCommand", profile["method_names"])
+        self.assertIn("@WORKTYPE", profile["db_parameters"])
+        self.assertIn(
+            {"client_method": "GetDataSetFromSP", "procedure": "sp_SA800100_SELECT"},
+            profile["sp_calls"],
+        )
+
+    def test_build_plan_dict_state_preserves_author_tagged_fields(self):
+        result = build_pb_to_csharp_migration_plan(
+            "Migrate SA800100 using C_KONE110 style.",
+            {
+                "target_style": "C_KONE110",
+                "procedure_name": "sp_SA800100_SELECT",
+                "has_sp_style_reference": True,
+            },
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        resolution = result.metadata["author_tagged_style_resolution"]
+        self.assertEqual("SA800100", resolution["program_key"])
+        self.assertEqual("matched", resolution["status"])
+        self.assertEqual("FrmDevBase", resolution["style_profile"]["base_class"])
+
     def test_generated_csharp_style_requires_author_tagged_evidence_when_enabled(self):
         missing = verify_migration_generated_csharp_style(
             'return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");',
@@ -786,12 +941,118 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("author_tagged_style_evidence_required", {issue["code"] for issue in missing.metadata["issues"]})
 
         present = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT");',
+            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
             program_key="SA800100",
-            primary_style_evidence_paths=[r"Programs\20.영업(SA)\Konesystem.SA02\SA800100.cs"],
+            primary_style_evidence_paths=[
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+            ],
             require_author_tagged_evidence=True,
         )
         self.assertTrue(present.success, present.to_dict())
+        self.assertEqual("SA800100", present.metadata["expected_style_program_key"])
+        self.assertIn("author_tagged_generation_recipe", present.metadata)
+
+    def test_generated_csharp_style_blocks_wrong_author_tagged_evidence_path(self):
+        result = verify_migration_generated_csharp_style(
+            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+            program_key="SA800100",
+            primary_style_evidence_paths=[
+                r"Programs\60.??(DE)\Konesystem.DE01\DE000600.cs",
+                r"Programs\60.??(DE)\Konesystem.DE01\DE000600.Designer.cs",
+            ],
+            require_author_tagged_evidence=True,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("author_tagged_style_evidence_path_mismatch", {issue["code"] for issue in result.metadata["issues"]})
+
+    def test_generated_csharp_style_rejects_same_filename_without_module_tail(self):
+        result = verify_migration_generated_csharp_style(
+            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+            program_key="SA800100",
+            primary_style_evidence_paths=[
+                r"C:\tmp\SA800100.cs",
+                r"C:\tmp\SA800100.Designer.cs",
+            ],
+            require_author_tagged_evidence=True,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("author_tagged_style_evidence_path_mismatch", {issue["code"] for issue in result.metadata["issues"]})
+
+    def test_generated_csharp_style_requires_fallback_for_excluded_author_target(self):
+        missing_fallback = verify_migration_generated_csharp_style(
+            'return dbClient.GetDataSetFromSP("SP_SA900100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+            program_key="SA900100",
+            primary_style_evidence_paths=[
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+            ],
+            require_author_tagged_evidence=True,
+        )
+        self.assertFalse(missing_fallback.success)
+        self.assertIn("author_tagged_fallback_program_key_required", {issue["code"] for issue in missing_fallback.metadata["issues"]})
+
+        with_fallback = verify_migration_generated_csharp_style(
+            'return dbClient.GetDataSetFromSP("SP_SA900100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+            program_key="SA900100",
+            fallback_program_key="SA800100",
+            primary_style_evidence_paths=[
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+            ],
+            require_author_tagged_evidence=True,
+        )
+        self.assertTrue(with_fallback.success, with_fallback.to_dict())
+
+    def test_generated_csharp_style_blocks_bare_sp_call_under_author_tagged_mode(self):
+        result = verify_migration_generated_csharp_style(
+            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT");',
+            program_key="SA800100",
+            primary_style_evidence_paths=[
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+            ],
+            require_author_tagged_evidence=True,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("author_tagged_sp_call_missing_explicit_dbparameters", {issue["code"] for issue in result.metadata["issues"]})
+
+    def test_generated_csharp_style_blocks_bare_exec_sp_calls_under_author_tagged_mode(self):
+        result = verify_migration_generated_csharp_style(
+            'dbClient.ExecSP("sp_SA800100_SAVE");',
+            program_key="SA800100",
+            primary_style_evidence_paths=[
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
+                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+            ],
+            require_author_tagged_evidence=True,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("author_tagged_sp_call_missing_explicit_dbparameters", {issue["code"] for issue in result.metadata["issues"]})
+
+    def test_generated_csharp_style_blocks_unverified_devexpress_package_or_version(self):
+        generated = '''
+        <PackageReference Include="DevExpress.Win.Design" Version="26.1.0" />
+        dotnet add package DevExpress.Win
+        using DevExpress.XtraGrid;
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_devexpress_package_reference_detected", issue_codes)
+
+        version_ref = verify_migration_generated_csharp_style(
+            'using DevExpress.XtraGrid, Version=26.1.0; // unverified target reference'
+        )
+        version_issue_codes = {issue["code"] for issue in version_ref.metadata["issues"]}
+        self.assertFalse(version_ref.success)
+        self.assertIn("generated_unverified_devexpress_version_reference_detected", version_issue_codes)
 
     def test_generated_csharp_style_blocks_patterns_absent_from_matched_sources(self):
         generated = '''
@@ -1096,6 +1357,7 @@ END
                 "kind": "existing_sp",
                 "object": "sp_DE000600_SELECT",
                 "verified": True,
+                "definition_hash": "18B35CA51C9BBBCC3F6C7EE0481799D5B8922CD58FEC20DCB3C07E673D0120A2",
                 "program_description": "설계조회",
             },
         )
@@ -1121,6 +1383,7 @@ END
                 "kind": "existing_sp",
                 "object": "sp_DE000600_SELECT",
                 "verified": True,
+                "definition_hash": "18B35CA51C9BBBCC3F6C7EE0481799D5B8922CD58FEC20DCB3C07E673D0120A2",
                 "program_description": "설계조회",
             },
         )
@@ -1183,7 +1446,7 @@ END
             {issue["code"] for issue in fake_existing_sp_summary.metadata["issues"]},
         )
 
-        verified_existing_sp = verify_pb_migration_sp_generation_contract(
+        object_only_verified_sp = verify_pb_migration_sp_generation_contract(
             sp_metadata_header()
             + """
 CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
@@ -1197,6 +1460,58 @@ BEGIN
 END
 """,
             source_evidence={"kind": "existing_sp", "object": "sp_SA900100_SELECT", "verified": True},
+        )
+        self.assertFalse(object_only_verified_sp.success)
+        self.assertIn(
+            "missing_pb_or_db_source_evidence_for_sp_generation",
+            {issue["code"] for issue in object_only_verified_sp.metadata["issues"]},
+        )
+
+        excerpt_only_existing_sp = verify_pb_migration_sp_generation_contract(
+            sp_metadata_header()
+            + """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS CUSTNM
+    END
+END
+""",
+            source_evidence={
+                "kind": "existing_sp",
+                "object": "sp_SA900100_SELECT",
+                "verified": True,
+                "definition_excerpt": "SELECT 1",
+            },
+        )
+        self.assertFalse(excerpt_only_existing_sp.success)
+        self.assertIn(
+            "missing_pb_or_db_source_evidence_for_sp_generation",
+            {issue["code"] for issue in excerpt_only_existing_sp.metadata["issues"]},
+        )
+
+        verified_existing_sp = verify_pb_migration_sp_generation_contract(
+            sp_metadata_header()
+            + """
+CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS CUSTNM
+    END
+END
+""",
+            source_evidence={
+                "kind": "existing_sp",
+                "object": "sp_SA900100_SELECT",
+                "verified": True,
+                "definition_hash": "954465F0F0D81341EF6527FC33A7B4CE916E4A86DAE4810E86A1301242609376",
+            },
         )
         self.assertTrue(verified_existing_sp.success, verified_existing_sp.metadata["issues"])
 

@@ -2,6 +2,7 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Iterable, List
 from xml.sax.saxutils import escape
 
@@ -122,6 +123,63 @@ AUTHOR_TAGGED_CSHARP_STYLE_BASELINE: Dict[str, Any] = {
         "direct_grid_datasource_null_reset": 0,
         "CallDetailQuery_generated_method": 0,
     },
+    "positive_generation_recipe": {
+        "source_priority": [
+            "author-tagged SP definition",
+            "normalized program key from procedure name",
+            "same-program primary C# file",
+            "same-program Designer file",
+            "same-module neighbor only when the active program is excluded or unmapped",
+        ],
+        "screen_base": {
+            "normal_screen": "FrmDevBase",
+            "popup_screen": "FrmPopBase",
+            "evidence": "34 normal screens and 3 popup screens in the matched baseline",
+        },
+        "command_flow": [
+            "keep SearchCommand, SaveCommand, and ClearCommand override/event flow when the matched source has it",
+            "keep existing local event names and do not invent generic wrapper methods",
+            "use focused-row events directly for detail refresh instead of generated CallDetailQuery helpers",
+        ],
+        "select_flow": [
+            "prefer the matched source's CallSelectProcedure or CallViewQuery shape",
+            "keep dbClient.GetDataSetFromSP calls local to the procedure-call method",
+            "pass explicit new DbParameter entries near the stored-procedure call",
+            "pass raw control or focused-row values; let the stored procedure own wildcard and derived-date handling",
+        ],
+        "save_flow": [
+            "serialize changed grid/table data with DataUtil.DataTableToXml when the matched source family does it",
+            "use dbClient.ExecSPTrn for transactional saves and dbClient.ExecSP only when the matched source proves that local path",
+            "do not create DTO/request/context objects for ordinary save or retrieve parameters",
+        ],
+        "focused_row_detail_flow": [
+            "use gvw*.GetFocusedDataRow() and direct dr[\"FIELD\"].ToString() style when matched evidence supports focused detail refresh",
+            "use devFnc.InitControl(grd*) or matched local reset helpers for KoneLib grid resets",
+            "avoid DBNull ternary wrappers, null-coalesced wildcard defaults, and generated value helper methods",
+        ],
+        "designer_flow": [
+            "use target custom controls before generic DevExpress controls",
+            "when DevExpress is present, use the target project's referenced DevExpress version and existing API surface; do not generate code from the latest DevExpress API by default",
+            "declare explicit GridColumn fields named colList_FIELD, colDetail_FIELD, colTABLE_FIELD, or colPURPOSE_FIELD",
+            "register columns with Columns.AddRange",
+            "preserve BindingField, TabIndex, containment, size, location, and Properties assignments when Designer evidence exists",
+            "set header UseFont plus horizontal and vertical center alignment where target columns use them",
+            "set cell UseFont where target columns use it",
+            "use RepositoryItemSpinEdit through ColumnEdit for numeric grid columns instead of DisplayFormat-only output",
+        ],
+        "sp_flow": [
+            "keep the metadata header immediately above CREATE/ALTER PROCEDURE",
+            "preserve procedure names, parameter names, Korean literals, comments, aliases, predicates, calculations, and row contracts",
+            "do not add defensive parameter defaults or normalization blocks unless same-procedure evidence proves them",
+            "do not invent SELECT TOP 0 schema-only branches, CTEs, #temp tables, MERGE, or NOT EXISTS by default",
+        ],
+        "evidence_discipline": [
+            "do not claim PB behavior parity from generated C# alone",
+            "do not upgrade, re-target, or assume newer third-party libraries such as DevExpress; use target project references or mark the dependency contract blocked",
+            "mark source-unverified behavior as inferred draft unless PB, pasted source, matched C#, DB schema, or explicit user approval proves it",
+            "reading a reference file is not runtime use; require verifier, module, artifact, or blocked/passthrough evidence",
+        ],
+    },
 }
 
 AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS: Dict[str, List[str]] = {
@@ -185,6 +243,146 @@ def normalize_author_tagged_program_key(procedure_name: str) -> str:
     return upper
 
 
+def _normalize_author_tagged_evidence_path(path: str) -> str:
+    return re.sub(r"[\\/]+", "\\\\", str(path or "").strip()).upper()
+
+
+def _author_tagged_path_parts(path: str) -> List[str]:
+    return [part.upper() for part in re.split(r"[\\/]+", str(path or "").strip()) if part]
+
+
+def _author_tagged_path_file_name(path: str) -> str:
+    parts = _author_tagged_path_parts(path)
+    return parts[-1] if parts else ""
+
+
+def _author_tagged_path_tail(path: str, length: int = 2) -> str:
+    parts = _author_tagged_path_parts(path)
+    if not parts:
+        return ""
+    return "\\\\".join(parts[-length:])
+
+
+def _author_tagged_path_uses_excluded_segment(path: str) -> bool:
+    excluded = {"BACKUP", "BIN", "OBJ", ".GIT", ".VS"}
+    return bool(excluded.intersection(_author_tagged_path_parts(path)))
+
+
+def _expected_author_tagged_style_paths(program_key: str) -> List[str]:
+    return list(AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS.get(str(program_key or "").upper(), []))
+
+
+def _author_tagged_evidence_paths_match(program_key: str, evidence_paths: Iterable[str]) -> bool:
+    expected_paths = _expected_author_tagged_style_paths(program_key)
+    if not expected_paths:
+        return False
+    actual_paths = [str(path or "") for path in evidence_paths if str(path or "").strip()]
+    if any(_author_tagged_path_uses_excluded_segment(path) for path in actual_paths):
+        return False
+    expected_tails = {_author_tagged_path_tail(path) for path in expected_paths}
+    actual_tails = {_author_tagged_path_tail(path) for path in actual_paths}
+    return bool(expected_tails) and expected_tails.issubset(actual_tails)
+
+
+def _load_author_tagged_program_style_profile(program_key: str) -> Dict[str, Any]:
+    """Load the bundled per-program profile without requiring the user's source tree."""
+    key = str(program_key or "").upper()
+    if not key:
+        return {}
+    profile_path = (
+        Path(__file__).resolve().parents[2]
+        / "skills"
+        / "pb_to_csharp_migration_harness"
+        / "references"
+        / "author-tagged-program-style-profiles.json"
+    )
+    try:
+        with profile_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    profile = payload.get("profiles", {}).get(key, {})
+    return dict(profile) if isinstance(profile, dict) else {}
+
+
+def _discover_author_tagged_csharp_paths(program_key: str, csharp_root: str) -> List[str]:
+    """Find same-program C# and Designer files under a root without trusting localized folder text."""
+    root = str(csharp_root or "").strip()
+    key = str(program_key or "").strip().upper()
+    if not root or not key or not os.path.isdir(root):
+        return []
+    skip_dirs = {"BACKUP", "BIN", "OBJ", ".GIT", ".VS"}
+    primary_path = ""
+    designer_path = ""
+    primary_name = f"{key}.CS"
+    designer_name = f"{key}.DESIGNER.CS"
+    for current_root, dir_names, file_names in os.walk(root):
+        dir_names[:] = [name for name in dir_names if name.upper() not in skip_dirs]
+        for file_name in file_names:
+            upper_name = file_name.upper()
+            full_path = os.path.normpath(os.path.join(current_root, file_name))
+            if upper_name == primary_name and not primary_path:
+                primary_path = full_path
+            elif upper_name == designer_name and not designer_path:
+                designer_path = full_path
+        if primary_path and designer_path:
+            break
+    return [path for path in (primary_path, designer_path) if path]
+
+
+def _build_author_tagged_screen_style_profile(program_key: str, source_text: str, designer_text: str = "") -> Dict[str, Any]:
+    """Build a portable same-program style profile from full C#/Designer text."""
+    source = str(source_text or "")
+    designer = str(designer_text or "")
+    combined = source + "\n" + designer
+    method_names = sorted(
+        set(
+            re.findall(
+                r"\b(?:private|protected|public|internal)\s+(?:override\s+)?(?:void|DataSet|bool|string|int)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+                source,
+            )
+        )
+    )
+    sp_calls = re.findall(r'dbClient\.(GetDataSetFromSP|ExecSPTrn|ExecSP)\s*\(\s*"([^"]+)"', source)
+    db_parameters = re.findall(r'new\s+DbParameter\s*\(\s*"(@[A-Za-z0-9_]+)"', source)
+    grid_controls = sorted(set(re.findall(r"\b(grd[A-Za-z0-9_]*)\b", combined)))
+    grid_views = sorted(set(re.findall(r"\b(gvw[A-Za-z0-9_]*)\b", combined)))
+    grid_columns = sorted(set(re.findall(r"\b(col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+)\b", designer)))
+    binding_fields = sorted(set(re.findall(r'\.BindingField\s*=\s*"([^"]+)"', designer)))
+    repository_spin = sorted(set(re.findall(r"\b(rpsSpin[A-Za-z0-9_]*)\b", designer)))
+    return {
+        "program_key": str(program_key or "").upper(),
+        "base_class": (
+            "FrmPopBase"
+            if re.search(r":\s*FrmPopBase\b", source)
+            else "FrmDevBase"
+            if re.search(r":\s*FrmDevBase\b", source)
+            else ""
+        ),
+        "method_names": method_names,
+        "command_handlers": [name for name in method_names if name in {"SearchCommand", "SaveCommand", "ClearCommand"}],
+        "select_methods": [name for name in method_names if name in {"CallSelectProcedure", "CallViewQuery", "CallProc"}],
+        "focused_row_methods": [name for name in method_names if "FocusedRow" in name or name == "fnFocusedRowChanged"],
+        "sp_calls": [{"method": method, "procedure": procedure} for method, procedure in sp_calls],
+        "db_parameters": db_parameters,
+        "grid_controls": grid_controls,
+        "grid_views": grid_views,
+        "grid_columns": grid_columns[:200],
+        "grid_column_count": len(grid_columns),
+        "binding_fields": binding_fields[:200],
+        "binding_field_count": len(binding_fields),
+        "repository_spin_controls": repository_spin,
+        "has_data_table_to_xml": "DataUtil.DataTableToXml" in source,
+        "has_exec_sp_trn": "dbClient.ExecSPTrn" in source,
+        "has_get_focused_data_row": "GetFocusedDataRow" in source,
+        "has_devfnc_initcontrol": "devFnc.InitControl" in source,
+        "has_columns_addrange": ".Columns.AddRange" in designer,
+        "has_header_usefont": "AppearanceHeader.Options.UseFont = true" in designer,
+        "has_header_center_alignment": "AppearanceHeader.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.Center" in designer,
+        "has_cell_usefont": "AppearanceCell.Options.UseFont = true" in designer,
+    }
+
+
 def resolve_author_tagged_style_evidence(
     procedure_name: str,
     *,
@@ -194,7 +392,8 @@ def resolve_author_tagged_style_evidence(
     program_key = normalize_author_tagged_program_key(procedure_name)
     exclusions = {key.upper(): value for key, value in AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["baseline_exclusions"].items()}
     relative_paths = AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS.get(program_key, [])
-    evidence_paths = [
+    discovered_paths = _discover_author_tagged_csharp_paths(program_key, csharp_root)
+    evidence_paths = discovered_paths or [
         os.path.normpath(os.path.join(csharp_root, rel_path)) if csharp_root else rel_path
         for rel_path in relative_paths
     ]
@@ -204,6 +403,22 @@ def resolve_author_tagged_style_evidence(
         status = "excluded"
     elif not relative_paths:
         status = "unmapped"
+    elif csharp_root and len(discovered_paths) < 2:
+        status = "stale_or_missing"
+    elif csharp_root and exists and not all(exists):
+        status = "stale_or_missing"
+    style_profile: Dict[str, Any] = {}
+    if status == "matched" and csharp_root and len(evidence_paths) >= 2 and all(os.path.exists(path) for path in evidence_paths[:2]):
+        try:
+            with open(evidence_paths[0], "r", encoding="utf-8-sig", errors="ignore") as source_file:
+                source_text = source_file.read()
+            with open(evidence_paths[1], "r", encoding="utf-8-sig", errors="ignore") as designer_file:
+                designer_text = designer_file.read()
+            style_profile = _build_author_tagged_screen_style_profile(program_key, source_text, designer_text)
+        except OSError:
+            style_profile = {}
+    if status == "matched" and not style_profile:
+        style_profile = _load_author_tagged_program_style_profile(program_key)
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
         "procedure_name": procedure_name,
@@ -211,19 +426,24 @@ def resolve_author_tagged_style_evidence(
         "status": status,
         "primary_style_evidence_paths": evidence_paths,
         "path_exists": exists,
+        "missing_style_evidence_paths": [
+            path for path, path_exists in zip(evidence_paths, exists) if not path_exists
+        ],
         "exclusion_reason": exclusions.get(program_key, ""),
+        "style_profile": style_profile,
         "baseline_counts": {
             "sp_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["sp_count"],
             "normalized_program_key_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["normalized_program_key_count"],
             "primary_csharp_baseline_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["primary_csharp_baseline_files_analyzed"],
             "designer_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["designer_files_analyzed"],
         },
+        "author_tagged_generation_recipe": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["positive_generation_recipe"],
     }
-    success = status == "matched" and bool(relative_paths)
+    success = status == "matched" and bool(relative_paths) and (not csharp_root or all(exists))
     return HarnessResult(
         success=success,
         stdout=json.dumps({"status": status, "program_key": program_key, "evidence_count": len(evidence_paths)}, ensure_ascii=False, sort_keys=True),
-        stderr="" if success else "Author-tagged SP did not resolve to primary same-program C# style evidence.",
+        stderr="" if success else "Author-tagged SP did not resolve to fresh primary same-program C# style evidence.",
         exit_code=0 if success else 1,
         metadata=metadata,
     )
@@ -377,6 +597,7 @@ class MigrationInputState:
     """Portable evidence state for PB -> C# migration planning."""
 
     has_pblscripter: bool = False
+    has_orca: bool = False
     has_exported_pb_sources: bool = False
     has_datawindow_converter: bool = False
     has_target_csharp_samples: bool = False
@@ -386,11 +607,20 @@ class MigrationInputState:
     has_pasted_source: bool = False
     has_behavior_description: bool = False
     target_project_name: str = ""
+    target_style: str = ""
+    pb_version: str = ""
+    pbl_export_tool: str = ""
+    procedure_name: str = ""
+    program_key: str = ""
+    fallback_program_key: str = ""
+    author_tagged_required: bool = False
+    primary_style_evidence_paths: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "has_pblscripter": self.has_pblscripter,
+            "has_orca": self.has_orca,
             "has_exported_pb_sources": self.has_exported_pb_sources,
             "has_datawindow_converter": self.has_datawindow_converter,
             "has_target_csharp_samples": self.has_target_csharp_samples or self.has_ty_csharp_samples,
@@ -400,6 +630,14 @@ class MigrationInputState:
             "has_pasted_source": self.has_pasted_source,
             "has_behavior_description": self.has_behavior_description,
             "target_project_name": self.target_project_name,
+            "target_style": self.target_style,
+            "pb_version": self.pb_version,
+            "pbl_export_tool": self.pbl_export_tool,
+            "procedure_name": self.procedure_name,
+            "program_key": self.program_key,
+            "fallback_program_key": self.fallback_program_key,
+            "author_tagged_required": self.author_tagged_required,
+            "primary_style_evidence_paths": list(self.primary_style_evidence_paths),
             "notes": list(self.notes),
         }
 
@@ -407,6 +645,7 @@ class MigrationInputState:
     def from_dict(cls, data: Dict[str, Any]) -> "MigrationInputState":
         return cls(
             has_pblscripter=bool(data.get("has_pblscripter", False)),
+            has_orca=bool(data.get("has_orca", data.get("orca_available", False))),
             has_exported_pb_sources=bool(data.get("has_exported_pb_sources", False)),
             has_datawindow_converter=bool(data.get("has_datawindow_converter", False)),
             has_target_csharp_samples=bool(
@@ -418,6 +657,16 @@ class MigrationInputState:
             has_pasted_source=bool(data.get("has_pasted_source", False)),
             has_behavior_description=bool(data.get("has_behavior_description", False)),
             target_project_name=str(data.get("target_project_name", "")),
+            target_style=str(data.get("target_style", "")),
+            pb_version=str(data.get("pb_version", data.get("powerbuilder_version", ""))),
+            pbl_export_tool=str(data.get("pbl_export_tool", data.get("export_tool", ""))),
+            procedure_name=str(data.get("procedure_name", "")),
+            program_key=str(data.get("program_key", "")),
+            fallback_program_key=str(data.get("fallback_program_key", "")),
+            author_tagged_required=bool(data.get("author_tagged_required", False)),
+            primary_style_evidence_paths=[
+                str(item) for item in data.get("primary_style_evidence_paths", []) if str(item)
+            ],
             notes=[str(item) for item in data.get("notes", [])],
         )
 
@@ -518,10 +767,98 @@ class CSharpDesignerControlSpec:
         }
 
 
+def build_pbl_export_strategy(state: MigrationInputState | Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """Choose the portable PBL export provider and version handling strategy."""
+    input_state = _coerce_state(state)
+    explicit_tool = input_state.pbl_export_tool.strip().lower()
+    pb_version = input_state.pb_version.strip()
+    runtime_lookup_required = False
+    if input_state.has_exported_pb_sources:
+        provider = "pre_exported_source"
+        status = "not_needed"
+        confidence = "strong"
+        reason = "Exported .sru/.srw/.srd source is already available; skip PBL export."
+    elif input_state.has_pblscripter or explicit_tool in {"pblscripter", "export-pbl", "export-pbl.ps1"}:
+        provider = "pblscripter"
+        status = "available"
+        confidence = "strong"
+        reason = "Use the wrapper to list and export PB objects into an external output directory."
+    elif input_state.has_orca or explicit_tool == "orca":
+        provider = "orca"
+        status = "available"
+        confidence = "strong"
+        reason = "Use ORCA directly to list and export PB objects into an external output directory."
+    elif input_state.has_pasted_source:
+        provider = "pasted_source"
+        status = "fallback"
+        confidence = "bounded"
+        reason = "Use pasted SRU/SRW/SRD text as the source boundary; PBL export is not available."
+    elif input_state.has_behavior_description:
+        provider = "described_behavior"
+        status = "fallback"
+        confidence = "inferred"
+        reason = "Use the described PB behavior as inferred requirements; source parity is unverified."
+    else:
+        provider = "bundled_reference"
+        status = "fallback"
+        confidence = "low"
+        reason = "Use bundled process references only until PB source, ORCA, PblScripter, pasted source, or behavior details are provided."
+
+    if provider in {"pblscripter", "orca"} and not pb_version:
+        status = "available_with_version_probe"
+        confidence = "bounded"
+        runtime_lookup_required = True
+        reason = (
+            reason
+            + " PB version is not confirmed, so list/probe first and block full source parity until the matching runtime is known."
+        )
+
+    version_policy = (
+        "Match the ORCA/runtime major version to the PBL lineage before opening or exporting. "
+        "PB 7.0 libraries should use PB 7.0 ORCA/runtime; PB 12.5 libraries should use PB 12.5 ORCA/runtime. "
+        "If the version is unknown, list/probe only and mark full source inspection blocked until the version is confirmed."
+    )
+    operations = [
+        "list PBL objects before export",
+        "export the named window/user object first",
+        "export linked DataWindows after SRU/SRW references are known",
+        "write exports into an external run output directory, never into the source PBL tree",
+        "preserve source encoding when reading exported text",
+    ]
+    blocked_conditions = [
+        "missing PBL path",
+        "missing matching PB runtime/ORCA version",
+        "ORCA session open failure",
+        "bad library or incompatible PBL version",
+        "license/SySAM failure",
+        "encoding damage in exported source",
+    ]
+    return {
+        "provider": provider,
+        "status": status,
+        "confidence": confidence,
+        "reason": reason,
+        "pb_version": pb_version,
+        "version_policy": version_policy,
+        "provider_priority": [
+            "PblScripter or equivalent wrapper",
+            "direct ORCA",
+            "pre-exported SRU/SRW/SRD/SRM source",
+            "pasted source",
+            "described behavior",
+            "bundled reference baseline",
+        ],
+        "operations": operations,
+        "blocked_conditions": blocked_conditions,
+        "runtime_lookup_required": runtime_lookup_required,
+    }
+
+
 def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None = None) -> Dict[str, Any]:
     """Classify whether the migration run is standalone, described-behavior, partial-reference, full-reference, or pasted-source."""
     input_state = _coerce_state(state)
     has_csharp_reference = input_state.has_target_csharp_samples or input_state.has_ty_csharp_samples
+    export_strategy = build_pbl_export_strategy(input_state)
     if input_state.has_exported_pb_sources and has_csharp_reference and input_state.has_sp_style_reference:
         mode = "full-reference"
         confidence = 0.9 if input_state.has_live_db_access else 0.82
@@ -534,6 +871,7 @@ def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None =
     elif any(
         [
             input_state.has_pblscripter,
+            input_state.has_orca,
             input_state.has_exported_pb_sources,
             input_state.has_datawindow_converter,
             has_csharp_reference,
@@ -558,6 +896,8 @@ def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None =
         strong_evidence.append("live DB schema/procedure verification")
     if input_state.has_pblscripter and not input_state.has_exported_pb_sources:
         weak_evidence.append("PblScripter available but export not attached yet")
+    if input_state.has_orca and not input_state.has_exported_pb_sources:
+        weak_evidence.append("ORCA available but export not attached yet")
     if input_state.has_datawindow_converter:
         weak_evidence.append("DataWindowToXml-style grid column conversion available")
     if input_state.has_pasted_source:
@@ -571,11 +911,12 @@ def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None =
         "state": input_state.to_dict(),
         "strong_evidence": strong_evidence,
         "weak_evidence": weak_evidence,
-        "runtime_lookup_required": False,
+        "pbl_export_strategy": export_strategy,
+        "runtime_lookup_required": export_strategy["runtime_lookup_required"],
         "fallback_policy": (
-            "Use bundled references first. Use user-provided behavior descriptions as inferred requirements, not "
-            "source parity. Use live PBL, source, converter, C# samples, or DB access only when the user provides "
-            "them or explicitly asks for refresh/verification."
+            "Use PblScripter when available, direct ORCA when PblScripter is missing, already-exported "
+            ".sru/.srw/.srd/.srm files when export tooling is absent, then pasted source or described behavior. "
+            "Use bundled references as the portable baseline and do not claim source parity without exported or pasted PB source."
         ),
     }
 
@@ -770,21 +1111,87 @@ def build_pb_to_csharp_migration_plan(
     """Build a deterministic migration plan that works without host-local PB/C#/DB assets."""
     mode = classify_migration_mode(state)
     input_state = _coerce_state(state)
+    pbl_export_strategy = build_pbl_export_strategy(input_state)
     control_stack = resolve_csharp_control_stack(dict(state or {}).get("available_controls") if isinstance(state, dict) else None)
+    target_style_text = " ".join(
+        [
+            input_state.target_style,
+            input_state.target_project_name,
+            input_state.procedure_name,
+            input_state.program_key,
+        ]
+    ).upper()
+    author_tagged_required = bool(
+        input_state.author_tagged_required
+        or "C_KONE110" in target_style_text
+        or "KH" in target_style_text
+        or input_state.procedure_name
+        or input_state.program_key
+    )
+    resolved_program_key = (
+        input_state.program_key.upper()
+        if input_state.program_key
+        else normalize_author_tagged_program_key(input_state.procedure_name)
+    )
+    author_tagged_style_resolution: Dict[str, Any] = {
+        "required": author_tagged_required,
+        "status": "not_requested",
+        "program_key": resolved_program_key,
+        "fallback_program_key": input_state.fallback_program_key.upper(),
+        "primary_style_evidence_paths": list(input_state.primary_style_evidence_paths),
+        "generation_recipe": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["positive_generation_recipe"] if author_tagged_required else {},
+    }
+    if author_tagged_required:
+        if input_state.primary_style_evidence_paths:
+            expected_key = input_state.fallback_program_key.upper() or resolved_program_key
+            author_tagged_style_resolution.update(
+                {
+                    "status": "provided",
+                    "expected_style_program_key": expected_key,
+                    "path_match": _author_tagged_evidence_paths_match(
+                        expected_key,
+                        input_state.primary_style_evidence_paths,
+                    ),
+                }
+            )
+        elif input_state.procedure_name:
+            resolved = resolve_author_tagged_style_evidence(input_state.procedure_name)
+            author_tagged_style_resolution.update(resolved.metadata)
+        elif resolved_program_key:
+            expected_paths = _expected_author_tagged_style_paths(resolved_program_key)
+            author_tagged_style_resolution.update(
+                {
+                    "status": "matched" if expected_paths else "unmapped",
+                    "expected_style_program_key": resolved_program_key,
+                    "primary_style_evidence_paths": expected_paths,
+                    "path_match": bool(expected_paths),
+                }
+            )
+        else:
+            author_tagged_style_resolution.update(
+                {
+                    "status": "blocked",
+                    "blocked_reason": "author_tagged_style_requested_without_procedure_or_program_key",
+                }
+            )
     steps = [
         "Frame the PB screen/program objective, operator workflow, and target C# surface.",
+        "Select the PBL export provider: PblScripter wrapper, direct ORCA, pre-exported source, pasted source, described behavior, or bundled fallback.",
+        "Match the PB/ORCA runtime version to the PBL lineage before opening or exporting libraries.",
         "Collect PB evidence from exported .sru/.srw/.srd files, pasted source, user-described behavior, or bundled fallback references.",
         "Separate confirmed behavior from inferred behavior when PB source is absent.",
         "Trace SRU/SRW event flow before DataWindow SQL so popup/save behavior is not missed.",
         "Map DataWindow columns to target-project controls; fall back to DevExpress and then WinForms basics when needed.",
         "For detail forms, lay out label/editor pairs in clean aligned rows and columns instead of blindly copying PB coordinates.",
         "Resolve the target-project control stack before generating C# so project-specific controls are not replaced by a fixed TY/KoneLib assumption.",
+        "For C_KONE110/KH style, resolve author-tagged SP -> program key -> same-program C#/Designer evidence before generating code.",
         "Draft C# flow by preserving existing target-project method paths such as CallViewQuery, CallProc, SelectType, DataTableToXml, and SetModified when present.",
         "Draft SELECT/SAVE stored procedures from the packaged KH SP style reference and host-local sql-formatting contract.",
         "Separate formatting-only cleanup from semantic/performance rewrites; require DB-backed evidence for semantic changes.",
         "Produce a migration checklist, traceability table, and verification plan before implementation claims.",
     ]
     deliverables = [
+        "PBL export provider and PB version strategy",
         "PB source analysis notes",
         "confirmed vs inferred behavior map",
         "DataWindow column/layout mapping",
@@ -803,7 +1210,9 @@ def build_pb_to_csharp_migration_plan(
         "steps": steps,
         "deliverables": deliverables,
         "target_project_name": input_state.target_project_name,
+        "pbl_export_strategy": pbl_export_strategy,
         "control_stack": control_stack,
+        "author_tagged_style_resolution": author_tagged_style_resolution,
         "token_optimizer_status": "passthrough",
         "token_optimizer_status_reason": (
             "PB source, SQL, C# style rules, and business literals are source-of-truth content; do not compress them."
@@ -1293,6 +1702,7 @@ def verify_migration_generated_csharp_style(
     source_text: str,
     *,
     program_key: str = "",
+    fallback_program_key: str = "",
     primary_style_evidence_paths: Any = None,
     excluded_paths: Any = None,
     require_author_tagged_evidence: bool = False,
@@ -1317,6 +1727,49 @@ def verify_migration_generated_csharp_style(
         )
     excluded_keys = {key.upper() for key in AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["baseline_exclusions"]}
     excluded_seed_used = any(key in path.upper() for key in excluded_keys for path in primary_paths)
+    expected_style_program_key = normalized_program_key
+    normalized_fallback_program_key = str(fallback_program_key or "").upper()
+    if require_author_tagged_evidence and normalized_program_key in excluded_keys:
+        expected_style_program_key = normalized_fallback_program_key
+        if not normalized_fallback_program_key:
+            issues.append(
+                {
+                    "code": "author_tagged_fallback_program_key_required",
+                    "severity": "error",
+                    "message": (
+                        "Excluded or current repair targets cannot seed their own style. Provide a fallback_program_key "
+                        "resolved from established author-tagged same-module evidence."
+                    ),
+                    "program_key": normalized_program_key,
+                }
+            )
+    if require_author_tagged_evidence and expected_style_program_key and primary_paths:
+        expected_paths = _expected_author_tagged_style_paths(expected_style_program_key)
+        if expected_paths and not _author_tagged_evidence_paths_match(expected_style_program_key, primary_paths):
+            issues.append(
+                {
+                    "code": "author_tagged_style_evidence_path_mismatch",
+                    "severity": "error",
+                    "message": (
+                        "Primary style evidence must match the author-tagged SP -> program key -> same-program "
+                        "C# and Designer mapping, not an arbitrary same-project file."
+                    ),
+                    "program_key": normalized_program_key,
+                    "expected_style_program_key": expected_style_program_key,
+                    "expected_paths": expected_paths,
+                    "actual_paths": primary_paths,
+                }
+            )
+        elif not expected_paths:
+            issues.append(
+                {
+                    "code": "author_tagged_style_mapping_missing",
+                    "severity": "error",
+                    "message": "No bundled author-tagged C# mapping exists for the requested style program key.",
+                    "program_key": normalized_program_key,
+                    "expected_style_program_key": expected_style_program_key,
+                }
+            )
     if require_author_tagged_evidence and normalized_program_key in excluded_keys and not primary_paths:
         issues.append(
             {
@@ -1333,6 +1786,48 @@ def verify_migration_generated_csharp_style(
                 "severity": "error",
                 "message": "Current repair targets or SP-only/non-screen mappings cannot be used as primary C# style evidence.",
                 "program_key": normalized_program_key,
+            }
+        )
+
+    if require_author_tagged_evidence and re.search(
+        r"dbClient\.(?:GetDataSetFromSP|ExecSPTrn|ExecSP)\s*\(",
+        source,
+    ) and not re.search(
+        r"new\s+DbParameter\s*\(", source
+    ):
+        issues.append(
+            {
+                "code": "author_tagged_sp_call_missing_explicit_dbparameters",
+                "severity": "error",
+                "message": (
+                    "Matched C_KONE110/KH screen retrieve code keeps explicit DbParameter entries near "
+                    "dbClient.GetDataSetFromSP; do not present a bare SP call as style-complete generated C#."
+                ),
+            }
+        )
+
+    if re.search(r"<PackageReference\s+Include=\"DevExpress", source, flags=re.IGNORECASE) or re.search(
+        r"\bdotnet\s+add\s+package\s+DevExpress", source, flags=re.IGNORECASE
+    ):
+        issues.append(
+            {
+                "code": "generated_devexpress_package_reference_detected",
+                "severity": "error",
+                "message": (
+                    "Do not add or upgrade DevExpress packages during PB-to-C# migration generation. "
+                    "Use the target project's existing references and API surface."
+                ),
+            }
+        )
+    if re.search(r"DevExpress\.[A-Za-z0-9_.]+,\s*Version=\d+", source):
+        issues.append(
+            {
+                "code": "generated_unverified_devexpress_version_reference_detected",
+                "severity": "error",
+                "message": (
+                    "Do not emit unverified DevExpress assembly version references. The migration must follow "
+                    "the target project references, not the latest library version."
+                ),
             }
         )
 
@@ -1764,6 +2259,8 @@ def verify_migration_generated_csharp_style(
         "status": "passed" if passed else "blocked",
         "issues": issues,
         "program_key": normalized_program_key,
+        "fallback_program_key": normalized_fallback_program_key,
+        "expected_style_program_key": expected_style_program_key,
         "require_author_tagged_evidence": bool(require_author_tagged_evidence),
         "primary_style_evidence_paths": primary_paths,
         "excluded_paths": excluded,
@@ -1773,6 +2270,7 @@ def verify_migration_generated_csharp_style(
             "primary_csharp_baseline_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["primary_csharp_baseline_files_analyzed"],
             "designer_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["designer_files_analyzed"],
         },
+        "author_tagged_generation_recipe": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["positive_generation_recipe"],
         "column_style_contract": (
             "Generated grid columns must use explicit target-style names, Designer/AddRange registration, "
             "and RepositoryItemSpinEdit ColumnEdit for numeric AMT/QTY/UNP/WGT/PRICE/RATE/COST/TOTAL columns instead of GridColumn DisplayFormat."
@@ -1823,11 +2321,17 @@ def verify_pb_migration_sp_generation_contract(
         path_only = bool(str(item.get("path") or "").strip())
         object_name = bool(str(item.get("object") or "").strip())
         hash_or_definition = bool(
-            str(item.get("sha256") or item.get("definition_hash") or item.get("definition_path") or "").strip()
+            str(
+                item.get("sha256")
+                or item.get("definition_hash")
+                or item.get("definition_path")
+                or item.get("definition_text")
+                or ""
+            ).strip()
         )
         verified = bool(item.get("verified"))
         if kind == "existing_sp":
-            has_detail = hash_or_definition or (verified and (object_name or path_only))
+            has_detail = verified and (object_name or path_only) and hash_or_definition
         elif kind == "approved_inferred_draft":
             has_detail = bool(item.get("approved") and path_or_summary)
         elif kind == "db_schema":
@@ -2542,20 +3046,7 @@ def _sort_int(value: int | None) -> int:
 def _coerce_state(state: MigrationInputState | Dict[str, Any] | None) -> MigrationInputState:
     if isinstance(state, MigrationInputState):
         return state
-    data = dict(state or {})
-    return MigrationInputState(
-        has_pblscripter=bool(data.get("has_pblscripter", False)),
-        has_exported_pb_sources=bool(data.get("has_exported_pb_sources", False)),
-        has_datawindow_converter=bool(data.get("has_datawindow_converter", False)),
-        has_target_csharp_samples=bool(data.get("has_target_csharp_samples", data.get("has_ty_csharp_samples", False))),
-        has_ty_csharp_samples=bool(data.get("has_ty_csharp_samples", False)),
-        has_sp_style_reference=bool(data.get("has_sp_style_reference", False)),
-        has_live_db_access=bool(data.get("has_live_db_access", False)),
-        has_pasted_source=bool(data.get("has_pasted_source", False)),
-        has_behavior_description=bool(data.get("has_behavior_description", False)),
-        target_project_name=str(data.get("target_project_name", "")),
-        notes=[str(item) for item in data.get("notes", [])],
-    )
+    return MigrationInputState.from_dict(dict(state or {}))
 
 
 def _normalize_control_inventory(available_controls: Dict[str, Any] | Iterable[str] | None) -> Dict[str, Any]:
