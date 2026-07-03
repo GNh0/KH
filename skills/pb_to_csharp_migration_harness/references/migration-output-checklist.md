@@ -18,6 +18,7 @@ Use this checklist before handoff or completion.
 - Target C# control fallback map.
 - SELECT/SAVE SP plan.
 - SP generation evidence: source SQL/PB/DB evidence or approved inferred-draft marker, `@WORKTYPE` branch contract, CTE/#temp/MERGE/NOT EXISTS scan, and SQL formatting verifier status.
+- SP parameter/local-variable evidence: procedure parameters are caller/C# inputs only; derived helper/calculation values such as year/month/base-date values are local `DECLARE` variables assigned with `SET`; when caller `DbParameter` evidence exists, the generated SP signature contains no extra parameters outside that caller set.
 - SQL formatting/verifier status.
 - Traceability from PB behavior to C# method and SP branch.
 - Verification plan.
@@ -33,6 +34,8 @@ Use this checklist before handoff or completion.
 - No claim of correct Designer style without property extraction or explicit fallback assumptions.
 - No generated runtime grid-column helper when the target style requires Designer `GridColumn` members and `col*_<FIELD>` names.
 - No completed SELECT/SAVE SP claim from only C# parameters or grid columns. Use blocked contract or clearly labeled inferred draft when PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, or DB evidence is absent.
+- No SP-internal helper/calculation values exposed as generated procedure parameters; no derived helper values such as `@YYYY`, `@MM`, `@BASYYYY`, or `@LASTDT` exposed as generated procedure parameters.
+- No generated `IF ISNULL(...)` guard/default block around date derivation. Use local `DECLARE` and `SET` for internal variables.
 - Detail form controls are aligned as readable label/editor pairs instead of blindly copying PB coordinates unless exact visual parity was explicitly requested.
 - No generated user-facing files outside the exact requested target path.
 - No hidden use of global memory as a substitute for current artifacts.

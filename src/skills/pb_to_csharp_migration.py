@@ -2450,6 +2450,119 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not default business selector parameters such as @GUBUN or @GB to generated literals unless verified target SP evidence uses them.",
             }
         )
+    signature_match = re.search(
+        r"(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE[\s\S]*?\bAS\b",
+        upper_comments_stripped,
+    )
+    procedure_parameters: List[str] = []
+    if signature_match:
+        signature_text = signature_match.group(0)
+        procedure_parameters = sorted(
+            set(
+                re.findall(
+                    r"@([A-Z][A-Z0-9_]*)\s+(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*))?(?:\s*\([^)]*\))?",
+                    signature_text,
+                )
+            )
+        )
+        caller_parameter_names: set[str] = set()
+        for item in normalized_source_evidence:
+            for key in (
+                "caller_parameters",
+                "db_parameters",
+                "csharp_db_parameters",
+                "procedure_call_parameters",
+                "sp_call_parameters",
+            ):
+                values = item.get(key)
+                if isinstance(values, str):
+                    values = re.findall(r"@[A-Za-z][A-Za-z0-9_]*", values)
+                if isinstance(values, (list, tuple, set)):
+                    for value in values:
+                        match = re.search(r"@?([A-Za-z][A-Za-z0-9_]*)", str(value or ""))
+                        if match:
+                            caller_parameter_names.add(match.group(1).upper())
+        if caller_parameter_names:
+            non_caller_params = [name for name in procedure_parameters if name not in caller_parameter_names]
+            if non_caller_params:
+                issues.append(
+                    {
+                        "code": "non_caller_procedure_parameter_detected",
+                        "severity": "error",
+                        "message": (
+                            "Generated SP parameters must match values actually sent by the C# caller. "
+                            "SP-internal calculation/helper values must be local DECLARE variables assigned with SET."
+                        ),
+                        "parameters": [f"@{name}" for name in non_caller_params],
+                        "caller_parameters": [f"@{name}" for name in sorted(caller_parameter_names)],
+                    }
+                )
+        helper_date_params = sorted(
+            set(
+                re.findall(
+                    r"@(YYYY|MM|BASYYYY|LASTDT)\s+(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*))?(?:\s*\([^)]*\))?",
+                    signature_text,
+                )
+            )
+        )
+        if helper_date_params:
+            issues.append(
+                {
+                    "code": "derived_date_helper_parameter_detected",
+                    "severity": "error",
+                    "message": (
+                        "Do not expose derived helper date values such as @YYYY, @MM, @BASYYYY, or @LASTDT "
+                        "as generated procedure parameters. Accept the raw target-style date input, then use local DECLARE and SET "
+                        "inside the procedure when derived values are needed."
+                    ),
+                    "parameters": [f"@{name}" for name in helper_date_params],
+                }
+            )
+    if re.search(
+        r"IF\s*\(?\s*ISNULL\s*\(\s*@(GIJUNDT|YYYY|MM|BASYYYY|LASTDT)\s*,\s*''\s*\)",
+        upper_comments_stripped,
+    ):
+        issues.append(
+            {
+                "code": "if_isnull_date_derivation_block_detected",
+                "severity": "error",
+                "message": (
+                    "Do not generate IF ISNULL(...) guard/default blocks for date-derived SP values. "
+                    "Use local DECLARE plus SET for derived variables, and avoid source-unbacked fallback branches."
+                ),
+            }
+        )
+    if re.search(
+        r"SET\s+@(YYYY|MM|BASYYYY|LASTDT)\s*=\s*(?:LEFT\s*\(\s*@GIJUNDT|SUBSTRING\s*\(\s*@GIJUNDT|RIGHT\s*\(\s*'0'\s*\+|CONVERT\s*\(\s*VARCHAR\s*\(\s*[48]\s*\)\s*,\s*(?:YEAR|DATEADD|CONVERT))",
+        upper_comments_stripped,
+    ) and re.search(
+        r"IF\s*\(?\s*(?:ISNULL\s*\(\s*@(GIJUNDT|YYYY|MM|BASYYYY|LASTDT)|@(GIJUNDT|YYYY|MM|BASYYYY|LASTDT)\s*(?:<>|=|>|<|>=|<=))",
+        upper_comments_stripped,
+    ):
+        issues.append(
+            {
+                "code": "generated_if_wrapped_date_set_block_detected",
+                "severity": "error",
+                "message": (
+                    "Do not wrap generated date SET assignments in IF/default logic. "
+                    "If the target SP needs derived year/month/base dates, derive them as local variables with DECLARE and SET only."
+                ),
+            }
+        )
+    if re.search(
+        r"IF\s*\(?\s*@(GIJUNDT|YYYY|MM|BASYYYY|LASTDT)\s*(?:<>|=|>|<|>=|<=)[\s\S]{0,240}\bSET\s+@(YYYY|MM|BASYYYY|LASTDT)\s*=",
+        upper_comments_stripped,
+    ):
+        issues.append(
+            {
+                "code": "generated_if_wrapped_date_set_block_detected",
+                "severity": "error",
+                "message": (
+                    "Do not wrap generated date SET assignments in IF/default logic. "
+                    "If the target SP needs derived year/month/base dates, derive them as local variables with DECLARE and SET only."
+                ),
+            }
+        )
     if re.search(r"SET\s+@WORKTYPE\s*=\s*ISNULL\s*\(", upper_comments_stripped):
         issues.append(
             {

@@ -17,6 +17,10 @@ When the requested style is the user's C_KONE110/KH/Geunho-authored output, read
 - Use `@WORKTYPE VARCHAR(20) = NULL` or a required `@WORKTYPE` parameter for C_KONE110/KH-style output. Do not generate `@WORKTYPE = ''`.
 - Do not default business filter parameters to `''`, `'%'`, `'T'`, or `'1'` unless verified target procedure evidence uses those exact defaults.
 - Do not add up-front `SET @WORKTYPE = ISNULL(...)` or `SET @PARAM = (CASE WHEN ISNULL(...) THEN ... END)` normalization blocks unless verified target procedure evidence already uses that pattern.
+- Procedure parameters are values sent by C# or the caller. Values used only for SP-internal helper/calculation work must be local variables declared with `DECLARE` and assigned with `SET`.
+- When matched C# call evidence is available, the generated SP signature must not introduce parameters outside that caller `DbParameter` set. Extra calculation values belong in local variables.
+- Do not expose derived helper values such as `@YYYY`, `@MM`, `@BASYYYY`, or `@LASTDT` as generated procedure parameters. Accept the raw target-style date input from C# and derive local variables inside the procedure when needed.
+- Do not generate `IF ISNULL(@GIJUNDT, ...)`, `IF ISNULL(@YYYY, ...)`, `IF ISNULL(@MM, ...)`, `IF ISNULL(@BASYYYY, ...)`, `IF ISNULL(@LASTDT, ...)`, or direct `IF @GIJUNDT <> '' SET @YYYY = ...` guard/default blocks around date derivation. When a derived local value is needed, use `DECLARE` plus `SET`; do not invent fallback branches unless verified target SP evidence proves that exact shape.
 - For C_KONE110/KH-style SELECT procedures, include `SET NOCOUNT ON;` and prefer `SET ARITHABORT ON;` unless current target evidence proves otherwise.
 - Keep formatting-only work separate from semantic/performance rewrites.
 - Avoid CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, and helper `@FIND...` variables by default.

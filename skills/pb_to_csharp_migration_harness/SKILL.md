@@ -75,6 +75,9 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - avoid new CTEs, `#` temporary tables, `MERGE`, and `NOT EXISTS` by default;
    - do not generate empty-string/wildcard/status parameter defaults such as `@WORKTYPE = ''`, `@CUSTCD = '%'`, `@GUBUN = 'T'`, or `@GB = '1'` unless existing verified target SP evidence uses that exact contract;
    - do not add an up-front parameter normalization block such as `SET @WORKTYPE = ISNULL(...)` or `SET @PARAM = (CASE WHEN ISNULL(...) THEN ... END)` unless verified existing SP evidence for that same procedure branch already has it;
+   - procedure parameters are only values sent by C# or the caller; helper/calculation values used only inside the SP must be local `DECLARE` variables followed by `SET`, not generated parameters;
+   - do not expose derived date helper values such as `@YYYY`, `@MM`, `@BASYYYY`, or `@LASTDT` as generated procedure parameters; accept the raw target-style date input and derive local variables inside the SP when needed;
+   - do not wrap date helper `SET` assignments in generated `IF ISNULL(...)` defaulting blocks or direct `IF @GIJUNDT <> '' SET @YYYY = ...` style guards; local derived date variables use `DECLARE` plus `SET` only unless verified existing SP evidence proves another shape;
    - do not present a full generated SELECT/SAVE SP as complete unless structured PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, DB schema, or an explicit user-approved inferred draft marker is recorded;
    - run `verify_pb_migration_sp_generation_contract` before completion claims for generated migration SP text;
    - use host-local `sql-formatting` for formatting and `sql-formatting-style-harness` for verification.
@@ -117,6 +120,9 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not add CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, helper `@FIND...` variables, or scalar-function join rewrites by default.
 - Do not invent completed SELECT/SAVE SP bodies from only a C# call signature. If only parameters and expected grid columns are known, output a blocked SP contract or clearly labeled inferred draft.
 - Do not add default parameter values or parameter-normalization `SET` blocks just to make generated SQL defensive. Follow the verified SP contract or keep defaults as `NULL`/required parameters.
+- Do not declare SP-internal helper or calculation values as procedure parameters. Parameters are caller/C# inputs; helper values belong in local `DECLARE` variables.
+- When the matched C# call has explicit `DbParameter` evidence, generated SP parameters must stay inside that caller parameter set. Extra values belong in local `DECLARE` variables.
+- Do not generate `IF ISNULL(@GIJUNDT, ...)`, `IF ISNULL(@YYYY, ...)`, `IF ISNULL(@MM, ...)`, `IF ISNULL(@BASYYYY, ...)`, `IF ISNULL(@LASTDT, ...)`, or direct `IF @GIJUNDT <> '' SET @YYYY = ...` date helper blocks. If date derivation is needed, use local `DECLARE` and `SET` without invented guard branches.
 - Do not add source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks to generated migration procedures; return from known branches or report a blocked contract instead.
 - Do not generate grid columns through ad hoc runtime helpers when the target style expects Designer-level `GridColumn` members and `col*_<FIELD>` names.
 - Do not generate internal request/context DTOs such as `RetrieveContext`, `GetRetrieveContext`, `GetEditValue`, or `GetColumnText` for ordinary screen retrieval code unless the target source already proves that pattern.

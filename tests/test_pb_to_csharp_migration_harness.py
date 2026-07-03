@@ -1614,6 +1614,274 @@ END
         self.assertIn("if_isnull_parameter_normalization_detected", issue_codes)
         self.assertIn("trim_parameter_normalization_detected", issue_codes)
 
+    def test_sp_generation_contract_blocks_derived_date_helper_parameters_and_if_defaults(self):
+        generated = sp_metadata_header() + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ORGDIV   VARCHAR(2)
+    , @GIJUNDT  VARCHAR(8)
+    , @YYYY     VARCHAR(4)
+    , @MM       VARCHAR(2)
+    , @BASYYYY  VARCHAR(4)
+    , @LASTDT   VARCHAR(8)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF ISNULL(@GIJUNDT, '') <> ''
+    BEGIN
+        SET @YYYY = LEFT(@GIJUNDT, 4);
+        SET @MM = SUBSTRING(@GIJUNDT, 5, 2);
+    END;
+
+    IF ISNULL(@YYYY, '') = ''
+        SET @YYYY = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+
+    IF ISNULL(@MM, '') = ''
+        SET @MM = RIGHT('0' + CONVERT(VARCHAR(2), MONTH(GETDATE())), 2);
+
+    IF ISNULL(@BASYYYY, '') = ''
+        SET @BASYYYY = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+
+    IF ISNULL(@LASTDT, '') = ''
+    BEGIN
+        SET @LASTDT = CONVERT(VARCHAR(8), DATEADD(DAY, -DAY(GETDATE()), GETDATE()), 112);
+
+        IF @YYYY <> LEFT(@LASTDT, 4)
+            SET @LASTDT = CONVERT(VARCHAR(4), CONVERT(INT, @YYYY) - 1) + '1231';
+    END;
+
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT A.CUSTNM
+        FROM BA020T A;
+    END
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("derived_date_helper_parameter_detected", issue_codes)
+        self.assertIn("if_isnull_date_derivation_block_detected", issue_codes)
+        self.assertIn("generated_if_wrapped_date_set_block_detected", issue_codes)
+
+    def test_sp_generation_contract_allows_local_declared_date_helpers_without_if_defaults(self):
+        generated = sp_metadata_header() + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ORGDIV   VARCHAR(2)
+    , @GIJUNDT  VARCHAR(8)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @YYYY    VARCHAR(4)
+          , @MM      VARCHAR(2)
+          , @BASYYYY VARCHAR(4)
+          , @LASTDT  VARCHAR(8);
+
+    SET @YYYY = LEFT(@GIJUNDT, 4);
+    SET @MM = SUBSTRING(@GIJUNDT, 5, 2);
+    SET @BASYYYY = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+    SET @LASTDT = CONVERT(VARCHAR(8), DATEADD(DAY, -DAY(GETDATE()), GETDATE()), 112);
+
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT A.CUSTNM
+        FROM BA020T A;
+    END
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertNotIn("derived_date_helper_parameter_detected", issue_codes)
+        self.assertNotIn("if_isnull_date_derivation_block_detected", issue_codes)
+        self.assertNotIn("generated_if_wrapped_date_set_block_detected", issue_codes)
+
+    def test_sp_generation_contract_blocks_alter_procedure_derived_helper_parameters(self):
+        generated = sp_metadata_header() + """
+ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ORGDIV   VARCHAR(2)
+    , @GIJUNDT  VARCHAR(8)
+    , @YYYY     VARCHAR(4)
+AS
+BEGIN
+    SELECT A.CUSTNM
+    FROM BA020T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("derived_date_helper_parameter_detected", issue_codes)
+
+    def test_sp_generation_contract_blocks_parenthesized_date_isnull_defaults(self):
+        generated = sp_metadata_header() + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ORGDIV   VARCHAR(2)
+    , @GIJUNDT  VARCHAR(8)
+AS
+BEGIN
+    DECLARE @YYYY VARCHAR(4);
+
+    IF (ISNULL(@GIJUNDT, '') = '')
+        SET @YYYY = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+
+    SELECT A.CUSTNM
+    FROM BA020T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("if_isnull_date_derivation_block_detected", issue_codes)
+        self.assertIn("generated_if_wrapped_date_set_block_detected", issue_codes)
+
+    def test_sp_generation_contract_blocks_direct_if_wrapped_date_set(self):
+        generated = sp_metadata_header() + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ORGDIV   VARCHAR(2)
+    , @GIJUNDT  VARCHAR(8)
+AS
+BEGIN
+    DECLARE @YYYY VARCHAR(4);
+
+    IF @GIJUNDT <> ''
+        SET @YYYY = CONVERT(VARCHAR(4), @GIJUNDT);
+
+    SELECT A.CUSTNM
+    FROM BA020T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_if_wrapped_date_set_block_detected", issue_codes)
+
+    def test_sp_generation_contract_blocks_non_caller_helper_parameters_when_csharp_params_known(self):
+        generated = sp_metadata_header() + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ORGDIV   VARCHAR(2)
+    , @GIJUNDT  VARCHAR(8)
+    , @ROWCNT   INT
+AS
+BEGIN
+    SELECT A.CUSTNM
+    FROM BA020T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence=[
+                {"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+                {
+                    "kind": "csharp_call",
+                    "path": "SA900100.cs",
+                    "db_parameters": ["@WORKTYPE", "@ORGDIV", "@GIJUNDT"],
+                },
+            ],
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("non_caller_procedure_parameter_detected", issue_codes)
+
+    def test_sp_generation_contract_blocks_non_caller_parameters_with_broader_sql_types(self):
+        generated = sp_metadata_header() + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ORGDIV   VARCHAR(2)
+    , @GIJUNDT  VARCHAR(8)
+    , @ROWNUM   INTEGER
+    , @ROWGUID  UNIQUEIDENTIFIER
+    , @FILEBIN  VARBINARY(MAX)
+    , @RUNTIME  DATETIME2
+AS
+BEGIN
+    SELECT A.CUSTNM
+    FROM BA020T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence=[
+                {"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+                {
+                    "kind": "csharp_call",
+                    "path": "SA900100.cs",
+                    "db_parameters": ["@WORKTYPE", "@ORGDIV", "@GIJUNDT"],
+                },
+            ],
+        )
+        non_caller_issue = next(
+            issue
+            for issue in result.metadata["issues"]
+            if issue["code"] == "non_caller_procedure_parameter_detected"
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("@ROWNUM", non_caller_issue["parameters"])
+        self.assertIn("@ROWGUID", non_caller_issue["parameters"])
+        self.assertIn("@FILEBIN", non_caller_issue["parameters"])
+        self.assertIn("@RUNTIME", non_caller_issue["parameters"])
+
+    def test_sp_generation_contract_allows_parameters_matching_csharp_call_evidence(self):
+        generated = sp_metadata_header() + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ORGDIV   VARCHAR(2)
+    , @GIJUNDT  VARCHAR(8)
+AS
+BEGIN
+    DECLARE @ROWCNT INT;
+
+    SET @ROWCNT = 0;
+
+    SELECT A.CUSTNM
+    FROM BA020T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence=[
+                {"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+                {
+                    "kind": "csharp_call",
+                    "path": "SA900100.cs",
+                    "db_parameters": ["@WORKTYPE", "@ORGDIV", "@GIJUNDT"],
+                },
+            ],
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertNotIn("non_caller_procedure_parameter_detected", issue_codes)
+
     def test_composed_sp_and_sql_formatting_verifier_requires_both_gates(self):
         sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
       @WORKTYPE    VARCHAR(20) = NULL
