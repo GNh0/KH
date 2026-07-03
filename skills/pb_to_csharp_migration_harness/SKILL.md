@@ -114,6 +114,12 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not use arbitrary same-project C# files as the style basis when an author-tagged SP can be mapped to a same-program C# source. The bundled baseline is built from 62 author-tagged SPs, 41 program keys, 37 primary C# files, and 37 Designer files.
 - Do not let current generated repair targets teach the style back to the harness. Treat them as targets to verify, not baseline evidence.
 - Do not generate generic search/default/layout wrappers such as `SetDefaultSearchValues`, `ApplyListColumnLayout`, `GetBasisYear`, `GetCustomerLike`, or `ValidateSearch` for ordinary screens unless the active target source already proves that pattern.
+- Do not inline LIKE wildcard shaping in `CallSelectProcedure(...)` arguments such as `btnCUSTCD.Text + "%"` or `dr["ITEMCD"].ToString() + "%"`.
+- Do not shape stored-procedure LIKE parameters in C# with `custcd = custcd + "%"`, `itemcd = itemcd + "%"`, or `itemcd = "%"`. Pass raw control/row values and let the stored procedure own LIKE defaults and wildcard handling.
+- Do not add hidden date defaulting inside search/procedure paths such as `if (ymd*.EditValue == null) ymd*.SetToDay(0)`.
+- Do not split a `u_DateEdit` value into C# parameters such as `@YYYY = ymd*.DateTime.Year.ToString()`, `@MM = DateTime.Now.Month...`, or `@BASYYYY = DateTime.Now.Year...`. Pass the target-style raw date value with `YYYYMMDD()` and let the stored procedure derive related year/month/base-date parameters.
+- Do not generate ad hoc `new DateTime(...)` or string-concatenated month/year boundary values for screen retrieve parameters; let the stored procedure own derived date boundaries unless matched target evidence proves otherwise.
+- For KoneLib-style screens, use `devFnc.InitControl(grd*)` for grid resets when matched target evidence shows that pattern. Do not generate direct `grd*.DataSource = null` resets unless active target evidence proves that exact local pattern.
 - Do not replace explicit Designer month/amount columns with runtime `for` loops and `VisibleIndex` assignments.
 - Do not broaden popup result handling or emit mojibake Korean captions/messages without current source evidence.
 - Do not format SQL without preserving uppercase identifiers, Korean literals, comments, aliases, predicates, calculations, and row-shape contracts.

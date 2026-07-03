@@ -176,6 +176,12 @@ Zero-hit generated patterns in these matched sources:
 | `?? "%"` wildcard null coalescing | 0 |
 | `btn*.EditValue == null ? string.Empty : ...` extraction | 0 |
 | `string x = Convert.ToString(rad*.EditValue)` local variables | 0 |
+| `CallSelectProcedure(..., value + "%", ...)` inline wildcard arguments | 0 |
+| C# `custcd = custcd + "%"` / `itemcd = "%"` LIKE parameter shaping | 0 |
+| `if (ymd*.EditValue == null) ymd*.SetToDay(0)` inside search/procedure paths | 0 |
+| C# split date parameters such as `@YYYY = ymd*.DateTime.Year.ToString()` and `@MM/@BASYYYY = DateTime.Now...` | 0 |
+| ad hoc month/year-end `new DateTime(...)` boundary blocks in screen retrieve code | 0 |
+| direct `grd*.DataSource = null` reset in KoneLib-style screens | 0 |
 
 ## Designer Style Analysis
 
@@ -213,8 +219,13 @@ Designer files analyzed: 37.
 - Do not wrap focused-row values in `DBNull.Value ? ...` ternaries for ordinary detail lookup code unless the same target screen proves that pattern.
 - Do not route search/detail parameters through `_selectType == SelectType.DETAIL ? ...` ternaries. Keep list/detail branches explicit.
 - Do not use `?? "%"` as a generated wildcard fallback unless the matched source proves it.
+- Do not inline LIKE wildcard shaping in `CallSelectProcedure(...)` call-site arguments such as `btnCUSTCD.Text + "%"` or `dr["ITEMCD"].ToString() + "%"`.
+- Do not shape stored-procedure search parameters in C# with `custcd = custcd + "%"`, `itemcd = itemcd + "%"`, or `itemcd = "%"`. Pass raw values from controls/rows and let the stored procedure own LIKE defaults and wildcard handling.
+- Do not add `if (ymd*.EditValue == null) ymd*.SetToDay(0)` inside search or stored-procedure-call paths. Initialize date controls in `Load`/`Clear`, or validate and return before execution.
+- Do not split a `u_DateEdit` value into C# parameters such as `@YYYY = ymd*.DateTime.Year.ToString()`, `@MM = DateTime.Now.Month...`, or `@BASYYYY = DateTime.Now.Year...`. Pass the target-style raw date value with `YYYYMMDD()` and let the stored procedure derive related year/month/base-date parameters.
+- Do not generate ad hoc month-end or year-end `new DateTime(...)` or boundary string blocks in screen retrieve code. Pass raw date/year values and let the stored procedure own derived date boundaries unless matched source evidence proves otherwise.
 - Do not create `string gb = Convert.ToString(radGB.EditValue)` or similar generated radio locals. Pass or read the control value in the existing style.
-- Use `devFnc.InitControl(...)` for reset paths when the matched source family does that, rather than assigning `DataSource = null` as a generated default.
+- Use `devFnc.InitControl(...)` for grid/control reset paths when the matched KoneLib source family does that. Do not generate direct `grd*.DataSource = null` resets unless active target evidence proves that exact local pattern.
 
 ## Designer Generation Rules From The Analysis
 

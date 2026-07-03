@@ -114,6 +114,12 @@ AUTHOR_TAGGED_CSHARP_STYLE_BASELINE: Dict[str, Any] = {
         "percent_null_coalesce": 0,
         "ButtonEdit_null_string_empty_ternary": 0,
         "radio_Convert_ToString_local": 0,
+        "CallSelectProcedure_inline_wildcard_argument": 0,
+        "CSharp_like_wildcard_shaping": 0,
+        "DateEdit_null_SetToDay_default": 0,
+        "DateEdit_year_or_now_parameter_shaping": 0,
+        "generated_date_boundary_DateTime_block": 0,
+        "direct_grid_datasource_null_reset": 0,
     },
 }
 
@@ -1563,6 +1569,87 @@ def verify_migration_generated_csharp_style(
                 "code": "generated_callselect_string_literal_default_detected",
                 "severity": "error",
                 "message": "Do not generate CallSelectProcedure string parameters defaulting to empty string or '%'; pass verified caller values explicitly.",
+            }
+        )
+    if re.search(r"CallSelectProcedure\s*\([\s\S]{0,300}\+\s*\"%\"", source):
+        issues.append(
+            {
+                "code": "generated_callselect_inline_wildcard_argument_detected",
+                "severity": "error",
+                "message": "Do not generate CallSelectProcedure call-site arguments that inline LIKE wildcards such as btnCUSTCD.Text + \"%\" or rowValue + \"%\"; pass raw values and let the stored procedure own LIKE shaping.",
+            }
+        )
+    if re.search(r"\b(?:custcd|itemcd|[A-Za-z0-9_]*(?:cd|CD))\s*=\s*[^;\n]+\+\s*\"%\"\s*;", source) or re.search(
+        r"\b(?:custcd|itemcd|[A-Za-z0-9_]*(?:cd|CD))\s*=\s*\"%\"\s*;",
+        source,
+    ):
+        issues.append(
+            {
+                "code": "generated_csharp_like_wildcard_shaping_detected",
+                "severity": "error",
+                "message": "Do not generate C# wildcard shaping such as custcd = custcd + \"%\" or itemcd = \"%\" for migration SELECT parameters; pass raw values and handle LIKE defaults in the stored procedure.",
+            }
+        )
+    if re.search(
+        r"if\s*\(\s*(ymd[A-Z0-9_]*)\.EditValue\s*==\s*null\s*\)\s*(?:\{\s*)?\1\.SetToDay\s*\(\s*0\s*\)",
+        source,
+    ):
+        issues.append(
+            {
+                "code": "generated_dateedit_settoday_null_default_detected",
+                "severity": "error",
+                "message": "Do not generate DateEdit null guards that silently call SetToDay(0) inside search/procedure paths; initialize in Load/Clear or validate before execution.",
+            }
+        )
+    if re.search(r'new\s+DbParameter\s*\(\s*"@(?:YYYY|BASYYYY)"\s*,\s*ymd[A-Z0-9_]*\.DateTime\.Year\.ToString\s*\(\s*\)\s*\)', source) or re.search(
+        r'new\s+DbParameter\s*\(\s*"@(?:MM|BASYYYY)"\s*,\s*DateTime\.Now\.[A-Za-z]+\.ToString\s*\(',
+        source,
+    ):
+        issues.append(
+            {
+                "code": "generated_dateedit_year_or_now_parameter_shaping_detected",
+                "severity": "error",
+                "message": "Do not generate C# parameters that split u_DateEdit values into @YYYY/@MM/@BASYYYY with DateTime.Year.ToString() or DateTime.Now; pass the target-style raw YYYYMMDD() value and let the stored procedure derive related date parameters.",
+            }
+        )
+    if re.search(r"\bgrd[A-Za-z0-9_]*\.DataSource\s*=\s*null\s*;", source):
+        issues.append(
+            {
+                "code": "generated_direct_grid_datasource_null_reset_detected",
+                "severity": "error",
+                "message": "Do not generate direct grd*.DataSource = null resets for KoneLib-style screens; use devFnc.InitControl(grd*) unless the active target source proves otherwise.",
+            }
+        )
+    if any(
+        re.search(pattern, source)
+        for pattern in (
+            r"new\s+DateTime\s*\(\s*DateTime\.Now\.Year\s*,\s*DateTime\.Now\.Month\s*,\s*1\s*\)\s*\.AddDays\s*\(\s*-1\s*\)",
+            r"DateTime\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*DateTime\.Now\.AddDays\s*\(\s*1\s*-\s*DateTime\.Now\.Day\s*\)\s*\.AddDays\s*\(\s*-1\s*\)",
+            r"new\s+DateTime\s*\([\s\S]{0,120}DateTime\.DaysInMonth\s*\(",
+            r"\.AddMonths\s*\(\s*1\s*\)\s*\.AddDays\s*\(\s*-1\s*\)",
+        )
+    ):
+        issues.append(
+            {
+                "code": "generated_month_end_datetime_block_detected",
+                "severity": "error",
+                "message": "Do not generate ad hoc month-end DateTime construction blocks in migrated screen code unless matched target evidence proves that exact pattern.",
+            }
+        )
+    if re.search(r"new\s+DateTime\s*\(\s*ymd[A-Z0-9_]*\.DateTime\.Year\s*-\s*1\s*,\s*12\s*,\s*31\s*\)", source):
+        issues.append(
+            {
+                "code": "generated_year_end_datetime_block_detected",
+                "severity": "error",
+                "message": "Do not generate ad hoc year-end DateTime construction blocks from DateEdit values unless matched target evidence proves that exact pattern.",
+            }
+        )
+    if re.search(r"\(\s*ymd[A-Z0-9_]*\.DateTime\.Year\s*-\s*1\s*\)\s*\.ToString\s*\(\s*\"0000\"\s*\)\s*\+\s*\"1231\"", source):
+        issues.append(
+            {
+                "code": "generated_year_end_string_boundary_detected",
+                "severity": "error",
+                "message": "Do not generate year-end boundary strings such as (ymdGIJUN.DateTime.Year - 1).ToString(\"0000\") + \"1231\" in C#; let the stored procedure own derived date boundaries.",
             }
         )
     if re.search(r"\?\?\s*\"%\"", source):

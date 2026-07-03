@@ -754,6 +754,12 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertEqual(27, baseline["designer_pattern_counts"]["RepositoryItemSpinEdit"]["files"])
         self.assertEqual(0, baseline["zero_hit_generated_patterns"]["DBNull_ternary_row_value"])
         self.assertEqual(0, baseline["zero_hit_generated_patterns"]["radio_Convert_ToString_local"])
+        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["CallSelectProcedure_inline_wildcard_argument"])
+        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["CSharp_like_wildcard_shaping"])
+        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["DateEdit_null_SetToDay_default"])
+        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["DateEdit_year_or_now_parameter_shaping"])
+        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["generated_date_boundary_DateTime_block"])
+        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["direct_grid_datasource_null_reset"])
 
     def test_author_tagged_style_evidence_resolves_sp_to_program_key(self):
         self.assertEqual("SA800100", normalize_author_tagged_program_key("dbo.sp_SA800100_SELECT"))
@@ -816,6 +822,116 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("generated_percent_null_coalesce_detected", issue_codes)
         self.assertIn("generated_buttonedit_null_stringempty_ternary_detected", issue_codes)
         self.assertIn("generated_radio_convert_tostring_local_detected", issue_codes)
+
+    def test_generated_csharp_style_blocks_sa900100_leftover_generated_patterns(self):
+        generated = '''
+        private void SA900100_SearchCommand(object sender, SearchCommandEventArgs e)
+        {
+            if (ymdGIJUN.EditValue == null)
+                ymdGIJUN.SetToDay(0);
+
+            DataSet ds = CallSelectProcedure(SelectType.LIST, btnCUSTCD.Text + "%", "%");
+        }
+
+        private void CallDetailQuery()
+        {
+            DataRow dr = gvwList.GetFocusedDataRow();
+            DataSet ds = CallSelectProcedure(SelectType.DETAIL, dr["CUSTCD"].ToString(), dr["PRNTITEMCD"].ToString() + "%");
+        }
+
+        private DataSet CallSelectProcedure(SelectType _selectType, string _custcd, string _itemcd)
+        {
+            DateTime lastdt = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1).AddDays(-1);
+            if (ymdGIJUN.DateTime.Year != lastdt.Year)
+                lastdt = new DateTime(ymdGIJUN.DateTime.Year - 1, 12, 31);
+
+            return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_callselect_inline_wildcard_argument_detected", issue_codes)
+        self.assertIn("generated_dateedit_settoday_null_default_detected", issue_codes)
+        self.assertIn("generated_month_end_datetime_block_detected", issue_codes)
+        self.assertIn("generated_year_end_datetime_block_detected", issue_codes)
+
+    def test_generated_csharp_style_blocks_csharp_sp_parameter_shaping(self):
+        generated = '''
+        private DataSet CallSelectProcedure(SelectType _selectType, string _custcd, string _itemcd)
+        {
+            DateTime basdt = DateTime.Now.AddDays(1 - DateTime.Now.Day).AddDays(-1);
+            string custcd = _custcd;
+            string itemcd = _itemcd;
+            string lastdt = basdt.ToString("yyyyMMdd");
+
+            if (ymdGIJUN.DateTime.Year != basdt.Year)
+                lastdt = (ymdGIJUN.DateTime.Year - 1).ToString("0000") + "1231";
+
+            if (_selectType == SelectType.LIST)
+            {
+                custcd = btnCUSTCD.Text;
+                if (string.IsNullOrEmpty(custcd))
+                    custcd = "%";
+                else
+                    custcd = custcd + "%";
+
+                itemcd = "%";
+            }
+            else if (_selectType == SelectType.DETAIL)
+            {
+                itemcd = itemcd + "%";
+            }
+
+            return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_csharp_like_wildcard_shaping_detected", issue_codes)
+        self.assertIn("generated_month_end_datetime_block_detected", issue_codes)
+        self.assertIn("generated_year_end_string_boundary_detected", issue_codes)
+
+    def test_generated_csharp_style_blocks_dateedit_split_date_parameters(self):
+        generated = '''
+        return dbClient.GetDataSetFromSP("sp_SA900100_SELECT"
+                , new DbParameter("@WORKTYPE", _selectType.ToString())
+                , new DbParameter("@ORGDIV", userInfo.Orgdiv)
+                , new DbParameter("@CUSTCD", _custcd)
+                , new DbParameter("@YYYY", ymdGIJUN.DateTime.Year.ToString())
+                , new DbParameter("@MM", DateTime.Now.Month.ToString("00"))
+                , new DbParameter("@BASYYYY", DateTime.Now.Year.ToString())
+                , new DbParameter("@GUBUN", radGUBUN.EditValue)
+                , new DbParameter("@GB", radGB.EditValue)
+                , new DbParameter("@ITEMCD", _itemcd)
+                );
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_dateedit_year_or_now_parameter_shaping_detected", issue_codes)
+
+    def test_generated_csharp_style_blocks_direct_grid_datasource_null_reset(self):
+        generated = '''
+        private void Search()
+        {
+            grdDetail.DataSource = null;
+            grdList.DataSource = null;
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_direct_grid_datasource_null_reset_detected", issue_codes)
 
     def test_generated_csharp_style_blocks_dbnull_and_helper_variants(self):
         generated = '''
