@@ -2,7 +2,7 @@
 
 Date: 2026-07-02
 Branch: `codex-runtime`
-Version: `2.9.113`
+Version: `2.9.114`
 
 ## Purpose
 
@@ -242,10 +242,10 @@ User feedback clarified that "analyze every program" means no omission from the 
 
 Evidence added:
 
-- `author-tagged-style-baseline.md` records 61 `C_KONE110` procedures whose definitions contain `KH`, `근호`, or `장근호` and normalizes them into 40 program keys.
-- 39 program keys were mapped to C# source-bearing programs under `C_KONE110_1`; `SA116T` is recorded as SP-only/unmapped local evidence.
+- `author-tagged-style-baseline.md` now records 62 `C_KONE110` procedures whose definitions contain `KH`, `근호`, or `장근호` and normalizes them into 41 program keys.
+- 37 primary C# screen files and 37 Designer files are used as the seed style baseline after excluding current repair targets and non-screen mappings; `SA116T` is recorded as SP-only evidence.
 - The baseline records that author-tagged C# samples use direct procedure-call/local-variable flow and do not use generated `RetrieveContext`, `GetEditValue`, or `GetColumnText` helpers.
-- The SP baseline records 0/61 occurrences of `SET @WORKTYPE = ISNULL(...)` and 0/61 occurrences of `@WORKTYPE VARCHAR(20) = ''`.
+- The SP baseline records zero accepted occurrences of generated `SET @WORKTYPE = ISNULL(...)` and `@WORKTYPE VARCHAR(20) = ''` defaults.
 
 Runtime gates added:
 
@@ -329,3 +329,62 @@ Verification evidence:
 - `rg` scan for rejected helper/mojibake patterns in `SA900100.cs` + `SA900100.Designer.cs`: no matches.
 - Visual Studio MSBuild 2022 command on `Konesystem.SA02.csproj` with `Configuration=Debug`, `Platform=AnyCPU`: succeeded and produced `Konesystem.SA02.dll`; existing platform warnings remain unrelated.
 - `dotnet build --no-restore` was also tried, but .NET SDK build failed before target compilation on existing non-string resource handling in `KoneLib.DevBase`. VS MSBuild is the valid verification path for this legacy project.
+
+## 2.9.114 Follow-up: Author-Tagged SP To C# Baseline
+
+User feedback clarified that the C# style baseline must not be "general C# style" or "any same-project sample". The baseline is:
+
+1. `KH` / `근호` / `장근호` authored stored procedure.
+2. Normalized program key from `sp_<PROGRAM>_SELECT` or `sp_<PROGRAM>_SAVE`.
+3. Same-program C# screen source and Designer source.
+4. Concrete style patterns extracted from those matched files.
+
+Fresh evidence:
+
+- DB selector: `C_KONE110` procedures whose definition contains `KH`, `근호`, or `장근호`.
+- Author-tagged SPs: 62.
+- Normalized program keys: 41.
+- Primary C# baseline files analyzed: 37.
+- Designer files analyzed: 37.
+- `SA900100` is a current repair target, not seed baseline evidence.
+- `SA116T`, `PopDwgnoFrm`, and `popSendMail` are SP-only or platform/non-screen mappings.
+
+Observed C# baseline:
+
+- `CallSelectProcedure`: 31 files / 135 hits.
+- `CallViewQuery`: 5 files / 43 hits.
+- `SelectType`: 33 files / 339 hits.
+- `SearchCommand`: 34 files / 136 hits.
+- `SaveCommand`: 31 files / 124 hits.
+- `DataUtil.DataTableToXml`: 27 files / 71 hits.
+- `GetFocusedDataRow`: 27 files / 74 hits.
+- `dr["..."].ToString()` or `dr?["..."].ToString()`: 20 files / 91 hits.
+- `devFnc.InitControl`: 29 files / 154 hits.
+
+Zero-hit generated C# patterns now blocked:
+
+- `private sealed class` / `*Context` retrieve DTOs.
+- `SearchParams` / `Request` / `Criteria` private helper classes.
+- `GetEditValue(...)` / `GetColumnText(...)` generic helpers.
+- `dr["FIELD"] == DBNull.Value ? ...`, `Convert.IsDBNull(...) ?`, `DataRow.IsNull(...) ?`, `is DBNull`, and focused-cell DBNull wrappers.
+- `_selectType == SelectType.DETAIL ? ...` parameter routing.
+- `?? "%"` wildcard null coalescing.
+- `CallSelectProcedure(... string _x = "" / "%")` generated defaults.
+- `btn*.EditValue == null ? string.Empty : ...`.
+- `Convert.ToString(rad*.EditValue)` radio locals.
+
+Observed Designer baseline:
+
+- `u_GridControl`: 35 files / 221 hits.
+- `u_TextEdit`: 25 files / 1990 hits.
+- `u_DateEdit`: 28 files / 206 hits.
+- `u_SpinEdit`: 18 files / 922 hits.
+- `BindingField`: 31 files / 754 hits.
+- explicit `GridColumn col*_<FIELD>` members: 34 files / 2336 hits.
+- `Columns.AddRange`: 35 files / 93 hits.
+- header/cell appearance font and center alignment settings are common and must not be dropped.
+- numeric columns should use `RepositoryItemSpinEdit` via `ColumnEdit`, not `DisplayFormat` as the primary behavior.
+
+SP verifier follow-up:
+
+- Blocks `SET/SELECT @PARAM = ISNULL(...)`, `COALESCE(...)`, `NULLIF(...)`, `IF ISNULL(@PARAM, ...)`, and `LTRIM/RTRIM` generated normalization blocks unless verified target evidence proves that exact pattern.

@@ -20,6 +20,9 @@ from src.skills.pb_to_csharp_migration import (
     extract_datawindow_columns,
     extract_csharp_designer_control_specs,
     generate_devexpress_grid_xml,
+    get_author_tagged_csharp_style_baseline,
+    normalize_author_tagged_program_key,
+    resolve_author_tagged_style_evidence,
     verify_migration_generated_csharp_style,
     verify_pb_migration_sp_generation_contract,
     verify_pb_migration_sp_with_sql_formatting,
@@ -687,7 +690,7 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
         private bool ValidateSearch()
         {
-            ShowMessageError("湲곗??꾨룄瑜??낅젰?섏떆??");
+            ShowMessageError("\u6e72\uacd7");
             return true;
         }
 
@@ -735,6 +738,114 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("generated_month_column_visibleindex_loop_detected", issue_codes)
         self.assertIn("popcust_dialogresult_yes_or_ok_detected", issue_codes)
         self.assertIn("mojibake_korean_literal_detected", issue_codes)
+
+    def test_author_tagged_csharp_style_baseline_has_real_analysis_counts(self):
+        baseline = get_author_tagged_csharp_style_baseline()
+
+        self.assertEqual(62, baseline["sp_count"])
+        self.assertEqual(41, baseline["normalized_program_key_count"])
+        self.assertEqual(37, baseline["primary_csharp_baseline_files_analyzed"])
+        self.assertEqual(37, baseline["designer_files_analyzed"])
+        self.assertIn("SA900100", baseline["baseline_exclusions"])
+        self.assertEqual(31, baseline["primary_csharp_pattern_counts"]["CallSelectProcedure"]["files"])
+        self.assertEqual(27, baseline["primary_csharp_pattern_counts"]["GetFocusedDataRow"]["files"])
+        self.assertEqual(35, baseline["designer_pattern_counts"]["u_GridControl"]["files"])
+        self.assertEqual(34, baseline["designer_pattern_counts"]["explicit_GridColumn_fields"]["files"])
+        self.assertEqual(27, baseline["designer_pattern_counts"]["RepositoryItemSpinEdit"]["files"])
+        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["DBNull_ternary_row_value"])
+        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["radio_Convert_ToString_local"])
+
+    def test_author_tagged_style_evidence_resolves_sp_to_program_key(self):
+        self.assertEqual("SA800100", normalize_author_tagged_program_key("dbo.sp_SA800100_SELECT"))
+        self.assertEqual("MA100100_POP", normalize_author_tagged_program_key("[dbo].[sp_MA100100_POP_SELECT]"))
+
+        resolved = resolve_author_tagged_style_evidence("sp_SA800100_SELECT")
+        self.assertTrue(resolved.success, resolved.to_dict())
+        self.assertEqual("SA800100", resolved.metadata["program_key"])
+        self.assertIn("SA800100.cs", resolved.metadata["primary_style_evidence_paths"][0])
+
+        excluded = resolve_author_tagged_style_evidence("SP_SA900100_SELECT")
+        self.assertFalse(excluded.success)
+        self.assertEqual("excluded", excluded.metadata["status"])
+        self.assertIn("repair target", excluded.metadata["exclusion_reason"])
+
+    def test_generated_csharp_style_requires_author_tagged_evidence_when_enabled(self):
+        missing = verify_migration_generated_csharp_style(
+            'return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");',
+            program_key="SA800100",
+            require_author_tagged_evidence=True,
+        )
+        self.assertFalse(missing.success)
+        self.assertIn("author_tagged_style_evidence_required", {issue["code"] for issue in missing.metadata["issues"]})
+
+        present = verify_migration_generated_csharp_style(
+            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT");',
+            program_key="SA800100",
+            primary_style_evidence_paths=[r"Programs\20.영업(SA)\Konesystem.SA02\SA800100.cs"],
+            require_author_tagged_evidence=True,
+        )
+        self.assertTrue(present.success, present.to_dict())
+
+    def test_generated_csharp_style_blocks_patterns_absent_from_matched_sources(self):
+        generated = '''
+        private void CallDetailQuery()
+        {
+            DataRow dr = gvwList.GetFocusedDataRow();
+            string custcd = dr["CUSTCD"] == DBNull.Value ? string.Empty : dr["CUSTCD"].ToString().Trim();
+            string itemcd = dr["PRNTITEMCD"] == DBNull.Value ? string.Empty : dr["PRNTITEMCD"].ToString().Trim();
+            itemcd = string.IsNullOrEmpty(itemcd) ? "%" : itemcd + "%";
+            DataSet ds = CallSelectProcedure(SelectType.DETAIL, custcd, itemcd);
+        }
+
+        private DataSet CallSelectProcedure(SelectType _selectType, string _custcd = null, string _itemcd = null)
+        {
+            string gubun = Convert.ToString(radGUBUN.EditValue);
+            string gb = Convert.ToString(radGB.EditValue);
+            string custcd = btnCUSTCD.EditValue == null ? string.Empty : btnCUSTCD.EditValue.ToString().Trim();
+            string itemcd = _selectType == SelectType.DETAIL ? (_itemcd ?? "%") : "%";
+            return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_dbnull_ternary_row_value_detected", issue_codes)
+        self.assertIn("generated_selecttype_detail_ternary_detected", issue_codes)
+        self.assertIn("generated_percent_null_coalesce_detected", issue_codes)
+        self.assertIn("generated_buttonedit_null_stringempty_ternary_detected", issue_codes)
+        self.assertIn("generated_radio_convert_tostring_local_detected", issue_codes)
+
+    def test_generated_csharp_style_blocks_dbnull_and_helper_variants(self):
+        generated = '''
+        private class SearchParams
+        {
+            public string CUSTCD { get; set; }
+        }
+
+        private DataSet CallSelectProcedure(SelectType _selectType, string _custcd = "", string _itemcd = "%")
+        {
+            DataRow dr = gvwList.GetFocusedDataRow();
+            string custcd = Convert.IsDBNull(dr["CUSTCD"]) ? string.Empty : dr["CUSTCD"].ToString();
+            string itemcd = dr.IsNull("ITEMCD") ? string.Empty : dr["ITEMCD"].ToString();
+            object qty = gvwList.GetFocusedRowCellValue("QTY") == DBNull.Value ? 0 : gvwList.GetFocusedRowCellValue("QTY");
+            if (dr["ORDNUM"] is DBNull)
+                return null;
+            return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("generated_private_parameter_helper_class_detected", issue_codes)
+        self.assertIn("generated_callselect_string_literal_default_detected", issue_codes)
+        self.assertIn("generated_convert_isdbnull_ternary_detected", issue_codes)
+        self.assertIn("generated_datarow_isnull_ternary_detected", issue_codes)
+        self.assertIn("generated_focused_cell_dbnull_check_detected", issue_codes)
+        self.assertIn("generated_is_dbnull_check_detected", issue_codes)
 
     def test_generated_csharp_style_blocks_name_text_field_as_dateedit(self):
         generated = '''
@@ -1017,6 +1128,11 @@ BEGIN
 
     SET @WORKTYPE = ISNULL(@WORKTYPE, '');
     SET @CUSTCD = (CASE WHEN ISNULL(@CUSTCD, '') = '' THEN '%' ELSE @CUSTCD END);
+    SELECT @ITEMCD = COALESCE(@ITEMCD, '%');
+    SET @GUBUN = NULLIF(@GUBUN, '');
+    IF ISNULL(@GB, '') = ''
+        SET @GB = '1';
+    SET @CUSTCD = LTRIM(RTRIM(@CUSTCD));
 
     IF @WORKTYPE = 'LIST'
     BEGIN
@@ -1037,6 +1153,11 @@ END
         self.assertIn("business_flag_parameter_default_detected", issue_codes)
         self.assertIn("worktype_isnull_normalization_detected", issue_codes)
         self.assertIn("case_isnull_parameter_normalization_detected", issue_codes)
+        self.assertIn("set_isnull_parameter_normalization_detected", issue_codes)
+        self.assertIn("set_coalesce_parameter_normalization_detected", issue_codes)
+        self.assertIn("set_nullif_parameter_normalization_detected", issue_codes)
+        self.assertIn("if_isnull_parameter_normalization_detected", issue_codes)
+        self.assertIn("trim_parameter_normalization_detected", issue_codes)
 
     def test_composed_sp_and_sql_formatting_verifier_requires_both_gates(self):
         sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]

@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List
@@ -53,6 +54,172 @@ SP_PROCEDURE_NAME_PATTERN = re.compile(
     r"(?:\[[^\]]+\]|\w+)?\s*\.?\s*(?:\[(?P<bracketed>SP_[A-Z0-9_]+)\]|(?P<plain>SP_[A-Z0-9_]+))",
     re.IGNORECASE,
 )
+
+AUTHOR_TAGGED_CSHARP_STYLE_BASELINE: Dict[str, Any] = {
+    "snapshot_date": "2026-07-03",
+    "db_source": "C_KONE110 SYS.OBJECTS + SYS.SQL_MODULES",
+    "sp_selector": "procedure definition contains KH, Geunho, or Jang Geunho author text",
+    "sp_count": 62,
+    "normalized_program_key_count": 41,
+    "primary_csharp_baseline_files_analyzed": 37,
+    "designer_files_analyzed": 37,
+    "source_root": r"C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_1\Programs",
+    "baseline_exclusions": {
+        "SA900100": "current generated/repair target, not accepted as a seed style sample",
+        "SA116T": "author-tagged SP only; no same-name C# screen file found",
+        "PopDwgnoFrm": "platform popup mapping, no same-name screen file under Programs",
+        "popSendMail": "platform popup mapping, no same-name screen file under Programs",
+    },
+    "primary_csharp_pattern_counts": {
+        "dbClient.GetDataSetFromSP": {"files": 35, "hits": 38},
+        "CallSelectProcedure": {"files": 31, "hits": 135},
+        "CallViewQuery": {"files": 5, "hits": 43},
+        "SelectType": {"files": 33, "hits": 339},
+        "SearchCommand": {"files": 34, "hits": 136},
+        "SaveCommand": {"files": 31, "hits": 124},
+        "DataUtil.DataTableToXml": {"files": 27, "hits": 71},
+        "dbClient.ExecSPTrn": {"files": 24, "hits": 32},
+        "dbClient.ExecSP": {"files": 5, "hits": 5},
+        "GetFocusedDataRow": {"files": 27, "hits": 74},
+        "dr_index_ToString": {"files": 20, "hits": 91},
+        "devFnc.InitControl": {"files": 29, "hits": 154},
+    },
+    "designer_pattern_counts": {
+        "u_GridControl": {"files": 35, "hits": 221},
+        "u_GridView": {"files": 21, "hits": 235},
+        "u_TextEdit": {"files": 25, "hits": 1990},
+        "u_ButtonEdit": {"files": 11, "hits": 176},
+        "u_DateEdit": {"files": 28, "hits": 206},
+        "u_SpinEdit": {"files": 18, "hits": 922},
+        "u_RadioButton": {"files": 16, "hits": 265},
+        "u_CheckEdit": {"files": 12, "hits": 246},
+        "BindingField": {"files": 31, "hits": 754},
+        "explicit_GridColumn_fields": {"files": 34, "hits": 2336},
+        "Columns.AddRange": {"files": 35, "hits": 93},
+        "AppearanceHeader.Options.UseFont": {"files": 34, "hits": 2493},
+        "AppearanceHeader.HAlignment.Center": {"files": 34, "hits": 2578},
+        "AppearanceHeader.VAlignment.Center": {"files": 33, "hits": 2072},
+        "AppearanceCell.Options.UseFont": {"files": 35, "hits": 2432},
+        "ColumnEdit_repository": {"files": 26, "hits": 387},
+        "RepositoryItemSpinEdit": {"files": 27, "hits": 791},
+        "TabIndex": {"files": 37, "hits": 1911},
+    },
+    "zero_hit_generated_patterns": {
+        "private_sealed_class": 0,
+        "context_class_or_GetContext": 0,
+        "GetEditValue_helper": 0,
+        "GetColumnText_helper": 0,
+        "DBNull_ternary_row_value": 0,
+        "SelectType_DETAIL_ternary": 0,
+        "percent_null_coalesce": 0,
+        "ButtonEdit_null_string_empty_ternary": 0,
+        "radio_Convert_ToString_local": 0,
+    },
+}
+
+AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS: Dict[str, List[str]] = {
+    "AS100100": [r"Programs\50.품질(QC)\Konesystem.QC02\AS100100.cs", r"Programs\50.품질(QC)\Konesystem.QC02\AS100100.Designer.cs"],
+    "AS100110": [r"Programs\50.품질(QC)\Konesystem.QC02\AS100110.cs", r"Programs\50.품질(QC)\Konesystem.QC02\AS100110.Designer.cs"],
+    "AS200100": [r"Programs\50.품질(QC)\Konesystem.QC02\AS200100.cs", r"Programs\50.품질(QC)\Konesystem.QC02\AS200100.Designer.cs"],
+    "AS200110": [r"Programs\50.품질(QC)\Konesystem.QC02\AS200110.cs", r"Programs\50.품질(QC)\Konesystem.QC02\AS200110.Designer.cs"],
+    "BA000100": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000100.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000100.Designer.cs"],
+    "BA000200": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000200.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000200.Designer.cs"],
+    "BA000500": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000500.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000500.Designer.cs"],
+    "BA000600": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000600.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000600.Designer.cs"],
+    "BA000700": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000700.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000700.Designer.cs"],
+    "DE000500": [r"Programs\60.설계(DE)\Konesystem.DE01\DE000500.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE000500.Designer.cs"],
+    "DE000600": [r"Programs\60.설계(DE)\Konesystem.DE01\DE000600.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE000600.Designer.cs"],
+    "DE000700": [r"Programs\60.설계(DE)\Konesystem.DE01\DE000700.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE000700.Designer.cs"],
+    "DE100100": [r"Programs\60.설계(DE)\Konesystem.DE01\DE100100.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE100100.Designer.cs"],
+    "DE600100": [r"Programs\60.설계(DE)\Konesystem.DE01\DE600100.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE600100.Designer.cs"],
+    "MA100100": [r"Programs\30.자재물류(MA)\Konesystem.MA01\MA100100.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\MA100100.Designer.cs"],
+    "MA100100_POP": [r"Programs\30.자재물류(MA)\Konesystem.MA01\POP\MA100100_POP.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\POP\MA100100_POP.Designer.cs"],
+    "MA100200": [r"Programs\30.자재물류(MA)\Konesystem.MA01\MA100200.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\MA100200.Designer.cs"],
+    "MA200100": [r"Programs\30.자재물류(MA)\Konesystem.MA01\MA200100.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\MA200100.Designer.cs"],
+    "MA400100": [r"Programs\30.자재물류(MA)\Konesystem.MA01\MA400100.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\MA400100.Designer.cs"],
+    "PR100350": [r"Programs\40.생산(PR)\Konesystem.PR01\PR100350.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR100350.Designer.cs"],
+    "PR100350_USERPOP": [r"Programs\40.생산(PR)\Konesystem.PR01\POP\PR100350_USERPOP.cs", r"Programs\40.생산(PR)\Konesystem.PR01\POP\PR100350_USERPOP.Designer.cs"],
+    "PR300100": [r"Programs\40.생산(PR)\Konesystem.PR01\PR300100.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR300100.Designer.cs"],
+    "PR300110": [r"Programs\40.생산(PR)\Konesystem.PR01\PR300110.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR300110.Designer.cs"],
+    "PR300120": [r"Programs\40.생산(PR)\Konesystem.PR01\PR300120.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR300120.Designer.cs"],
+    "PR300500": [r"Programs\40.생산(PR)\Konesystem.PR01\PR300500.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR300500.Designer.cs"],
+    "PR600100": [r"Programs\40.생산(PR)\Konesystem.PR01\PR600100.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR600100.Designer.cs"],
+    "PR600200": [r"Programs\40.생산(PR)\Konesystem.PR01\PR600200.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR600200.Designer.cs"],
+    "QC000100": [r"Programs\50.품질(QC)\Konesystem.QC01\QC000100.cs", r"Programs\50.품질(QC)\Konesystem.QC01\QC000100.Designer.cs"],
+    "QC100100": [r"Programs\50.품질(QC)\Konesystem.QC01\QC100100.cs", r"Programs\50.품질(QC)\Konesystem.QC01\QC100100.Designer.cs"],
+    "SA100100": [r"Programs\20.영업(SA)\Konesystem.SA01\SA100100.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA100100.Designer.cs"],
+    "SA100100_COPYPOP": [r"Programs\20.영업(SA)\Konesystem.SA01\POP\SA100100_COPYPOP.cs", r"Programs\20.영업(SA)\Konesystem.SA01\POP\SA100100_COPYPOP.Designer.cs"],
+    "SA100110": [r"Programs\20.영업(SA)\Konesystem.SA01\SA100110.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA100110.Designer.cs"],
+    "SA200100": [r"Programs\20.영업(SA)\Konesystem.SA01\SA200100.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA200100.Designer.cs"],
+    "SA200150": [r"Programs\20.영업(SA)\Konesystem.SA01\SA200150.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA200150.Designer.cs"],
+    "SA400100": [r"Programs\20.영업(SA)\Konesystem.SA01\SA400100.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA400100.Designer.cs"],
+    "SA800100": [r"Programs\20.영업(SA)\Konesystem.SA02\SA800100.cs", r"Programs\20.영업(SA)\Konesystem.SA02\SA800100.Designer.cs"],
+    "TEST": [r"Programs\10.기준(BA)\Konesystem.BA01\TEST.cs", r"Programs\10.기준(BA)\Konesystem.BA01\TEST.Designer.cs"],
+}
+
+
+def get_author_tagged_csharp_style_baseline() -> Dict[str, Any]:
+    """Return the bundled author-tagged SP-to-C# style evidence snapshot."""
+    return json.loads(json.dumps(AUTHOR_TAGGED_CSHARP_STYLE_BASELINE))
+
+
+def normalize_author_tagged_program_key(procedure_name: str) -> str:
+    """Normalize sp_<PROGRAM>_SELECT/SAVE names to the matched C# program key."""
+    name = str(procedure_name or "").strip().strip("[]")
+    if "." in name:
+        name = name.split(".")[-1].strip().strip("[]")
+    upper = name.upper()
+    if upper.startswith("SP_"):
+        upper = upper[3:]
+    for suffix in ("_SELECT", "_SAVE"):
+        if upper.endswith(suffix):
+            upper = upper[: -len(suffix)]
+            break
+    return upper
+
+
+def resolve_author_tagged_style_evidence(
+    procedure_name: str,
+    *,
+    csharp_root: str = "",
+) -> HarnessResult:
+    """Resolve author-tagged SP style evidence through the program-key C# mapping."""
+    program_key = normalize_author_tagged_program_key(procedure_name)
+    exclusions = {key.upper(): value for key, value in AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["baseline_exclusions"].items()}
+    relative_paths = AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS.get(program_key, [])
+    evidence_paths = [
+        os.path.normpath(os.path.join(csharp_root, rel_path)) if csharp_root else rel_path
+        for rel_path in relative_paths
+    ]
+    exists = [os.path.exists(path) for path in evidence_paths] if csharp_root else []
+    status = "matched"
+    if program_key in exclusions:
+        status = "excluded"
+    elif not relative_paths:
+        status = "unmapped"
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "procedure_name": procedure_name,
+        "program_key": program_key,
+        "status": status,
+        "primary_style_evidence_paths": evidence_paths,
+        "path_exists": exists,
+        "exclusion_reason": exclusions.get(program_key, ""),
+        "baseline_counts": {
+            "sp_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["sp_count"],
+            "normalized_program_key_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["normalized_program_key_count"],
+            "primary_csharp_baseline_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["primary_csharp_baseline_files_analyzed"],
+            "designer_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["designer_files_analyzed"],
+        },
+    }
+    success = status == "matched" and bool(relative_paths)
+    return HarnessResult(
+        success=success,
+        stdout=json.dumps({"status": status, "program_key": program_key, "evidence_count": len(evidence_paths)}, ensure_ascii=False, sort_keys=True),
+        stderr="" if success else "Author-tagged SP did not resolve to primary same-program C# style evidence.",
+        exit_code=0 if success else 1,
+        metadata=metadata,
+    )
 
 
 def _is_numeric_grid_field_name(field_name: str) -> bool:
@@ -1115,10 +1282,52 @@ def extract_csharp_designer_control_specs(source_text: str) -> HarnessResult:
     )
 
 
-def verify_migration_generated_csharp_style(source_text: str) -> HarnessResult:
+def verify_migration_generated_csharp_style(
+    source_text: str,
+    *,
+    program_key: str = "",
+    primary_style_evidence_paths: Any = None,
+    excluded_paths: Any = None,
+    require_author_tagged_evidence: bool = False,
+) -> HarnessResult:
     """Block generated C# patterns that do not match the target Designer/grid style."""
     source = str(source_text or "")
     issues: List[Dict[str, Any]] = []
+    normalized_program_key = str(program_key or "").upper()
+    primary_paths = [str(path) for path in (primary_style_evidence_paths or []) if str(path)]
+    excluded = [str(path) for path in (excluded_paths or []) if str(path)]
+
+    if require_author_tagged_evidence and not primary_paths:
+        issues.append(
+            {
+                "code": "author_tagged_style_evidence_required",
+                "severity": "error",
+                "message": (
+                    "C_KONE110/KH-style generated C# must name primary style evidence resolved from "
+                    "author-tagged SP -> program key -> matching C# screen source."
+                ),
+            }
+        )
+    excluded_keys = {key.upper() for key in AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["baseline_exclusions"]}
+    excluded_seed_used = any(key in path.upper() for key in excluded_keys for path in primary_paths)
+    if require_author_tagged_evidence and normalized_program_key in excluded_keys and not primary_paths:
+        issues.append(
+            {
+                "code": "excluded_program_cannot_seed_author_tagged_style",
+                "severity": "error",
+                "message": "This program is excluded from seed style evidence and must be verified against another matched baseline source.",
+                "program_key": normalized_program_key,
+            }
+        )
+    if require_author_tagged_evidence and excluded_seed_used:
+        issues.append(
+            {
+                "code": "excluded_path_cannot_seed_author_tagged_style",
+                "severity": "error",
+                "message": "Current repair targets or SP-only/non-screen mappings cannot be used as primary C# style evidence.",
+                "program_key": normalized_program_key,
+            }
+        )
 
     has_designer_grid_column_members = bool(
         re.search(r"\bprivate\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s+col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\s*;", source)
@@ -1220,6 +1429,14 @@ def verify_migration_generated_csharp_style(source_text: str) -> HarnessResult:
                 ),
             }
         )
+    if re.search(r"\bprivate\s+class\s+[A-Za-z_][A-Za-z0-9_]*(?:Params|Parameters|Request|Criteria)\b", source):
+        issues.append(
+            {
+                "code": "generated_private_parameter_helper_class_detected",
+                "severity": "error",
+                "message": "Do not generate private SearchParams/Request/Criteria helper classes for C_KONE110/KH-style screen code.",
+            }
+        )
     if re.search(
         r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?[A-Za-z0-9_.<>?]+\s+GetEditValue\s*\(",
         source,
@@ -1291,13 +1508,85 @@ def verify_migration_generated_csharp_style(source_text: str) -> HarnessResult:
                 "message": "PopCustFrm selection should follow the target popup contract; do not broaden it to DialogResult.Yes || DialogResult.OK without source evidence.",
             }
         )
-    mojibake_tokens = ("湲곗", "遺臾", "?쒗", "怨꾩", "怨좉", "議고", "留ㅼ", "誘몃")
+    mojibake_tokens = (
+        "\u6e72\uacd7",
+        "\u907a\x80\u81fe",
+        "?\uc497",
+        "\u6028\uafa9",
+        "\u6028\uc889",
+        "\u8b70\uace0",
+        "\uf9cd\u317c",
+        "\u8a98\uba83",
+    )
     if any(token in source for token in mojibake_tokens):
         issues.append(
             {
                 "code": "mojibake_korean_literal_detected",
                 "severity": "error",
                 "message": "Generated C# contains mojibake Korean text; preserve Korean captions/messages as readable UTF-8 text.",
+            }
+        )
+    if re.search(r'\[\s*"[^"]+"\s*\]\s*==\s*DBNull\.Value\s*\?', source):
+        issues.append(
+            {
+                "code": "generated_dbnull_ternary_row_value_detected",
+                "severity": "error",
+                "message": "Do not generate DBNull ternary wrappers around focused-row values for ordinary C_KONE110/KH detail lookups; follow target direct row-value access unless source proves otherwise.",
+            }
+        )
+    dbnull_variant_patterns = {
+        "generated_convert_isdbnull_ternary_detected": r"Convert\.IsDBNull\s*\([^)]+\)\s*\?",
+        "generated_datarow_isnull_ternary_detected": r"\.\s*IsNull\s*\(\s*\"[^\"]+\"\s*\)\s*\?",
+        "generated_is_dbnull_check_detected": r"\bis\s+DBNull\b",
+        "generated_focused_cell_dbnull_check_detected": r"GetFocusedRowCellValue\s*\([^)]+\)\s*==\s*DBNull\.Value",
+    }
+    for code, pattern in dbnull_variant_patterns.items():
+        if re.search(pattern, source):
+            issues.append(
+                {
+                    "code": code,
+                    "severity": "error",
+                    "message": "Do not generate alternate DBNull/DataRow null wrappers for ordinary matched-source C# row access.",
+                }
+            )
+    if re.search(r"_selectType\s*==\s*SelectType\.DETAIL\s*\?", source):
+        issues.append(
+            {
+                "code": "generated_selecttype_detail_ternary_detected",
+                "severity": "error",
+                "message": "Do not generate _selectType == SelectType.DETAIL ternary parameter routing; keep select/detail parameters explicit and same-shape with target procedure calls.",
+            }
+        )
+    if re.search(r"CallSelectProcedure\s*\([^)]*,\s*string\s+_[A-Za-z0-9_]+\s*=\s*\"(?:%|)\"", source):
+        issues.append(
+            {
+                "code": "generated_callselect_string_literal_default_detected",
+                "severity": "error",
+                "message": "Do not generate CallSelectProcedure string parameters defaulting to empty string or '%'; pass verified caller values explicitly.",
+            }
+        )
+    if re.search(r"\?\?\s*\"%\"", source):
+        issues.append(
+            {
+                "code": "generated_percent_null_coalesce_detected",
+                "severity": "error",
+                "message": "Do not generate null-coalescing wildcard defaults such as _itemcd ?? \"%\" for migration C# unless the target code proves that pattern.",
+            }
+        )
+    if re.search(r"btn[A-Z0-9_]*\.EditValue\s*==\s*null\s*\?\s*string\.Empty", source):
+        issues.append(
+            {
+                "code": "generated_buttonedit_null_stringempty_ternary_detected",
+                "severity": "error",
+                "message": "Do not generate ButtonEdit null/string.Empty ternary extraction for ordinary search parameters; use the target's direct Text/EditValue style.",
+            }
+        )
+    if re.search(r"string\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*Convert\.ToString\s*\(\s*rad[A-Z0-9_]*\.EditValue\s*\)", source):
+        issues.append(
+            {
+                "code": "generated_radio_convert_tostring_local_detected",
+                "severity": "error",
+                "message": "Do not generate extra Convert.ToString(rad*.EditValue) local variables for SP parameters; pass the target control value in the existing style.",
             }
         )
     if re.search(r"KoneLib\.Controls\.u_DateEdit\s+txt[A-Z0-9_]*NM\b", source):
@@ -1382,6 +1671,16 @@ def verify_migration_generated_csharp_style(source_text: str) -> HarnessResult:
         "harness": "pb-to-csharp-migration-harness",
         "status": "passed" if passed else "blocked",
         "issues": issues,
+        "program_key": normalized_program_key,
+        "require_author_tagged_evidence": bool(require_author_tagged_evidence),
+        "primary_style_evidence_paths": primary_paths,
+        "excluded_paths": excluded,
+        "author_tagged_baseline_counts": {
+            "sp_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["sp_count"],
+            "normalized_program_key_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["normalized_program_key_count"],
+            "primary_csharp_baseline_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["primary_csharp_baseline_files_analyzed"],
+            "designer_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["designer_files_analyzed"],
+        },
         "column_style_contract": (
             "Generated grid columns must use explicit target-style names, Designer/AddRange registration, "
             "and RepositoryItemSpinEdit ColumnEdit for numeric AMT/QTY/UNP/WGT/PRICE/RATE/COST/TOTAL columns instead of GridColumn DisplayFormat."
@@ -1571,6 +1870,23 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not add generated CASE/ISNULL parameter normalization blocks unless verified target SP evidence already uses that pattern.",
             }
         )
+    parameter_normalization_patterns = {
+        "set_isnull_parameter_normalization_detected": r"SET\s+@[A-Z0-9_]+\s*=\s*ISNULL\s*\(",
+        "select_isnull_parameter_normalization_detected": r"SELECT\s+@[A-Z0-9_]+\s*=\s*ISNULL\s*\(",
+        "set_coalesce_parameter_normalization_detected": r"(?:SET|SELECT)\s+@[A-Z0-9_]+\s*=\s*COALESCE\s*\(",
+        "set_nullif_parameter_normalization_detected": r"(?:SET|SELECT)\s+@[A-Z0-9_]+\s*=\s*NULLIF\s*\(",
+        "if_isnull_parameter_normalization_detected": r"IF\s+ISNULL\s*\(\s*@[A-Z0-9_]+",
+        "trim_parameter_normalization_detected": r"(?:SET|SELECT)\s+@[A-Z0-9_]+\s*=\s*(?:LTRIM|RTRIM)\s*\(",
+    }
+    for code, pattern in parameter_normalization_patterns.items():
+        if re.search(pattern, upper_comments_stripped):
+            issues.append(
+                {
+                    "code": code,
+                    "severity": "error",
+                    "message": "Do not add generated parameter normalization blocks unless verified target SP evidence already uses that exact pattern.",
+                }
+            )
     if re.search(r"(^|[;\s])WITH\s+(?:\[[^\]]+\]|[A-Z0-9_]+)\s+AS\s*\(", upper_unprotected):
         issues.append(
             {

@@ -2,7 +2,14 @@
 
 Use this reference before drafting or reviewing target-project C# migration code. TY/C_KONE110 examples are packaged sample evidence only; the active target project's real controls, base forms, method paths, and naming conventions override this baseline.
 
-When the requested target is the user's C_KONE110/KH-style migration output, read `author-tagged-style-baseline.md` together with this file. That baseline fixes the complete author-tagged SP/program dataset used for this style, including the absence of generated context DTOs, generic value helpers, and runtime grid helper generation in the sampled C# programs.
+When the requested target is the user's C_KONE110/KH-style migration output, read `author-tagged-style-baseline.md` together with this file. That baseline is primary because it was built from author-tagged stored procedures mapped to same-program C# screen sources. This file is secondary guidance only.
+
+Style selection order:
+
+1. Same-program C# source matched from a `KH`, `근호`, or `장근호` authored stored procedure.
+2. Same module/family neighbor only when the current program is a repair target or has no same-name C# evidence.
+3. This packaged generic TY/C_KONE110 guidance.
+4. Generic DevExpress/WinForms fallback only when the target project has no stronger evidence.
 
 ## Core style
 
@@ -11,6 +18,7 @@ When the requested target is the user's C_KONE110/KH-style migration output, rea
 - Keep ordinary procedure parameters near the procedure call as local variables when the target baseline shows that pattern. Do not introduce generated internal DTO/context classes such as `RetrieveContext` for simple retrieve state.
 - Do not add generic local helpers such as `GetEditValue(...)`, `GetColumnText(...)`, or runtime `SetVisibleIndex(...)` unless the current target screen already proves that exact helper style.
 - Do not invent generic generated helpers such as `SetDefaultSearchValues(...)`, `ApplyListColumnLayout(...)`, `GetBasisYear(...)`, `GetCustomerLike(...)`, or `ValidateSearch(...)` for ordinary search screens. If default values, popup values, or year/date values are simple, keep them directly in `Load`, `ClearCommand`, event handlers, or the procedure-call method in the same shape as the target source.
+- Do not add generated `DBNull.Value ?` row-value wrappers, `_selectType == SelectType.DETAIL ?` routing, `?? "%"` wildcard coalescing, `btn*.EditValue == null ? string.Empty`, or `Convert.ToString(rad*.EditValue)` locals for ordinary screen code. The analyzed author-tagged baseline has zero hits for those patterns.
 - Prefer small, same-shape patches over broad redesign.
 - Treat the active checkout and active screen binding as source of truth. Duplicate project trees are common; verify the target tree before applying style.
 

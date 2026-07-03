@@ -1,90 +1,110 @@
-# Author-Tagged C# / SP Style Baseline
+# Author-Tagged SP To C# Style Baseline
 
-This bundled baseline captures the source data used to model the user's C_KONE110/KH-style PB-to-C# migration output. Use it when the user asks to follow procedures or C# programs written by `KH`, `근호`, or `장근호`, or when a migration target is C_KONE110-like.
+This baseline is the bundled evidence for the user's C_KONE110/KH-style PB-to-C# migration output. It is not a generic TY, KoneLib, or DevExpress style guide.
 
-This is evidence, not decoration. Do not replace it with a few representative files. If local DB/source access is unavailable, use this snapshot as the fallback style dataset.
+Use this file when a task asks to follow procedures or C# programs written by `KH`, `근호`, or `장근호`, or when a C_KONE110-like migration target needs the user's house style.
+
+## Baseline Rule
+
+Primary style evidence must be selected in this order:
+
+1. Find stored procedures whose definition contains the author text `KH`, `근호`, or `장근호`.
+2. Normalize the program key from the procedure name:
+   - remove the leading `sp_`;
+   - remove trailing `_SELECT` or `_SAVE`;
+   - preserve popup suffixes such as `_POP`, `_COPYPOP`, and `_USERPOP`.
+3. Find the matching C# screen source by the normalized program key.
+4. Use only that matched C# source and its `.Designer.cs` as primary style evidence.
+5. If the program has no matching C# screen source, treat the SP as SQL evidence only.
+6. Do not use arbitrary same-project C# files as primary style evidence when matched author-tagged evidence exists.
+
+`SA900100` is a current repair target. Do not use its generated state as a seed baseline until it has passed the verifier; use the pre-existing matched programs plus same-module evidence such as `SA800100` for style.
 
 ## Snapshot
 
-- Snapshot date: 2026-07-02
+- Snapshot date: 2026-07-03
 - DB source: `C_KONE110` `SYS.OBJECTS` + `SYS.SQL_MODULES`
 - SP selector: procedure definition contains `KH`, `근호`, or `장근호`
-- SP count: 61
-- Normalized program key count: 40
-- C# source root used for mapping: `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_1`
-- C# source-bearing program mappings: 39
-- SP-only or locally unmapped program key: `SA116T`
-- Common popup/platform mappings are included: `PopDwgnoFrm`, `popSendMail`
+- SP count: 62
+- Normalized program key count: 41
+- C# source root used for mapping: `C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_1\Programs`
+- Primary C# baseline files analyzed: 37
+- Designer files analyzed: 37
+- Current target excluded from seed baseline: `SA900100`
+- SP-only or non-screen mappings: `SA116T`, `PopDwgnoFrm`, `popSendMail`
 
-## Complete SP Dataset
+## Author-Tagged SP Dataset
 
-| Program key | Procedure | Author hint | Definition length | Arithabort | Bad `SET @WORKTYPE = ISNULL` | Bad `@WORKTYPE = ''` |
-| --- | --- | --- | ---: | ---: | ---: | ---: |
-| AS100100 | sp_AS100100_SAVE | 근호 | 32875 | 0 | 0 | 0 |
-| AS100100 | sp_AS100100_SELECT | 근호 | 10189 | 1 | 0 | 0 |
-| AS100110 | sp_AS100110_SAVE | 근호 | 7023 | 0 | 0 | 0 |
-| AS100110 | sp_AS100110_SELECT | 근호 | 6368 | 1 | 0 | 0 |
-| AS200100 | sp_AS200100_SELECT | KH | 1792 | 1 | 0 | 0 |
-| AS200110 | sp_AS200110_SELECT | KH | 2527 | 1 | 0 | 0 |
-| BA000100 | sp_BA000100_SAVE | 장근호 | 4610 | 0 | 0 | 0 |
-| BA000100 | sp_BA000100_SELECT | 근호 | 1166 | 1 | 0 | 0 |
-| BA000200 | sp_BA000200_SAVE | 장근호 | 4647 | 0 | 0 | 0 |
-| BA000200 | sp_BA000200_SELECT | 근호 | 1122 | 1 | 0 | 0 |
-| BA000500 | sp_BA000500_SAVE | 장근호 | 13849 | 0 | 0 | 0 |
-| BA000500 | sp_BA000500_SELECT | 근호 | 6596 | 1 | 0 | 0 |
-| BA000600 | sp_BA000600_SAVE | 장근호 | 5294 | 0 | 0 | 0 |
-| BA000600 | sp_BA000600_SELECT | 근호 | 3694 | 1 | 0 | 0 |
-| BA000700 | sp_BA000700_SAVE | 근호 | 6378 | 0 | 0 | 0 |
-| BA000700 | sp_BA000700_SELECT | 근호 | 3126 | 1 | 0 | 0 |
-| DE000500 | sp_DE000500_SAVE | 근호 | 4715 | 0 | 0 | 0 |
-| DE000500 | sp_DE000500_SELECT | 근호 | 2191 | 1 | 0 | 0 |
-| DE000600 | sp_DE000600_SAVE | 근호 | 16750 | 0 | 0 | 0 |
-| DE000600 | sp_DE000600_SELECT | 근호 | 7370 | 1 | 0 | 0 |
-| DE000700 | sp_DE000700_SAVE | 근호 | 43650 | 0 | 0 | 0 |
-| DE000700 | sp_DE000700_SELECT | 근호 | 29316 | 1 | 0 | 0 |
-| DE100100 | sp_DE100100_SELECT | 근호 | 4773 | 0 | 0 | 0 |
-| DE600100 | sp_DE600100_SELECT | 근호 | 6646 | 1 | 0 | 0 |
-| MA100100 | sp_MA100100_SAVE | 근호 | 18473 | 0 | 0 | 0 |
-| MA100100 | sp_MA100100_SELECT | 근호 | 28113 | 1 | 0 | 0 |
-| MA100100_POP | sp_MA100100_POP_SELECT | 근호 | 10055 | 1 | 0 | 0 |
-| MA100200 | sp_MA100200_SAVE | 근호 | 8290 | 0 | 0 | 0 |
-| MA100200 | sp_MA100200_SELECT | 근호 | 5820 | 1 | 0 | 0 |
-| MA200100 | sp_MA200100_SAVE | 근호 | 11899 | 0 | 0 | 0 |
-| MA200100 | sp_MA200100_SELECT | 근호 | 9725 | 1 | 0 | 0 |
-| MA400100 | sp_MA400100_SAVE | KH | 14732 | 0 | 0 | 0 |
-| PopDwgnoFrm | sp_PopDwgnoFrm_SELECT | 근호 | 2318 | 1 | 0 | 0 |
-| popSendMail | sp_popSendMail_SAVE | 근호 | 924 | 1 | 0 | 0 |
-| popSendMail | sp_popSendMail_SELECT | 근호 | 720 | 1 | 0 | 0 |
-| PR100350 | sp_PR100350_SAVE | KH | 8659 | 0 | 0 | 0 |
-| PR100350_USERPOP | sp_PR100350_USERPOP_SELECT | 근호 | 1477 | 1 | 0 | 0 |
-| PR300100 | sp_PR300100_SAVE | 근호 | 19628 | 0 | 0 | 0 |
-| PR300100 | sp_PR300100_SELECT | KH | 24480 | 1 | 0 | 0 |
-| PR300110 | sp_PR300110_SAVE | 근호 | 4639 | 0 | 0 | 0 |
-| PR300110 | sp_PR300110_SELECT | KH | 4414 | 1 | 0 | 0 |
-| PR300120 | sp_PR300120_SELECT | KH | 3551 | 1 | 0 | 0 |
-| PR300500 | sp_PR300500_SAVE | 근호 | 3582 | 0 | 0 | 0 |
-| PR300500 | sp_PR300500_SELECT | 근호 | 4122 | 1 | 0 | 0 |
-| PR600100 | sp_PR600100_SELECT | KH | 2777 | 1 | 0 | 0 |
-| PR600200 | sp_PR600200_SELECT | KH | 6164 | 1 | 0 | 0 |
-| QC000100 | sp_QC000100_SAVE | KH | 16549 | 0 | 0 | 0 |
-| QC000100 | sp_QC000100_SELECT | KH | 9581 | 1 | 0 | 0 |
-| QC100100 | sp_QC100100_SAVE | 근호 | 2335 | 0 | 0 | 0 |
-| QC100100 | sp_QC100100_SELECT | 근호 | 13601 | 1 | 0 | 0 |
-| SA100100 | sp_SA100100_SAVE | 근호 | 48436 | 0 | 0 | 0 |
-| SA100100 | sp_SA100100_SELECT | 근호 | 17179 | 1 | 0 | 0 |
-| SA100100_COPYPOP | sp_SA100100_COPYPOP_SAVE | 근호 | 11555 | 1 | 0 | 0 |
-| SA100110 | sp_SA100110_SELECT | 근호 | 14186 | 1 | 0 | 0 |
-| SA116T | sp_SA116T_SAVE | 근호 | 22203 | 0 | 0 | 0 |
-| SA200100 | sp_SA200100_SELECT | 근호 | 9893 | 1 | 0 | 0 |
-| SA200150 | sp_SA200150_SELECT | 근호 | 7663 | 1 | 0 | 0 |
-| SA400100 | sp_SA400100_SAVE | KH | 14811 | 0 | 0 | 0 |
-| SA800100 | sp_SA800100_SAVE | 근호 | 6394 | 0 | 0 | 0 |
-| SA800100 | sp_SA800100_SELECT | 근호 | 55084 | 1 | 0 | 0 |
-| TEST | sp_TEST_SELECT | 근호 | 2856 | 1 | 0 | 0 |
+| Program key | Procedure | Author hint |
+| --- | --- | --- |
+| AS100100 | sp_AS100100_SAVE | 근호 |
+| AS100100 | sp_AS100100_SELECT | 근호 |
+| AS100110 | sp_AS100110_SAVE | 근호 |
+| AS100110 | sp_AS100110_SELECT | 근호 |
+| AS200100 | sp_AS200100_SELECT | KH |
+| AS200110 | sp_AS200110_SELECT | KH |
+| BA000100 | sp_BA000100_SAVE | 장근호 |
+| BA000100 | sp_BA000100_SELECT | 근호 |
+| BA000200 | sp_BA000200_SAVE | 장근호 |
+| BA000200 | sp_BA000200_SELECT | 근호 |
+| BA000500 | sp_BA000500_SAVE | 장근호 |
+| BA000500 | sp_BA000500_SELECT | 근호 |
+| BA000600 | sp_BA000600_SAVE | 장근호 |
+| BA000600 | sp_BA000600_SELECT | 근호 |
+| BA000700 | sp_BA000700_SAVE | 근호 |
+| BA000700 | sp_BA000700_SELECT | 근호 |
+| DE000500 | sp_DE000500_SAVE | 근호 |
+| DE000500 | sp_DE000500_SELECT | 근호 |
+| DE000600 | sp_DE000600_SAVE | 근호 |
+| DE000600 | sp_DE000600_SELECT | 근호 |
+| DE000700 | sp_DE000700_SAVE | 근호 |
+| DE000700 | sp_DE000700_SELECT | 근호 |
+| DE100100 | sp_DE100100_SELECT | 근호 |
+| DE600100 | sp_DE600100_SELECT | 근호 |
+| MA100100 | sp_MA100100_SAVE | 근호 |
+| MA100100 | sp_MA100100_SELECT | 근호 |
+| MA100100_POP | sp_MA100100_POP_SELECT | 근호 |
+| MA100200 | sp_MA100200_SAVE | 근호 |
+| MA100200 | sp_MA100200_SELECT | 근호 |
+| MA200100 | sp_MA200100_SAVE | 근호 |
+| MA200100 | sp_MA200100_SELECT | 근호 |
+| MA400100 | sp_MA400100_SAVE | KH |
+| PopDwgnoFrm | sp_PopDwgnoFrm_SELECT | 근호 |
+| popSendMail | sp_popSendMail_SAVE | 근호 |
+| popSendMail | sp_popSendMail_SELECT | 근호 |
+| PR100350 | sp_PR100350_SAVE | KH |
+| PR100350_USERPOP | sp_PR100350_USERPOP_SELECT | 근호 |
+| PR300100 | sp_PR300100_SAVE | 근호 |
+| PR300100 | sp_PR300100_SELECT | KH |
+| PR300110 | sp_PR300110_SAVE | 근호 |
+| PR300110 | sp_PR300110_SELECT | KH |
+| PR300120 | sp_PR300120_SELECT | KH |
+| PR300500 | sp_PR300500_SAVE | 근호 |
+| PR300500 | sp_PR300500_SELECT | 근호 |
+| PR600100 | sp_PR600100_SELECT | KH |
+| PR600200 | sp_PR600200_SELECT | KH |
+| QC000100 | sp_QC000100_SAVE | KH |
+| QC000100 | sp_QC000100_SELECT | KH |
+| QC100100 | sp_QC100100_SAVE | 근호 |
+| QC100100 | sp_QC100100_SELECT | 근호 |
+| SA100100 | sp_SA100100_SAVE | 근호 |
+| SA100100 | sp_SA100100_SELECT | 근호 |
+| SA100100_COPYPOP | sp_SA100100_COPYPOP_SAVE | 근호 |
+| SA100110 | sp_SA100110_SELECT | 근호 |
+| SA116T | sp_SA116T_SAVE | 근호 |
+| SA200100 | sp_SA200100_SELECT | 근호 |
+| SA200150 | sp_SA200150_SELECT | 근호 |
+| SA400100 | sp_SA400100_SAVE | KH |
+| SA800100 | sp_SA800100_SAVE | 근호 |
+| SA800100 | sp_SA800100_SELECT | 근호 |
+| SA900100 | SP_SA900100_SELECT | 근호 |
+| TEST | sp_TEST_SELECT | 근호 |
 
-## Complete Program-to-C# Mapping
+## Program-To-C# Mapping
 
-| Program key | Mapped C# evidence |
+These are the same-name primary screen mappings under the active source root. Backups and generated repair targets are not used as primary style evidence.
+
+| Program key | Primary C# evidence |
 | --- | --- |
 | AS100100 | `Programs\50.품질(QC)\Konesystem.QC02\AS100100.cs`, `.Designer.cs` |
 | AS100110 | `Programs\50.품질(QC)\Konesystem.QC02\AS100110.cs`, `.Designer.cs` |
@@ -105,8 +125,6 @@ This is evidence, not decoration. Do not replace it with a few representative fi
 | MA100200 | `Programs\30.자재물류(MA)\Konesystem.MA01\MA100200.cs`, `.Designer.cs` |
 | MA200100 | `Programs\30.자재물류(MA)\Konesystem.MA01\MA200100.cs`, `.Designer.cs` |
 | MA400100 | `Programs\30.자재물류(MA)\Konesystem.MA01\MA400100.cs`, `.Designer.cs` |
-| PopDwgnoFrm | `Programs\60.설계(DE)\Konesystem.DE01\POP\DEDWGPOP.cs`; platform popup also calls `sp_PopDwgnoFrm_SELECT` through `KonesystemPlatform\KoneLib.PgmBase\PopDwgFrm.cs` |
-| popSendMail | `KonesystemPlatform\KoneLib.PgmBase\PopSendMail.cs` |
 | PR100350 | `Programs\40.생산(PR)\Konesystem.PR01\PR100350.cs`, `.Designer.cs` |
 | PR100350_USERPOP | `Programs\40.생산(PR)\Konesystem.PR01\POP\PR100350_USERPOP.cs`, `.Designer.cs` |
 | PR300100 | `Programs\40.생산(PR)\Konesystem.PR01\PR300100.cs`, `.Designer.cs` |
@@ -120,83 +138,114 @@ This is evidence, not decoration. Do not replace it with a few representative fi
 | SA100100 | `Programs\20.영업(SA)\Konesystem.SA01\SA100100.cs`, `.Designer.cs` |
 | SA100100_COPYPOP | `Programs\20.영업(SA)\Konesystem.SA01\POP\SA100100_COPYPOP.cs`, `.Designer.cs` |
 | SA100110 | `Programs\20.영업(SA)\Konesystem.SA01\SA100110.cs`, `.Designer.cs` |
-| SA116T | No C# class/procedure-call match found in `C_KONE110_1`; treat as SP-only evidence unless current source proves otherwise. |
 | SA200100 | `Programs\20.영업(SA)\Konesystem.SA01\SA200100.cs`, `.Designer.cs` |
 | SA200150 | `Programs\20.영업(SA)\Konesystem.SA01\SA200150.cs`, `.Designer.cs` |
 | SA400100 | `Programs\20.영업(SA)\Konesystem.SA01\SA400100.cs`, `.Designer.cs` |
 | SA800100 | `Programs\20.영업(SA)\Konesystem.SA02\SA800100.cs`, `.Designer.cs` |
 | TEST | `Programs\10.기준(BA)\Konesystem.BA01\TEST.cs`, `.Designer.cs` |
 
-## C# Style Frequency Summary
+## C# Style Analysis
 
-Primary C# files analyzed: 39.
+Primary C# files analyzed: 37.
 
-| Pattern | Count |
+| Pattern | Files | Hits |
+| --- | ---: | ---: |
+| `dbClient.GetDataSetFromSP(...)` | 35 | 38 |
+| `CallSelectProcedure(...)` | 31 | 135 |
+| `CallViewQuery(...)` | 5 | 43 |
+| `SelectType` | 33 | 339 |
+| `SearchCommand` | 34 | 136 |
+| `SaveCommand` | 31 | 124 |
+| `DataUtil.DataTableToXml(...)` | 27 | 71 |
+| `dbClient.ExecSPTrn(...)` | 24 | 32 |
+| `dbClient.ExecSP(...)` | 5 | 5 |
+| `GetFocusedDataRow(...)` | 27 | 74 |
+| `dr["..."].ToString()` / `dr?["..."].ToString()` | 20 | 91 |
+| `devFnc.InitControl(...)` | 29 | 154 |
+
+Zero-hit generated patterns in these matched sources:
+
+| Generated pattern | Hits |
 | --- | ---: |
-| `dbClient.GetDataSetFromSP(...)` | 36 |
-| `SelectType` enum/use | 35 |
-| `SearchCommand` | 34 |
-| `SaveCommand` | 31 |
-| `DataUtil.DataTableToXml(...)` | 27 |
-| `dbClient.ExecSPTrn(...)` | 25 |
-| `DialogResult.OK` | 17 |
-| `SetModified(...)` | 11 |
-| `CallViewQuery(...)` | 6 |
-| `PopCustFrm` | 6 |
-| `dbClient.ExecSP(...)` | 5 |
-| `PopItemFrm` | 3 |
-| `dbClient.GetDataTableFromSP(...)` | 2 |
-| `private sealed class` | 0 |
+| `private sealed class` for retrieve context | 0 |
 | `class *Context` / `Get*Context(...)` | 0 |
 | local `GetEditValue(...)` helper | 0 |
 | local `GetColumnText(...)` helper | 0 |
-| generated `SetDefaultSearchValues(...)` helper | 0 |
-| generated `ApplyListColumnLayout(...)` helper | 0 |
-| generated `GetBasisYear(...)` / `GetCustomerLike(...)` helper | 0 |
-| generated runtime monthly `VisibleIndex` loop | 0 |
+| `dr["FIELD"] == DBNull.Value ? ...` ternary row wrappers | 0 |
+| `_selectType == SelectType.DETAIL ? ...` parameter routing | 0 |
+| `?? "%"` wildcard null coalescing | 0 |
+| `btn*.EditValue == null ? string.Empty : ...` extraction | 0 |
+| `string x = Convert.ToString(rad*.EditValue)` local variables | 0 |
 
-## C# Generation Rules From This Baseline
+## Designer Style Analysis
 
-- Prefer the existing screen's direct event flow: constructor event wiring, `SearchCommand`, `SaveCommand`, `ClearCommand`, local procedure-call methods, and direct grid binding.
-- Keep ordinary retrieve parameters as local variables near the procedure call. Do not generate internal DTO/context classes such as `RetrieveContext`.
-- Do not generate generic local helpers such as `GetEditValue(...)` or `GetColumnText(...)` for ordinary screen code. Use the target's existing direct access style unless the current screen already proves such helpers.
-- Do not generate generic search/default/layout wrappers such as `SetDefaultSearchValues(...)`, `ApplyListColumnLayout(...)`, `GetBasisYear(...)`, `GetCustomerLike(...)`, or `ValidateSearch(...)` for ordinary C_KONE110/KH-style screens unless the active target screen already owns that exact pattern.
-- Preserve project controls before generic DevExpress controls. In C_KONE110-like targets, `u_GridControl`, `u_TextEdit`, `u_ButtonEdit`, `u_DateEdit`, `u_RadioButton`, and repository controls must be preserved when present.
-- A name field such as `txtCUSTNM` is a text edit by default. Do not infer a date control from `txt*`.
-- Date/year fields use the target date-edit convention such as `ymd*` when the target source proves it.
-- Use explicit Designer grid column members and `Columns.AddRange` with `colList_*`, `colDetail_*`, `col<TABLE>_*`, or `col<PURPOSE>_*` names. Runtime column helper generation is not the C_KONE110 baseline.
-- Preserve explicit Designer month/amount column order. Do not replace `colList_AMT01` ... `colList_AMTTOT` order with a generated runtime `for` loop and `VisibleIndex` assignments.
-- Numeric grid columns such as AMT/QTY/UNP/WGT/PRICE/RATE/COST/TOTAL should use `RepositoryItemSpinEdit` through `ColumnEdit`. Do not rely on `GridColumn.DisplayFormat` as the primary numeric formatting path.
-- Popup result checks must follow the existing popup contract. Do not widen a `PopCustFrm` selection path to `DialogResult.Yes || DialogResult.OK` unless the target source proves that popup returns both.
-- Korean captions/messages must remain readable UTF-8 text. Mojibake literals are not valid style evidence.
+Designer files analyzed: 37.
 
-## SP Style Frequency Summary
+| Pattern | Files | Hits |
+| --- | ---: | ---: |
+| `u_GridControl` | 35 | 221 |
+| `u_GridView` | 21 | 235 |
+| `u_TextEdit` | 25 | 1990 |
+| `u_ButtonEdit` | 11 | 176 |
+| `u_DateEdit` | 28 | 206 |
+| `u_SpinEdit` | 18 | 922 |
+| `u_RadioButton` | 16 | 265 |
+| `u_CheckEdit` | 12 | 246 |
+| `BindingField = ...` | 31 | 754 |
+| explicit `GridColumn col*_<FIELD>` members | 34 | 2336 |
+| `Columns.AddRange(...)` | 35 | 93 |
+| `AppearanceHeader.Options.UseFont = true` | 34 | 2493 |
+| `AppearanceHeader.TextOptions.HAlignment = Center` | 34 | 2578 |
+| `AppearanceHeader.TextOptions.VAlignment = Center` | 33 | 2072 |
+| `AppearanceCell.Options.UseFont = true` | 35 | 2432 |
+| `.ColumnEdit = this.rps...` | 26 | 387 |
+| `RepositoryItemSpinEdit` | 27 | 791 |
+| `TabIndex = ...` | 37 | 1911 |
 
-Author-tagged SPs analyzed: 61.
+## C# Generation Rules From The Analysis
 
-| Pattern | Count |
-| --- | ---: |
-| `SET ARITHABORT ON` | 36 |
-| `SET @WORKTYPE = ISNULL(...)` | 0 |
-| `@WORKTYPE VARCHAR(20) = ''` | 0 |
+- Use same-program matched source first. For `sp_SA800100_SELECT`, use `SA800100.cs` and `SA800100.Designer.cs`, not an arbitrary C# file.
+- For a current repair target such as `SA900100`, do not treat generated code as proof of style. Use established author-tagged mappings and same-module neighbors as evidence, then verify the target.
+- Preserve existing command and event flow: `SearchCommand`, `SaveCommand`, `ClearCommand`, direct event handlers, local procedure-call methods, and direct grid/control binding.
+- `CallSelectProcedure(...)` and `CallViewQuery(...)` are valid when already present or when the matched source family proves them.
+- Keep procedure parameters explicit and near `dbClient.GetDataSetFromSP(...)`.
+- Do not generate `RetrieveContext`, private DTOs, generic `GetEditValue(...)`, generic `GetColumnText(...)`, or broad value-normalization helpers.
+- Do not wrap focused-row values in `DBNull.Value ? ...` ternaries for ordinary detail lookup code unless the same target screen proves that pattern.
+- Do not route search/detail parameters through `_selectType == SelectType.DETAIL ? ...` ternaries. Keep list/detail branches explicit.
+- Do not use `?? "%"` as a generated wildcard fallback unless the matched source proves it.
+- Do not create `string gb = Convert.ToString(radGB.EditValue)` or similar generated radio locals. Pass or read the control value in the existing style.
+- Use `devFnc.InitControl(...)` for reset paths when the matched source family does that, rather than assigning `DataSource = null` as a generated default.
 
-Representative parameter snippets from `sp_SA100100_SELECT`, `sp_MA100100_SELECT`, `sp_DE000600_SELECT`, `sp_BA000100_SELECT`, and `sp_SA800100_SELECT` use required parameters or `= NULL` defaults. They do not default business filters to `''`, `'%'`, `'T'`, or `'1'` in the procedure signature by default.
+## Designer Generation Rules From The Analysis
 
-## SP Generation Rules From This Baseline
+- Preserve project controls before generic DevExpress controls: `u_GridControl`, `u_TextEdit`, `u_ButtonEdit`, `u_DateEdit`, `u_SpinEdit`, `u_RadioButton`, and `u_CheckEdit`.
+- Preserve `BindingField`, `TabIndex`, `Location`, `Size`, parent containment, and existing `Properties.*` assignments when a Designer file exists.
+- Generate explicit `GridColumn` members with names such as `colList_ITEMCD`, `colDetail_ORDNUM`, `colSA110T_QTY`, or `colPOR_PORSEQ`.
+- Register grid columns through `Columns.AddRange(...)`, not runtime `Columns.Add`, `Columns.AddField`, or helper-generated names.
+- Grid header defaults should include `AppearanceHeader.Options.UseFont = true`, horizontal center alignment, and vertical center alignment where target columns use them.
+- Grid cell defaults should include `AppearanceCell.Options.UseFont = true` where target columns use it.
+- Numeric grid columns such as AMT, QTY, UNP, WGT, PRICE, RATE, COST, and TOTAL should use a `RepositoryItemSpinEdit` through `ColumnEdit`; do not rely on `DisplayFormat` as the primary numeric behavior.
 
-- Preserve existing procedure names, parameter names, branch names, Korean literals, comments, table names, aliases, calculations, and row contracts.
-- Keep the standard metadata comment block immediately above `CREATE/ALTER PROCEDURE`: `AUTHOR`, `CREATE DATE`, `DESCRIPTION`, and the separator lines. The author value can follow current target evidence, but the block must not be omitted.
-- Use `@WORKTYPE VARCHAR(20) = NULL` or a required `@WORKTYPE` parameter when matching this baseline. Do not default `@WORKTYPE` to `''`.
-- Do not add broad parameter defaults such as `@CUSTCD = '%'`, `@ITEMCD = '%'`, `@GUBUN = 'T'`, or `@GB = '1'` unless verified existing target procedure evidence uses those exact defaults.
-- Do not add up-front parameter normalization blocks such as `SET @WORKTYPE = ISNULL(@WORKTYPE, '')` or `SET @PARAM = (CASE WHEN ISNULL(@PARAM, '') = '' THEN ... END)` unless verified target procedure evidence already uses the same pattern for that branch.
-- For SELECT procedures, include `SET NOCOUNT ON;` and prefer `SET ARITHABORT ON;` when generating C_KONE110/KH-style SELECT output unless local evidence proves the target omits it.
-- Do not invent schema-only `SELECT TOP 0` fallback result sets for missing source evidence.
+## SP Rules From The Dataset
+
+- Keep the metadata block immediately above `CREATE/ALTER PROCEDURE`:
+
+```sql
+-- =============================================
+-- AUTHOR:      <author>
+-- CREATE DATE: <date>
+-- DESCRIPTION: <program description>
+-- =============================================
+```
+
+- Preserve procedure names, parameter names, Korean literals, comments, table names, aliases, calculations, and row contracts.
+- Do not add default `@WORKTYPE = ''`, broad `@CUSTCD = '%'`, `@ITEMCD = '%'`, `@GUBUN = 'T'`, or `@GB = '1'` unless the verified procedure evidence has that exact contract.
+- Do not add up-front parameter-normalization blocks such as `SET @WORKTYPE = ISNULL(...)` or `SET @PARAM = CASE WHEN ISNULL(...)`.
+- Do not invent schema-only `SELECT TOP 0` fallback result sets for missing evidence.
 - Do not introduce CTEs, `#` temp tables, `MERGE`, or `NOT EXISTS` by default.
-- Keep wide `INSERT INTO (...) SELECT ...` mappings in grouped horizontal rows when the source style uses that layout; do not force one column per line.
+- Keep wide `INSERT INTO (...) SELECT ...` mappings in grouped horizontal rows when the source style uses that layout.
 
-## Baseline Queries
-
-SP selector:
+## Baseline Query
 
 ```sql
 SELECT O.NAME, M.DEFINITION
@@ -209,14 +258,4 @@ WHERE O.TYPE = 'P'
       OR M.DEFINITION LIKE N'%근호%'
       OR M.DEFINITION LIKE N'%KH%'
       );
-```
-
-Program key normalization:
-
-```sql
-CASE
-    WHEN BASE_NAME LIKE '%[_]SELECT' THEN LEFT(BASE_NAME, LEN(BASE_NAME) - 7)
-    WHEN BASE_NAME LIKE '%[_]SAVE' THEN LEFT(BASE_NAME, LEN(BASE_NAME) - 5)
-    ELSE BASE_NAME
-END
 ```

@@ -4,7 +4,7 @@ Use this fixed packaged style before drafting or reviewing SQL Server SELECT/SAV
 
 This reference is intentionally bundled. Do not query live DB procedures only to discover the style on every run. Refresh this document only when the user explicitly asks to update the style baseline.
 
-When the requested style is the user's C_KONE110/KH/Geunho-authored output, read `author-tagged-style-baseline.md` with this file. That baseline captures the complete 61-procedure author-tagged dataset and the 40 normalized program mappings used to block shallow generated defaults.
+When the requested style is the user's C_KONE110/KH/Geunho-authored output, read `author-tagged-style-baseline.md` with this file. That baseline captures the current 62-procedure author-tagged dataset, 41 normalized program mappings, and matched C# evidence used to block shallow generated defaults.
 
 ## General rules
 

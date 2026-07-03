@@ -25,7 +25,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Read `references/datawindow-layout-mapping.md` when converting DataWindow columns or layout into DevExpress/WinForms structure.
 - Read `references/ty-csharp-style.md` before drafting or reviewing target C# screen logic; TY/C_KONE110 is a sample style, not a universal baseline.
 - Read `references/kh-sp-style.md` before drafting or reviewing SELECT/SAVE stored procedures.
-- Read `references/author-tagged-style-baseline.md` when the target is the user's C_KONE110/KH style or when asked to follow KH/근호/장근호-authored C#/SP style; this file is the bundled evidence snapshot and must not be skipped for generated C# or SP work in that style.
+- Read `references/author-tagged-style-baseline.md` when the target is the user's C_KONE110/KH style or when asked to follow KH/근호/장근호-authored C#/SP style; this file contains the analyzed `author-tagged SP -> program key -> matching C# screen source` baseline and must not be skipped for generated C# or SP work in that style.
 - Read `references/sql-formatting-bridge.md` when SQL formatting, scalar function conversion, or verifier composition is involved.
 - Read `references/migration-output-checklist.md` before claiming completion or handoff.
 - Use `examples/minimal-workflow.md` as the compact success/blocked scenario.
@@ -64,7 +64,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 7. Draft target C# flow from the style reference:
    - preserve existing method paths such as `CallViewQuery`, `CallProc`, `SelectType`, `DataUtil.DataTableToXml`, `SetModified`, `grd*`, `gvw*`, `tree*`, and current event paths when the target project has them;
    - do not invent parallel helper methods when the current class already has the correct stored-procedure call path.
-   - for C_KONE110/KH-style migration, compare the target against every program listed in `references/author-tagged-style-baseline.md`; do not generate internal DTO/context classes, generic value-reading helpers, or runtime grid helpers when that baseline shows direct local-variable/procedure-call flow.
+   - for C_KONE110/KH-style migration, compare the target against the analyzed author-tagged baseline in `references/author-tagged-style-baseline.md`; use same-program matched C# evidence first, exclude current generated repair targets from seed evidence, and block zero-hit generated patterns such as internal DTO/context classes, generic value helpers, `DBNull.Value ?` row wrappers, `_selectType == SelectType.DETAIL ?` routing, `?? "%"` wildcard coalescing, `btn*.EditValue == null ? string.Empty`, and `Convert.ToString(rad*.EditValue)` radio locals.
 8. Draft SELECT/SAVE SP work from the fixed packaged KH SP style:
    - preserve procedure names, parameters, Korean literals, comments, and result contracts;
    - include the standard procedure metadata header immediately above `CREATE/ALTER PROCEDURE` with `AUTHOR`, `CREATE DATE`, and `DESCRIPTION`;
@@ -111,6 +111,8 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not add source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks to generated migration procedures; return from known branches or report a blocked contract instead.
 - Do not generate grid columns through ad hoc runtime helpers when the target style expects Designer-level `GridColumn` members and `col*_<FIELD>` names.
 - Do not generate internal request/context DTOs such as `RetrieveContext`, `GetRetrieveContext`, `GetEditValue`, or `GetColumnText` for ordinary screen retrieval code unless the target source already proves that pattern.
+- Do not use arbitrary same-project C# files as the style basis when an author-tagged SP can be mapped to a same-program C# source. The bundled baseline is built from 62 author-tagged SPs, 41 program keys, 37 primary C# files, and 37 Designer files.
+- Do not let current generated repair targets teach the style back to the harness. Treat them as targets to verify, not baseline evidence.
 - Do not generate generic search/default/layout wrappers such as `SetDefaultSearchValues`, `ApplyListColumnLayout`, `GetBasisYear`, `GetCustomerLike`, or `ValidateSearch` for ordinary screens unless the active target source already proves that pattern.
 - Do not replace explicit Designer month/amount columns with runtime `for` loops and `VisibleIndex` assignments.
 - Do not broaden popup result handling or emit mojibake Korean captions/messages without current source evidence.
@@ -131,6 +133,9 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - `src.skills.pb_to_csharp_migration.build_csharp_control_name`
 - `src.skills.pb_to_csharp_migration.extract_csharp_designer_control_specs`
 - `src.skills.pb_to_csharp_migration.build_csharp_grid_column_designer_plan`
+- `src.skills.pb_to_csharp_migration.get_author_tagged_csharp_style_baseline`
+- `src.skills.pb_to_csharp_migration.normalize_author_tagged_program_key`
+- `src.skills.pb_to_csharp_migration.resolve_author_tagged_style_evidence`
 - `src.skills.pb_to_csharp_migration.verify_migration_generated_csharp_style`
 - `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_generation_contract`
 - `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_with_sql_formatting`
