@@ -760,6 +760,7 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertEqual(0, baseline["zero_hit_generated_patterns"]["DateEdit_year_or_now_parameter_shaping"])
         self.assertEqual(0, baseline["zero_hit_generated_patterns"]["generated_date_boundary_DateTime_block"])
         self.assertEqual(0, baseline["zero_hit_generated_patterns"]["direct_grid_datasource_null_reset"])
+        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["CallDetailQuery_generated_method"])
 
     def test_author_tagged_style_evidence_resolves_sp_to_program_key(self):
         self.assertEqual("SA800100", normalize_author_tagged_program_key("dbo.sp_SA800100_SELECT"))
@@ -818,6 +819,7 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
         self.assertFalse(result.success)
         self.assertIn("generated_dbnull_ternary_row_value_detected", issue_codes)
+        self.assertIn("generated_call_detail_query_helper_detected", issue_codes)
         self.assertIn("generated_selecttype_detail_ternary_detected", issue_codes)
         self.assertIn("generated_percent_null_coalesce_detected", issue_codes)
         self.assertIn("generated_buttonedit_null_stringempty_ternary_detected", issue_codes)
@@ -854,9 +856,31 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
         self.assertFalse(result.success)
         self.assertIn("generated_callselect_inline_wildcard_argument_detected", issue_codes)
+        self.assertIn("generated_call_detail_query_helper_detected", issue_codes)
         self.assertIn("generated_dateedit_settoday_null_default_detected", issue_codes)
         self.assertIn("generated_month_end_datetime_block_detected", issue_codes)
         self.assertIn("generated_year_end_datetime_block_detected", issue_codes)
+
+    def test_generated_csharp_style_allows_focused_row_changed_style_name(self):
+        generated = '''
+        private void fnFocusedRowChanged()
+        {
+            DataRow dr = gvwList.GetFocusedDataRow();
+            if (dr == null || gvwList.FocusedRowHandle < 0)
+            {
+                devFnc.InitControl(grdDetail);
+                return;
+            }
+
+            DataSet ds = CallSelectProcedure(SelectType.DETAIL, dr["CUSTCD"].ToString(), dr["PRNTITEMCD"].ToString());
+            grdDetail.DataSource = ds.Tables[0];
+        }
+        '''
+
+        result = verify_migration_generated_csharp_style(generated)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertNotIn("generated_call_detail_query_helper_detected", issue_codes)
 
     def test_generated_csharp_style_blocks_csharp_sp_parameter_shaping(self):
         generated = '''

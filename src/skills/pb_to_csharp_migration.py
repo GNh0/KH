@@ -120,6 +120,7 @@ AUTHOR_TAGGED_CSHARP_STYLE_BASELINE: Dict[str, Any] = {
         "DateEdit_year_or_now_parameter_shaping": 0,
         "generated_date_boundary_DateTime_block": 0,
         "direct_grid_datasource_null_reset": 0,
+        "CallDetailQuery_generated_method": 0,
     },
 }
 
@@ -1474,6 +1475,10 @@ def verify_migration_generated_csharp_style(
             }
         )
     generated_helper_patterns = {
+        "generated_call_detail_query_helper_detected": (
+            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+CallDetailQuery\s*\(",
+            "Do not invent CallDetailQuery for C_KONE110/KH focused-row detail handling; use the target event shape or proven fnFocusedRowChanged/CallViewQuery pattern.",
+        ),
         "generated_default_search_values_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+SetDefaultSearchValues\s*\(",
             "Do not invent SetDefaultSearchValues for ordinary C_KONE110/KH screens; set default control values directly in Load/Clear unless a target file proves that helper.",

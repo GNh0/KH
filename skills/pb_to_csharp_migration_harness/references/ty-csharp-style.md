@@ -25,6 +25,7 @@ Style selection order:
 - Do not split a `u_DateEdit` value into C# parameters such as `@YYYY = ymd*.DateTime.Year.ToString()`, `@MM = DateTime.Now.Month...`, or `@BASYYYY = DateTime.Now.Year...`. Pass the target-style raw date value with `YYYYMMDD()` and let the stored procedure derive related year/month/base-date parameters.
 - Do not generate ad hoc month-end/year-end `new DateTime(...)` or boundary string blocks for screen retrieve parameters. Pass raw date/year values and let the stored procedure own derived date boundaries unless a matched target screen proves otherwise.
 - For KoneLib-style screens, use `devFnc.InitControl(grd*)` for grid resets when the matched source family does that. Do not generate direct `grd*.DataSource = null` resets unless active target evidence proves that exact local pattern.
+- Do not invent `CallDetailQuery` for list-focused detail loading. Use the active target event shape directly or a proven local helper name such as `fnFocusedRowChanged`, `TabChanged`, or `CallViewQuery`.
 - Prefer small, same-shape patches over broad redesign.
 - Treat the active checkout and active screen binding as source of truth. Duplicate project trees are common; verify the target tree before applying style.
 

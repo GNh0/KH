@@ -13,10 +13,11 @@ Block PB-to-C# migration output that still looks generated after author-tagged s
 - `new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1).AddDays(-1)` and `new DateTime(ymdGIJUN.DateTime.Year - 1, 12, 31)` boundary blocks
 - direct `grd*.DataSource = null` resets in a KoneLib-style screen
 - C# date parameter shaping such as `@YYYY`, `@MM`, `@BASYYYY`, or `@LASTDT` from `DateTime.Now` / `ymd*.DateTime`
+- generated helper naming such as `CallDetailQuery()` for focused-row detail loading
 
 ## Root Cause
 
-`verify_migration_generated_csharp_style` only blocked signature defaults, `?? "%"`, null wrappers, DTO/context helpers, and grid/runtime helper patterns. It did not inspect `CallSelectProcedure(...)` call-site wildcard arguments, DateEdit null defaulting, generated DateTime boundary blocks, direct grid null resets, or C#-side split date parameters.
+`verify_migration_generated_csharp_style` only blocked signature defaults, `?? "%"`, null wrappers, DTO/context helpers, and grid/runtime helper patterns. It did not inspect `CallSelectProcedure(...)` call-site wildcard arguments, DateEdit null defaulting, generated DateTime boundary blocks, direct grid null resets, C#-side split date parameters, or generated focused-row helper names.
 
 ## Changes
 
@@ -28,6 +29,7 @@ Block PB-to-C# migration output that still looks generated after author-tagged s
   - `generated_year_end_datetime_block_detected`
   - `generated_year_end_string_boundary_detected`
   - `generated_direct_grid_datasource_null_reset_detected`
+  - `generated_call_detail_query_helper_detected`
 - Added regression coverage for the exact SA900100 leftover pattern.
 - Updated PB-to-C# harness references so future agents do not treat these patterns as acceptable C_KONE110/KH style.
 - Bumped plugin manifests to `2.9.115`.
@@ -43,6 +45,7 @@ The local target `SA900100.cs` was repaired separately in the user project:
 - C# now passes `@GIJUNDT` from `ymdGIJUN.YYYYMMDD()` and does not pass generated `@YYYY`, `@MM`, `@BASYYYY`, or `@LASTDT` parameters.
 - Empty list/detail grid resets use `devFnc.InitControl(grd*)` instead of `grd*.DataSource = null`.
 - The stored procedure owns wildcard/default/date-boundary shaping from `@GIJUNDT`; the C# screen only passes raw control values.
+- The list-focused detail refresh helper was renamed from generated `CallDetailQuery()` to the house-style `fnFocusedRowChanged()`.
 
 ## Verification
 

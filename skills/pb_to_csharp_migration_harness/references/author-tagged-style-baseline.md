@@ -182,6 +182,7 @@ Zero-hit generated patterns in these matched sources:
 | C# split date parameters such as `@YYYY = ymd*.DateTime.Year.ToString()` and `@MM/@BASYYYY = DateTime.Now...` | 0 |
 | ad hoc month/year-end `new DateTime(...)` boundary blocks in screen retrieve code | 0 |
 | direct `grd*.DataSource = null` reset in KoneLib-style screens | 0 |
+| invented `CallDetailQuery` helper for focused-row detail loading | 0 |
 
 ## Designer Style Analysis
 
@@ -226,6 +227,7 @@ Designer files analyzed: 37.
 - Do not generate ad hoc month-end or year-end `new DateTime(...)` or boundary string blocks in screen retrieve code. Pass raw date/year values and let the stored procedure own derived date boundaries unless matched source evidence proves otherwise.
 - Do not create `string gb = Convert.ToString(radGB.EditValue)` or similar generated radio locals. Pass or read the control value in the existing style.
 - Use `devFnc.InitControl(...)` for grid/control reset paths when the matched KoneLib source family does that. Do not generate direct `grd*.DataSource = null` resets unless active target evidence proves that exact local pattern.
+- Do not invent `CallDetailQuery` for focused-row detail loading. Use the active target event shape directly or a proven local helper name such as `fnFocusedRowChanged`, `TabChanged`, or `CallViewQuery`.
 
 ## Designer Generation Rules From The Analysis
 
