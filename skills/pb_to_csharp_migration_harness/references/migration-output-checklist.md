@@ -18,7 +18,7 @@ Use this checklist before handoff or completion.
 - Author-tagged per-program style profile when C_KONE110/KH style applies: matched program key, source/designer hashes, method path, SP calls, parameters, grid/view names, BindingField samples, repository controls, and fallback program key if the active target is excluded.
 - Target C# control fallback map.
 - SELECT/SAVE SP plan.
-- SP generation evidence: source SQL/PB/DB evidence or approved inferred-draft marker, `@WORKTYPE` branch contract, CTE/#temp/MERGE/NOT EXISTS scan, and SQL formatting verifier status.
+- SP generation evidence: source SQL/PB/DB evidence or approved inferred-draft marker, `@WORKTYPE` branch contract, CTE/#temp/MERGE/NOT EXISTS/IF-EXISTS-WHERE-subquery scan, and SQL formatting verifier status.
 - SP parameter/local-variable evidence: procedure parameters are caller/C# inputs only; derived helper/calculation values such as year/month/base-date values are local `DECLARE` variables assigned with `SET`; when caller `DbParameter` evidence exists, the generated SP signature contains no extra parameters outside that caller set.
 - SQL formatting/verifier status.
 - Traceability from PB behavior to C# method and SP branch.

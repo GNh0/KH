@@ -393,6 +393,112 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         }
         self.assertIn("join_condition_indentation", codes)
 
+    def test_verifier_blocks_where_subquery_inside_if_exists(self):
+        cases = [
+            (
+                "IN",
+                "          WHERE A.ORDNUM IN (\n"
+                "                              SELECT T.ORDNUM\n"
+                "                              FROM @TMP T\n"
+                "                             )\n",
+            ),
+            (
+                "EXISTS",
+                "          WHERE EXISTS (\n"
+                "                        SELECT 1\n"
+                "                        FROM @TMP T\n"
+                "                        WHERE T.ORDNUM = A.ORDNUM\n"
+                "                       )\n",
+            ),
+            (
+                "NOT EXISTS",
+                "          WHERE NOT EXISTS (\n"
+                "                            SELECT 1\n"
+                "                            FROM @TMP T\n"
+                "                            WHERE T.ORDNUM = A.ORDNUM\n"
+                "                           )\n",
+            ),
+            (
+                "SCALAR",
+                "          WHERE A.ORDSEQ = (\n"
+                "                            SELECT MAX(T.ORDSEQ)\n"
+                "                            FROM @TMP T\n"
+                "                           )\n",
+            ),
+        ]
+
+        for label, predicate in cases:
+            with self.subTest(label=label):
+                bad_block = (
+                    "IF EXISTS (\n"
+                    "          SELECT 1\n"
+                    "          FROM SA100T A\n"
+                    f"{predicate}"
+                    "          )\n"
+                    "BEGIN\n"
+                    "    RAISERROR('Already processed.', 16, 1);\n"
+                    "    RETURN;\n"
+                    "END\n"
+                )
+
+                result = verify_sql_formatting_style(bad_block, bad_block)
+
+                self.assertFalse(result.success)
+                codes = {
+                    issue["code"]
+                    for issue in result.metadata["mechanical_checks"]["style_issues"]
+                }
+                self.assertIn("if_exists_where_subquery", codes)
+
+    def test_verifier_allows_simple_where_predicate_inside_if_exists(self):
+        guard_block = (
+            "IF EXISTS (\n"
+            "          SELECT 1\n"
+            "          FROM SA100T A\n"
+            "          WHERE A.ORDNUM = @ORDNUM\n"
+            "          )\n"
+            "BEGIN\n"
+            "    RAISERROR('Already processed.', 16, 1);\n"
+            "    RETURN;\n"
+            "END\n"
+        )
+
+        result = verify_sql_formatting_style(guard_block, guard_block)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+
+        self.assertNotIn("if_exists_where_subquery", codes)
+
+    def test_verifier_does_not_block_derived_table_internal_where_subquery_inside_if_exists(self):
+        guard_block = (
+            "IF EXISTS (\n"
+            "          SELECT 1\n"
+            "          FROM (\n"
+            "                SELECT T.ORDNUM\n"
+            "                FROM SA100T T\n"
+            "                WHERE T.ORDSEQ IN (\n"
+            "                                      SELECT X.ORDSEQ\n"
+            "                                      FROM @TMP X\n"
+            "                                     )\n"
+            "               ) A\n"
+            "          WHERE A.ORDNUM = @ORDNUM\n"
+            "          )\n"
+            "BEGIN\n"
+            "    RAISERROR('Already processed.', 16, 1);\n"
+            "    RETURN;\n"
+            "END\n"
+        )
+
+        result = verify_sql_formatting_style(guard_block, guard_block)
+        codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+
+        self.assertNotIn("if_exists_where_subquery", codes)
+
     def test_verifier_allows_grouped_insert_with_wrapped_long_expression(self):
         grouped = (
             "INSERT INTO SA130T\n"

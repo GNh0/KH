@@ -324,6 +324,7 @@ def _check_style(original: str, formatted: str, *, cte_temp_table_reason: str | 
     issues.extend(_check_select_leading_commas(formatted))
     issues.extend(_check_insert_select_layout(formatted))
     issues.extend(_check_cte_temp_table_introduction(original, formatted, cte_temp_table_reason=cte_temp_table_reason))
+    issues.extend(_check_if_exists_where_subquery(formatted))
     issues.extend(_check_join_indentation(formatted))
     issues.extend(_check_case_parentheses(formatted))
     issues.extend(_check_ba011t_conversion(original, formatted))
@@ -966,6 +967,58 @@ def _has_cte_temp_table_exception_reason(reason: str | None) -> bool:
         r"\bstatistics\s+io\b",
     ]
     return any(re.search(pattern, normalized) for pattern in exception_patterns)
+
+
+def _check_if_exists_where_subquery(sql: str) -> List[SqlFormattingIssue]:
+    issues: List[SqlFormattingIssue] = []
+    unprotected = _strip_literals_and_comments(sql)
+    for block in _extract_if_exists_blocks(unprotected):
+        if _contains_where_subquery(block):
+            issues.append(
+                SqlFormattingIssue(
+                    code="if_exists_where_subquery",
+                    severity="error",
+                    message=(
+                        "Do not put a nested subquery under WHERE inside IF EXISTS guards by default. "
+                        "Use direct JOIN/derived-table style or record explicit source evidence."
+                    ),
+                    evidence=[_single_line_sample(block)],
+                    check_kind="style",
+                )
+            )
+    return issues
+
+
+def _extract_if_exists_blocks(unprotected_sql: str) -> List[str]:
+    blocks: List[str] = []
+    pattern = re.compile(r"\bIF\s+EXISTS\s*\(", flags=re.IGNORECASE)
+    for match in pattern.finditer(unprotected_sql):
+        open_index = unprotected_sql.find("(", match.start())
+        if open_index < 0:
+            continue
+        close_index = _find_matching_parenthesis(unprotected_sql, open_index)
+        if close_index > open_index:
+            blocks.append(unprotected_sql[open_index + 1 : close_index])
+    return blocks
+
+
+def _contains_where_subquery(block: str) -> bool:
+    upper = block.upper()
+    where_index = _find_top_level_keyword(upper, 0, "WHERE")
+    if where_index < 0:
+        return False
+    where_text = upper[where_index:]
+    subquery_patterns = [
+        r"\b(?:NOT\s+)?EXISTS\s*\(\s*SELECT\b",
+        r"\b(?:NOT\s+)?IN\s*\(\s*SELECT\b",
+        r"(?:=|<>|!=|<=|>=|<|>)\s*\(\s*SELECT\b",
+    ]
+    return any(re.search(pattern, where_text, flags=re.IGNORECASE | re.DOTALL) for pattern in subquery_patterns)
+
+
+def _single_line_sample(text: str, *, limit: int = 240) -> str:
+    sample = re.sub(r"\s+", " ", text.strip())
+    return sample[:limit]
 
 
 def _extract_temp_table_names(unprotected_sql: str) -> set[str]:

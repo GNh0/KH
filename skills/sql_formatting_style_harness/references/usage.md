@@ -37,7 +37,7 @@ The verifier blocks when string literals, localized literals, comment shape/coun
 
 ## Style rules
 
-The verifier checks the established host-local style: uppercase identifiers outside literals/comments, leading-comma procedure parameters and SELECT columns, wide `INSERT INTO ... SELECT` grouped horizontal layout with per-mapping continuation lines for long expressions, no newly introduced CTEs or `#` temporary tables by default, JOIN indentation, parenthesized CASE expressions, and verified scalar lookup conversion shape when applicable. Unknown scalar functions stay unchanged unless DB/MCP metadata, project source, or the host-local style contract proves an equivalent lookup join. `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is treated as a verified `BA011T` lookup contract when the host-local `sql-formatting` skill is available.
+The verifier checks the established host-local style: uppercase identifiers outside literals/comments, leading-comma procedure parameters and SELECT columns, wide `INSERT INTO ... SELECT` grouped horizontal layout with per-mapping continuation lines for long expressions, no newly introduced CTEs or `#` temporary tables by default, no nested `WHERE` subqueries inside `IF EXISTS` guards by default, JOIN indentation, parenthesized CASE expressions, and verified scalar lookup conversion shape when applicable. Unknown scalar functions stay unchanged unless DB/MCP metadata, project source, or the host-local style contract proves an equivalent lookup join. `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is treated as a verified `BA011T` lookup contract when the host-local `sql-formatting` skill is available.
 
 Use CTEs or `#` temporary tables only as exceptions: explicit user request, recursive logic, repeated multi-statement reuse, a large intermediate set that needs indexing/statistics, procedural staging that cannot be expressed cleanly inline, or measured performance evidence. If one is used, the formatter should state the reason; otherwise recommendations should stay in the direct join, derived table, aggregate subquery, and existing stored-procedure style.
 
@@ -60,6 +60,8 @@ If the host-local `sql-formatting` skill is unavailable, the verifier records th
 ## Quality bar
 
 A passing result must preserve literals, localized text, comments, predicates, JOIN conditions, calculations, and row-shape semantics; reject ad hoc outer aliases such as `T`, `TT`, or `YY`; keep wide `INSERT INTO ... SELECT` mappings horizontally grouped unless a single expression needs continuation; and block CTE or `#` temporary-table introductions unless the caller provides a concrete exception reason. Scalar-function-to-join rewrites are allowed only when the verifier can prove the lookup contract from host-local style guidance, source, or DB/MCP metadata.
+
+`IF EXISTS` guard blocks should use direct joins, derived tables, or simple key predicates. Block `WHERE ... IN (SELECT ...)`, `WHERE EXISTS (SELECT ...)`, `WHERE NOT EXISTS (SELECT ...)`, and scalar `WHERE COL = (SELECT ...)` patterns unless source evidence requires that exact form.
 
 ## PowerBuilder source validation hook
 

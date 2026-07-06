@@ -2980,6 +2980,17 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not introduce NOT EXISTS in migration SP generation by default.",
             }
         )
+    if _pb_contract_contains_if_exists_where_subquery(upper_unprotected):
+        issues.append(
+            {
+                "code": "if_exists_where_subquery_in_generated_sp",
+                "severity": "error",
+                "message": (
+                    "Do not put a nested subquery under WHERE inside IF EXISTS guards in migration SP generation by default. "
+                    "Use direct JOIN/derived-table style or record explicit source evidence."
+                ),
+            }
+        )
 
     passed = not any(issue["severity"] == "error" for issue in issues)
     metadata = {
@@ -3003,6 +3014,61 @@ def verify_pb_migration_sp_generation_contract(
         exit_code=0 if passed else 1,
         metadata=metadata,
     )
+
+
+def _pb_contract_contains_if_exists_where_subquery(upper_unprotected_sql: str) -> bool:
+    for block in _pb_contract_extract_if_exists_blocks(upper_unprotected_sql):
+        where_index = _pb_contract_find_top_level_keyword(block, "WHERE")
+        if where_index < 0:
+            continue
+        where_text = block[where_index:]
+        subquery_patterns = [
+            r"\b(?:NOT\s+)?EXISTS\s*\(\s*SELECT\b",
+            r"\b(?:NOT\s+)?IN\s*\(\s*SELECT\b",
+            r"(?:=|<>|!=|<=|>=|<|>)\s*\(\s*SELECT\b",
+        ]
+        if any(re.search(pattern, where_text, flags=re.IGNORECASE | re.DOTALL) for pattern in subquery_patterns):
+            return True
+    return False
+
+
+def _pb_contract_extract_if_exists_blocks(upper_unprotected_sql: str) -> List[str]:
+    blocks: List[str] = []
+    pattern = re.compile(r"\bIF\s+EXISTS\s*\(", flags=re.IGNORECASE)
+    for match in pattern.finditer(upper_unprotected_sql):
+        open_index = upper_unprotected_sql.find("(", match.start())
+        if open_index < 0:
+            continue
+        close_index = _pb_contract_find_matching_parenthesis(upper_unprotected_sql, open_index)
+        if close_index > open_index:
+            blocks.append(upper_unprotected_sql[open_index + 1 : close_index])
+    return blocks
+
+
+def _pb_contract_find_top_level_keyword(text: str, keyword: str) -> int:
+    depth = 0
+    keyword_re = re.compile(rf"\b{re.escape(keyword)}\b", flags=re.IGNORECASE)
+    for index, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and keyword_re.match(text, index):
+            return index
+    return -1
+
+
+def _pb_contract_find_matching_parenthesis(text: str, open_index: int) -> int:
+    depth = 0
+    for index in range(open_index, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
 
 def verify_pb_migration_sp_with_sql_formatting(
     original_sql_text: str,

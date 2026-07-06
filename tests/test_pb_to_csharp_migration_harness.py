@@ -1698,6 +1698,90 @@ END
         self.assertFalse(cte.success)
         self.assertIn("cte_in_generated_sp", {issue["code"] for issue in cte.metadata["issues"]})
 
+        for label, predicate in [
+            (
+                "IN",
+                """
+              WHERE A.ORDNUM IN (
+                                  SELECT T.ORDNUM
+                                  FROM @TMP T
+                                 )
+""",
+            ),
+            (
+                "EXISTS",
+                """
+              WHERE EXISTS (
+                            SELECT 1
+                            FROM @TMP T
+                            WHERE T.ORDNUM = A.ORDNUM
+                           )
+""",
+            ),
+            (
+                "SCALAR",
+                """
+              WHERE A.ORDSEQ = (
+                                SELECT MAX(T.ORDSEQ)
+                                FROM @TMP T
+                               )
+""",
+            ),
+        ]:
+            with self.subTest(if_exists_where_subquery=label):
+                if_exists_where_subquery = verify_pb_migration_sp_generation_contract(
+                    sp_metadata_header()
+                    + f"""
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SAVE]
+      @WORKTYPE    VARCHAR(20) = NULL
+    , @ORGDIV      VARCHAR(2)  = NULL
+AS
+BEGIN
+    IF EXISTS (
+              SELECT 1
+              FROM SA100T A
+{predicate.rstrip()}
+              )
+    BEGIN
+        RAISERROR('Already processed.', 16, 1);
+        RETURN;
+    END
+END
+""",
+                    source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_2.srd"},
+                )
+                self.assertFalse(if_exists_where_subquery.success)
+                self.assertIn(
+                    "if_exists_where_subquery_in_generated_sp",
+                    {issue["code"] for issue in if_exists_where_subquery.metadata["issues"]},
+                )
+
+        if_exists_simple_where = verify_pb_migration_sp_generation_contract(
+            sp_metadata_header()
+            + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SAVE]
+      @WORKTYPE    VARCHAR(20) = NULL
+    , @ORGDIV      VARCHAR(2)  = NULL
+AS
+BEGIN
+    IF EXISTS (
+              SELECT 1
+              FROM SA100T A
+              WHERE A.ORDNUM = @ORGDIV
+              )
+    BEGIN
+        RAISERROR('Already processed.', 16, 1);
+        RETURN;
+    END
+END
+""",
+            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_2.srd"},
+        )
+        self.assertNotIn(
+            "if_exists_where_subquery_in_generated_sp",
+            {issue["code"] for issue in if_exists_simple_where.metadata["issues"]},
+        )
+
         schema_fallback = verify_pb_migration_sp_generation_contract(
             """
 CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]

@@ -269,7 +269,7 @@ Do not add or upgrade DevExpress packages while using this profile. When DevExpr
 - Do not add default `@WORKTYPE = ''`, broad `@CUSTCD = '%'`, `@ITEMCD = '%'`, `@GUBUN = 'T'`, or `@GB = '1'` unless the verified procedure evidence has that exact contract.
 - Do not add up-front parameter-normalization blocks such as `SET @WORKTYPE = ISNULL(...)` or `SET @PARAM = CASE WHEN ISNULL(...)`.
 - Do not invent schema-only `SELECT TOP 0` fallback result sets for missing evidence.
-- Do not introduce CTEs, `#` temp tables, `MERGE`, or `NOT EXISTS` by default.
+- Do not introduce CTEs, `#` temp tables, `MERGE`, `NOT EXISTS`, or nested `WHERE` subqueries inside `IF EXISTS` guards by default.
 - Keep wide `INSERT INTO (...) SELECT ...` mappings in grouped horizontal rows when the source style uses that layout.
 
 ## Baseline Query

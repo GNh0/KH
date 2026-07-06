@@ -74,6 +74,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - preserve procedure names, parameters, Korean literals, comments, and result contracts;
    - include the standard procedure metadata header immediately above `CREATE/ALTER PROCEDURE` with `AUTHOR`, `CREATE DATE`, and `DESCRIPTION`;
    - avoid new CTEs, `#` temporary tables, `MERGE`, and `NOT EXISTS` by default;
+   - avoid `IF EXISTS` guard blocks that put nested subqueries under `WHERE` by default, such as `WHERE X IN (SELECT ...)`, `WHERE EXISTS (SELECT ...)`, or scalar `(SELECT ...)` predicates;
    - do not generate empty-string/wildcard/status parameter defaults such as `@WORKTYPE = ''`, `@CUSTCD = '%'`, `@GUBUN = 'T'`, or `@GB = '1'` unless existing verified target SP evidence uses that exact contract;
    - do not add an up-front parameter normalization block such as `SET @WORKTYPE = ISNULL(...)` or `SET @PARAM = (CASE WHEN ISNULL(...) THEN ... END)` unless verified existing SP evidence for that same procedure branch already has it;
    - procedure parameters are only values sent by C# or the caller; helper/calculation values used only inside the SP must be local `DECLARE` variables followed by `SET`, not generated parameters;
@@ -103,7 +104,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - SP plan: SELECT/SAVE procedure names, `@WORKTYPE` branches, XML/table variable plan, transaction/error/logging plan, and formatting verifier status.
 - Author-tagged style baseline summary for C_KONE110/KH-style work: number of SPs/programs checked, mapped C# files, unmatched/exception programs, common style patterns, and generated-pattern violations blocked.
 - Author-tagged per-program profile summary for C_KONE110/KH-style work: matched program key, source and Designer hash, base class, command/select/focused-row method names, SP calls, DbParameter names, grid/view names, BindingField samples, repository controls, dependency/version notes, and fallback program key when the active target is excluded.
-- SP generation evidence: source evidence or explicit inferred-draft marker, `@WORKTYPE` contract, forbidden CTE/#temp/MERGE/NOT EXISTS scan, and SQL formatter/verifier status.
+- SP generation evidence: source evidence or explicit inferred-draft marker, `@WORKTYPE` contract, forbidden CTE/#temp/MERGE/NOT EXISTS/IF-EXISTS-WHERE-subquery scan, and SQL formatter/verifier status.
 - SQL formatter composition: host-local `sql-formatting` applied or explicitly unavailable, plus KH verifier result when applicable.
 - Token optimizer status: `passthrough` for source-of-truth SQL/C#/PB text, or `used` only for safe noisy command output/transcripts.
 - Completion checklist with blocked items and next evidence required.
@@ -123,6 +124,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not add, upgrade, or re-target DevExpress packages or assemblies during migration generation. Existing target project references and controls are the dependency contract.
 - Do not replace a target project's custom controls with DevExpress just because DevExpress is known; target-project controls win first.
 - Do not add CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, helper `@FIND...` variables, or scalar-function join rewrites by default.
+- Do not write `IF EXISTS` guards with nested `WHERE` subqueries by default. A simple key predicate is allowed, but `WHERE ... IN (SELECT ...)`, `WHERE EXISTS (SELECT ...)`, and `WHERE COL = (SELECT ...)` should be rewritten to direct JOIN/derived-table style or blocked until source evidence proves that shape.
 - Do not invent completed SELECT/SAVE SP bodies from only a C# call signature. If only parameters and expected grid columns are known, output a blocked SP contract or clearly labeled inferred draft.
 - Do not add default parameter values or parameter-normalization `SET` blocks just to make generated SQL defensive. Follow the verified SP contract or keep defaults as `NULL`/required parameters.
 - Do not declare SP-internal helper or calculation values as procedure parameters. Parameters are caller/C# inputs; helper values belong in local `DECLARE` variables.

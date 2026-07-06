@@ -58,6 +58,7 @@ If a host cannot create temporary comparison files, record `sql_formatting_style
 - Check BA011T scalar-to-join conversion shape when the verified scalar lookup appears in the original SQL.
 - Check wide `INSERT INTO ... SELECT` mappings so they keep the user's grouped horizontal stored-procedure layout instead of one-column-per-line output. Long `CASE`, `ROW_NUMBER`, `ISNULL`, arithmetic, or concatenation expressions may wrap onto continuation lines for that mapping.
 - Check that formatted/recommended SQL does not introduce CTEs or `#` temporary tables when the original did not already use them. These patterns are exceptions, not the default recommendation style.
+- Check that `IF EXISTS` guard blocks do not put nested subqueries under `WHERE` by default, such as `WHERE X IN (SELECT ...)`, `WHERE EXISTS (SELECT ...)`, or scalar `(SELECT ...)` predicates. Prefer direct joins, derived tables, or existing stored-procedure style unless explicit source evidence proves the subquery form.
 
 ## PowerBuilder validation path
 
@@ -92,6 +93,7 @@ The harness does not claim to prove DB semantics. Execution-plan changes, result
 - Do not trigger the harness for mention-only risk examples that are not actionable SQL formatting requests.
 - Do not require scalar-to-join conversion for unknown scalar functions when the function body or lookup contract cannot be checked. Preserve those functions and require the formatter to state why conversion was skipped.
 - Do not introduce CTEs or `#` temporary tables as a default "cleaner" rewrite. Prefer direct joins, derived tables, aggregate subqueries, and existing stored-procedure style unless there is an explicit request or a concrete technical reason.
+- Do not write `IF EXISTS` guards with `WHERE` subqueries by default. A simple `WHERE A.KEY = @KEY` predicate is fine, but nested `WHERE ... IN (SELECT ...)`, `WHERE EXISTS (SELECT ...)`, or `WHERE COL = (SELECT ...)` must be blocked unless source evidence requires it.
 - Do not write exports, fragments, or verifier output into `C:\GWERP`.
 
 ## UAF implementation targets

@@ -23,8 +23,9 @@ When the requested style is the user's C_KONE110/KH/Geunho-authored output, read
 - Do not generate `IF ISNULL(@GIJUNDT, ...)`, `IF ISNULL(@YYYY, ...)`, `IF ISNULL(@MM, ...)`, `IF ISNULL(@BASYYYY, ...)`, `IF ISNULL(@LASTDT, ...)`, or direct `IF @GIJUNDT <> '' SET @YYYY = ...` guard/default blocks around date derivation. When a derived local value is needed, use `DECLARE` plus `SET`; do not invent fallback branches unless verified target SP evidence proves that exact shape.
 - For C_KONE110/KH-style SELECT procedures, include `SET NOCOUNT ON;` and prefer `SET ARITHABORT ON;` unless current target evidence proves otherwise.
 - Keep formatting-only work separate from semantic/performance rewrites.
-- Avoid CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, and helper `@FIND...` variables by default.
+- Avoid CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, nested `WHERE` subqueries inside `IF EXISTS` guards, and helper `@FIND...` variables by default.
 - Prefer direct joins, derived tables, aggregate subqueries, table variables, inline predicates, and existing stored-procedure style.
+- In `IF EXISTS` guard blocks, prefer direct JOIN/derived-table style or simple key predicates. Do not generate `WHERE ... IN (SELECT ...)`, `WHERE EXISTS (SELECT ...)`, `WHERE NOT EXISTS (SELECT ...)`, or scalar `WHERE COL = (SELECT ...)` forms unless verified source evidence requires that exact shape.
 - Do not present a full migration SELECT/SAVE SP body as complete from only a C# call signature, parameter list, or grid column list. Full SP output needs structured PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, DB schema evidence, or a clearly approved inferred-draft marker. Do not add source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks.
 - Generated migration SP text must pass `verify_pb_migration_sp_generation_contract` before completion claims, then pass the separate SQL formatting verifier when formatted output is shown.
 

@@ -60,7 +60,7 @@ The correct behavior is not to fail because local tools are absent. The harness 
 - Grid column generation evidence with explicit `GridColumn` member names and no blocked runtime helper pattern.
 - Detail form layout evidence when input controls are generated, including field names, control names, bounds, `BindingField` assignments, and TabIndex order.
 - Target C# control fallback map is visible, including selected provider and fallback reason.
-- SP generation evidence includes source evidence or an inferred-draft marker, plus forbidden CTE/#temp/MERGE/NOT EXISTS scan.
+- SP generation evidence includes source evidence or an inferred-draft marker, plus forbidden CTE/#temp/MERGE/NOT EXISTS/IF-EXISTS-WHERE-subquery scan.
 - SQL text marked as passthrough, not compressed.
 - Missing local PBL/C#/DB artifacts listed as blocked or lower-confidence evidence.
 
@@ -74,7 +74,7 @@ The correct behavior is not to fail because local tools are absent. The harness 
 - Treats TY/C_KONE110, KoneLib, or another sample project as the universal C# baseline.
 - Generates grid columns through `AddGridColumn`, `Columns.AddField`, or `view.Name + "_" + fieldName` without target evidence.
 - Presents a full SP body as completed from only a C# call signature or grid column list.
-- Adds CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, or scalar-function rewrites by default.
+- Adds CTEs, `#` temporary tables, `MERGE`, `NOT EXISTS`, nested `WHERE` subqueries inside `IF EXISTS`, or scalar-function rewrites by default.
 - Formats SQL without host-local `sql-formatting` or without verifier evidence when proof is requested.
 - Creates files in a staging folder instead of the exact requested target path.
 

@@ -22,4 +22,4 @@ SQL/stored procedure text is contract-sensitive. Do not summarize or minify it. 
 
 ## Default recommendation policy
 
-Do not recommend CTE, `#` temporary table, `MERGE`, `NOT EXISTS`, scalar-function-to-join conversion, or performance tuning just because the SQL looks cleaner that way. Those are exceptions requiring a concrete reason or user request.
+Do not recommend CTE, `#` temporary table, `MERGE`, `NOT EXISTS`, nested `WHERE` subqueries inside `IF EXISTS` guards, scalar-function-to-join conversion, or performance tuning just because the SQL looks cleaner that way. Those are exceptions requiring a concrete reason or user request.
