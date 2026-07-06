@@ -50,7 +50,8 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - trace `.sru` entrypoints, `.srw` window logic, and linked `.srd` DataWindows;
    - never write exports into the source PBL tree.
 4. If only bundled references are available, use the packaged PB export and analysis rules to produce a bounded plan, not a false claim of source parity.
-5. Map DataWindow fields/layout:
+5. Before generating C# implementation code, produce and verify a substantial migration analysis `.md` handoff. The 019f178e PR100200/PROD_302_A analysis depth is the minimum floor, not an aspirational example: it must cover objective/operator, PB source evidence, user workflow, C# scope, event/call flow, DB/SP mapping, transaction/error behavior, implementation order, constraints/business rules, manual tests, and LLM handoff. Run `verify_pb_migration_analysis_document` or record a blocked reason before proceeding.
+6. Map DataWindow fields/layout:
    - use `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`, `resolve_csharp_grid_column_prefix`, `resolve_csharp_grid_control_names`, and `generate_devexpress_grid_xml` for DataWindowToXml-compatible grid columns, matched captions, C# grid names, C# column names, and converter GridView defaults;
    - treat that mapping as grid-column scaffolding, not full PB coordinate or control migration;
    - for detail-entry areas, use `build_detail_form_layout_plan` to create SA100100-style clean label/editor rows and columns; preserve source order and captions, but do not copy PB pixel coordinates blindly;
@@ -59,17 +60,17 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - when emitting C# Designer code, mirror `build_datawindow_gridview_designer_defaults` so the generated GridView keeps the converter's group-panel, filter-row, footer, auto-width, even-row, and view-caption defaults.
    - when target C# Designer code is available, use `extract_csharp_designer_control_specs` to preserve actual control types, `BindingField`, `TabIndex`, bounds, containment, `Properties.*`, and collection calls before generating or reviewing new code;
    - when generating grid columns, use explicit GridColumn members and `Columns.AddRange` with `colList_*`, `colDetail_*`, `col<TABLE>_*`, or `col<PURPOSE>_*` names; block default `AddGridColumn`, `Columns.AddField`, and `view.Name + "_" + fieldName` helper patterns unless the existing target screen already proves that style.
-6. Resolve the target C# control stack before drafting code:
+7. Resolve the target C# control stack before drafting code:
    - prefer target-project/custom controls such as a project-owned `u_GridControl` when they exist;
    - fall back to DevExpress controls only when the target project has no matching custom control;
    - when DevExpress is present, use the target project's existing references and API surface; do not add NuGet packages, upgrade assemblies, or generate code from the latest DevExpress version by default;
    - fall back to WinForms basic controls when neither target-project controls nor DevExpress are available;
    - record the selected provider and fallback reason in the migration evidence.
-7. Draft target C# flow from the style reference:
+8. Draft target C# flow from the style reference:
    - preserve existing method paths such as `CallViewQuery`, `CallProc`, `SelectType`, `DataUtil.DataTableToXml`, `SetModified`, `grd*`, `gvw*`, `tree*`, and current event paths when the target project has them;
    - do not invent parallel helper methods when the current class already has the correct stored-procedure call path.
    - for C_KONE110/KH-style migration, compare the target against `references/author-tagged-style-baseline.md` and `references/author-tagged-program-style-profiles.json`; use same-program matched C# and Designer evidence first, require a fallback program key for excluded/current repair targets, and block zero-hit generated patterns such as internal DTO/context classes, generic value helpers, invented `CallDetailQuery` detail helpers, `DBNull.Value ?` row wrappers, `_selectType == SelectType.DETAIL ?` routing, `?? "%"` wildcard coalescing, `btn*.EditValue == null ? string.Empty`, and `Convert.ToString(rad*.EditValue)` radio locals.
-8. Draft SELECT/SAVE SP work from the fixed packaged KH SP style:
+9. Draft SELECT/SAVE SP work from the fixed packaged KH SP style:
    - preserve procedure names, parameters, Korean literals, comments, and result contracts;
    - include the standard procedure metadata header immediately above `CREATE/ALTER PROCEDURE` with `AUTHOR`, `CREATE DATE`, and `DESCRIPTION`;
    - avoid new CTEs, `#` temporary tables, `MERGE`, and `NOT EXISTS` by default;
@@ -81,8 +82,8 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - do not present a full generated SELECT/SAVE SP as complete unless structured PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, DB schema, or an explicit user-approved inferred draft marker is recorded;
    - run `verify_pb_migration_sp_generation_contract` before completion claims for generated migration SP text;
    - use host-local `sql-formatting` for formatting and `sql-formatting-style-harness` for verification.
-9. Separate formatting-only work from semantic rewrites. Require DB/MCP/source evidence for schema-dependent joins, scalar-function conversion, result parity, transaction behavior, or performance claims.
-10. Produce the migration checklist, traceability, blockers, and verification plan before implementation or completion claims.
+10. Separate formatting-only work from semantic rewrites. Require DB/MCP/source evidence for schema-dependent joins, scalar-function conversion, result parity, transaction behavior, or performance claims.
+11. Produce the migration checklist, traceability, blockers, and verification plan before implementation or completion claims.
 
 ## Required outputs
 
@@ -90,6 +91,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - PBL export provider and PB version strategy: PblScripter wrapper, direct ORCA, pre-exported source, pasted source, described behavior, or bundled fallback; include version/runtime confidence for PB 7.0, PB 12.5, or unknown lineage.
 - Migration mode and evidence strength: `standalone`, `described-behavior`, `pasted-source`, `partial-reference`, or `full-reference`.
 - PB source trace summary: PBL/object, `.sru`, `.srw`, linked `.srd`, event/retrieve/update/save paths, and missing evidence.
+- Migration analysis `.md` handoff quality result: line count, heading count, code-evidence count, required section coverage, and blocked reason when the handoff is below the 019f178e minimum floor.
 - Confirmed vs inferred behavior map when PB source is absent and the user provided only behavior descriptions.
 - DataWindow mapping summary: field names, generated grid column names, unsupported layout semantics, and converter fallback status.
 - DataWindow naming summary: selected `grd*/gvw*` names, selected `col*_<COLUMN>` prefix, matched captions, and fallback fields when captions were not provable.
@@ -112,6 +114,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not treat missing PblScripter as missing export capability when direct ORCA is available. Direct ORCA is a first-class export provider, but it must use a matching PB runtime/ORCA version.
 - Do not open or export an unknown-version PBL as if source evidence is proven. Probe/list first, record the suspected PB version, and block full source parity until the version/runtime is confirmed.
 - Do not claim full PB behavior parity from binary strings or file names alone.
+- Do not start generated C# implementation from a short log-level analysis. The migration analysis `.md` handoff must be at least as substantial as the 019f178e baseline and must pass `verify_pb_migration_analysis_document` or remain blocked.
 - Do not treat DataWindowToXml-style output as a full visual layout migration; it is a column-to-grid XML helper.
 - Do not search the DB for KH-authored procedures on every run; use the fixed packaged SP style unless the user explicitly asks to refresh it.
 - Do not treat TY/C_KONE110, KoneLib, or any other project name as the universal C# baseline. They are sample references only when the target project provides them.
@@ -161,6 +164,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - `src.skills.pb_to_csharp_migration.normalize_author_tagged_program_key`
 - `src.skills.pb_to_csharp_migration.resolve_author_tagged_style_evidence`
 - `src.skills.pb_to_csharp_migration.verify_migration_generated_csharp_style`
+- `src.skills.pb_to_csharp_migration.verify_pb_migration_analysis_document`
 - `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_generation_contract`
 - `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_with_sql_formatting`
 - `src.skills.pb_to_csharp_migration.generate_devexpress_grid_xml`

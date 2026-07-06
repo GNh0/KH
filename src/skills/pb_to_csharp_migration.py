@@ -41,6 +41,90 @@ CSHARP_THIS_REFERENCE_PATTERN = re.compile(r"this\.([A-Za-z_][A-Za-z0-9_]*)")
 
 NUMERIC_GRID_FIELD_TOKENS = ("AMT", "QTY", "UNP", "WGT", "PRICE", "RATE", "COST", "TOTAL")
 NUMERIC_GRID_FIELD_SUFFIXES = ("TOT", "BAL")
+PB_MIGRATION_ANALYSIS_MIN_LINES = 350
+PB_MIGRATION_ANALYSIS_MIN_HEADINGS = 10
+PB_MIGRATION_ANALYSIS_MIN_CODE_FENCE_PAIRS = 5
+PB_MIGRATION_ANALYSIS_SECTION_RULES = {
+    "objective_and_operator": (
+        r"\bobjective\b",
+        r"\btarget\s+operator\b",
+        r"목적",
+        r"대상",
+        r"운영자",
+    ),
+    "source_evidence": (
+        r"\bPBL\b",
+        r"\bSRU\b",
+        r"\bSRW\b",
+        r"\bSRD\b",
+        r"\bDataWindow\b",
+        r"PB\s*원본",
+        r"소스",
+    ),
+    "user_workflow": (
+        r"사용자\s*동작",
+        r"업무\s*흐름",
+        r"처리\s*흐름",
+        r"\bevent\b",
+        r"\bworkflow\b",
+    ),
+    "csharp_scope": (
+        r"C#\s*개발\s*범위",
+        r"C#\s*구현",
+        r"구현\s*범위",
+        r"target\s+C#",
+    ),
+    "event_and_call_flow": (
+        r"버튼",
+        r"이벤트",
+        r"처리\s*순서",
+        r"\bhandler\b",
+        r"\bclick\b",
+    ),
+    "db_sp_mapping": (
+        r"DB\s*처리",
+        r"\bSP\b",
+        r"\bprocedure\b",
+        r"\bSELECT\b",
+        r"\bSAVE\b",
+        r"\bINSERT\b",
+        r"\bUPDATE\b",
+        r"\bDELETE\b",
+    ),
+    "transaction_and_error": (
+        r"트랜잭션",
+        r"\btransaction\b",
+        r"\brollback\b",
+        r"\bRAISERROR\b",
+        r"오류",
+        r"검증",
+    ),
+    "implementation_order": (
+        r"구현\s*순서",
+        r"개발\s*순서",
+        r"작업\s*순서",
+        r"implementation\s*order",
+    ),
+    "constraints_and_business_rules": (
+        r"주의점",
+        r"제약",
+        r"업무\s*규칙",
+        r"필수",
+        r"\binvariant\b",
+    ),
+    "manual_tests": (
+        r"수동\s*테스트",
+        r"테스트\s*시나리오",
+        r"verification",
+        r"검증\s*계획",
+    ),
+    "llm_handoff": (
+        r"LLM\s*구현\s*요청",
+        r"handoff",
+        r"요약",
+        r"전달",
+    ),
+}
 SP_METADATA_HEADER_PATTERN = re.compile(
     r"^\s*--\s*=+\s*\r?\n"
     r"--\s*AUTHOR\s*:\s*.*\r?\n"
@@ -1181,6 +1265,7 @@ def build_pb_to_csharp_migration_plan(
         "Collect PB evidence from exported .sru/.srw/.srd files, pasted source, user-described behavior, or bundled fallback references.",
         "Separate confirmed behavior from inferred behavior when PB source is absent.",
         "Trace SRU/SRW event flow before DataWindow SQL so popup/save behavior is not missed.",
+        "Write a substantial analysis markdown handoff before C# generation and verify it with verify_pb_migration_analysis_document.",
         "Map DataWindow columns to target-project controls; fall back to DevExpress and then WinForms basics when needed.",
         "For detail forms, lay out label/editor pairs in clean aligned rows and columns instead of blindly copying PB coordinates.",
         "Resolve the target-project control stack before generating C# so project-specific controls are not replaced by a fixed TY/KoneLib assumption.",
@@ -1193,6 +1278,7 @@ def build_pb_to_csharp_migration_plan(
     deliverables = [
         "PBL export provider and PB version strategy",
         "PB source analysis notes",
+        "minimum-depth migration analysis markdown handoff",
         "confirmed vs inferred behavior map",
         "DataWindow column/layout mapping",
         "detail form label/editor layout and binding plan",
@@ -1224,6 +1310,98 @@ def build_pb_to_csharp_migration_plan(
         stderr="" if objective.strip() else "Migration objective is required.",
         exit_code=0 if objective.strip() else 1,
         metadata=payload,
+    )
+
+
+def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
+    """Require a substantial PB-to-C# analysis handoff before C# generation."""
+    text = str(markdown_text or "")
+    lines = text.splitlines()
+    headings = [
+        line.strip()
+        for line in lines
+        if re.match(r"^\s*#{1,3}\s+\S", line)
+    ]
+    code_fence_pairs = text.count("```") // 2
+    section_coverage: Dict[str, bool] = {}
+    issues: List[Dict[str, Any]] = []
+
+    for section, patterns in PB_MIGRATION_ANALYSIS_SECTION_RULES.items():
+        covered = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+        section_coverage[section] = covered
+        if not covered:
+            issues.append(
+                {
+                    "code": "migration_analysis_required_section_missing",
+                    "severity": "error",
+                    "section": section,
+                    "message": (
+                        "PB-to-C# analysis markdown is below the minimum handoff standard; "
+                        "implementation needs this section before C# generation."
+                    ),
+                }
+            )
+
+    if len(lines) < PB_MIGRATION_ANALYSIS_MIN_LINES:
+        issues.append(
+            {
+                "code": "migration_analysis_document_too_short",
+                "severity": "error",
+                "minimum_lines": PB_MIGRATION_ANALYSIS_MIN_LINES,
+                "actual_lines": len(lines),
+                "message": (
+                    "PB-to-C# analysis markdown must be at least as substantial as the established "
+                    "019f178e handoff baseline, not a short log or summary."
+                ),
+            }
+        )
+    if len(headings) < PB_MIGRATION_ANALYSIS_MIN_HEADINGS:
+        issues.append(
+            {
+                "code": "migration_analysis_heading_count_too_low",
+                "severity": "error",
+                "minimum_headings": PB_MIGRATION_ANALYSIS_MIN_HEADINGS,
+                "actual_headings": len(headings),
+                "message": "The handoff needs enough named sections for C# implementation to navigate.",
+            }
+        )
+    if code_fence_pairs < PB_MIGRATION_ANALYSIS_MIN_CODE_FENCE_PAIRS:
+        issues.append(
+            {
+                "code": "migration_analysis_code_evidence_too_low",
+                "severity": "error",
+                "minimum_code_fence_pairs": PB_MIGRATION_ANALYSIS_MIN_CODE_FENCE_PAIRS,
+                "actual_code_fence_pairs": code_fence_pairs,
+                "message": (
+                    "The analysis handoff must include concrete PB/SQL/C# snippets or structured text blocks, "
+                    "not prose-only claims."
+                ),
+            }
+        )
+
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "check": "migration_analysis_document_quality",
+        "baseline": "019f178e-7387-7172-b99b-d97f9c5cf441",
+        "minimum_lines": PB_MIGRATION_ANALYSIS_MIN_LINES,
+        "line_count": len(lines),
+        "minimum_headings": PB_MIGRATION_ANALYSIS_MIN_HEADINGS,
+        "heading_count": len(headings),
+        "minimum_code_fence_pairs": PB_MIGRATION_ANALYSIS_MIN_CODE_FENCE_PAIRS,
+        "code_fence_pairs": code_fence_pairs,
+        "section_coverage": section_coverage,
+        "issues": issues,
+        "token_optimizer_status": "passthrough",
+        "token_optimizer_status_reason": (
+            "Migration analysis markdown is source-of-truth handoff context for C# generation and is not compressed."
+        ),
+    }
+    return HarnessResult(
+        success=not issues,
+        stdout=json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+        stderr="" if not issues else "PB-to-C# migration analysis markdown is below the minimum handoff standard.",
+        exit_code=0 if not issues else 1,
+        metadata=metadata,
     )
 
 

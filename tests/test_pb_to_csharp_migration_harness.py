@@ -25,6 +25,7 @@ from src.skills.pb_to_csharp_migration import (
     normalize_author_tagged_program_key,
     resolve_author_tagged_style_evidence,
     verify_migration_generated_csharp_style,
+    verify_pb_migration_analysis_document,
     verify_pb_migration_sp_generation_contract,
     verify_pb_migration_sp_with_sql_formatting,
     resolve_csharp_grid_control_names,
@@ -930,6 +931,100 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertEqual("SA800100", resolution["program_key"])
         self.assertEqual("matched", resolution["status"])
         self.assertEqual("FrmDevBase", resolution["style_profile"]["base_class"])
+
+    def test_migration_analysis_document_quality_blocks_short_log_level_summary(self):
+        shallow = """
+        # PB migration notes
+
+        ## 목적
+        PR100200을 C#으로 이관한다.
+
+        ## 구현
+        버튼을 추가하고 저장 프로시저를 만든다.
+        """
+
+        result = verify_pb_migration_analysis_document(shallow)
+
+        self.assertFalse(result.success)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+        self.assertIn("migration_analysis_document_too_short", issue_codes)
+        self.assertIn("migration_analysis_heading_count_too_low", issue_codes)
+        self.assertIn("migration_analysis_code_evidence_too_low", issue_codes)
+        self.assertIn(
+            "source_evidence",
+            {
+                issue.get("section")
+                for issue in result.metadata["issues"]
+                if issue["code"] == "migration_analysis_required_section_missing"
+            },
+        )
+
+    def test_migration_analysis_document_quality_accepts_minimum_handoff_depth(self):
+        required_body = """
+        # PR100200 PB-to-C# migration analysis
+
+        ## 1. 목적 및 운영자
+        목적은 PB 화면을 C# WinForms 화면과 SQL Server SP로 이관하는 것이다. 대상 운영자는 생산 담당자다.
+
+        ## 2. PB 원본 확인 결과
+        PBL, SRU, SRW, SRD, DataWindow 원본을 확인하고 소스 경로와 누락 증거를 기록한다.
+
+        ```powerscript
+        // clicked event source evidence
+        ```
+
+        ## 3. 최종 사용자 동작
+        사용자 동작과 업무 흐름, 버튼 이벤트, 조회/저장 workflow를 분리한다.
+
+        ## 4. C# 개발 범위
+        C# 구현 범위, target C# 화면, 컨트롤, 그리드, 팝업 반환값을 정의한다.
+
+        ```csharp
+        // target C# call path evidence
+        ```
+
+        ## 5. 이벤트 처리 순서
+        버튼 click handler, validation, popup, save call, result refresh 처리 순서를 쓴다.
+
+        ## 6. DB 처리 상세
+        SELECT, SAVE, INSERT, UPDATE, DELETE, SP, procedure, table mapping을 구체화한다.
+
+        ```sql
+        SELECT A.KEYCOL
+          FROM SAMPLE A;
+        ```
+
+        ## 7. 트랜잭션 및 오류 처리
+        transaction, rollback, RAISERROR, 검증, 오류 메시지 처리 위치를 기록한다.
+
+        ```sql
+        RAISERROR('error', 16, 1);
+        ```
+
+        ## 8. 구현 순서
+        구현 순서와 개발 순서를 번호로 남긴다.
+
+        ## 9. 개발 시 주의점
+        주의점, 제약, 업무 규칙, 필수 invariant를 명확히 적는다.
+
+        ## 10. 수동 테스트 시나리오
+        수동 테스트, verification, 검증 계획, 정상/취소/오류 케이스를 적는다.
+
+        ```text
+        manual test case
+        ```
+
+        ## 11. LLM 구현 요청용 요약
+        LLM 구현 요청, handoff, 요약, 전달 우선순위를 적는다.
+        """
+        filler = "\n".join(f"- evidence line {idx}: PB/C#/SP trace detail" for idx in range(360))
+        document = required_body + "\n" + filler
+
+        result = verify_pb_migration_analysis_document(document)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertGreaterEqual(result.metadata["line_count"], result.metadata["minimum_lines"])
+        self.assertTrue(all(result.metadata["section_coverage"].values()))
 
     def test_generated_csharp_style_requires_author_tagged_evidence_when_enabled(self):
         missing = verify_migration_generated_csharp_style(
