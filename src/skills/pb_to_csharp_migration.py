@@ -41,16 +41,13 @@ CSHARP_THIS_REFERENCE_PATTERN = re.compile(r"this\.([A-Za-z_][A-Za-z0-9_]*)")
 
 NUMERIC_GRID_FIELD_TOKENS = ("AMT", "QTY", "UNP", "WGT", "PRICE", "RATE", "COST", "TOTAL")
 NUMERIC_GRID_FIELD_SUFFIXES = ("TOT", "BAL")
-PB_MIGRATION_ANALYSIS_MIN_LINES = 350
-PB_MIGRATION_ANALYSIS_MIN_HEADINGS = 10
-PB_MIGRATION_ANALYSIS_MIN_CODE_FENCE_PAIRS = 5
 PB_MIGRATION_ANALYSIS_SECTION_RULES = {
     "objective_and_operator": (
         r"\bobjective\b",
         r"\btarget\s+operator\b",
-        r"목적",
-        r"대상",
-        r"운영자",
+        r"\ubaa9\uc801",
+        r"\ub300\uc0c1",
+        r"\uc6b4\uc601\uc790",
     ),
     "source_evidence": (
         r"\bPBL\b",
@@ -58,31 +55,31 @@ PB_MIGRATION_ANALYSIS_SECTION_RULES = {
         r"\bSRW\b",
         r"\bSRD\b",
         r"\bDataWindow\b",
-        r"PB\s*원본",
-        r"소스",
+        r"PB\s*\uc6d0\ubcf8",
+        r"\uc18c\uc2a4",
     ),
     "user_workflow": (
-        r"사용자\s*동작",
-        r"업무\s*흐름",
-        r"처리\s*흐름",
+        r"\uc0ac\uc6a9\uc790\s*\ub3d9\uc791",
+        r"\uc5c5\ubb34\s*\ud750\ub984",
+        r"\ucc98\ub9ac\s*\ud750\ub984",
         r"\bevent\b",
         r"\bworkflow\b",
     ),
     "csharp_scope": (
-        r"C#\s*개발\s*범위",
-        r"C#\s*구현",
-        r"구현\s*범위",
+        r"C#\s*\uac1c\ubc1c\s*\ubc94\uc704",
+        r"C#\s*\uad6c\ud604",
+        r"\uad6c\ud604\s*\ubc94\uc704",
         r"target\s+C#",
     ),
     "event_and_call_flow": (
-        r"버튼",
-        r"이벤트",
-        r"처리\s*순서",
+        r"\ubc84\ud2bc",
+        r"\uc774\ubca4\ud2b8",
+        r"\ucc98\ub9ac\s*\uc21c\uc11c",
         r"\bhandler\b",
         r"\bclick\b",
     ),
     "db_sp_mapping": (
-        r"DB\s*처리",
+        r"DB\s*\ucc98\ub9ac",
         r"\bSP\b",
         r"\bprocedure\b",
         r"\bSELECT\b",
@@ -92,38 +89,99 @@ PB_MIGRATION_ANALYSIS_SECTION_RULES = {
         r"\bDELETE\b",
     ),
     "transaction_and_error": (
-        r"트랜잭션",
+        r"\ud2b8\ub79c\uc7ad\uc158",
         r"\btransaction\b",
         r"\brollback\b",
         r"\bRAISERROR\b",
-        r"오류",
-        r"검증",
+        r"\uc624\ub958",
+        r"\uac80\uc99d",
     ),
     "implementation_order": (
-        r"구현\s*순서",
-        r"개발\s*순서",
-        r"작업\s*순서",
+        r"\uad6c\ud604\s*\uc21c\uc11c",
+        r"\uac1c\ubc1c\s*\uc21c\uc11c",
+        r"\uc791\uc5c5\s*\uc21c\uc11c",
         r"implementation\s*order",
     ),
     "constraints_and_business_rules": (
-        r"주의점",
-        r"제약",
-        r"업무\s*규칙",
-        r"필수",
+        r"\uc8fc\uc758\uc810",
+        r"\uc81c\uc57d",
+        r"\uc5c5\ubb34\s*\uaddc\uce59",
+        r"\ud544\uc218",
+        r"\bconstraints?\b",
+        r"\bbusiness\s+rules?\b",
+        r"\brequired\b",
         r"\binvariant\b",
     ),
     "manual_tests": (
-        r"수동\s*테스트",
-        r"테스트\s*시나리오",
+        r"\uc218\ub3d9\s*\ud14c\uc2a4\ud2b8",
+        r"\ud14c\uc2a4\ud2b8\s*\uc2dc\ub098\ub9ac\uc624",
         r"verification",
-        r"검증\s*계획",
+        r"\uac80\uc99d\s*\uacc4\ud68d",
     ),
     "llm_handoff": (
-        r"LLM\s*구현\s*요청",
+        r"LLM\s*\uad6c\ud604\s*\uc694\uccad",
         r"handoff",
-        r"요약",
-        r"전달",
+        r"\uc694\uc57d",
+        r"\uc804\ub2ec",
     ),
+}
+PB_MIGRATION_ANALYSIS_EVIDENCE_ANCHORS = {
+    "source_artifact_evidence": (
+        r"\bPBL\b",
+        r"\bPBD\b",
+        r"\bSRU\b",
+        r"\bSRW\b",
+        r"\bSRD\b",
+        r"\bDataWindow\b",
+        r"\bORCA\b",
+        r"\bPblScripter\b",
+        r"\bpowerscript\b",
+    ),
+    "target_csharp_evidence": (
+        r"\bC#\b",
+        r"\bWinForms\b",
+        r"\bDevExpress\b",
+        r"\bDesigner\b",
+        r"\bGridColumn\b",
+        r"\bBindingField\b",
+        r"\bDbParameter\b",
+        r"\bCallProc\b",
+        r"\bCallViewQuery\b",
+        r"\bCallSelectProcedure\b",
+    ),
+    "db_sp_contract_evidence": (
+        r"\bSP\b",
+        r"\bprocedure\b",
+        r"\bSELECT\b",
+        r"\bSAVE\b",
+        r"\bINSERT\b",
+        r"\bUPDATE\b",
+        r"\bDELETE\b",
+        r"@WORKTYPE\b",
+        r"\btransaction\b",
+        r"\bRAISERROR\b",
+    ),
+    "implementation_decision_evidence": (
+        r"\uad6c\ud604\s*\uc21c\uc11c",
+        r"\uac1c\ubc1c\s*\uc21c\uc11c",
+        r"\bimplementation\b",
+        r"\bhandoff\b",
+        r"LLM",
+    ),
+    "verification_evidence": (
+        r"\uc218\ub3d9\s*\ud14c\uc2a4\ud2b8",
+        r"\ud14c\uc2a4\ud2b8\s*\uc2dc\ub098\ub9ac\uc624",
+        r"\uac80\uc99d",
+        r"\bverification\b",
+        r"\bbuild\b",
+    ),
+}
+PB_MIGRATION_ANALYSIS_READINESS_RULES = {
+    "source_trace_ready": ("source_evidence", "event_and_call_flow", "source_artifact_evidence"),
+    "target_csharp_ready": ("csharp_scope", "target_csharp_evidence"),
+    "db_sp_ready": ("db_sp_mapping", "db_sp_contract_evidence"),
+    "implementation_ready": ("implementation_order", "llm_handoff", "implementation_decision_evidence"),
+    "verification_ready": ("transaction_and_error", "manual_tests", "verification_evidence"),
 }
 SP_METADATA_HEADER_PATTERN = re.compile(
     r"^\s*--\s*=+\s*\r?\n"
@@ -1314,7 +1372,7 @@ def build_pb_to_csharp_migration_plan(
 
 
 def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
-    """Require a substantial PB-to-C# analysis handoff before C# generation."""
+    """Require a composition- and evidence-complete PB-to-C# analysis handoff before C# generation."""
     text = str(markdown_text or "")
     lines = text.splitlines()
     headings = [
@@ -1324,6 +1382,8 @@ def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
     ]
     code_fence_pairs = text.count("```") // 2
     section_coverage: Dict[str, bool] = {}
+    evidence_anchor_coverage: Dict[str, bool] = {}
+    readiness: Dict[str, bool] = {}
     issues: List[Dict[str, Any]] = []
 
     for section, patterns in PB_MIGRATION_ANALYSIS_SECTION_RULES.items():
@@ -1342,54 +1402,51 @@ def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
                 }
             )
 
-    if len(lines) < PB_MIGRATION_ANALYSIS_MIN_LINES:
-        issues.append(
-            {
-                "code": "migration_analysis_document_too_short",
-                "severity": "error",
-                "minimum_lines": PB_MIGRATION_ANALYSIS_MIN_LINES,
-                "actual_lines": len(lines),
-                "message": (
-                    "PB-to-C# analysis markdown must be at least as substantial as the established "
-                    "019f178e handoff baseline, not a short log or summary."
-                ),
-            }
-        )
-    if len(headings) < PB_MIGRATION_ANALYSIS_MIN_HEADINGS:
-        issues.append(
-            {
-                "code": "migration_analysis_heading_count_too_low",
-                "severity": "error",
-                "minimum_headings": PB_MIGRATION_ANALYSIS_MIN_HEADINGS,
-                "actual_headings": len(headings),
-                "message": "The handoff needs enough named sections for C# implementation to navigate.",
-            }
-        )
-    if code_fence_pairs < PB_MIGRATION_ANALYSIS_MIN_CODE_FENCE_PAIRS:
-        issues.append(
-            {
-                "code": "migration_analysis_code_evidence_too_low",
-                "severity": "error",
-                "minimum_code_fence_pairs": PB_MIGRATION_ANALYSIS_MIN_CODE_FENCE_PAIRS,
-                "actual_code_fence_pairs": code_fence_pairs,
-                "message": (
-                    "The analysis handoff must include concrete PB/SQL/C# snippets or structured text blocks, "
-                    "not prose-only claims."
-                ),
-            }
-        )
+    for anchor, patterns in PB_MIGRATION_ANALYSIS_EVIDENCE_ANCHORS.items():
+        covered = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+        evidence_anchor_coverage[anchor] = covered
+        if not covered:
+            issues.append(
+                {
+                    "code": "migration_analysis_evidence_anchor_missing",
+                    "severity": "error",
+                    "anchor": anchor,
+                    "message": (
+                        "PB-to-C# analysis quality is judged by implementation evidence, not document length. "
+                        "This handoff is missing a required evidence anchor."
+                    ),
+                }
+            )
+
+    for rule, requirements in PB_MIGRATION_ANALYSIS_READINESS_RULES.items():
+        ready = all(section_coverage.get(item, evidence_anchor_coverage.get(item, False)) for item in requirements)
+        readiness[rule] = ready
+        if not ready:
+            issues.append(
+                {
+                    "code": "migration_analysis_readiness_missing",
+                    "severity": "error",
+                    "readiness_rule": rule,
+                    "requirements": list(requirements),
+                    "message": (
+                        "The analysis handoff is not ready for C# implementation because one or more "
+                        "composition/evidence requirements are missing."
+                    ),
+                }
+            )
 
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
         "check": "migration_analysis_document_quality",
-        "baseline": "019f178e-7387-7172-b99b-d97f9c5cf441",
-        "minimum_lines": PB_MIGRATION_ANALYSIS_MIN_LINES,
+        "quality_model": "composition_and_evidence_over_length",
+        "reference_baseline": "019f178e-7387-7172-b99b-d97f9c5cf441",
+        "reference_baseline_use": "content structure and implementation usefulness only; no hard line-count or code-block-count gate",
         "line_count": len(lines),
-        "minimum_headings": PB_MIGRATION_ANALYSIS_MIN_HEADINGS,
         "heading_count": len(headings),
-        "minimum_code_fence_pairs": PB_MIGRATION_ANALYSIS_MIN_CODE_FENCE_PAIRS,
         "code_fence_pairs": code_fence_pairs,
         "section_coverage": section_coverage,
+        "evidence_anchor_coverage": evidence_anchor_coverage,
+        "readiness": readiness,
         "issues": issues,
         "token_optimizer_status": "passthrough",
         "token_optimizer_status_reason": (

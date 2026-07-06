@@ -936,20 +936,22 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         shallow = """
         # PB migration notes
 
-        ## 목적
-        PR100200을 C#으로 이관한다.
+        ## Objective
+        Migrate PR100200 to C#.
 
-        ## 구현
-        버튼을 추가하고 저장 프로시저를 만든다.
+        ## Implementation
+        Add a button and create a stored procedure.
         """
 
         result = verify_pb_migration_analysis_document(shallow)
 
         self.assertFalse(result.success)
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
-        self.assertIn("migration_analysis_document_too_short", issue_codes)
-        self.assertIn("migration_analysis_heading_count_too_low", issue_codes)
-        self.assertIn("migration_analysis_code_evidence_too_low", issue_codes)
+        self.assertNotIn("migration_analysis_document_too_short", issue_codes)
+        self.assertNotIn("migration_analysis_heading_count_too_low", issue_codes)
+        self.assertNotIn("migration_analysis_code_evidence_too_low", issue_codes)
+        self.assertIn("migration_analysis_evidence_anchor_missing", issue_codes)
+        self.assertIn("migration_analysis_readiness_missing", issue_codes)
         self.assertIn(
             "source_evidence",
             {
@@ -960,71 +962,88 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         )
 
     def test_migration_analysis_document_quality_accepts_minimum_handoff_depth(self):
-        required_body = """
+        document = """
         # PR100200 PB-to-C# migration analysis
 
-        ## 1. 목적 및 운영자
-        목적은 PB 화면을 C# WinForms 화면과 SQL Server SP로 이관하는 것이다. 대상 운영자는 생산 담당자다.
+        ## 1. Objective and target operator
+        Objective: migrate the PowerBuilder production outsourcing workflow into a C# WinForms screen.
+        Target operator: production planner who selects rows, chooses outsourcing items, and saves the result.
 
-        ## 2. PB 원본 확인 결과
-        PBL, SRU, SRW, SRD, DataWindow 원본을 확인하고 소스 경로와 누락 증거를 기록한다.
+        ## 2. PB source evidence
+        Source evidence: prod_003.pbl, prod_302_a.sru, linked SRW popup, and SRD DataWindow objects.
+        The PB source trace records clicked event behavior, Retrieve arguments, DataWindow fields, and source gaps.
 
         ```powerscript
-        // clicked event source evidence
+        // PB clicked event source evidence from prod_302_a.sru
+        dw_main.AcceptText()
+        if dw_main.GetRow() <= 0 then return
         ```
 
-        ## 3. 최종 사용자 동작
-        사용자 동작과 업무 흐름, 버튼 이벤트, 조회/저장 workflow를 분리한다.
+        ## 3. User workflow
+        User workflow: select a production order row, click outsourcing, open popup, choose item, confirm save,
+        refresh list, and verify the result in the grid.
 
-        ## 4. C# 개발 범위
-        C# 구현 범위, target C# 화면, 컨트롤, 그리드, 팝업 반환값을 정의한다.
+        ## 4. C# implementation scope
+        Target C# scope: WinForms form, DevExpress grid, Designer GridColumn members, BindingField assignments,
+        popup result handling, DbParameter-based CallProc or CallViewQuery path, and refresh binding.
 
         ```csharp
-        // target C# call path evidence
+        // target C# evidence
+        dbClient.GetDataSetFromSP("sp_PR100200_SELECT", new DbParameter("@WORKTYPE", "LIST"));
         ```
 
-        ## 5. 이벤트 처리 순서
-        버튼 click handler, validation, popup, save call, result refresh 처리 순서를 쓴다.
+        ## 5. Event and call flow
+        Event/call flow: button click handler -> selected row validation -> duplicate outsourcing validation
+        -> popup call -> save confirmation -> SP SAVE call -> grid refresh.
 
-        ## 6. DB 처리 상세
-        SELECT, SAVE, INSERT, UPDATE, DELETE, SP, procedure, table mapping을 구체화한다.
+        ## 6. DB and SP mapping
+        DB/SP mapping: SELECT branch returns target row data, SAVE branch performs INSERT into SA130T and UPDATE PR110T.
+        @WORKTYPE distinguishes LIST, DETAIL, and SAVE semantics. No source-unbacked schema-only fallback is allowed.
 
         ```sql
-        SELECT A.KEYCOL
-          FROM SAMPLE A;
+        INSERT INTO SA130T (ORGDIV, ORDNUM, ORDSEQ)
+        SELECT A.ORGDIV, A.ORDNUM, A.ORDSEQ
+          FROM PR110T A
+         WHERE A.ORGDIV = @ORGDIV;
         ```
 
-        ## 7. 트랜잭션 및 오류 처리
-        transaction, rollback, RAISERROR, 검증, 오류 메시지 처리 위치를 기록한다.
+        ## 7. Transaction and error handling
+        transaction boundary: INSERT and UPDATE run in one transaction; rollback on validation failure.
+        RAISERROR message is used for duplicate or completed-process conflicts.
 
         ```sql
-        RAISERROR('error', 16, 1);
+        IF EXISTS (SELECT 1 FROM SA130T WHERE ORGDIV = @ORGDIV)
+            RAISERROR('Already processed.', 16, 1);
         ```
 
-        ## 8. 구현 순서
-        구현 순서와 개발 순서를 번호로 남긴다.
+        ## 8. Implementation order
+        Implementation order: preserve existing button, comment old incompatible code, add popup call,
+        add save SP branch, update Designer grid columns, then verify build and manual flow.
 
-        ## 9. 개발 시 주의점
-        주의점, 제약, 업무 규칙, 필수 invariant를 명확히 적는다.
+        ## 9. Constraints and business rules
+        Required business rules: preserve ORDNUM + ORDSEQ key, do not save with ORDNUM alone,
+        do not invent C# wildcard shaping, and keep source Korean literals unchanged.
 
-        ## 10. 수동 테스트 시나리오
-        수동 테스트, verification, 검증 계획, 정상/취소/오류 케이스를 적는다.
+        ## 10. Manual test scenarios
+        Verification plan: normal save, popup cancel, duplicate outsourcing row, completed process conflict,
+        grid refresh, SP rollback check, and C# build check.
 
         ```text
-        manual test case
+        manual test case: choose one valid row, select popup item, save, verify SA130T insert and PR110T update.
         ```
 
-        ## 11. LLM 구현 요청용 요약
-        LLM 구현 요청, handoff, 요약, 전달 우선순위를 적는다.
+        ## 11. LLM implementation handoff
+        LLM handoff: use this analysis as the migration contract. Implement C# and SP from the mapped PB behavior,
+        not from generic screen assumptions. Block if PB source, C# target style, or SP evidence conflicts.
         """
-        filler = "\n".join(f"- evidence line {idx}: PB/C#/SP trace detail" for idx in range(360))
-        document = required_body + "\n" + filler
 
         result = verify_pb_migration_analysis_document(document)
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertGreaterEqual(result.metadata["line_count"], result.metadata["minimum_lines"])
+        self.assertLess(result.metadata["line_count"], 350)
         self.assertTrue(all(result.metadata["section_coverage"].values()))
+        self.assertTrue(all(result.metadata["evidence_anchor_coverage"].values()))
+        self.assertTrue(all(result.metadata["readiness"].values()))
 
     def test_generated_csharp_style_requires_author_tagged_evidence_when_enabled(self):
         missing = verify_migration_generated_csharp_style(

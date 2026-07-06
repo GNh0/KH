@@ -6,7 +6,7 @@ Use this checklist before handoff or completion.
 
 - Objective and target operator.
 - Migration mode and evidence strength.
-- Migration analysis `.md` handoff quality: at least the 019f178e PR100200/PROD_302_A depth, with objective/operator, PB source evidence, user workflow, C# scope, event/call flow, DB/SP mapping, transaction/error behavior, implementation order, constraints/business rules, manual tests, and LLM handoff covered. Record `verify_pb_migration_analysis_document` status before C# generation.
+- Migration analysis `.md` handoff quality: at least the 019f178e PR100200/PROD_302_A composition quality, with objective/operator, PB source evidence, user workflow, C# scope, event/call flow, DB/SP mapping, transaction/error behavior, implementation order, constraints/business rules, manual tests, and LLM handoff covered well enough for C# implementation. Record `verify_pb_migration_analysis_document` status before C# generation. Do not use raw line count, heading count, or code-block count as quality gates.
 - PBL export provider and PB version strategy: selected provider, provider order, PB version, ORCA/runtime confidence, runtime lookup requirement, blocked export conditions, and source-parity confidence.
 - PB source trace summary.
 - DataWindow field/layout mapping.
@@ -33,7 +33,7 @@ Use this checklist before handoff or completion.
 - No claim of DB semantic equivalence without DB-backed check.
 - No claim of layout fidelity without visual/layout source.
 - No claim of correct Designer style without property extraction or explicit fallback assumptions.
-- No generated C# implementation from a short log-level analysis. The analysis `.md` handoff must pass the 019f178e minimum floor or the implementation remains blocked.
+- No generated C# implementation from a short log-level analysis. The analysis `.md` handoff must pass the implementation-readiness quality gate or the implementation remains blocked.
 - No generated runtime grid-column helper when the target style requires Designer `GridColumn` members and `col*_<FIELD>` names.
 - No completed SELECT/SAVE SP claim from only C# parameters or grid columns. Use blocked contract or clearly labeled inferred draft when PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, or DB evidence is absent.
 - No SP-internal helper/calculation values exposed as generated procedure parameters; no derived helper values such as `@YYYY`, `@MM`, `@BASYYYY`, or `@LASTDT` exposed as generated procedure parameters.
