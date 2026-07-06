@@ -183,6 +183,90 @@ PB_MIGRATION_ANALYSIS_READINESS_RULES = {
     "implementation_ready": ("implementation_order", "llm_handoff", "implementation_decision_evidence"),
     "verification_ready": ("transaction_and_error", "manual_tests", "verification_evidence"),
 }
+PB_MIGRATION_DEVELOPMENT_SPEC_RULES = {
+    "cross_agent_handoff_contract": (
+        r"\banalysis\s+agent\b",
+        r"\bdeveloper\s+agent\b",
+        r"\bdevelopment\s+handoff\b",
+        r"\bimplementation\s+handoff\b",
+        r"\ubd84\uc11d\s*\ub2f4\ub2f9",
+        r"\uac1c\ubc1c\s*\ub2f4\ub2f9",
+        r"\uc11c\ube0c\uc5d0\uc774\uc804\ud2b8",
+    ),
+    "target_file_plan": (
+        r"\btarget\s+file\b",
+        r"\bfile\s+plan\b",
+        r"\bDesigner\.cs\b",
+        r"\b\.cs\b",
+        r"\bprocedure\b",
+        r"\ud30c\uc77c\s*\uacc4\ud68d",
+    ),
+    "pb_to_csharp_event_mapping": (
+        r"\bPB\s+event\b",
+        r"\bC#\s+(?:method|handler|event)\b",
+        r"\bevent\s+mapping\b",
+        r"\bhandler\b",
+        r"\ub9e4\ud551",
+        r"\uc774\ubca4\ud2b8",
+    ),
+    "datawindow_field_mapping": (
+        r"\bDataWindow\b",
+        r"\bPB\s+(?:column|field)\b",
+        r"\bGridColumn\b",
+        r"\bBindingField\b",
+        r"\bCaption\b",
+        r"\ud544\ub4dc\s*\ub9e4\ud551",
+    ),
+    "control_layout_binding_plan": (
+        r"\bcontrol\b",
+        r"\bTabIndex\b",
+        r"\bBindingField\b",
+        r"\bLabelControl\b",
+        r"\bGridView\b",
+        r"\ucee8\ud2b8\ub864",
+    ),
+    "sp_contract_matrix": (
+        r"\bSP\s+contract\b",
+        r"\bprocedure\s+contract\b",
+        r"@WORKTYPE\b",
+        r"\bparameter\b",
+        r"\bresult\s+column\b",
+        r"\bDML\b",
+    ),
+    "style_profile_contract": (
+        r"\bauthor-tagged\b",
+        r"\bprogram\s+key\b",
+        r"\bstyle\s+profile\b",
+        r"\bfallback\s+program\b",
+        r"\bsource\s+hash\b",
+        r"\uc2a4\ud0c0\uc77c\s*\uae30\uc900",
+    ),
+    "implementation_task_breakdown": (
+        r"\bimplementation\s+task\b",
+        r"\btask\s+list\b",
+        r"\bdone\s+criteria\b",
+        r"\bacceptance\b",
+        r"\uad6c\ud604\s*\uc791\uc5c5",
+        r"\uc644\ub8cc\s*\uae30\uc900",
+    ),
+    "verification_contract": (
+        r"\bmanual\s+test\b",
+        r"\bexpected\s+UI\b",
+        r"\bexpected\s+DB\b",
+        r"\bbuild\b",
+        r"\brollback\b",
+        r"\uac80\uc99d\s*\uacc4\uc57d",
+    ),
+    "confirmed_inferred_blocked_split": (
+        r"\bconfirmed\b",
+        r"\binferred\b",
+        r"\bblocked\b",
+        r"\bassumption\b",
+        r"\ud655\uc815",
+        r"\ucd94\uc815",
+        r"\ucc28\ub2e8",
+    ),
+}
 SP_METADATA_HEADER_PATTERN = re.compile(
     r"^\s*--\s*=+\s*\r?\n"
     r"--\s*AUTHOR\s*:\s*.*\r?\n"
@@ -1383,6 +1467,7 @@ def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
     code_fence_pairs = text.count("```") // 2
     section_coverage: Dict[str, bool] = {}
     evidence_anchor_coverage: Dict[str, bool] = {}
+    development_spec_coverage: Dict[str, bool] = {}
     readiness: Dict[str, bool] = {}
     issues: List[Dict[str, Any]] = []
 
@@ -1435,6 +1520,24 @@ def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
                 }
             )
 
+    for item, patterns in PB_MIGRATION_DEVELOPMENT_SPEC_RULES.items():
+        covered = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+        development_spec_coverage[item] = covered
+        if not covered:
+            issues.append(
+                {
+                    "code": "migration_analysis_development_spec_missing",
+                    "severity": "error",
+                    "spec_item": item,
+                    "message": (
+                        "The PB-to-C# analysis handoff must be detailed enough for a separate developer agent "
+                        "to implement from the analysis output without re-inferring PB behavior."
+                    ),
+                }
+            )
+
+    readiness["developer_agent_handoff_ready"] = all(development_spec_coverage.values())
+
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
         "check": "migration_analysis_document_quality",
@@ -1446,6 +1549,12 @@ def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
         "code_fence_pairs": code_fence_pairs,
         "section_coverage": section_coverage,
         "evidence_anchor_coverage": evidence_anchor_coverage,
+        "development_spec_coverage": development_spec_coverage,
+        "cross_agent_contract": {
+            "analysis_agent_output": "migration analysis plus development specification",
+            "developer_agent_input": "same document; no hidden chat context or source re-inference required",
+            "developer_agent_handoff_ready": readiness["developer_agent_handoff_ready"],
+        },
         "readiness": readiness,
         "issues": issues,
         "token_optimizer_status": "passthrough",

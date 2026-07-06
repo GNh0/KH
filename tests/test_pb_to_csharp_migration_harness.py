@@ -952,6 +952,7 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertNotIn("migration_analysis_code_evidence_too_low", issue_codes)
         self.assertIn("migration_analysis_evidence_anchor_missing", issue_codes)
         self.assertIn("migration_analysis_readiness_missing", issue_codes)
+        self.assertIn("migration_analysis_development_spec_missing", issue_codes)
         self.assertIn(
             "source_evidence",
             {
@@ -1035,6 +1036,57 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         ## 11. LLM implementation handoff
         LLM handoff: use this analysis as the migration contract. Implement C# and SP from the mapped PB behavior,
         not from generic screen assumptions. Block if PB source, C# target style, or SP evidence conflicts.
+
+        ## 12. Cross-agent development specification
+        Analysis agent output contract: this document is the development handoff for the developer agent.
+        Developer agent must not re-infer PB behavior from chat context; use the target file plan and mapping tables.
+
+        ### Target file plan
+        | artifact | target file / class / procedure | implementation task | done criteria |
+        | --- | --- | --- | --- |
+        | C# screen | PR100200.cs | add button handler and CallProc path | build succeeds |
+        | Designer | PR100200.Designer.cs | add explicit GridColumn members | BindingField and Caption match |
+        | SQL procedure | sp_PR100200_SAVE procedure | add SAVE @WORKTYPE branch | SP contract passes review |
+
+        ### PB event to C# event mapping
+        | PB event | C# method / handler | validation | output |
+        | --- | --- | --- | --- |
+        | clicked | btnOutsourcing_Click handler | selected row and duplicate check | popup save call |
+
+        ### DataWindow field mapping
+        | DataWindow | PB column / field | C# control / GridColumn | BindingField | Caption |
+        | --- | --- | --- | --- | --- |
+        | dw_main | ORDNUM | colList_ORDNUM GridColumn | ORDNUM | Order No |
+        | dw_main | ITEMCD | btnITEMCD control | ITEMCD | Item |
+
+        ### Control layout and binding plan
+        | control | type | BindingField | TabIndex | note |
+        | --- | --- | --- | --- | --- |
+        | lblITEMCD | LabelControl |  | 0 | item label |
+        | btnITEMCD | ButtonEdit | ITEMCD | 1 | target control |
+        | gvwList | GridView |  | 10 | list view |
+
+        ### SP contract matrix
+        | SP contract | @WORKTYPE | parameter | result column | DML |
+        | --- | --- | --- | --- | --- |
+        | sp_PR100200_SAVE | SAVE | @ORGDIV, @XML | ORDNUM, ORDSEQ | INSERT SA130T / UPDATE PR110T |
+
+        ### Style profile contract
+        Author-tagged style profile: use program key PR100200. If unmapped, use fallback program PR300100
+        with source hash and Designer hash evidence before applying style patterns.
+
+        ### Implementation task list
+        1. implementation task: update PR100200.cs handler; acceptance: selected row validation is preserved.
+        2. implementation task: update PR100200.Designer.cs grid columns; done criteria: explicit AddRange columns exist.
+        3. implementation task: update SQL SAVE branch; acceptance: transaction and RAISERROR behavior match.
+
+        ### Verification contract
+        manual test: save one valid row. expected UI: grid refresh shows the saved row.
+        expected DB: SA130T insert and PR110T update exist. build and rollback checks must pass.
+
+        ### Confirmed / inferred / blocked split
+        confirmed: PB clicked event and DataWindow columns. inferred: popup captions when SRD text is absent.
+        blocked: source parity remains blocked if the PBL export or SP schema conflicts with this document.
         """
 
         result = verify_pb_migration_analysis_document(document)
@@ -1043,7 +1095,9 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertLess(result.metadata["line_count"], 350)
         self.assertTrue(all(result.metadata["section_coverage"].values()))
         self.assertTrue(all(result.metadata["evidence_anchor_coverage"].values()))
+        self.assertTrue(all(result.metadata["development_spec_coverage"].values()))
         self.assertTrue(all(result.metadata["readiness"].values()))
+        self.assertTrue(result.metadata["cross_agent_contract"]["developer_agent_handoff_ready"])
 
     def test_generated_csharp_style_requires_author_tagged_evidence_when_enabled(self):
         missing = verify_migration_generated_csharp_style(
