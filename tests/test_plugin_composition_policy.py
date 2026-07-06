@@ -293,6 +293,22 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertTrue(any(role.provider_id == "sql-formatting" for role in decision.assistants))
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
 
+    def test_concise_korean_save_procedure_generation_adds_sql_formatting_assistant(self):
+        decision = compose_plugin_route(
+            "\ud604\uc7ac MA600110 \uae30\uc900\uc73c\ub85c SAVE "
+            "\ud504\ub85c\uc2dc\uc800 \uc791\uc131\ud574\uc904\uc218\uc788\uc5b4? "
+            "\uc774\ub7f0\uc790\ub8cc\ub85c \uc791\uc131\ud574\uc8fc\uba74\ub428",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertEqual(decision.route, "hybrid")
+        self.assertEqual(decision.controller.provider_id, "kh")
+        self.assertTrue(any(role.provider_id == "sql-formatting" for role in decision.assistants))
+        self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
     def test_sql_generation_request_routes_to_sql_formatting_without_skill_name(self):
         decision = compose_plugin_route(
             "Generate a SQL query for this requirement.\n"

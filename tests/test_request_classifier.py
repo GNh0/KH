@@ -894,6 +894,19 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("sql_formatting_style_request", result.reasons)
         self.assertIn("sql_formatting_style_check", result.evidence_required)
 
+    def test_concise_korean_save_procedure_generation_is_not_light_direct(self):
+        result = classify_request(
+            "\ud604\uc7ac MA600110 \uae30\uc900\uc73c\ub85c SAVE "
+            "\ud504\ub85c\uc2dc\uc800 \uc791\uc131\ud574\uc904\uc218\uc788\uc5b4? "
+            "\uc774\ub7f0\uc790\ub8cc\ub85c \uc791\uc131\ud574\uc8fc\uba74\ub428"
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("sql_formatting_style_request", result.reasons)
+        self.assertIn("sql_formatting_style_check", result.evidence_required)
+
     def test_sql_formatting_meta_review_is_medium_not_large_preflight(self):
         result = classify_request("Review whether SQL-formatting is not hidden by KH routing.")
 

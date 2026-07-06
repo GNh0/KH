@@ -3236,22 +3236,37 @@ SQL_FORMATTING_STYLE_ACTION_TERMS = {
     "align",
     "clean",
     "clean up",
+    "create",
+    "draft",
     "format",
+    "generate",
+    "make",
     "normalize",
     "organize",
     "refactor",
     "rewrite",
+    "save",
     "standardize",
+    "write",
     "\uc815\ub9ac",
     "\uc815\ub82c",
     "\ub9de\ucdb0",
+    "\uc791\uc131",
+    "\ub9cc\ub4e4",
+    "\uc800\uc7a5",
 }
 SQL_FORMATTING_STYLE_SUBJECT_TERMS = {
+    "proc",
+    "procedure",
     "sql",
+    "sp_",
+    "stored procedure",
     "t-sql",
     "tsql",
     "query",
     "\ucffc\ub9ac",
+    "\ud504\ub85c\uc2dc\uc800",
+    "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800",
 }
 SQL_NAMED_DML_RE = re.compile(r"\b(?:insert|update|delete|merge)\b", re.IGNORECASE)
 
@@ -3266,7 +3281,53 @@ def _is_sql_formatting_style_request(normalized: str) -> bool:
     dml_names = {match.group(0).lower() for match in SQL_NAMED_DML_RE.finditer(normalized)}
     if len(dml_names) >= 2:
         return True
+    if _looks_like_stored_procedure_generation_request(normalized):
+        return True
     return _looks_like_sql_or_tsql_payload(normalized)
+
+
+def _looks_like_stored_procedure_generation_request(normalized: str) -> bool:
+    """Detect concise procedure generation/cleanup prompts before short-question fallback."""
+    procedure_terms = {
+        "proc",
+        "procedure",
+        "sp_",
+        "stored procedure",
+        "\ud504\ub85c\uc2dc\uc800",
+        "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800",
+    }
+    generation_terms = {
+        "create",
+        "draft",
+        "generate",
+        "make",
+        "save",
+        "write",
+        "\uc791\uc131",
+        "\ub9cc\ub4e4",
+        "\uc800\uc7a5",
+        "\uc815\ub9ac",
+    }
+    if not _contains_any(normalized, procedure_terms):
+        return False
+    if not _contains_any(normalized, generation_terms):
+        return False
+    return not (
+        _is_sql_equivalence_question_without_output_request(normalized)
+        or _is_sql_diagnostic_question_without_output_request(normalized)
+    )
+
+
+def _is_sql_equivalence_question_without_output_request(normalized: str) -> bool:
+    if _contains_any(normalized, {"\ub611\uac19", "\uac19\uc774 \ub3d9\uc791", "\ub3d9\uc791\ud560\uae4c", "\ud574\ub3c4 \ub420\uae4c", "equivalent", "same behavior"}):
+        return not _contains_any(normalized, SQL_FORMATTING_STYLE_ACTION_TERMS)
+    return False
+
+
+def _is_sql_diagnostic_question_without_output_request(normalized: str) -> bool:
+    if _contains_any(normalized, {"why", "explain", "\uc65c", "\uc124\uba85", "\uc6d0\uc778", "\ubb50\uac00"}):
+        return not _contains_any(normalized, {"\uc791\uc131", "\ub9cc\ub4e4", "\uc815\ub9ac", "write", "create", "generate", "format", "clean"})
+    return False
 
 
 def _is_provider_meta_review_request(normalized: str) -> bool:

@@ -675,6 +675,10 @@ def _recommended_skills(classification: Dict[str, Any], plugin_route: Dict[str, 
 
 
 def _needs_sql_formatting_style_harness(classification: Dict[str, Any], plugin_route: Dict[str, Any]) -> bool:
+    if "sql_formatting_style_check" in set(classification.get("evidence_required", []) or []):
+        return True
+    if "sql_formatting_style_request" in set(classification.get("reasons", []) or []):
+        return True
     selected_roles = [plugin_route.get("controller", {}) or {}]
     selected_roles.extend(plugin_route.get("assistants", []) or [])
     if not any(role.get("capability") == "sql_formatting" for role in selected_roles):

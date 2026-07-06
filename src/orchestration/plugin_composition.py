@@ -995,6 +995,8 @@ def looks_like_sql_output_request(text: str) -> bool:
         return False
     if _looks_like_named_dml_sql_style_request(lowered):
         return True
+    if _looks_like_stored_procedure_output_request(lowered):
+        return True
     if not SQL_STATEMENT_PATTERN.search(lowered) or not SQL_CONTEXT_PATTERN.search(lowered):
         return False
     if _has_sql_equivalence_question_without_output_request(lowered):
@@ -1015,6 +1017,38 @@ def _looks_like_named_dml_sql_style_request(lowered: str) -> bool:
     if _has_sql_diagnostic_question_without_output_request(lowered):
         return False
     return any(marker in lowered for marker in SQL_OUTPUT_REQUEST_MARKERS)
+
+
+def _looks_like_stored_procedure_output_request(lowered: str) -> bool:
+    subject_markers = (
+        "stored procedure",
+        "procedure",
+        "proc",
+        "sp_",
+        "\ud504\ub85c\uc2dc\uc800",
+        "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800",
+    )
+    action_markers = (
+        "write",
+        "create",
+        "generate",
+        "draft",
+        "make",
+        "save",
+        "\uc791\uc131",
+        "\ub9cc\ub4e4",
+        "\uc800\uc7a5",
+        "\uc815\ub9ac",
+    )
+    if not any(marker in lowered for marker in subject_markers):
+        return False
+    if not any(marker in lowered for marker in action_markers):
+        return False
+    if _has_sql_equivalence_question_without_output_request(lowered):
+        return False
+    if _has_sql_diagnostic_question_without_output_request(lowered):
+        return False
+    return True
 
 
 def _has_sql_meta_review_context(lowered: str) -> bool:

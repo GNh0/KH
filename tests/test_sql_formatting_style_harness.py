@@ -1017,6 +1017,36 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             any("SQL PRE-OUTPUT GATE" in action for action in payload["required_next_actions"])
         )
 
+    def test_front_door_adds_sql_gate_for_concise_korean_save_procedure_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "sql-formatting"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Use when formatting, cleaning, standardizing, or refactoring SQL/T-SQL.\n"
+                "---\n"
+                "# SQL Formatting\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"CODEX_HOME": tmp}):
+                result = build_kh_front_door(
+                    "\ud604\uc7ac MA600110 \uae30\uc900\uc73c\ub85c SAVE "
+                    "\ud504\ub85c\uc2dc\uc800 \uc791\uc131\ud574\uc904\uc218\uc788\uc5b4? "
+                    "\uc774\ub7f0\uc790\ub8cc\ub85c \uc791\uc131\ud574\uc8fc\uba74\ub428",
+                    project=Path(tmp),
+                    host="codex",
+                )
+
+        payload = result.to_dict()
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["domain"], "software")
+        self.assertIn("sql-formatting-style-harness", payload["recommended_skills"])
+        self.assertIn("sql-formatting-style-harness", payload["immediate_next_skills"])
+        self.assertTrue(
+            any("SQL PRE-OUTPUT GATE" in action for action in payload["required_next_actions"])
+        )
+
     def test_front_door_does_not_select_verifier_for_mention_only_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp) / "skills" / "sql-formatting"
