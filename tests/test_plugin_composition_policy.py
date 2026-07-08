@@ -275,6 +275,21 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertNotIn("explicit_user_request:sql-formatting", decision.reasons)
         self.assertNotIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
 
+    def test_csharp_report_procedure_identifier_does_not_route_to_sql_formatting(self):
+        decision = compose_plugin_route(
+            'try { DataSet ds = ReportProcedure(drEA100T["RPTSPNM"].ToString(), strParmNames); '
+            'XtraReport rpt = (XtraReport)Activator.CreateInstance(reportType, new object[] { ds }); '
+            'if (rpt == null || rpt.RowCount <= 0) return; } Do I need this C# block?',
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertNotEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertFalse(any(role.provider_id == "sql-formatting" for role in decision.assistants))
+        self.assertNotIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
     def test_stored_procedure_generation_request_adds_sql_formatting_assistant(self):
         decision = compose_plugin_route(
             "Begin Tran\n"

@@ -916,6 +916,16 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("provider_meta_review_request", result.reasons)
         self.assertIn("routing_review", result.evidence_required)
 
+    def test_csharp_report_procedure_identifier_is_not_sql_formatting_request(self):
+        result = classify_request(
+            'try { DataSet ds = ReportProcedure(drEA100T["RPTSPNM"].ToString(), strParmNames); '
+            'XtraReport rpt = (XtraReport)Activator.CreateInstance(reportType, new object[] { ds }); '
+            'if (rpt == null || rpt.RowCount <= 0) return; } Do I need this C# block?'
+        )
+
+        self.assertNotIn("sql_formatting_style_request", result.reasons)
+        self.assertNotIn("sql_formatting_style_check", result.evidence_required)
+
     def test_api_design_is_software_heavy_not_product_design(self):
         result = classify_request("Design an API for payments.")
 

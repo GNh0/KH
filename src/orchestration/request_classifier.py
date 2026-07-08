@@ -3288,14 +3288,6 @@ def _is_sql_formatting_style_request(normalized: str) -> bool:
 
 def _looks_like_stored_procedure_generation_request(normalized: str) -> bool:
     """Detect concise procedure generation/cleanup prompts before short-question fallback."""
-    procedure_terms = {
-        "proc",
-        "procedure",
-        "sp_",
-        "stored procedure",
-        "\ud504\ub85c\uc2dc\uc800",
-        "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800",
-    }
     generation_terms = {
         "create",
         "draft",
@@ -3308,7 +3300,7 @@ def _looks_like_stored_procedure_generation_request(normalized: str) -> bool:
         "\uc800\uc7a5",
         "\uc815\ub9ac",
     }
-    if not _contains_any(normalized, procedure_terms):
+    if not _has_stored_procedure_subject(normalized):
         return False
     if not _contains_any(normalized, generation_terms):
         return False
@@ -3316,6 +3308,16 @@ def _looks_like_stored_procedure_generation_request(normalized: str) -> bool:
         _is_sql_equivalence_question_without_output_request(normalized)
         or _is_sql_diagnostic_question_without_output_request(normalized)
     )
+
+
+def _has_stored_procedure_subject(normalized: str) -> bool:
+    if "stored procedure" in normalized:
+        return True
+    if "\ud504\ub85c\uc2dc\uc800" in normalized or "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800" in normalized:
+        return True
+    if re.search(r"(?<![a-z0-9_])(?:procedure|proc)(?![a-z0-9_])", normalized):
+        return True
+    return re.search(r"(?<![a-z0-9_])sp_[a-z0-9_]+\b", normalized) is not None
 
 
 def _is_sql_equivalence_question_without_output_request(normalized: str) -> bool:

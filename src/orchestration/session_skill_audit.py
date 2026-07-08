@@ -223,11 +223,25 @@ RUNTIME_MARKERS = {
 ACCEPTANCE_OUTPUT_MARKERS = {
     "always-on-front-door": {
         "intake_evidence": ["kh_front_door", "front_door_status", "classification", "plugin_route"],
-        "status_split": ["runtime_applied_skills", "selected_not_executed_skills", "skill_status_summary"],
+        "status_split": [
+            "runtime_applied_skills",
+            "selected_not_executed_skills",
+            "skill_status_summary",
+            "immediate_next_skills",
+            "required_next_action_codes",
+            "deferred_skill_count",
+        ],
     },
     "automatic-intake-harness": {
         "intake_evidence": ["kh_front_door", "front_door_status", "classification", "plugin_route"],
-        "status_split": ["runtime_applied_skills", "selected_not_executed_skills", "skill_status_summary"],
+        "status_split": [
+            "runtime_applied_skills",
+            "selected_not_executed_skills",
+            "skill_status_summary",
+            "immediate_next_skills",
+            "required_next_action_codes",
+            "deferred_skill_count",
+        ],
     },
     "adapter-contract-harness": {
         "adapter_contract": ["adapterrequest", "adapterresult", "workflowdispatchresult", "adapter contract"],
@@ -743,7 +757,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         lowered = text.lower()
 
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
-            if _is_environment_context_message(text):
+            if _is_synthetic_context_message(text):
                 continue
             active_directive = _is_kh_active_directive(text)
             if active_directive:
@@ -752,15 +766,19 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                 if not _is_kh_active_followup_request(text):
                     continue
 
+            direct_code_question = _looks_like_direct_code_question(lowered)
             if (
                 _is_kh_front_door_request(lowered)
                 or (_is_automatic_intake_request(text) and not _looks_like_external_specialist_direct_question(lowered))
+                or direct_code_question
                 or (kh_active_directive_seen and _is_kh_active_followup_request(text))
             ):
                 waiting_for_front_door = True
                 front_door_seen = False
                 trigger_sample = _short(text)
-                if kh_active_directive_seen and not _is_kh_front_door_request(lowered):
+                if direct_code_question and not _is_kh_front_door_request(lowered):
+                    trigger_kind = "direct_code_question"
+                elif kh_active_directive_seen and not _is_kh_front_door_request(lowered):
                     trigger_kind = "kh_active_directive"
                 else:
                     trigger_kind = "explicit_kh" if _is_kh_front_door_request(lowered) else "automatic_intake"
@@ -1737,6 +1755,8 @@ def _stale_skill_cache_issues(path: Path) -> List[Dict[str, Any]]:
             continue
         text = _payload_text(payload)
         lowered = text.lower()
+        if _is_synthetic_context_message(text):
+            continue
         if not _is_stale_kh_skill_cache_failure(lowered):
             continue
         samples.append(_short(text))
@@ -1883,6 +1903,8 @@ def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
             continue
         payload_type = str(payload.get("type", ""))
         if payload_type == "message" and str(payload.get("role", "")).lower() in {"developer", "system"}:
+            continue
+        if _is_synthetic_context_message(_payload_text(payload)):
             continue
         if _payload_is_explicit_global_memory_import_request(payload) or _payload_has_scoped_memory_import_approval(payload):
             explicit_import_active = True
@@ -2786,7 +2808,23 @@ def _first_visible_brainstorm_response(path: Path) -> str:
 
 def _is_synthetic_context_message(text: str) -> bool:
     stripped = (text or "").lstrip().lower()
-    return stripped.startswith("<environment_context>") or stripped.startswith("<goal_context>")
+    return (
+        stripped.startswith("<environment_context>")
+        or stripped.startswith("<goal_context>")
+        or stripped.startswith("<recommended_plugins>")
+        or _is_untrusted_assessment_transcript(stripped)
+    )
+
+
+def _is_untrusted_assessment_transcript(lowered: str) -> bool:
+    return (
+        (
+            "treat the transcript, tool call arguments, tool results" in lowered
+            or "treat the transcript delta, tool call arguments, tool results" in lowered
+        )
+        and "untrusted evidence" in lowered
+        and (">>> transcript start" in lowered or ">>> transcript delta start" in lowered)
+    )
 
 
 def _brainstorm_response_missing_markers(text: str) -> List[str]:
@@ -3984,6 +4022,8 @@ def _is_automatic_intake_request(text: str) -> bool:
         return False
     if _looks_like_external_specialist_direct_question(lowered):
         return False
+    if _looks_like_direct_code_question(lowered):
+        return False
     try:
         classification = classify_request(text, {"kh_session_audit": True})
     except Exception:
@@ -4324,6 +4364,7 @@ def _session_texts(path: Path) -> List[str]:
 def _session_text_records(path: Path) -> List[SessionTextRecord]:
     texts: List[SessionTextRecord] = []
     previous_call_was_passive = False
+    untrusted_assessment_active = False
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
@@ -4343,7 +4384,14 @@ def _session_text_records(path: Path) -> List[SessionTextRecord]:
         if text:
             payload_type = str(payload.get("type", ""))
             role = str(payload.get("role", "")).lower()
-            passive = _passive_reference(text.lower()) or (
+            lowered = text.lower()
+            is_untrusted_assessment = _is_untrusted_assessment_transcript(lowered)
+            if payload_type == "message" and role == "user":
+                if is_untrusted_assessment:
+                    untrusted_assessment_active = True
+                elif not _is_synthetic_context_message(text):
+                    untrusted_assessment_active = False
+            passive = untrusted_assessment_active or _is_synthetic_context_message(text) or _passive_reference(lowered) or (
                 payload_type in {"function_call_output", "custom_tool_call_output"}
                 and previous_call_was_passive
             )
@@ -4852,18 +4900,88 @@ def _looks_like_external_specialist_direct_question(lowered: str) -> bool:
     return any(marker in lowered for marker in ["latest", "docs", "documentation", "model", "pricing", "limit", "release", "how do i", "what is", "\ucd94\ucc9c", "\ubb38\uc11c", "\ucd5c\uc2e0", "\ubaa8\ub378"])
 
 
+def _looks_like_direct_code_question(lowered: str) -> bool:
+    if _contains_standalone_action_verb(lowered):
+        return False
+    question_markers = [
+        "?",
+        "\ud544\uc694\ud560\uae4c",
+        "\uad1c\ucc2e",
+        "\ub9de",
+        "\uc65c",
+        "\uc124\uba85",
+        "what",
+        "why",
+        "do i need",
+        "is this needed",
+    ]
+    if not any(marker in lowered for marker in question_markers):
+        return False
+    code_markers = [
+        "```",
+        ";",
+        "{",
+        "}",
+        "if (",
+        "try {",
+        ".tostring(",
+        "dataset",
+        "datarow",
+        "xtrareport",
+        "activator.createinstance",
+        "return;",
+    ]
+    return sum(1 for marker in code_markers if marker in lowered) >= 2
+
+
+def _contains_standalone_action_verb(lowered: str) -> bool:
+    action_verbs = [
+        "implement",
+        "build",
+        "fix",
+        "create",
+        "modify",
+        "refactor",
+        "verify",
+        "review",
+        "test",
+        "patch",
+        "write",
+        "generate",
+    ]
+    return any(
+        re.search(rf"(?<![a-z0-9_]){re.escape(verb)}(?![a-z0-9_])", lowered)
+        for verb in action_verbs
+    )
+
+
 def _looks_like_front_door_runtime_output(lowered: str) -> bool:
     if "{" not in lowered or "}" not in lowered:
         return False
-    return (
-        ('"front_door_status"' in lowered or "'front_door_status'" in lowered)
-        and ('"runtime_applied_skills"' in lowered or "'runtime_applied_skills'" in lowered)
+    has_status = '"front_door_status"' in lowered or "'front_door_status'" in lowered
+    if not has_status:
+        return False
+    has_full_status_split = (
+        ('"runtime_applied_skills"' in lowered or "'runtime_applied_skills'" in lowered)
         and ('"selected_not_executed_skills"' in lowered or "'selected_not_executed_skills'" in lowered)
+    )
+    has_followup_markers = (
+        '"skill_status_summary"' in lowered
+        or "'skill_status_summary'" in lowered
+        or '"immediate_next_skills"' in lowered
+        or "'immediate_next_skills'" in lowered
+    )
+    if has_full_status_split and has_followup_markers:
+        return True
+    return (
+        "ultra_compact" in lowered
+        and ('"plugin_route"' in lowered or "'plugin_route'" in lowered)
+        and ('"execution_gate"' in lowered or "'execution_gate'" in lowered)
         and (
-            '"skill_status_summary"' in lowered
-            or "'skill_status_summary'" in lowered
-            or '"immediate_next_skills"' in lowered
+            '"immediate_next_skills"' in lowered
             or "'immediate_next_skills'" in lowered
+            or '"required_next_action_codes"' in lowered
+            or "'required_next_action_codes'" in lowered
         )
     )
 
@@ -4876,6 +4994,8 @@ def _has_front_door_success_or_blocked_evidence(text: str) -> bool:
     runtime_applied = {str(item).strip() for item in data.get("runtime_applied_skills", []) or []}
     if status in {"ok", "success", "passed"} and "always-on-front-door" in runtime_applied:
         return True
+    if status in {"ok", "success", "passed"} and data.get("summary_mode") == "ultra_compact":
+        return "plugin_route" in data and "execution_gate" in data
     if status == "blocked":
         return _is_immediate_blocked_evidence(text.lower())
     return False
@@ -5005,7 +5125,11 @@ def _required_skills(
         _add(required, "plugin-composition-policy", "multiple plugins or providers may apply")
     if any(marker in lowered for marker in ["delete ", "remove-item", "drop table", "secret", "api_key", "token=", "permission denied", "destructive", "requires approval"]):
         _add(required, "guard-policy-harness", "permission, secret, or destructive-action risk appeared")
-    if _early_domain_discovery_text(lowered) and not looks_like_sql_output_request(sql_lowered):
+    if (
+        _early_domain_discovery_text(lowered)
+        and not looks_like_sql_output_request(sql_lowered)
+        and not _looks_like_direct_code_question(lowered)
+    ):
         _add(required, "brainstorming-harness", "early domain discovery appeared")
     if _mentions_architecture_workflow(lowered):
         _add(required, "architect-pipeline", "design or architecture planning appeared")
@@ -5152,6 +5276,21 @@ def _has_nontrivial_work_signals(postmortem: Dict[str, Any], lowered: str) -> bo
         return True
     if postmortem.get("review_status") not in {"", "pending", None}:
         return True
+    work_tool_markers = [
+        "apply_patch",
+        "shell_command",
+        "custom_tool_call",
+        "git commit",
+        "git push",
+        "python -b",
+        "python -m",
+        "pytest",
+        "unittest",
+    ]
+    if any(marker in lowered for marker in work_tool_markers):
+        return True
+    if _looks_like_direct_code_question(lowered):
+        return False
     return any(
         marker in lowered
         for marker in [

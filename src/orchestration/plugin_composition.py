@@ -1020,14 +1020,6 @@ def _looks_like_named_dml_sql_style_request(lowered: str) -> bool:
 
 
 def _looks_like_stored_procedure_output_request(lowered: str) -> bool:
-    subject_markers = (
-        "stored procedure",
-        "procedure",
-        "proc",
-        "sp_",
-        "\ud504\ub85c\uc2dc\uc800",
-        "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800",
-    )
     action_markers = (
         "write",
         "create",
@@ -1040,7 +1032,7 @@ def _looks_like_stored_procedure_output_request(lowered: str) -> bool:
         "\uc800\uc7a5",
         "\uc815\ub9ac",
     )
-    if not any(marker in lowered for marker in subject_markers):
+    if not _has_stored_procedure_subject(lowered):
         return False
     if not any(marker in lowered for marker in action_markers):
         return False
@@ -1049,6 +1041,16 @@ def _looks_like_stored_procedure_output_request(lowered: str) -> bool:
     if _has_sql_diagnostic_question_without_output_request(lowered):
         return False
     return True
+
+
+def _has_stored_procedure_subject(lowered: str) -> bool:
+    if "stored procedure" in lowered:
+        return True
+    if "\ud504\ub85c\uc2dc\uc800" in lowered or "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800" in lowered:
+        return True
+    if re.search(r"(?<![a-z0-9_])(?:procedure|proc)(?![a-z0-9_])", lowered):
+        return True
+    return re.search(r"(?<![a-z0-9_])sp_[a-z0-9_]+\b", lowered) is not None
 
 
 def _has_sql_meta_review_context(lowered: str) -> bool:
