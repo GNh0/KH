@@ -204,6 +204,12 @@ class AntigravityDispatcher:
             final_goal=evaluated_goal or metadata.get("goal", {}),
             workflow_success=status == "success",
         )
+        if workflow_usability.enabled and workflow_usability.status == "blocked":
+            status = "blocked"
+            evaluated_goal = _block_goal_for_workflow_usability(
+                evaluated_goal or metadata.get("goal", {}),
+                workflow_usability.to_dict(),
+            )
         return AdapterResult(
             status=status,
             message=native_result.message or "Antigravity native dispatch completed",
@@ -272,3 +278,42 @@ def _adapter_status(native_status: str, task_success: bool, goal: dict) -> str:
     if goal and goal.get("status") == "blocked":
         return "blocked"
     return "success" if task_success else "failed"
+
+
+def _block_goal_for_workflow_usability(goal: dict, workflow_usability: dict) -> dict:
+    blocked_goal = dict(goal or {})
+    metadata = dict(blocked_goal.get("metadata", {}) or {})
+    required_next_skills = [
+        str(item)
+        for item in workflow_usability.get("required_next_skills", [])
+        if str(item).strip()
+    ]
+    metadata["workflow_usability_status"] = workflow_usability.get("status", "")
+    metadata["workflow_usability_required_next_skills"] = required_next_skills
+    metadata["missing_evidence"] = _dedupe_strings([
+        *list(metadata.get("missing_evidence", []) or []),
+        *required_next_skills,
+    ])
+    blocked_goal["status"] = "blocked"
+    blocked_goal["blocked_reason"] = (
+        "workflow_usability_runtime blocked completion because required KH follow-up skills "
+        f"were not applied or explicitly blocked: {', '.join(required_next_skills) or 'skill_transition_handoff'}"
+    )
+    evidence = list(blocked_goal.get("evidence", []) or [])
+    if "skill_transition_handoff" not in evidence:
+        evidence.append("skill_transition_handoff")
+    blocked_goal["evidence"] = evidence
+    blocked_goal["metadata"] = metadata
+    return blocked_goal
+
+
+def _dedupe_strings(items: list) -> list:
+    seen = set()
+    unique = []
+    for item in items:
+        text = str(item)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique

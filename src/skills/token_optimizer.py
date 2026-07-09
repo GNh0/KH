@@ -3,7 +3,7 @@ import ast
 import json
 import re
 import sys
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 from src.contracts import HarnessResult
 from src.skills.base import agent_skill
@@ -15,6 +15,11 @@ TOKEN_COUNT_NOTE = (
     "Counts are derived from the actual optimizer input/output text with KH's local token estimator; "
     "provider billing token usage is not exposed to this harness."
 )
+RETRIEVAL_BUDGET_DEFAULTS = {
+    "max_stdout_lines": 80,
+    "default_limit": 50,
+    "sample_limit": 10,
+}
 
 
 IMPORTANT_LOG_PATTERNS = tuple(
@@ -410,6 +415,87 @@ def summarize_session_jsonl(session_jsonl: str, max_lines: int = 80) -> HarnessR
         ),
     }
     return HarnessResult(success=True, stdout=optimized, stderr="", exit_code=0, metadata=metadata)
+
+
+@agent_skill(
+    name="build_retrieval_budget_plan",
+    description="Build a count/sample/fields/output-file preflight plan before broad retrieval or large command output.",
+)
+def build_retrieval_budget_plan(
+    operation: str,
+    expected_rows: int | None = None,
+    required_fields: List[str] | None = None,
+    limit: int | None = None,
+    output_path: str = "",
+    quality_sensitive: bool = False,
+) -> Dict[str, Any]:
+    """Plan token-safe retrieval before generating large stdout or broad file reads."""
+    fields = [field.strip() for field in (required_fields or []) if field and field.strip()]
+    effective_limit = limit if limit is not None else RETRIEVAL_BUDGET_DEFAULTS["default_limit"]
+    steps = [
+        "count-or-scope-first",
+        "sample-before-full-read",
+        "select-required-fields-only" if fields else "field-list-required-before-broad-read",
+        "write-large-output-to-file" if output_path else "require-output-path-before-large-output",
+    ]
+    issues: List[str] = []
+    if effective_limit <= 0:
+        issues.append("limit_must_be_positive")
+    if expected_rows is not None and expected_rows > effective_limit and not output_path:
+        issues.append("large_result_requires_output_path")
+    if not fields:
+        issues.append("required_fields_missing")
+    if quality_sensitive and not output_path:
+        issues.append("quality_sensitive_content_should_have_source_file_or_exact_reference")
+    status = "blocked" if issues else ("passthrough" if quality_sensitive else "planned")
+    return {
+        "operation": (operation or "retrieval").strip() or "retrieval",
+        "status": status,
+        "expected_rows": expected_rows,
+        "limit": effective_limit,
+        "sample_limit": min(effective_limit, RETRIEVAL_BUDGET_DEFAULTS["sample_limit"]),
+        "required_fields": fields,
+        "output_path": output_path,
+        "quality_sensitive": quality_sensitive,
+        "max_stdout_lines": RETRIEVAL_BUDGET_DEFAULTS["max_stdout_lines"],
+        "steps": steps,
+        "issues": issues,
+        "token_optimizer_status": "blocked" if issues else ("passthrough" if quality_sensitive else "considered_not_needed"),
+        "token_optimizer_status_reason": (
+            "exact source-of-truth retrieval should be written/read selectively without lossy compression"
+            if quality_sensitive
+            else "retrieval bounded before output, so no compression is needed yet"
+        ),
+    }
+
+
+@agent_skill(
+    name="validate_retrieval_budget_plan",
+    description="Validate that a retrieval plan avoids large stdout and caps broad reads before token optimization.",
+)
+def validate_retrieval_budget_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
+    issues = list(plan.get("issues", []) or [])
+    if int(plan.get("limit") or 0) <= 0:
+        issues.append("limit_must_be_positive")
+    if int(plan.get("sample_limit") or 0) <= 0:
+        issues.append("sample_limit_must_be_positive")
+    if not plan.get("required_fields"):
+        issues.append("required_fields_missing")
+    if plan.get("expected_rows") is not None:
+        try:
+            if int(plan["expected_rows"]) > int(plan.get("limit") or 0) and not plan.get("output_path"):
+                issues.append("large_result_requires_output_path")
+        except (TypeError, ValueError):
+            issues.append("expected_rows_must_be_int")
+    if int(plan.get("max_stdout_lines") or 0) > RETRIEVAL_BUDGET_DEFAULTS["max_stdout_lines"]:
+        issues.append("max_stdout_lines_too_high")
+    unique_issues = sorted(set(issues))
+    return {
+        "valid": not unique_issues,
+        "issues": unique_issues,
+        "operation": plan.get("operation", ""),
+        "status": "passed" if not unique_issues else "blocked",
+    }
 
 
 @agent_skill(

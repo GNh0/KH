@@ -1508,6 +1508,35 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertEqual(result.domain, domain)
                 self.assertEqual(result.recommended_execution, route)
 
+    def test_ambiguous_credential_context_routes_credential_safety_without_bare_token_overreach(self):
+        credential_cases = [
+            "OPENAI_API_KEY 있는지만 확인해봐. 값은 보여주지 말고.",
+            ".env에 키가 있는지 봐줘. 내용 전체 출력은 하지마.",
+            "GitHub token이 저장됐는지 확인하고, 로그에 값은 남기지마.",
+            "DB connection string 필요한데 안전하게 있는지만 체크해줘.",
+            "환경변수에 NCBI_API_KEY 잡혀있는지 확인 가능해?",
+            "secret 값은 말하지 말고 존재 여부만 알려줘.",
+        ]
+
+        for prompt in credential_cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertIn("credential-safety-harness", result.cross_cutting)
+                self.assertIn("credential_safety_status", result.evidence_required)
+                self.assertIn("credential_or_secret_boundary", result.reasons)
+
+        non_credential_cases = [
+            "현재 토큰 사용량이 얼마나 되는지 알려줘.",
+            "Token Optimizer를 쓰면 토큰이 줄어드는지 비교해줘.",
+            "이 문장을 토큰 수 적게 다시 써줘.",
+        ]
+
+        for prompt in non_credential_cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertNotIn("credential-safety-harness", result.cross_cutting)
+                self.assertNotIn("credential_safety_status", result.evidence_required)
+
     def test_module_cli_outputs_classification_json(self):
         completed = subprocess.run(
             [

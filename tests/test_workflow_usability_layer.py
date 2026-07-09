@@ -509,6 +509,22 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
                 "workspace_strategy": "project-local-worktree",
                 "host_panel_host": "antigravity",
                 "goal": {"objective": "Build a workflow."},
+                "skill_statuses": {
+                    "workflow-skill-distiller": {
+                        "status": "applied",
+                        "application_mode": "procedural",
+                        "evidence_note": "Follow-up skill distillation review was recorded.",
+                        "evidence_keys": ["workflow_skill_distiller_applied"],
+                        "metadata": {"artifact_path": ".kh/compound/workflow-demo/skill-distillation.md"},
+                    },
+                    "scenario-evaluation-harness": {
+                        "status": "applied",
+                        "application_mode": "procedural",
+                        "evidence_note": "Follow-up scenario regression review was recorded.",
+                        "evidence_keys": ["scenario_evaluation_applied"],
+                        "metadata": {"report_path": ".kh/compound/workflow-demo/scenario-evaluation.json"},
+                    },
+                },
             }
             noisy_output = "\n".join([*(f"progress {index}" for index in range(80)), "ERROR: runtime failed", "exit code: 1"])
             preflight = build_workflow_usability_preflight(tmp, metadata)
@@ -569,6 +585,8 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertIn("memory_candidates_recorded", result.evidence)
             self.assertTrue(Path(result.memory_state["store"]["candidates_path"]).exists())
             self.assertTrue(Path(result.compound["paths"]["compound_handoff"]).exists())
+            self.assertTrue(result.skill_transition_handoff["valid"])
+            self.assertEqual(result.required_next_skills, [])
             progress = read_development_progress(result.progress_path)
             self.assertTrue(validate_development_progress(progress)["valid"])
             self.assertEqual(progress.token_optimizer_status, "used")
@@ -580,6 +598,44 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertGreater(task_optimizer["summary"]["actual_tokens_saved"], 0)
             self.assertIn("ERROR: runtime failed", task_optimizer["records"][0]["stdout"])
             self.assertIn("development_progress_valid", result.evidence)
+
+    def test_runtime_completes_with_followup_when_only_compound_followup_skills_are_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            metadata = {
+                "workflow_usability_auto": True,
+                "token_optimizer_provider": "kh",
+                "token_optimizer_status": "considered_not_needed",
+                "memory_root": str(Path(tmp) / ".memory"),
+                "workspace_strategy": "project-local-worktree",
+                "goal": {"objective": "Build a workflow."},
+            }
+            result = apply_workflow_usability_runtime(
+                project_dir=tmp,
+                workflow_id="workflow-missing-followup",
+                file_list=["main.py"],
+                task_results=[
+                    WorkflowTaskResult(
+                        task_id="task-main",
+                        file_name="main.py",
+                        role="implementer",
+                        status="success",
+                        message="done",
+                        metadata={"evidence": ["task runner completed"]},
+                    )
+                ],
+                gate_results=[{"role": "code-quality-reviewer", "status": "passed"}],
+                metadata=metadata,
+                final_goal={"objective": "Build a workflow.", "status": "complete"},
+                workflow_success=True,
+            )
+
+            self.assertEqual(result.status, "complete_with_followup")
+            self.assertFalse(result.skill_transition_handoff["valid"])
+            self.assertIn("required_next_skills", result.evidence)
+            self.assertIn("skill_transition_handoff", result.evidence)
+            self.assertIn("workflow-skill-distiller", result.required_next_skills)
+            self.assertIn("scenario-evaluation-harness", result.required_next_skills)
+            self.assertNotIn("memory-state-harness", result.required_next_skills)
 
 
 if __name__ == "__main__":

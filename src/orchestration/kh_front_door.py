@@ -789,13 +789,19 @@ def _immediate_next_skills(
     recommended = set(recommended_skills)
     controller = plugin_route.get("controller", {}) or {}
     controller_id = str(controller.get("provider_id") or "")
+    credential_first = (
+        ["credential-safety-harness"]
+        if "credential-safety-harness" in recommended and _needs_credential_safety_harness(classification)
+        else []
+    )
 
     status = str(execution_gate.get("status") or "")
     if status == "blocked_until_brainstorming_handoff":
-        return ["brainstorming-harness"] if "brainstorming-harness" in recommended else []
+        return _dedupe([*credential_first, *(["brainstorming-harness"] if "brainstorming-harness" in recommended else [])])
 
     if status == "blocked_until_large_work_preflight":
         ordered = [
+            "credential-safety-harness",
             "goal-state-harness",
             "pb-to-csharp-migration-harness",
             "workflow-usability-harness",
@@ -807,18 +813,27 @@ def _immediate_next_skills(
         return [skill for skill in ordered if skill in recommended][:4]
 
     if _needs_sql_formatting_style_harness(classification, plugin_route):
-        return ["sql-formatting-style-harness"] if "sql-formatting-style-harness" in recommended else []
+        return _dedupe([*credential_first, *(["sql-formatting-style-harness"] if "sql-formatting-style-harness" in recommended else [])])
 
     if controller_id and controller_id not in {"kh", "none"}:
-        return []
+        return credential_first
 
     ordered = [
+        "credential-safety-harness",
         "command-output-harness",
         "workflow-usability-harness",
         "memory-state-harness",
         "verification-before-completion-harness",
     ]
     return [skill for skill in ordered if skill in recommended][:2]
+
+
+def _needs_credential_safety_harness(classification: Dict[str, Any]) -> bool:
+    return (
+        "credential-safety-harness" in set(classification.get("cross_cutting", []) or [])
+        or "credential_safety_status" in set(classification.get("evidence_required", []) or [])
+        or "credential_or_secret_boundary" in set(classification.get("reasons", []) or [])
+    )
 
 
 def _status(

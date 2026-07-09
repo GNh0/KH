@@ -16,6 +16,10 @@ from src.orchestration.runtime_memory import (
 )
 from src.orchestration.runtime_token_optimizer import optimize_workflow_task_results
 from src.orchestration.session_start_context import build_session_start_context
+from src.orchestration.skill_application import (
+    build_large_work_orchestration_bundle,
+)
+from src.orchestration.skill_transitions import validate_skill_transitions
 from src.orchestration.token_optimizer_provider import resolve_token_optimizer_provider
 
 
@@ -33,6 +37,8 @@ class WorkflowUsabilityRuntimeArtifacts:
     host_progress_panel: Dict[str, Any] = field(default_factory=dict)
     host_progress_panel_path: str = ""
     compound: Dict[str, Any] = field(default_factory=dict)
+    skill_transition_handoff: Dict[str, Any] = field(default_factory=dict)
+    required_next_skills: List[str] = field(default_factory=list)
     evidence: List[str] = field(default_factory=list)
     error_type: str = ""
     message: str = ""
@@ -148,9 +154,27 @@ def apply_workflow_usability_runtime(
             metadata,
             compound_artifacts.memory_candidates,
         )
+        transition_handoff = _validate_runtime_skill_transitions(
+            progress=progress,
+            metadata=runtime_metadata,
+            token_optimization=token_optimization,
+            compound_artifacts=compound_artifacts.to_dict(),
+            memory_state=memory_state,
+        )
+        required_next_skills = [
+            str(item)
+            for item in transition_handoff.get("required_next_skills", [])
+            if str(item).strip()
+        ]
+        transition_valid = bool(transition_handoff.get("valid", False))
+        runtime_status = _workflow_usability_runtime_status(
+            workflow_success,
+            transition_valid,
+            transition_handoff,
+        )
         return WorkflowUsabilityRuntimeArtifacts(
             enabled=True,
-            status="complete" if workflow_success else "blocked",
+            status=runtime_status,
             session_start_context=dict(preflight.get("session_start_context", {})),
             token_optimizer_provider=dict(preflight.get("token_optimizer_provider", {})),
             token_optimization=token_optimization,
@@ -161,6 +185,8 @@ def apply_workflow_usability_runtime(
             host_progress_panel=host_panel,
             host_progress_panel_path=str(host_panel_path),
             compound=compound_artifacts.to_dict(),
+            skill_transition_handoff=transition_handoff,
+            required_next_skills=required_next_skills,
             evidence=[
                 "workflow_usability_runtime",
                 "progress_json",
@@ -168,9 +194,11 @@ def apply_workflow_usability_runtime(
                 "progress_panel",
                 "host_progress_panel",
                 "compound_handoff",
+                "skill_transition_handoff",
                 *list(token_optimization.get("evidence", [])),
                 *list(memory_state.get("evidence", [])),
                 *list(compound_artifacts.evidence),
+                *(["required_next_skills"] if required_next_skills else []),
             ],
         )
     except Exception as exc:
@@ -181,10 +209,145 @@ def apply_workflow_usability_runtime(
             token_optimizer_provider=dict(preflight.get("token_optimizer_provider", {})),
             token_optimization={},
             memory_state={},
+            skill_transition_handoff={},
+            required_next_skills=[],
             evidence=["workflow_usability_runtime"],
             error_type=type(exc).__name__,
             message=str(exc),
         )
+
+
+def _validate_runtime_skill_transitions(
+    progress: DevelopmentRunProgress,
+    metadata: Dict[str, Any],
+    token_optimization: Dict[str, Any],
+    compound_artifacts: Dict[str, Any],
+    memory_state: Dict[str, Any],
+) -> Dict[str, Any]:
+    compound_handoff = dict(compound_artifacts.get("handoff", {}) or {})
+    memory_candidates = list(compound_artifacts.get("memory_candidates", []) or [])
+    bundle = build_large_work_orchestration_bundle(
+        objective=progress.objective,
+        workspace_strategy=progress.workspace_strategy or "in-place",
+        token_optimizer_status=progress.token_optimizer_status,
+        token_optimizer_status_reason=progress.token_optimizer_status_reason,
+        overrides=_runtime_skill_status_overrides(metadata, token_optimization, memory_state),
+        parallel_strategy_decision=str(
+            metadata.get("parallel_strategy_decision")
+            or progress.metadata.get("parallel_strategy_decision")
+            or "sequential single-worker execution"
+        ),
+        memory_candidates=memory_candidates,
+        compound_handoff=compound_handoff,
+        metadata={
+            "source": "workflow_usability_runtime",
+            "run_id": progress.run_id,
+            "compound_paths": dict(compound_artifacts.get("paths", {}) or {}),
+        },
+    )
+    handoff = validate_skill_transitions(bundle, phase="final")
+    return {
+        **handoff,
+        "compound_next_skills": list(compound_handoff.get("next_skills", []) or []),
+        "token_optimizer_status": progress.token_optimizer_status,
+        "token_optimizer_status_reason": progress.token_optimizer_status_reason,
+        "memory_state_status": str(memory_state.get("status", "")),
+    }
+
+
+def _runtime_skill_status_overrides(
+    metadata: Dict[str, Any],
+    token_optimization: Dict[str, Any],
+    memory_state: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    overrides = _metadata_skill_status_overrides(metadata.get("skill_statuses", {}))
+    overrides["compound-engineering-harness"] = {
+        "status": "applied",
+        "application_mode": "runtime",
+        "evidence_note": "Workflow usability runtime wrote Compound capture and handoff artifacts.",
+        "evidence_keys": ["compound_handoff", "compound_artifacts_written"],
+    }
+    token_status = str(token_optimization.get("status", "")).strip()
+    if token_status == "used":
+        overrides["token-optimizer"] = {
+            "status": "applied",
+            "application_mode": "runtime",
+            "evidence_note": "Token optimizer ran during workflow usability runtime.",
+            "evidence_keys": ["runtime_token_optimization", "token_usage"],
+        }
+    elif token_status in {"considered_not_needed", "passthrough"}:
+        overrides["token-optimizer"] = {
+            "status": "applied",
+            "application_mode": "procedural",
+            "evidence_note": "Token optimizer gate recorded a non-optimization decision.",
+            "evidence_keys": ["token_optimizer_status", "token_optimizer_status_reason"],
+        }
+    elif token_status == "blocked":
+        overrides["token-optimizer"] = {
+            "status": "blocked",
+            "application_mode": "blocked",
+            "evidence_note": "Token optimizer gate was blocked during runtime.",
+            "evidence_keys": ["token_optimizer_status", "token_optimizer_status_reason"],
+            "blocked_reason": str(token_optimization.get("token_optimizer_status_reason", "blocked")),
+        }
+
+    if memory_state.get("status") == "candidates_recorded":
+        overrides["memory-state-harness"] = {
+            "status": "applied",
+            "application_mode": "runtime",
+            "evidence_note": "Runtime memory candidate recorder persisted scoped memory candidates.",
+            "evidence_keys": ["memory_candidates_recorded"],
+        }
+    return overrides
+
+
+def _workflow_usability_runtime_status(
+    workflow_success: bool,
+    transition_valid: bool,
+    transition_handoff: Dict[str, Any],
+) -> str:
+    if not workflow_success:
+        return "blocked"
+    if transition_valid:
+        return "complete"
+    issues = list(transition_handoff.get("issues", []) or [])
+    if issues and all(str(issue.get("rule", "")).startswith("compound_next_skill_requires_followup") for issue in issues):
+        return "complete_with_followup"
+    return "blocked"
+
+
+def _metadata_skill_status_overrides(raw_statuses: Any) -> Dict[str, Dict[str, Any]]:
+    if not isinstance(raw_statuses, dict):
+        return {}
+    overrides: Dict[str, Dict[str, Any]] = {}
+    for skill_name, raw_status in raw_statuses.items():
+        name = str(skill_name).strip()
+        if not name:
+            continue
+        if isinstance(raw_status, dict):
+            status = str(raw_status.get("status", "")).strip() or "blocked"
+            application_mode = str(raw_status.get("application_mode", "")).strip() or (
+                "blocked" if status == "blocked" else "procedural"
+            )
+            overrides[name] = {
+                "status": status,
+                "application_mode": application_mode,
+                "evidence_note": str(raw_status.get("evidence_note", "")).strip()
+                or f"{name} status supplied by workflow metadata.",
+                "evidence_keys": [str(item) for item in raw_status.get("evidence_keys", [])],
+                "blocked_reason": str(raw_status.get("blocked_reason", "")).strip(),
+                "metadata": dict(raw_status.get("metadata", {}) or {}),
+            }
+        else:
+            status = str(raw_status).strip() or "blocked"
+            overrides[name] = {
+                "status": status,
+                "application_mode": "blocked" if status == "blocked" else "procedural",
+                "evidence_note": f"{name} status supplied by workflow metadata.",
+                "evidence_keys": ["metadata_skill_status"],
+                "blocked_reason": "metadata supplied blocked status" if status == "blocked" else "",
+            }
+    return overrides
 
 
 def progress_to_host_panel(path: str | Any) -> Dict[str, Any]:

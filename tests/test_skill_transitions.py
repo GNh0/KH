@@ -172,13 +172,15 @@ class SkillTransitionTests(unittest.TestCase):
                     "status": "applied",
                     "application_mode": "procedural",
                     "evidence_note": "Project-scoped memory candidates were captured.",
-                    "evidence_keys": ["memory_candidates"],
+                    "evidence_keys": ["memory_candidates_recorded"],
+                    "metadata": {"record_ids": ["memory-001"]},
                 },
                 "workflow-skill-distiller": {
                     "status": "applied",
                     "application_mode": "procedural",
                     "evidence_note": "Repeated workflow was routed for distillation.",
-                    "evidence_keys": ["compound_handoff"],
+                    "evidence_keys": ["workflow_skill_distiller_applied"],
+                    "metadata": {"artifact_path": ".kh/compound/skill-distillation.md"},
                 },
             },
         )
@@ -187,6 +189,31 @@ class SkillTransitionTests(unittest.TestCase):
 
         self.assertTrue(validation["valid"], validation)
         self.assertEqual(validation["required_next_skills"], [])
+
+    def test_self_attested_allowed_evidence_key_does_not_satisfy_compound_followup(self):
+        bundle = build_large_work_orchestration_bundle(
+            objective="Run reviewed workflow and capture learning.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="used",
+            compound_handoff={
+                "status": "ready_for_system_update",
+                "next_skills": ["workflow-skill-distiller"],
+            },
+            overrides={
+                "workflow-skill-distiller": {
+                    "status": "applied",
+                    "application_mode": "procedural",
+                    "evidence_note": "Generic metadata says distillation was applied.",
+                    "evidence_keys": ["workflow_skill_distiller_applied"],
+                },
+            },
+        )
+
+        validation = validate_skill_transitions(bundle, phase="final")
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("workflow-skill-distiller", validation["required_next_skills"])
+        self.assertEqual(validation["issues"][0]["rule"], "compound_next_skill_requires_followup_evidence")
 
 
 if __name__ == "__main__":

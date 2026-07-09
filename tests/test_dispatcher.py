@@ -176,6 +176,62 @@ class AntigravityDispatcherTests(unittest.TestCase):
         self.assertEqual({gate["status"] for gate in result.metadata["gate_results"]}, {"passed"})
         self.assertEqual(adapter.requests[0], request)
 
+    def test_execute_request_succeeds_with_followup_when_workflow_usability_requires_only_optional_followup(self):
+        native_result = AntigravityNativeDispatchResult(
+            status="success",
+            message="native completed",
+            task_results=[
+                WorkflowTaskResult(
+                    task_id="main_py",
+                    file_name="main.py",
+                    role="implementer",
+                    status="success",
+                    message="generated natively",
+                    metadata={
+                        "evidence": [
+                            "native dispatch completed",
+                            "code generated",
+                        ],
+                    },
+                )
+            ],
+            metadata={"host": "antigravity"},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            request = AdapterRequest(
+                project_dir=tmp,
+                files=["main.py"],
+                design_doc="# design",
+                platform_mode="antigravity",
+                metadata={
+                    "workflow_usability_auto": True,
+                    "suppress_progress_panel": True,
+                    "memory_root": str(Path(tmp) / ".memory"),
+                    "workspace_strategy": "project-local-worktree",
+                    "goal": {
+                        "objective": "build api",
+                        "status": "active",
+                        "evidence_required": [
+                            "design_doc",
+                            "target_files",
+                            "native dispatch completed",
+                            "code generated",
+                        ],
+                        "evidence": [],
+                    },
+                },
+            )
+
+            with redirect_stdout(StringIO()):
+                result = AntigravityDispatcher(
+                    native_adapter=StaticAntigravityNativeAdapter(native_result)
+                ).execute_request(request)
+
+        self.assertEqual(result.status, "success")
+        self.assertEqual(result.metadata["goal"]["status"], "complete")
+        self.assertEqual(result.metadata["workflow_usability"]["status"], "complete_with_followup")
+        self.assertIn("workflow-skill-distiller", result.metadata["workflow_usability"]["required_next_skills"])
+
     def test_execute_request_uses_native_adapter_blocked_result(self):
         native_result = AntigravityNativeDispatchResult(
             status="blocked",

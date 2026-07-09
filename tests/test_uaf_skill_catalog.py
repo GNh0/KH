@@ -25,6 +25,7 @@ CORE_SKILLS = {
     "branch-finishing-harness",
     "command-hook-policy-harness",
     "compound-engineering-harness",
+    "credential-safety-harness",
     "development-lifecycle-harness",
     "deliverable-template-quality-harness",
     "context-state-harness",
@@ -284,7 +285,7 @@ class UafSkillCatalogTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         payload = json.loads(completed.stdout)
         self.assertTrue(payload["success"], payload)
-        self.assertEqual(payload["total_skills"], 42)
+        self.assertEqual(payload["total_skills"], 43)
         self.assertEqual(payload["invalid_skills"], 0)
         self.assertIn("issue_count", payload)
         self.assertNotIn('"skills": [', completed.stdout)

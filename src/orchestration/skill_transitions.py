@@ -19,6 +19,28 @@ COMPOUND_FOLLOWUP_SKILLS = {
     "scenario-evaluation-harness",
     "context-state-harness",
 }
+COMPOUND_FOLLOWUP_EVIDENCE_KEYS = {
+    "workflow-skill-distiller": {
+        "workflow_skill_distiller_applied",
+        "workflow_distillation_review",
+        "skill_distillation_status",
+    },
+    "memory-state-harness": {
+        "memory_candidates_recorded",
+        "memory_state_applied",
+        "memory_recorded",
+    },
+    "scenario-evaluation-harness": {
+        "scenario_evaluation_applied",
+        "scenario_evaluation_result",
+        "scenario_regression_review",
+    },
+    "context-state-harness": {
+        "context_state_applied",
+        "resume_handoff",
+        "context_state_saved",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -254,15 +276,58 @@ def _require_compound_followup_consistency(
     next_skills = {str(item) for item in compound_handoff.get("next_skills", [])}
     for next_skill in sorted(next_skills & COMPOUND_FOLLOWUP_SKILLS):
         followup_status = statuses.get(next_skill)
-        if followup_status is not None and followup_status.status != "considered_not_needed":
+        if followup_status is None or followup_status.status == "considered_not_needed":
+            issues.append(SkillTransitionIssue(
+                rule="compound_next_skill_requires_followup_status",
+                source_skill="compound-engineering-harness",
+                required_skill=next_skill,
+                reason=f"compound handoff routes to {next_skill}, so it cannot be silently omitted",
+            ))
+            required_next_skills.append(next_skill)
+            continue
+        if followup_status.status == "blocked" and followup_status.blocked_reason.strip():
+            continue
+        allowed_evidence = COMPOUND_FOLLOWUP_EVIDENCE_KEYS.get(next_skill, set())
+        evidence_keys = set(followup_status.evidence_keys)
+        if evidence_keys & allowed_evidence and _has_followup_runtime_evidence(followup_status):
             continue
         issues.append(SkillTransitionIssue(
-            rule="compound_next_skill_requires_followup_status",
+            rule="compound_next_skill_requires_followup_evidence",
             source_skill="compound-engineering-harness",
             required_skill=next_skill,
-            reason=f"compound handoff routes to {next_skill}, so it cannot be silently omitted",
+            reason=(
+                f"compound handoff routes to {next_skill}, so metadata status must include "
+                "follow-up-specific evidence instead of a generic applied marker"
+            ),
         ))
         required_next_skills.append(next_skill)
+
+
+def _has_followup_runtime_evidence(status: SkillApplicationStatus) -> bool:
+    if status.application_mode == "runtime":
+        return True
+    metadata = dict(status.metadata or {})
+    concrete_keys = {
+        "artifact_path",
+        "artifact_paths",
+        "output_path",
+        "output_paths",
+        "result_path",
+        "result_paths",
+        "report_path",
+        "report_paths",
+        "runtime_path",
+        "generated_skill_path",
+        "scenario_report_path",
+        "verification_command",
+        "verification_result",
+        "record_ids",
+        "candidate_ids",
+    }
+    if any(key in metadata and metadata.get(key) for key in concrete_keys):
+        return True
+    evidence_artifacts = metadata.get("evidence_artifacts")
+    return isinstance(evidence_artifacts, list) and any(str(item).strip() for item in evidence_artifacts)
 
 
 def _dedupe(items: List[str]) -> List[str]:

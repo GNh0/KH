@@ -225,7 +225,10 @@ class WorkflowDispatchTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertTrue(usability["enabled"])
-        self.assertEqual(usability["status"], "complete")
+        self.assertEqual(usability["status"], "complete_with_followup")
+        self.assertIn("workflow-skill-distiller", usability["required_next_skills"])
+        self.assertIn("scenario-evaluation-harness", usability["required_next_skills"])
+        self.assertEqual(result.metadata["goal"]["status"], "complete")
         self.assertIn("KH Progress", usability["progress_panel"])
         self.assertEqual(usability["token_optimizer_provider"]["provider"], "kh")
         self.assertIn("memory_candidates", usability["compound"])

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 
 from src.skills.uaf_skill_audit import audit_packaged_skills
 from src.skills.uaf_skill_catalog import collect_packaged_skills
+from src.skills.demo_scenarios import DEMO_SKILL_PROFILES
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +26,7 @@ CORE_PRODUCTION_SKILLS = {
     "brainstorming-harness",
     "branch-finishing-harness",
     "compound-engineering-harness",
+    "credential-safety-harness",
     "deliverable-template-quality-harness",
     "domain-orchestration-harness",
     "goal-state-harness",
@@ -728,6 +730,13 @@ def _run_demo_script(skill_dir: Path, skill_name: str) -> Dict[str, Any]:
                 "returncode": completed.returncode,
                 "message": f"Demo payload failed validation: {', '.join(validation_errors[:8])}",
             }
+        host_matrix_errors = _validate_demo_host_matrix(skill_dir, script_path, skill_name)
+        if host_matrix_errors:
+            return {
+                "success": False,
+                "returncode": completed.returncode,
+                "message": f"Demo host matrix failed validation: {', '.join(host_matrix_errors[:8])}",
+            }
         return {
             "success": True,
             "returncode": completed.returncode,
@@ -737,8 +746,55 @@ def _run_demo_script(skill_dir: Path, skill_name: str) -> Dict[str, Any]:
                 "artifact_count": len(payload.get("artifacts", [])),
                 "contract_count": len(payload.get("contracts", [])),
                 "verification": payload.get("verification", {}),
+                "host_matrix": skill_name in HOST_MATRIX_DEMO_SKILLS,
             }, ensure_ascii=False),
         }
+
+
+HOST_MATRIX_DEMO_SKILLS = {
+    "always-on-front-door",
+    "token-optimizer",
+    "workflow-usability-harness",
+}
+
+
+def _validate_demo_host_matrix(skill_dir: Path, script_path: Path, skill_name: str) -> List[str]:
+    if skill_name not in HOST_MATRIX_DEMO_SKILLS:
+        return []
+
+    errors: List[str] = []
+    dispatch_values = set()
+    state_values = set()
+    for host in ["local", "codex", "antigravity-style", "claude-code"]:
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / skill_name / host
+            completed = subprocess.run(
+                [sys.executable, str(script_path), "--host", host, "--output-dir", str(output_dir)],
+                cwd=skill_dir,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+            if completed.returncode != 0:
+                errors.append(f"{host} demo exited {completed.returncode}")
+                continue
+            try:
+                payload = json.loads(completed.stdout)
+            except json.JSONDecodeError as exc:
+                errors.append(f"{host} demo stdout is not JSON: {exc}")
+                continue
+            errors.extend(f"{host}: {item}" for item in _validate_demo_payload(skill_name, payload, output_dir))
+            host_metadata = dict(payload.get("host_metadata", {}) or {})
+            if host_metadata.get("selected_host") != host:
+                errors.append(f"{host} selected_host mismatch")
+            evidence = dict(host_metadata.get("host_mode_evidence", {}) or {})
+            dispatch_values.add(str(evidence.get("dispatch", "")))
+            state_values.add(str(evidence.get("state", "")))
+    if len(dispatch_values) != 4:
+        errors.append("host matrix dispatch evidence is not host-specific")
+    if len(state_values) != 4:
+        errors.append("host matrix state evidence is not host-specific")
+    return errors
 
 
 def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir: Path) -> List[str]:
@@ -814,10 +870,20 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
             errors.append(f"contract {index} missing module")
         if not contract.get("fields_checked"):
             errors.append(f"contract {index} fields_checked empty")
-        if contract.get("roundtrip_checked") is not True:
-            errors.append(f"contract {index} did not roundtrip")
         if contract.get("source") not in {"dataclass", "gate-result", "policy-result", "artifact-validator"}:
             errors.append(f"contract {index} source invalid")
+        if contract.get("source") == "dataclass":
+            if contract.get("roundtrip_checked") is not True:
+                errors.append(f"contract {index} dataclass did not roundtrip")
+            if contract.get("roundtrip_kind") != "dataclass_from_dict":
+                errors.append(f"contract {index} dataclass roundtrip_kind invalid")
+        else:
+            if contract.get("roundtrip_checked") is not False:
+                errors.append(f"contract {index} mapping must not claim dataclass roundtrip")
+            if contract.get("schema_validation_checked") is not True:
+                errors.append(f"contract {index} mapping schema validation missing")
+            if contract.get("roundtrip_kind") != "mapping_schema_presence":
+                errors.append(f"contract {index} mapping roundtrip_kind invalid")
 
     specificity = dict(payload.get("demo_specificity", {}) or {})
     if specificity.get("skill") != skill_name:
@@ -834,6 +900,42 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
     ]:
         if specificity.get(key) is not True:
             errors.append(f"demo_specificity {key} must be true")
+    profile = dict(specificity.get("profile", {}) or {})
+    if profile.get("skill") != skill_name:
+        errors.append("demo_specificity profile skill mismatch")
+    expected_profile = DEMO_SKILL_PROFILES.get(skill_name)
+    if expected_profile is None:
+        errors.append("demo_specificity profile missing registered skill profile")
+    else:
+        expected_capability, expected_failure, expected_probe = expected_profile
+        if profile.get("capability_proven") != expected_capability:
+            errors.append("demo_specificity capability_proven mismatch")
+        if profile.get("failure_mode_proven") != expected_failure:
+            errors.append("demo_specificity failure_mode_proven mismatch")
+        if profile.get("semantic_probe") != expected_probe:
+            errors.append("demo_specificity semantic_probe mismatch")
+        if success_case.get("capability_proven") != expected_capability:
+            errors.append("success_case capability_proven mismatch")
+        if success_case.get("semantic_probe") != expected_probe:
+            errors.append("success_case semantic_probe mismatch")
+        if blocked_case.get("failure_mode_proven") != expected_failure:
+            errors.append("blocked_or_failure_case failure_mode_proven mismatch")
+        if blocked_case.get("semantic_probe") != expected_probe:
+            errors.append("blocked_or_failure_case semantic_probe mismatch")
+        success_evidence = "\n".join(str(item) for item in success_case.get("evidence", []) or [])
+        blocked_evidence = "\n".join(str(item) for item in blocked_case.get("evidence", []) or [])
+        if expected_capability not in success_evidence:
+            errors.append("success_case evidence missing capability proof")
+        if expected_probe not in success_evidence:
+            errors.append("success_case evidence missing semantic probe")
+        if expected_failure not in blocked_evidence:
+            errors.append("blocked_or_failure_case evidence missing failure mode")
+        if expected_probe not in blocked_evidence:
+            errors.append("blocked_or_failure_case evidence missing semantic probe")
+    errors.extend(_validate_profile_semantics(skill_name, profile, success_case, blocked_case, specificity))
+    for key in ["capability_proven", "failure_mode_proven", "semantic_probe"]:
+        if not str(profile.get(key, "")).strip():
+            errors.append(f"demo_specificity profile {key} missing")
     implementation_targets = list(specificity.get("declared_implementation_targets", []) or [])
     if not implementation_targets:
         errors.append("demo_specificity declared_implementation_targets empty")
@@ -856,6 +958,8 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
         errors.append("demo_specificity skill_specific_probe primary_target_status invalid")
     if probe.get("scenario_function") != specificity.get("scenario_function"):
         errors.append("demo_specificity skill_specific_probe scenario mismatch")
+    if probe.get("semantic_probe") != profile.get("semantic_probe"):
+        errors.append("demo_specificity skill_specific_probe semantic_probe mismatch")
     if probe.get("proof_kind") != "implementation-target-resolution-plus-contract-demo":
         errors.append("demo_specificity skill_specific_probe proof_kind invalid")
     if not probe.get("contract_modules"):
@@ -867,10 +971,24 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
         errors.append("demo_specificity unique_markers missing skill name")
     if expected_scenario_id not in unique_markers:
         errors.append("demo_specificity unique_markers missing scenario id")
+    if profile.get("semantic_probe") not in unique_markers:
+        errors.append("demo_specificity unique_markers missing semantic probe")
 
     host = dict(payload.get("host_metadata", {}) or {})
     if host.get("selected_host") not in {"local", "codex", "antigravity-style", "claude-code"}:
         errors.append("host selected_host invalid")
+    host_mode_evidence = dict(host.get("host_mode_evidence", {}) or {})
+    for key in ["dispatch", "state", "panel"]:
+        if not str(host_mode_evidence.get(key, "")).strip():
+            errors.append(f"host_mode_evidence {key} missing")
+    if host.get("host_claim_scope") != "simulated_metadata_only":
+        errors.append("host_claim_scope must be simulated_metadata_only")
+    if host.get("behavioral_host_execution") is not False:
+        errors.append("demo must not claim behavioral host execution")
+    if not str(host.get("behavioral_host_execution_reason", "")).strip():
+        errors.append("behavioral_host_execution_reason missing")
+    if host.get("verified_host_artifacts") not in ([], None):
+        errors.append("demo must not claim verified host artifacts")
     if len(host.get("host_differences", []) or []) < 3:
         errors.append("host_differences too shallow")
     if Path(str(host.get("output_dir", ""))) != output_dir:
@@ -909,11 +1027,148 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
     runtime_observation = dict(verification.get("runtime_observation", {}) or {})
     if runtime_observation.get("source") != "outer subprocess quality gate":
         errors.append("verification runtime_observation source invalid")
+    if verification.get("contract_validation_mode") != "dataclass_roundtrip_or_mapping_schema":
+        errors.append("verification contract_validation_mode invalid")
+    _validate_token_demo_semantics(skill_name, success_case, errors)
     declared_paths = {Path(str(artifact.get("path", ""))).resolve() for artifact in artifacts}
     generated_paths = {path.resolve() for path in output_dir.rglob("*") if path.is_file()}
     if generated_paths != declared_paths:
         errors.append("artifact manifest does not declare every generated file")
     return errors
+
+
+def _validate_token_demo_semantics(
+    skill_name: str,
+    success_case: Dict[str, Any],
+    errors: List[str],
+) -> None:
+    if skill_name not in {"token-optimizer", "command-output-harness"}:
+        return
+    payload = dict(success_case.get("payload", {}) or {})
+    metadata = dict(payload.get("metadata", {}) or {})
+    usage = dict(metadata.get("token_usage", {}) or {})
+    if usage.get("estimated_tokens_saved", 0) <= 0:
+        errors.append("token demo did not save estimated tokens")
+    if usage.get("token_savings_ratio", 0) <= 0:
+        errors.append("token demo token_savings_ratio missing")
+    if usage.get("preserved_required_facts") is not True and payload.get("preserved_required_facts") is not True:
+        errors.append("token demo did not preserve required facts")
+    accounting = dict(payload.get("runtime_token_accounting", {}) or {})
+    if usage.get("host_actual_tokens_available") is True:
+        errors.append("token demo must not claim host_actual_tokens_available")
+    if usage.get("billing_tokens_available") is True:
+        errors.append("token demo must not claim billing_tokens_available")
+    if usage.get("actual_host_usage_available") is True:
+        errors.append("token demo must not claim actual_host_usage_available")
+    if _positive_int(usage.get("host_actual_tokens_used")):
+        errors.append("token demo must not claim host_actual_tokens_used")
+    if str(usage.get("host_actual_token_source", "")).strip() not in {"", "not_available"}:
+        errors.append("token demo must not claim host_actual_token_source")
+    if accounting.get("actual_host_usage_available") is not False:
+        errors.append("token demo must not claim host billable token counters")
+    if accounting.get("must_not_report_as_billable_usage") is not True:
+        errors.append("token demo must mark local counts as non-billable telemetry")
+    if not accounting.get("actual_host_usage_reason"):
+        errors.append("token demo missing actual_host_usage_reason")
+
+
+def _validate_profile_semantics(
+    skill_name: str,
+    profile: Dict[str, Any],
+    success_case: Dict[str, Any],
+    blocked_case: Dict[str, Any],
+    specificity: Dict[str, Any],
+) -> List[str]:
+    errors: List[str] = []
+    capability_tokens = _meaningful_tokens(str(profile.get("capability_proven", "")))
+    failure_tokens = _meaningful_tokens(str(profile.get("failure_mode_proven", "")))
+    probe_tokens = _meaningful_tokens(str(profile.get("semantic_probe", "")).replace("probe", ""))
+
+    success_text = " ".join([
+        str(success_case.get("contract_type", "")),
+        str(success_case.get("expected_behavior", "")),
+        " ".join(str(item) for item in success_case.get("side_effects", []) or []),
+        " ".join(str(item) for item in specificity.get("contract_modules", []) or []),
+    ])
+    blocked_text = " ".join([
+        str(blocked_case.get("contract_type", "")),
+        str(blocked_case.get("blocked_reason", "")),
+        str(blocked_case.get("error_code", "")),
+        str(blocked_case.get("remediation", "")),
+        " ".join(str(item) for item in blocked_case.get("missing_inputs", []) or []),
+    ])
+    probe_text = " ".join([
+        skill_name,
+        str(specificity.get("scenario_function", "")),
+        str(dict(specificity.get("skill_specific_probe", {}) or {}).get("primary_target", "")),
+        " ".join(
+            str(target.get("ref", ""))
+            for target in specificity.get("declared_implementation_targets", []) or []
+            if isinstance(target, dict)
+        ),
+    ])
+
+    support_tokens = _meaningful_tokens(" ".join([success_text, blocked_text, probe_text]))
+
+    if capability_tokens and not (capability_tokens & support_tokens):
+        errors.append("demo profile capability is not supported by success behavior or contracts")
+    if failure_tokens and not (failure_tokens & support_tokens):
+        errors.append("demo profile failure mode is not supported by blocked behavior")
+    if probe_tokens and not (probe_tokens & support_tokens):
+        errors.append("demo profile semantic probe is not supported by skill name or implementation targets")
+    return errors
+
+
+PROFILE_STOPWORDS = {
+    "and",
+    "are",
+    "can",
+    "for",
+    "from",
+    "into",
+    "missing",
+    "mode",
+    "not",
+    "only",
+    "probe",
+    "status",
+    "the",
+    "this",
+    "when",
+    "with",
+}
+
+
+def _meaningful_tokens(value: str) -> set[str]:
+    tokens: set[str] = set()
+    current = []
+    for char in value.lower():
+        if char.isalnum():
+            current.append(char)
+            continue
+        if current:
+            _add_profile_token(tokens, "".join(current))
+            current = []
+    if current:
+        _add_profile_token(tokens, "".join(current))
+    return tokens
+
+
+def _add_profile_token(tokens: set[str], token: str) -> None:
+    if len(token) < 3 or token in PROFILE_STOPWORDS:
+        return
+    tokens.add(token)
+    if token.endswith("ing") and len(token) > 5:
+        tokens.add(token[:-3])
+    if token.endswith("s") and len(token) > 4:
+        tokens.add(token[:-1])
+
+
+def _positive_int(value: Any) -> bool:
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def _demo_safe_id(value: str) -> str:

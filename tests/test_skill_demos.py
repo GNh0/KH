@@ -5,8 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.skills.demo_scenarios import _scenario_for
+from src.skills.demo_scenarios import DEMO_SKILL_PROFILES, _scenario_for
 from src.skills.uaf_skill_catalog import collect_packaged_skills
+from src.skills.uaf_skill_quality import _validate_demo_payload
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,11 @@ class SkillDemoTests(unittest.TestCase):
         catalog = collect_packaged_skills()
         skills = catalog["skills"]
         self.assertGreaterEqual(len(skills), 27)
+        self.assertEqual(
+            {skill["name"] for skill in skills},
+            set(DEMO_SKILL_PROFILES),
+            "every packaged skill must have a skill-specific demo profile",
+        )
         with tempfile.TemporaryDirectory() as tmp:
             output_root = Path(tmp)
             for skill in skills:
@@ -118,6 +124,11 @@ class SkillDemoTests(unittest.TestCase):
             self.assertGreater(token_usage["without_token_optimizer"], token_usage["with_token_optimizer"])
             self.assertGreater(token_usage["estimated_tokens_saved"], 0)
             self.assertGreater(token_usage["token_savings_ratio"], 0.5)
+            accounting = success_payload["runtime_token_accounting"]
+            self.assertFalse(accounting["actual_host_usage_available"])
+            self.assertTrue(accounting["actual_host_usage_reason"])
+            self.assertEqual(accounting["measured_scope"], "optimizer input/output payload")
+            self.assertTrue(accounting["must_not_report_as_billable_usage"])
             self.assertTrue(success_payload["preserved_required_facts"])
             for fact in [
                 "tests/test_invoice.py::test_total_rounding FAILED",
@@ -126,6 +137,16 @@ class SkillDemoTests(unittest.TestCase):
                 "exit code: 1",
             ]:
                 self.assertIn(fact, success_payload["stdout"])
+        if skill_name == "compound-engineering-harness":
+            success_payload = payload["success_case"]["payload"]
+            for next_skill in [
+                "workflow-skill-distiller",
+                "memory-state-harness",
+                "scenario-evaluation-harness",
+            ]:
+                self.assertIn(next_skill, success_payload["next_skills"])
+            self.assertTrue(success_payload["learnings"])
+            self.assertTrue(success_payload["regression_checks"])
 
         self.assertIn(payload["blocked_or_failure_case"]["status"], {"blocked", "failed"})
         self.assertIn("contract_type", payload["blocked_or_failure_case"])
@@ -145,8 +166,14 @@ class SkillDemoTests(unittest.TestCase):
             self.assertIn("name", contract)
             self.assertIn("module", contract)
             self.assertTrue(contract["fields_checked"], contract)
-            self.assertTrue(contract["roundtrip_checked"], contract)
             self.assertIn(contract["source"], {"dataclass", "gate-result", "policy-result", "artifact-validator"})
+            if contract["source"] == "dataclass":
+                self.assertTrue(contract["roundtrip_checked"], contract)
+                self.assertEqual(contract["roundtrip_kind"], "dataclass_from_dict")
+            else:
+                self.assertFalse(contract["roundtrip_checked"], contract)
+                self.assertTrue(contract["schema_validation_checked"], contract)
+                self.assertEqual(contract["roundtrip_kind"], "mapping_schema_presence")
 
         specificity = payload["demo_specificity"]
         self.assertEqual(specificity["skill"], skill_name)
@@ -156,6 +183,22 @@ class SkillDemoTests(unittest.TestCase):
         self.assertTrue(specificity["blocked_context_bound"])
         self.assertTrue(specificity["success_and_blocked_are_distinct"])
         self.assertTrue(specificity["artifact_namespace_bound"])
+        self.assertEqual(specificity["profile"]["skill"], skill_name)
+        self.assertTrue(specificity["profile"]["capability_proven"])
+        self.assertTrue(specificity["profile"]["failure_mode_proven"])
+        self.assertTrue(specificity["profile"]["semantic_probe"])
+        expected_capability, expected_failure, expected_probe = DEMO_SKILL_PROFILES[skill_name]
+        self.assertEqual(specificity["profile"]["capability_proven"], expected_capability)
+        self.assertEqual(specificity["profile"]["failure_mode_proven"], expected_failure)
+        self.assertEqual(specificity["profile"]["semantic_probe"], expected_probe)
+        self.assertEqual(payload["success_case"]["capability_proven"], expected_capability)
+        self.assertEqual(payload["success_case"]["semantic_probe"], expected_probe)
+        self.assertEqual(payload["blocked_or_failure_case"]["failure_mode_proven"], expected_failure)
+        self.assertEqual(payload["blocked_or_failure_case"]["semantic_probe"], expected_probe)
+        self.assertIn(expected_capability, "\n".join(payload["success_case"]["evidence"]))
+        self.assertIn(expected_probe, "\n".join(payload["success_case"]["evidence"]))
+        self.assertIn(expected_failure, "\n".join(payload["blocked_or_failure_case"]["evidence"]))
+        self.assertIn(expected_probe, "\n".join(payload["blocked_or_failure_case"]["evidence"]))
         self.assertTrue(specificity["declared_implementation_targets"])
         self.assertTrue(specificity["resolved_implementation_targets"])
         self.assertEqual(specificity["skill_specific_probe"]["skill"], skill_name)
@@ -168,11 +211,23 @@ class SkillDemoTests(unittest.TestCase):
             specificity["skill_specific_probe"]["proof_kind"],
             "implementation-target-resolution-plus-contract-demo",
         )
+        self.assertEqual(
+            specificity["skill_specific_probe"]["semantic_probe"],
+            specificity["profile"]["semantic_probe"],
+        )
         self.assertTrue(specificity["skill_specific_probe"]["contract_modules"])
         self.assertIn(skill_name, specificity["unique_markers"])
         self.assertIn(payload["scenario_id"], specificity["unique_markers"])
+        self.assertIn(specificity["profile"]["semantic_probe"], specificity["unique_markers"])
 
         self.assertIn(payload["host_metadata"]["selected_host"], {"local", "codex", "antigravity-style", "claude-code"})
+        self.assertTrue(payload["host_metadata"]["host_mode_evidence"]["dispatch"])
+        self.assertTrue(payload["host_metadata"]["host_mode_evidence"]["state"])
+        self.assertTrue(payload["host_metadata"]["host_mode_evidence"]["panel"])
+        self.assertEqual(payload["host_metadata"]["host_claim_scope"], "simulated_metadata_only")
+        self.assertFalse(payload["host_metadata"]["behavioral_host_execution"])
+        self.assertTrue(payload["host_metadata"]["behavioral_host_execution_reason"])
+        self.assertEqual(payload["host_metadata"]["verified_host_artifacts"], [])
         self.assertGreaterEqual(len(payload["host_metadata"]["host_differences"]), 3)
         self.assertEqual(Path(payload["host_metadata"]["output_dir"]), output_dir)
         self.assertIn("python_version", payload["host_metadata"])
@@ -183,6 +238,10 @@ class SkillDemoTests(unittest.TestCase):
         self.assertEqual(payload["verification"]["exit_code"], 0)
         self.assertTrue(payload["verification"]["stdout_json_only"])
         self.assertTrue(payload["verification"]["contract_roundtrip"])
+        self.assertEqual(
+            payload["verification"]["contract_validation_mode"],
+            "dataclass_roundtrip_or_mapping_schema",
+        )
         self.assertTrue(payload["verification"]["artifacts_within_output_dir"])
         self.assertTrue(payload["verification"]["artifacts_validated"])
         self.assertIn("runtime_observation", payload["verification"])
@@ -204,6 +263,100 @@ class SkillDemoTests(unittest.TestCase):
     def test_unknown_skill_cannot_fall_back_to_generic_gate_demo(self):
         with self.assertRaises(ValueError):
             _scenario_for("new-unmapped-skill")
+
+    def test_demo_host_modes_are_parameterized(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_root = Path(tmp)
+            evidence_by_host = {}
+            for host in ["local", "codex", "antigravity-style", "claude-code"]:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "src.skills.demo_scenarios",
+                        "--skill",
+                        "workflow-usability-harness",
+                        "--host",
+                        host,
+                        "--output-dir",
+                        str(output_root / host),
+                    ],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    encoding="utf-8",
+                    text=True,
+                )
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                payload = json.loads(completed.stdout)
+                self.assertEqual(payload["host_metadata"]["selected_host"], host)
+                evidence_by_host[host] = payload["host_metadata"]["host_mode_evidence"]
+
+            self.assertEqual(len({item["dispatch"] for item in evidence_by_host.values()}), 4)
+            self.assertEqual(len({item["state"] for item in evidence_by_host.values()}), 4)
+
+    def test_demo_validation_rejects_self_minted_profile_claims(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "workflow-usability-harness"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.skills.demo_scenarios",
+                    "--skill",
+                    "workflow-usability-harness",
+                    "--output-dir",
+                    str(output_dir),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                encoding="utf-8",
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            payload["demo_specificity"]["profile"]["capability_proven"] = "NONSENSE CAPABILITY"
+            payload["demo_specificity"]["profile"]["failure_mode_proven"] = "NONSENSE FAILURE"
+            payload["demo_specificity"]["profile"]["semantic_probe"] = "NONSENSE PROBE"
+            payload["success_case"]["capability_proven"] = "NONSENSE CAPABILITY"
+            payload["success_case"]["semantic_probe"] = "NONSENSE PROBE"
+            payload["blocked_or_failure_case"]["failure_mode_proven"] = "NONSENSE FAILURE"
+            payload["blocked_or_failure_case"]["semantic_probe"] = "NONSENSE PROBE"
+
+            errors = _validate_demo_payload("workflow-usability-harness", payload, output_dir)
+
+            self.assertTrue(errors)
+            self.assertTrue(any("semantic" in error or "capability" in error for error in errors), errors)
+
+    def test_token_demo_validation_rejects_fake_host_billing_claims(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "token-optimizer"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.skills.demo_scenarios",
+                    "--skill",
+                    "token-optimizer",
+                    "--output-dir",
+                    str(output_dir),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                encoding="utf-8",
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            token_usage = payload["success_case"]["payload"]["metadata"]["token_usage"]
+            token_usage["host_actual_tokens_available"] = True
+            token_usage["host_actual_tokens_used"] = 123456
+            token_usage["host_actual_token_source"] = "fake-provider-billing"
+            token_usage["billing_tokens_available"] = True
+
+            errors = _validate_demo_payload("token-optimizer", payload, output_dir)
+
+            self.assertTrue(any("host_actual" in error or "billing" in error for error in errors), errors)
 
 
 if __name__ == "__main__":

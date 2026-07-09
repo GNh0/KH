@@ -28,6 +28,19 @@ Use this as an early decision gate for every non-trivial KH turn, not only as a 
 
 When a host exposes more than one context optimization path, record `token_optimizer_provider` as `kh`, `rtk`, or `hybrid`. KH is the built-in Python provider. RTK-style command optimization is optional. Hybrid may use RTK for high-noise command output when available and fall back to KH otherwise. `passthrough` is a decision/status for source-of-truth content when compression would lower quality; it is not a provider.
 
+## Retrieval preflight
+
+Before broad DB/API/search/file retrieval, reduce at the source instead of waiting to compress after the output is already in context:
+
+- Count or scope first.
+- Sample before full read.
+- Select only required fields, columns, file names, line ranges, or evidence keys.
+- Require explicit limits or selectors for broad scans.
+- Write large or structured results to an output file and read only needed fields back.
+- Keep exact source-of-truth content as passthrough and use file references instead of lossy summaries.
+
+Use `src.skills.token_optimizer.build_retrieval_budget_plan` and `validate_retrieval_budget_plan` to record this decision when a workflow may otherwise dump large output into the model.
+
 ## Development evidence quality bar
 
 For Superpowers-style or KH lifecycle work, compression must preserve the evidence that makes the run trustworthy:
@@ -59,7 +72,8 @@ If any of those facts would be lost, do not compress that item; use `passthrough
 8. For before/after reporting, call `src.skills.token_optimizer.compare_token_usage` for one item or `aggregate_token_usage_stats` for a workflow-level summary. Report legacy compatibility fields (`without_token_optimizer`, `with_token_optimizer`, `estimated_tokens_saved`, `token_savings_ratio`) plus RTK-style payload estimates (`estimated_payload_without_optimizer`, `estimated_payload_with_optimizer`, `estimated_payload_tokens_saved`, `estimated_payload_token_savings_ratio`, `where_saved`) and host evidence (`host_actual_tokens_available`, `host_actual_tokens_used`, `host_actual_token_source`, `host_actual_token_evidence`). Keep legacy optimizer-local `actual_*` fields for backward compatibility, but do not describe them as provider billing tokens; they are payload-derived estimates unless the host evidence says otherwise.
 9. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
 10. Final workflow status must include `token_optimizer_status` and `token_optimizer_status_reason`. If status is not `used`, also include `not_used_reason` explaining whether the content was too small, passed through for quality, blocked by provider/policy, or had no optimizable command output/transcript.
-11. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
+11. For broad retrieval, call `build_retrieval_budget_plan` before executing the command. Block or revise the retrieval when fields, selectors, limits, or output paths are missing.
+12. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 
 ## External Benchmark Recipe
 
@@ -80,6 +94,7 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - Compact log or code text that preserves errors, file paths, test names, and exit status context.
 - Token-savings estimate or before/after size when used inside a harness result.
 - Token usage before/after statistics when the skill is used as workflow evidence, including RTK-style estimated payload telemetry, host actual token evidence when available from `goal.tokensUsed` or session `token_count`, and a clear `billing_tokens_available` flag.
+- Retrieval budget plan when a command/API/search/DB operation could emit large output.
 - Runtime workflow evidence under `metadata.token_optimizer` for command outputs and agent transcripts when the workflow has `WorkflowTaskResult` objects.
 - `token_optimizer_status_reason` for every workflow-level token decision, and `not_used_reason` whenever status is `considered_not_needed`, `passthrough`, or `blocked`.
 - RTK-style `by_command_family` savings statistics when command output is optimized through KH runtime.
@@ -106,6 +121,8 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - `src.skills.token_optimizer.summarize_agent_transcript`
 - `src.skills.token_optimizer.compare_token_usage`
 - `src.skills.token_optimizer.aggregate_token_usage_stats`
+- `src.skills.token_optimizer.build_retrieval_budget_plan`
+- `src.skills.token_optimizer.validate_retrieval_budget_plan`
 - `src.skills.token_optimizer.estimate_token_count`
 - `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider`
 - `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results`

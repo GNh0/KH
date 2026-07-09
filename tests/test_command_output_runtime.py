@@ -9,6 +9,7 @@ from src.contracts import WorkflowTaskResult
 from src.orchestration.runtime_token_optimizer import optimize_workflow_task_results
 from src.skills.token_optimizer import (
     aggregate_token_usage_stats,
+    build_retrieval_budget_plan,
     compare_token_usage,
     extract_host_actual_token_evidence,
     minify_code,
@@ -17,6 +18,7 @@ from src.skills.token_optimizer import (
     summarize_agent_transcript,
     summarize_session_jsonl,
     truncate_logs,
+    validate_retrieval_budget_plan,
 )
 
 
@@ -61,6 +63,68 @@ class CommandOutputRuntimeTests(unittest.TestCase):
         self.assertGreater(result.metadata["token_usage"]["without_token_optimizer"], result.metadata["token_usage"]["with_token_optimizer"])
         self.assertGreater(result.metadata["token_usage"]["estimated_tokens_saved"], 0)
         self.assertTokenUsageTelemetry(result.metadata["token_usage"])
+
+    def test_retrieval_budget_plan_blocks_large_stdout_without_output_path(self):
+        plan = build_retrieval_budget_plan(
+            "db-procedure-scan",
+            expected_rows=5000,
+            required_fields=["name", "definition"],
+            limit=100,
+            output_path="",
+        )
+
+        self.assertEqual(plan["status"], "blocked")
+        self.assertIn("large_result_requires_output_path", plan["issues"])
+        validation = validate_retrieval_budget_plan(plan)
+        self.assertFalse(validation["valid"])
+        self.assertIn("large_result_requires_output_path", validation["issues"])
+
+    def test_retrieval_budget_plan_passes_when_bounded_to_file_and_fields(self):
+        plan = build_retrieval_budget_plan(
+            "db-procedure-scan",
+            expected_rows=5000,
+            required_fields=["name", "definition"],
+            limit=100,
+            output_path="artifacts/procedure_scan.json",
+        )
+
+        self.assertEqual(plan["status"], "planned")
+        self.assertEqual(plan["token_optimizer_status"], "considered_not_needed")
+        self.assertEqual(plan["sample_limit"], 10)
+        self.assertTrue(validate_retrieval_budget_plan(plan)["valid"])
+
+    def test_retrieval_budget_plan_passthroughs_quality_sensitive_source_text(self):
+        plan = build_retrieval_budget_plan(
+            "stored-procedure-source",
+            expected_rows=1,
+            required_fields=["definition"],
+            limit=1,
+            output_path="artifacts/sp.sql",
+            quality_sensitive=True,
+        )
+
+        self.assertEqual(plan["status"], "passthrough")
+        self.assertEqual(plan["token_optimizer_status"], "passthrough")
+        self.assertTrue(validate_retrieval_budget_plan(plan)["valid"])
+
+    def test_retrieval_budget_plan_blocks_invalid_quality_sensitive_source_text(self):
+        plan = build_retrieval_budget_plan(
+            "stored-procedure-source",
+            expected_rows=5000,
+            required_fields=[],
+            limit=100,
+            output_path="",
+            quality_sensitive=True,
+        )
+
+        self.assertEqual(plan["status"], "blocked")
+        self.assertEqual(plan["token_optimizer_status"], "blocked")
+        self.assertIn("required_fields_missing", plan["issues"])
+        self.assertIn("large_result_requires_output_path", plan["issues"])
+        self.assertIn("quality_sensitive_content_should_have_source_file_or_exact_reference", plan["issues"])
+        validation = validate_retrieval_budget_plan(plan)
+        self.assertFalse(validation["valid"])
+        self.assertEqual(validation["status"], "blocked")
 
     def test_truncate_logs_prioritizes_failed_pytest_over_bulk_passed_tests(self):
         log = _pytest_bulk_log()

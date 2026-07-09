@@ -8,7 +8,7 @@ KH는 Superpowers식 작업 흐름, Compound 학습, RTK식 토큰 게이트, Op
 
 ## 포함 항목
 
-- 지원 파일, smoke check, demo를 갖춘 42개 packaged skill/harness
+- 지원 파일, smoke check, demo를 갖춘 43개 packaged skill/harness
 - `always-on-front-door`: 비사소한 작업 전에 먼저 실행되는 bootstrap skill
 - `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`
 - `brainstorming-harness`, `compound-engineering-harness`, `workflow-usability-harness`

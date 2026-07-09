@@ -41,6 +41,7 @@ SKILL_EXECUTION_LEVELS = {
     "command-output-harness": "python-module",
     "compound-engineering-harness": "hybrid-harness",
     "context-state-harness": "python-module",
+    "credential-safety-harness": "python-module",
     "development-lifecycle-harness": "procedure-policy",
     "deliverable-template-quality-harness": "python-module",
     "domain-orchestration-harness": "hybrid-harness",

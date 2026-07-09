@@ -29,11 +29,12 @@ This is a personal UAF command output harness. It provides compact command outpu
 ## Command lifecycle
 
 1. Parse the requested command and classify the command family.
-2. Route to a command-family filter for test, build, git-read, dependency, Python, or generic output.
-3. Execute the underlying command without changing its exit code semantics.
-4. Call `src.skills.token_optimizer.summarize_command_output` to filter stdout and stderr according to the command family.
-5. Print compact output that keeps actionable failures and summaries.
-6. Track raw size, filtered size, command family, elapsed time, and savings estimate.
+2. Before broad or noisy commands, build a retrieval budget plan: count/scope first, sample before full read, select fields/line ranges, require explicit limits, and write large structured output to a file.
+3. Route to a command-family filter for test, build, git-read, dependency, Python, or generic output.
+4. Execute the underlying command without changing its exit code semantics.
+5. Call `src.skills.token_optimizer.summarize_command_output` to filter stdout and stderr according to the command family.
+6. Print compact output that keeps actionable failures and summaries.
+7. Track raw size, filtered size, command family, elapsed time, and savings estimate.
 
 ## Filter rules
 
@@ -59,6 +60,7 @@ Pressure scenario: if a pytest log has hundreds of passing tests and one failure
 
 - Compact stdout/stderr summary that keeps failures, exit status, changed paths, and actionable lines.
 - Raw size, filtered size, elapsed time, command family, and token savings estimate.
+- Retrieval budget plan for broad commands that could emit large stdout.
 - Fallback reason when output is returned raw.
 - Preserved exit code and enough context to reproduce the failing command.
 
@@ -67,6 +69,7 @@ Pressure scenario: if a pytest log has hundreds of passing tests and one failure
 - Do not summarize away the only failing assertion, traceback, or compiler error.
 - Do not change command success semantics while filtering output.
 - Do not return an empty summary for non-empty failing output.
+- Do not run broad source, DB, or API output into stdout when selectors, limits, or output-file handling are missing.
 - Do not over-compress file paths, test names, or line numbers needed for follow-up edits.
 
 ## UAF implementation targets
@@ -74,5 +77,7 @@ Pressure scenario: if a pytest log has hundreds of passing tests and one failure
 - `src.skills.token_optimizer.summarize_command_output`
 - `src.skills.token_optimizer.filter_command_output`
 - `src.skills.token_optimizer.truncate_logs`
+- `src.skills.token_optimizer.build_retrieval_budget_plan`
+- `src.skills.token_optimizer.validate_retrieval_budget_plan`
 - `src.contracts.HarnessResult`
 - `tests.test_command_output_runtime`

@@ -1206,6 +1206,29 @@ EXTRA_SECURITY_HIGH_RISK_TERMS = {
     "secret was committed",
     "committed to main",
 }
+CREDENTIAL_SAFETY_TERMS = {
+    ".env",
+    "$env:",
+    "env:",
+    "api key",
+    "api-key",
+    "apikey",
+    "credential",
+    "credentials",
+    "connection string",
+    "connection-string",
+    "secret",
+    "secrets",
+    "password",
+    "github token",
+    "refresh token",
+    "token was committed",
+    "secret was committed",
+    "environment variable",
+    "environment variables",
+    "openai_api_key",
+    "ncbi_api_key",
+}
 SHOPPING_TERMS = {
     "air fryer",
     "air fryers",
@@ -2256,6 +2279,10 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _requires_resume_context(context):
         evidence_required.append("resume_handoff")
         reasons.append("resume_context_required")
+    if _needs_credential_safety(normalized):
+        cross_cutting.append("credential-safety-harness")
+        evidence_required.append("credential_safety_status")
+        reasons.append("credential_or_secret_boundary")
 
     memory_requested = _is_memory_state_request(normalized)
     if memory_requested and "resume_context_required" in reasons:
@@ -4525,6 +4552,10 @@ def _context_exceeds_token_budget(context: dict) -> bool:
     if _context_int(context, "broad_file_reads") >= 3:
         return True
     return False
+
+
+def _needs_credential_safety(normalized: str) -> bool:
+    return _contains_any(normalized, CREDENTIAL_SAFETY_TERMS)
 
 
 def _context_int(context: dict, key: str) -> int:

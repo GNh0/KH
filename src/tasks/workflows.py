@@ -754,6 +754,26 @@ async def async_project_workflow(
         workflow_success=success,
         preflight=workflow_usability_preflight,
     )
+    if workflow_usability.enabled and workflow_usability.status == "blocked":
+        success = False
+        final_goal = _block_goal_for_workflow_usability(final_goal or goal_metadata, workflow_usability.to_dict())
+        if ledger and final_goal:
+            ledger.save_current_goal(
+                final_goal,
+                active_task="",
+                tasks=_task_ledger_summary(ordered_results, list(file_list)),
+                next_recommended_action=_next_goal_action(final_goal),
+            )
+            ledger.append_event(
+                "goal_blocked",
+                {
+                    "objective": final_goal.get("objective", ""),
+                    "status": final_goal.get("status", ""),
+                    "blocked_reason": final_goal.get("blocked_reason", ""),
+                    "missing_evidence": final_goal.get("metadata", {}).get("missing_evidence", []),
+                    "workflow_id": workflow_id,
+                },
+            )
     if workflow_usability.enabled and workflow_usability.progress_panel and not metadata.get("suppress_progress_panel"):
         print(workflow_usability.progress_panel.rstrip())
 
@@ -787,6 +807,45 @@ async def async_project_workflow(
             "gate_evidence": gate_evidence,
         },
     )
+
+
+def _block_goal_for_workflow_usability(goal: dict, workflow_usability: dict) -> dict:
+    blocked_goal = dict(goal or {})
+    metadata = dict(blocked_goal.get("metadata", {}) or {})
+    required_next_skills = [
+        str(item)
+        for item in workflow_usability.get("required_next_skills", [])
+        if str(item).strip()
+    ]
+    metadata["workflow_usability_status"] = workflow_usability.get("status", "")
+    metadata["workflow_usability_required_next_skills"] = required_next_skills
+    metadata["missing_evidence"] = _dedupe_strings([
+        *list(metadata.get("missing_evidence", []) or []),
+        *required_next_skills,
+    ])
+    blocked_goal["status"] = "blocked"
+    blocked_goal["blocked_reason"] = (
+        "workflow_usability_runtime blocked completion because required KH follow-up skills "
+        f"were not applied or explicitly blocked: {', '.join(required_next_skills) or 'skill_transition_handoff'}"
+    )
+    evidence = list(blocked_goal.get("evidence", []) or [])
+    if "skill_transition_handoff" not in evidence:
+        evidence.append("skill_transition_handoff")
+    blocked_goal["evidence"] = evidence
+    blocked_goal["metadata"] = metadata
+    return blocked_goal
+
+
+def _dedupe_strings(items: list) -> list:
+    seen = set()
+    unique = []
+    for item in items:
+        text = str(item)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
 
 
 def dispatch_project_workflow(

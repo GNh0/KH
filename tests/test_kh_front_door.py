@@ -221,6 +221,34 @@ class KhFrontDoorTests(unittest.TestCase):
             "blocked_until_large_work_preflight",
         )
 
+    def test_front_door_routes_ambiguous_secret_presence_request_to_credential_safety_gate(self):
+        result = build_kh_front_door(
+            ".env에 OPENAI_API_KEY 있는지만 확인해봐. 값은 출력하지 말고, 없으면 어떻게 넣을지만 알려줘.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertIn("credential-safety-harness", payload["recommended_skills"])
+        self.assertIn("credential-safety-harness", payload["immediate_next_skills"])
+        self.assertEqual(
+            payload["skill_statuses"]["credential-safety-harness"]["status"],
+            "pending_immediate_execution",
+        )
+        self.assertIn("credential_safety_status", payload["classification"]["evidence_required"])
+        self.assertNotIn("credential-safety-harness", payload.get("runtime_applied_skills", []))
+
+    def test_front_door_does_not_route_bare_token_usage_question_to_credential_safety(self):
+        result = build_kh_front_door(
+            "Token Optimizer를 쓰면 현재 토큰 사용량이 줄어드는지 비교해서 설명해줘.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertNotIn("credential-safety-harness", payload["recommended_skills"])
+        self.assertNotIn("credential-safety-harness", payload["immediate_next_skills"])
+
     def test_front_door_does_not_route_provider_when_name_is_review_example(self):
         with tempfile.TemporaryDirectory() as tmp:
             skill_dir = Path(tmp) / "skills" / "sql-formatting"

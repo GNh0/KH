@@ -87,6 +87,11 @@ def _render_skill_md(name: str, trigger: str, steps: List[str], targets: List[st
 
         This skill captures a repeatable UAF workflow as a host-readable skill.
 
+        ## Dependencies
+
+        - Reuse existing installed skills or KH harnesses when they already cover a step.
+        - Do not reimplement a capability that another packaged skill can provide.
+
         ## Support files
 
         - Read `references/usage.md` before applying this skill to real work.
@@ -95,6 +100,11 @@ def _render_skill_md(name: str, trigger: str, steps: List[str], targets: List[st
 
         ## Workflow
 
+        1. Confirm the workflow purpose, inputs, outputs, strict steps, flexible steps, failure handling, and whether code is needed.
+        2. If code, API calls, file I/O, data processing, or computation are needed, prefer a small CLI/helper script with explicit output files and bounded limits.
+        3. For any required external tool, runtime, package manager, CLI, browser, MCP server, or API client, verify availability before use; if it is missing, require an explicit install/setup decision and re-check PATH or connection state after setup.
+        4. If no code is needed, keep this as instruction-only workflow guidance and state why.
+
         {step_lines}
 
         ## Required outputs
@@ -102,10 +112,15 @@ def _render_skill_md(name: str, trigger: str, steps: List[str], targets: List[st
         - Decision that the trigger applies.
         - Workflow evidence and failure handling notes.
         - Verification command or review result.
+        - Existing skill dependencies and any output-file/limit/rate-limit choices.
+        - Dependency/tool preflight result, setup approval requirement, and post-setup verification when external tools are needed.
 
         ## Common mistakes
 
         - Do not create a skill for a one-off story.
+        - Do not skip design approval for an underspecified workflow.
+        - Do not assume a required runtime, package manager, browser, MCP server, CLI, or API client is installed.
+        - Do not emit large stdout from helper scripts; write files and read only needed fields.
         - Do not hide operational steps in README-only text.
         - Do not claim the skill ran unless its workflow evidence exists.
 
@@ -129,11 +144,20 @@ def _render_usage(name: str, trigger: str, steps: List[str], targets: List[str],
 
         - Trigger condition and workflow boundary.
         - User-facing outputs and internal evidence paths.
+        - Existing skills that should be reused rather than reimplemented.
+        - Whether the workflow needs code, API calls, file I/O, data processing, or only instructions.
+        - Output-file path, required selectors/fields, explicit limits, retry/rate-limit policy, external tool/runtime preflight, setup approval boundary, and failure behavior when code is needed.
         - Execution level: `{execution_level}`.
         - Implementation targets:
         {target_lines}
 
         ## Execution pattern
+
+        1. Run an iterative design pass before writing `SKILL.md` or helper code.
+        2. Document dependencies on existing skills and the reason each dependency is reused.
+        3. For code-backed workflows, use file-output-first helpers: require `--output`, require selectors or `--limit`, keep stdout to a short status line, and preserve error bodies for self-correction.
+        4. Before using an external tool, runtime, package manager, browser, MCP server, or API client, verify it is available. If missing, block for an explicit install/setup decision, then re-check PATH or connection state before continuing.
+        5. For external APIs, document rate limits; use retry/backoff for transient errors and fail loudly on non-retryable errors with response details.
 
         {step_lines}
 
@@ -142,16 +166,22 @@ def _render_usage(name: str, trigger: str, steps: List[str], targets: List[str],
         - Skill name and execution level.
         - Inputs used and output files produced.
         - Verification result and remaining gaps.
+        - Design approval or blocked reason when the workflow is underspecified.
+        - Dependency list, tool/runtime preflight result, code-vs-instruction decision, output-file policy, and limit/rate-limit choices.
 
         ## Failure handling
 
         - Stop if the trigger does not apply.
         - Withhold completion if expected evidence is missing.
         - Record blocked reasons when required inputs are unavailable.
+        - Block if a helper script would dump large output to stdout instead of writing to a file.
+        - Block if a broad retrieval lacks explicit selectors, fields, or limits.
+        - Block if a required external tool is missing and no explicit setup approval or fallback path exists.
 
         ## Quality bar
 
         A valid use must let another agent reproduce why the skill applied, what ran, what evidence was produced, and what remains unfinished.
+        It should also prove the workflow was designed before implementation, dependencies were reused when available, required tools were verified before use, and any code-backed retrieval is bounded before output enters context.
         """).strip() + "\n"
 
 
@@ -167,12 +197,21 @@ def _render_example(name: str, steps: List[str], targets: List[str], execution_l
 
         ## Expected steps
 
+        1. Confirm workflow purpose, inputs, outputs, strict/flexible steps, failure behavior, and whether code is needed.
+        2. Identify existing skills or harnesses to reuse.
+        3. If code is needed, require output-file-first helpers with explicit selectors or limits.
+        4. Verify required tools/runtimes before use; if missing, record setup approval or fallback.
+
         {step_lines}
 
         ## Expected evidence
 
         - `actual_runtime_path`: `skills/{name}/SKILL.md`
         - `execution_level`: `{execution_level}`
+        - `design_gate`: approved or blocked with rationale
+        - `dependency_reuse`: existing skills considered before new code
+        - `dependency_preflight`: required tools/runtimes checked before use
+        - `output_policy`: file output for large or structured results
         - Implementation targets:
         {target_lines}
 
@@ -181,6 +220,7 @@ def _render_example(name: str, steps: List[str], targets: List[str], execution_l
         - The workflow is one-off and should not become a skill.
         - The trigger is too vague for discovery.
         - Support files are not referenced from `SKILL.md`.
+        - Required external tools are assumed rather than verified.
 
         ## Done criteria
 

@@ -67,6 +67,11 @@ from src.skills.command_policy import (
     evaluate_guard_policy,
     evaluate_write_boundary,
 )
+from src.skills.credential_safety import (
+    build_credential_safety_plan,
+    classify_credential_command,
+    validate_credential_safety_plan,
+)
 from src.skills.token_optimizer import optimize_context_content
 from src.skills.sql_formatting_style import verify_sql_formatting_style
 from src.skills.pb_to_csharp_migration import (
@@ -141,14 +146,64 @@ ROUTING_SKILLS = {
     "scenario-evaluation-harness",
 }
 
+DEMO_SKILL_PROFILES = {
+    "adapter-contract-harness": ("adapter normalization", "missing host dispatch inputs", "adapter-contract-probe"),
+    "always-on-front-door": ("front-door bootstrap", "pending immediate skill gate", "front-door-probe"),
+    "architect-pipeline": ("design blueprint deliverables", "missing source guide", "architect-probe"),
+    "artifact-render-qa-harness": ("artifact render validation", "format validation failure", "artifact-render-probe"),
+    "automatic-intake-harness": ("automatic KH intake", "stale cache path", "automatic-intake-probe"),
+    "brainstorming-harness": ("decision-first brainstorming", "under-specified discovery", "brainstorming-probe"),
+    "branch-finishing-harness": ("branch finish evidence", "missing release evidence", "branch-finish-probe"),
+    "command-hook-policy-harness": ("command policy guard", "unapproved destructive command", "command-hook-probe"),
+    "command-output-harness": ("command output compression", "contract-sensitive passthrough", "command-output-probe"),
+    "compound-engineering-harness": ("post-review learning capture", "missing learning rationale", "compound-probe"),
+    "context-state-harness": ("resume handoff state", "missing fresh evidence", "context-state-probe"),
+    "credential-safety-harness": ("credential presence no-leak check", "secret value exposure attempt", "credential-safety-probe"),
+    "deliverable-template-quality-harness": ("deliverable template quality", "missing template-required source", "deliverable-quality-probe"),
+    "development-lifecycle-harness": ("development lifecycle gates", "missing QA checks", "development-lifecycle-probe"),
+    "domain-orchestration-harness": ("domain design orchestration", "missing domain source guide", "domain-orchestration-probe"),
+    "goal-state-harness": ("goal evidence closure", "missing completion evidence", "goal-state-probe"),
+    "guard-policy-harness": ("write/destructive guard", "unsafe command or boundary", "guard-policy-probe"),
+    "harness-evaluator": ("harness evaluator contracts", "non-repeatable workflow", "harness-evaluator-probe"),
+    "health-check-harness": ("release health dashboard", "missing fresh verification", "health-check-probe"),
+    "host-agent-orchestration": ("host portable dispatch", "missing host adapter fields", "host-orchestration-probe"),
+    "memory-state-harness": ("scoped memory state", "missing scoped evidence", "memory-state-probe"),
+    "orchestration-role-graph": ("role graph execution", "blocked role dependency", "role-graph-probe"),
+    "parallel-orchestration-harness": ("bounded parallel role waves", "blocked downstream role", "parallel-orchestration-probe"),
+    "pb-to-csharp-migration-harness": ("PB to C# migration plan", "missing DataWindow columns", "pb-csharp-probe"),
+    "plan-execution-harness": ("plan task execution", "missing QA checks", "plan-execution-probe"),
+    "plugin-composition-policy": ("provider composition", "unsafe provider self-selection", "plugin-composition-probe"),
+    "qa-gate-harness": ("QA gate evidence", "empty QA check set", "qa-gate-probe"),
+    "quality-gates-harness": ("quality gate evidence", "missing test/review evidence", "quality-gate-probe"),
+    "request-complexity-router": ("request complexity routing", "ambiguous domain request", "complexity-router-probe"),
+    "review-gate-harness": ("review gate normalization", "review finding blocks release", "review-gate-probe"),
+    "role-execution-audit-harness": ("role artifact audit", "missing role artifact", "role-audit-probe"),
+    "scenario-evaluation-harness": ("SIDE-style scenario matrix", "unexpected scenario failures", "scenario-evaluation-probe"),
+    "skill-catalog": ("packaged skill catalog", "catalog/distill mismatch", "skill-catalog-probe"),
+    "snapshot-state-harness": ("work-level snapshot bundle", "missing rollback evidence", "snapshot-probe"),
+    "sql-formatting-style-harness": ("SQL formatting style verification", "logic-changing SQL rewrite", "sql-formatting-probe"),
+    "subagent-review-pipeline": ("subagent review pipeline", "blocked reviewer dependency", "subagent-review-probe"),
+    "systematic-debugging-harness": ("debugging gate evaluator", "missing QA checks", "debugging-probe"),
+    "token-optimizer": ("token optimization telemetry", "contract-sensitive passthrough", "token-optimizer-probe"),
+    "traceability-matrix-harness": ("traceability matrix mapping", "missing source evidence", "traceability-probe"),
+    "verification-before-completion-harness": ("fresh verification guard", "missing fresh verification", "completion-verification-probe"),
+    "workflow-skill-distiller": ("workflow distillation", "one-off workflow rejected", "workflow-distiller-probe"),
+    "workflow-usability-harness": ("workflow usability evidence", "missing progress-to-compound", "workflow-usability-probe"),
+    "worktree-isolation-harness": ("workspace isolation policy", "missing workspace boundary", "worktree-isolation-probe"),
+}
+
 
 def run_skill_demo(
     skill_name: str,
     output_dir: str | Path,
     repo_root: str | Path | None = None,
     skill_dir: str | Path | None = None,
+    host: str = "local",
 ) -> Dict[str, Any]:
     """Run one deterministic mini-demo for a packaged UAF skill."""
+    if host not in {"local", "codex", "antigravity-style", "claude-code"}:
+        raise ValueError(f"unsupported demo host: {host}")
+    _demo_profile(skill_name)
     root = Path(repo_root or _find_repo_root()).resolve()
     output = Path(output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -180,6 +235,7 @@ def run_skill_demo(
             repo_root=root,
             skill_dir=skill_path,
             execution_level=metadata.get("execution_level", "procedure-policy"),
+            selected_host=host,
         )
         implementation_targets = _implementation_target_probes(skill_path, root)
         verification = _verification(
@@ -219,17 +275,25 @@ def main(default_skill_name: str | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run a KH UAF packaged skill mini-demo.")
     parser.add_argument("--skill", default=default_skill_name or "", help="Packaged skill name.")
     parser.add_argument("--output-dir", default="", help="Directory for demo artifacts.")
+    parser.add_argument(
+        "--host",
+        default="local",
+        choices=["local", "codex", "antigravity-style", "claude-code"],
+        help="Host mode to reflect in demo metadata.",
+    )
     args = parser.parse_args()
     if not args.skill:
         parser.error("--skill is required")
     root = _find_repo_root()
     output = Path(args.output_dir) if args.output_dir else _default_demo_output_dir(args.skill)
-    payload = run_skill_demo(args.skill, output_dir=output, repo_root=root)
+    payload = run_skill_demo(args.skill, output_dir=output, repo_root=root, host=args.host)
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
 
 def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]]:
+    if skill_name == "credential-safety-harness":
+        return _credential_safety_scenario
     if skill_name == "pb-to-csharp-migration-harness":
         return _pb_to_csharp_migration_scenario
     if skill_name == "sql-formatting-style-harness":
@@ -269,24 +333,51 @@ def _attach_skill_demo_context(
     scenario_result: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Bind shared scenario families to the exact packaged skill under test."""
+    profile = _demo_profile(skill_name)
     result = dict(scenario_result)
     context = {
         "skill": skill_name,
         "scenario_id": f"demo-{_safe_id(skill_name)}",
         "scenario_function": scenario_function,
+        "semantic_probe": profile["semantic_probe"],
     }
     success_case = dict(result.get("success_case", {}) or {})
     blocked_case = dict(result.get("blocked_or_failure_case", {}) or {})
     success_case["skill_demo_context"] = dict(context)
     blocked_case["skill_demo_context"] = dict(context)
+    success_case["capability_proven"] = profile["capability_proven"]
+    success_case["semantic_probe"] = profile["semantic_probe"]
+    blocked_case["failure_mode_proven"] = profile["failure_mode_proven"]
+    blocked_case["semantic_probe"] = profile["semantic_probe"]
     evidence = list(success_case.get("evidence", []) or [])
-    marker = f"skill-specific demo context: {skill_name} via {scenario_function}"
-    if marker not in evidence:
-        evidence.append(marker)
+    for marker in [
+        f"skill-specific demo context: {skill_name} via {scenario_function}",
+        f"capability_proven: {profile['capability_proven']}",
+        f"semantic_probe: {profile['semantic_probe']}",
+    ]:
+        if marker not in evidence:
+            evidence.append(marker)
     success_case["evidence"] = evidence
+    blocked_case["evidence"] = list(blocked_case.get("evidence", []) or []) + [
+        f"failure_mode_proven: {profile['failure_mode_proven']}",
+        f"semantic_probe: {profile['semantic_probe']}",
+    ]
     result["success_case"] = success_case
     result["blocked_or_failure_case"] = blocked_case
     return result
+
+
+def _demo_profile(skill_name: str) -> Dict[str, str]:
+    try:
+        capability, failure_mode, semantic_probe = DEMO_SKILL_PROFILES[skill_name]
+    except KeyError as exc:
+        raise ValueError(f"no skill-specific demo profile registered for packaged skill: {skill_name}") from exc
+    return {
+        "skill": skill_name,
+        "capability_proven": capability,
+        "failure_mode_proven": failure_mode,
+        "semantic_probe": semantic_probe,
+    }
 
 
 def _implementation_target_probes(skill_path: Path, repo_root: Path) -> List[Dict[str, Any]]:
@@ -318,6 +409,7 @@ def _demo_specificity(
     output_dir: Path,
 ) -> Dict[str, Any]:
     scenario_id = f"demo-{_safe_id(skill_name)}"
+    profile = _demo_profile(skill_name)
     contract_names = [str(contract.get("name", "")) for contract in contracts]
     contract_modules = [str(contract.get("module", "")) for contract in contracts]
     artifact_paths = [str(artifact.get("path", "")) for artifact in artifacts]
@@ -334,6 +426,7 @@ def _demo_specificity(
         "scenario_id": scenario_id,
         "scenario_function": scenario_function,
         "execution_level": execution_level,
+        "profile": profile,
         "success_context_bound": success_context.get("skill") == skill_name
         and success_context.get("scenario_id") == scenario_id
         and success_context.get("scenario_function") == scenario_function,
@@ -350,6 +443,7 @@ def _demo_specificity(
             "primary_target": primary_target.get("ref", ""),
             "primary_target_status": primary_target.get("status", ""),
             "scenario_function": scenario_function,
+            "semantic_probe": profile["semantic_probe"],
             "contract_modules": contract_modules,
             "proof_kind": "implementation-target-resolution-plus-contract-demo",
         },
@@ -359,6 +453,7 @@ def _demo_specificity(
             scenario_id,
             scenario_function,
             execution_level,
+            profile["semantic_probe"],
             str(primary_target.get("ref", "")),
             ",".join(contract_names[:5]),
         ],
@@ -718,8 +813,22 @@ def _command_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dic
     )
     success_payload = optimized.to_dict()
     success_payload["preserved_required_facts"] = preserved
+    token_usage = dict(success_payload.get("metadata", {}).get("token_usage", {}) or {})
+    token_usage["preserved_required_facts"] = preserved
+    token_usage["required_fact_count"] = len(required_facts)
+    token_usage["preserved_required_fact_count"] = sum(1 for item in required_facts if item in optimized.stdout)
+    success_payload.setdefault("metadata", {})["token_usage"] = token_usage
     success_payload["policy_verdict"] = policy["verdict"]
     success_payload["write_boundary"] = boundary
+    success_payload["runtime_token_accounting"] = {
+        "actual_host_usage_available": False,
+        "actual_host_usage_reason": "local Python demos cannot read Codex/host billable token usage counters",
+        "measured_scope": "optimizer input/output payload",
+        "fallback_count_method": success_payload.get("metadata", {})
+        .get("token_usage", {})
+        .get("payload_token_count_method", "deterministic_local_estimate_chars_div_4"),
+        "must_not_report_as_billable_usage": True,
+    }
     contracts = [
         _dataclass_contract(optimized),
         _mapping_contract("CommandPolicyResult", "src.skills.command_policy", policy, "policy-result"),
@@ -735,6 +844,53 @@ def _command_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dic
         blocked_payload=blocked_result.to_dict(),
         blocked_reason="contract-sensitive text must pass through without minify or truncation",
         missing_inputs=[],
+        contracts=contracts,
+        artifacts=[],
+    )
+
+
+def _credential_safety_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
+    env_path = str(output_dir / ".env")
+    plan = build_credential_safety_plan(
+        "NCBI_API_KEY",
+        env_file=env_path,
+        platform="powershell",
+    )
+    validation = validate_credential_safety_plan(plan)
+    unsafe = classify_credential_command("Get-Content $HOME\\.env")
+    success_payload = {
+        "plan": plan.to_dict(),
+        "validation": validation,
+        "unsafe_command_verdict": unsafe,
+        "credential_safety_status": "passed" if validation["valid"] and not unsafe["allowed"] else "blocked",
+        "semantic_probe": "credential-safety-probe",
+    }
+    blocked_payload = {
+        "status": "blocked",
+        "credential_safety_status": "blocked",
+        "unsafe_command": "echo $env:NCBI_API_KEY",
+        "classification": classify_credential_command("echo $env:NCBI_API_KEY"),
+        "remediation": "Use a quiet presence check or ask the user to add the key outside chat.",
+    }
+    contracts = [
+        _dataclass_contract(plan),
+        _mapping_contract("CredentialSafetyValidation", "src.skills.credential_safety", validation, "policy-result"),
+        _mapping_contract("CredentialCommandClassification", "src.skills.credential_safety", unsafe, "policy-result"),
+    ]
+    return _scenario_result(
+        success_contract="CredentialSafetyPlan",
+        success_payload=success_payload,
+        success_evidence=[
+            "credential presence no-leak check passed",
+            "safe presence command validated",
+            "secret value exposure attempt blocked",
+        ],
+        success_behavior="Perform a credential presence no-leak check and block secret value exposure attempts.",
+        success_side_effects=["writes demo evidence JSON only"],
+        blocked_contract="CredentialCommandClassification",
+        blocked_payload=blocked_payload,
+        blocked_reason="secret value exposure attempt blocked by credential safety",
+        missing_inputs=["safe presence check or external credential setup"],
         contracts=contracts,
         artifacts=[],
     )
@@ -1412,6 +1568,8 @@ def _dataclass_contract(instance: Any) -> Dict[str, Any]:
         "module": cls.__module__,
         "fields_checked": list(payload.keys()),
         "roundtrip_checked": bool(roundtrip),
+        "schema_validation_checked": bool(payload),
+        "roundtrip_kind": "dataclass_from_dict",
         "source": "dataclass" if is_dataclass(instance) else "policy-result",
         "sample": _compact_demo_sample(payload),
     }
@@ -1422,7 +1580,9 @@ def _mapping_contract(name: str, module: str, payload: Dict[str, Any], source: s
         "name": name,
         "module": module,
         "fields_checked": list(payload.keys()),
-        "roundtrip_checked": bool(payload),
+        "roundtrip_checked": False,
+        "schema_validation_checked": bool(payload),
+        "roundtrip_kind": "mapping_schema_presence",
         "source": source,
         "sample": _compact_demo_sample(payload),
     }
@@ -1668,24 +1828,70 @@ def _artifact_record_from_file(
     }
 
 
-def _host_metadata(output_dir: Path, repo_root: Path, skill_dir: Path, execution_level: str) -> Dict[str, Any]:
+def _host_metadata(
+    output_dir: Path,
+    repo_root: Path,
+    skill_dir: Path,
+    execution_level: str,
+    selected_host: str,
+) -> Dict[str, Any]:
+    host_modes = {
+        "local": {
+            "dispatch": "simulated local host metadata for direct Python module or CLI demo execution",
+            "state": "simulated local state root; demo output root is explicitly supplied",
+            "panel": "simulated local panel contract via stdout JSON plus generated artifact manifest",
+        },
+        "codex": {
+            "dispatch": "simulated Codex host metadata for tool-mediated workspace execution with plugin skill injection",
+            "state": "simulated Codex state contract; runtime root may live outside the user project",
+            "panel": "simulated Codex panel contract; host_panel.codex.json is not produced by this local demo",
+        },
+        "antigravity-style": {
+            "dispatch": "simulated Antigravity-style host metadata for agent-manager plugin registration",
+            "state": "simulated Antigravity-style state contract for host-owned runtime paths",
+            "panel": "simulated Antigravity-style panel contract; host panel rendering is not launched by this demo",
+        },
+        "claude-code": {
+            "dispatch": "simulated Claude Code host metadata for procedural skill guidance or local CLI calls",
+            "state": "simulated Claude Code state contract for separated project files and evidence",
+            "panel": "simulated Claude Code panel contract for compact JSON evidence",
+        },
+    }
+    selected = host_modes[selected_host]
     return {
-        "selected_host": "local",
+        "selected_host": selected_host,
+        "host_mode_evidence": {
+            "dispatch": selected["dispatch"],
+            "state": selected["state"],
+            "panel": selected["panel"],
+        },
+        "host_claim_scope": "simulated_metadata_only",
+        "behavioral_host_execution": False,
+        "behavioral_host_execution_reason": (
+            "The packaged demo runs as local Python and validates host-specific metadata contracts only; "
+            "it does not launch Codex, Antigravity-style, or Claude Code host runtimes."
+        ),
+        "verified_host_artifacts": [],
         "host_differences": [
             {
                 "host": "codex",
-                "dispatch": "tool-mediated local workspace with plugin skills",
-                "state": "runtime root may live outside the user project",
+                "dispatch": host_modes["codex"]["dispatch"],
+                "state": host_modes["codex"]["state"],
             },
             {
                 "host": "antigravity-style",
-                "dispatch": "plugin or MCP registration can expose the same skill contract",
-                "state": "runtime paths remain host-owned",
+                "dispatch": host_modes["antigravity-style"]["dispatch"],
+                "state": host_modes["antigravity-style"]["state"],
             },
             {
                 "host": "claude-code",
-                "dispatch": "skill folder can be read as procedural guidance or called through local CLI",
-                "state": "project files and internal evidence stay separated",
+                "dispatch": host_modes["claude-code"]["dispatch"],
+                "state": host_modes["claude-code"]["state"],
+            },
+            {
+                "host": "local",
+                "dispatch": host_modes["local"]["dispatch"],
+                "state": host_modes["local"]["state"],
             },
         ],
         "repo_root": str(repo_root),
@@ -1709,7 +1915,12 @@ def _verification(
         "exit_code": 0,
         "stdout_json_only": True,
         "stderr_empty_or_expected": True,
-        "contract_roundtrip": all(contract.get("roundtrip_checked") for contract in contracts),
+        "contract_roundtrip": all(
+            contract.get("roundtrip_checked") is True
+            or contract.get("schema_validation_checked") is True
+            for contract in contracts
+        ),
+        "contract_validation_mode": "dataclass_roundtrip_or_mapping_schema",
         "artifacts_within_output_dir": all(_is_relative_to(Path(artifact["path"]), output_dir) for artifact in artifacts),
         "artifacts_validated": all(bool(artifact.get("validated")) for artifact in artifacts),
         "artifact_count": len(artifacts),
