@@ -239,6 +239,25 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         }
         self.assertIn("ad_hoc_outer_alias", codes)
 
+    def test_verifier_allows_ba011t_repeated_lookup_numbered_alias_family(self):
+        sql = (
+            "SELECT A.ITEMCD\n"
+            "     , ISNULL(E1.SUBNM, '') AS MNGITEM1NM\n"
+            "     , ISNULL(E2.SUBNM, '') AS OUTINSPECNM\n"
+            "FROM SA220T A\n"
+            "        LEFT OUTER JOIN BA011T E1\n"
+            "                     ON E1.MAINCD = 'MA002'\n"
+            "                     AND E1.SUBCD = A.MNGITEM1\n"
+            "\n"
+            "        LEFT OUTER JOIN BA011T E2\n"
+            "                     ON E2.MAINCD = 'MA020'\n"
+            "                     AND E2.SUBCD = A.OUTINSPEC;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+
     def test_verifier_blocks_derived_table_outer_internal_alias(self):
         original = (
             "SELECT A.ORDNUM\n"
@@ -348,6 +367,75 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             for issue in result.metadata["mechanical_checks"]["preservation_issues"]
         }
         self.assertIn("localized_text_damaged", preservation_codes)
+
+    def test_verifier_blocks_session_019f45b6_first_answer_text_damage(self):
+        original = (
+            "SELECT C.USERNM\n"
+            "     , A.PAC1     /*\ud300\uc7a5\ud655\uc778*/\n"
+            "     , (CASE WHEN A.REMARK LIKE '' THEN '' ELSE '\u25cb' END) AS CMT\n"
+            "     , A.ININSPEC /* \uc2b9\uc778\uad6c\ubd84*/\n"
+            "     , ISNULL(E.SUBNM, '') AS MNGITEM1NM\n"
+            "     , ISNULL(F.SUBNM, '') AS OUTINSPECNM\n"
+            "FROM SA220T A\n"
+            "        LEFT OUTER JOIN BA011T E\n"
+            "                     ON E.MAINCD = 'MA002'\n"
+            "                     AND E.SUBCD = A.MNGITEM1\n"
+            "\n"
+            "        LEFT OUTER JOIN BA011T F\n"
+            "                     ON F.MAINCD = 'MA020'\n"
+            "                     AND F.SUBCD = A.OUTINSPEC\n"
+            "WHERE A.OUTINSPEC LIKE '%' /*\uae30\ud0c0\ucd9c\uace0\uad6c\ubd84*/\n"
+            "  AND (CASE WHEN A.ININSPEC = 'Y' THEN 'Y' ELSE 'N' END) LIKE '%' /* \uc2b9\uc778\uc5ec\ubd80 */;\n"
+        )
+        formatted = (
+            "SELECT C.USERNM\n"
+            "     , A.PAC1     /*?\u0080?\u03bd\uc19a??/\n"
+            "     , (CASE WHEN A.REMARK LIKE '' THEN '' ELSE '?? END) AS CMT\n"
+            "     , A.ININSPEC /* ?\ubc40\uc52c援щ텇*/\n"
+            "     , ISNULL(E.SUBNM, '') AS MNGITEM1NM\n"
+            "     , ISNULL(F.SUBNM, '') AS OUTINSPECNM\n"
+            "FROM SA220T A\n"
+            "        LEFT OUTER JOIN BA011T E\n"
+            "                     ON E.MAINCD = 'MA002'\n"
+            "                     AND E.SUBCD = A.MNGITEM1\n"
+            "\n"
+            "        LEFT OUTER JOIN BA011T F\n"
+            "                     ON F.MAINCD = 'MA020'\n"
+            "                     AND F.SUBCD = A.OUTINSPEC\n"
+            "WHERE A.OUTINSPEC LIKE '%' /*\u6e32\uace0?\u7570\uc395퀬援щ텇*/\n"
+            "  AND (CASE WHEN A.ININSPEC = 'Y' THEN 'Y' ELSE 'N' END) LIKE '%' /* ?\ubc40\uc52c?\uc5ec? */;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        preservation_codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["preservation_issues"]
+        }
+        self.assertIn("localized_text_damaged", preservation_codes)
+        self.assertIn("comments_changed", preservation_codes)
+
+    def test_verifier_blocks_unterminated_string_literal(self):
+        original = (
+            "SELECT A.ITEMCD\n"
+            "     , (CASE WHEN A.REMARK LIKE '' THEN '' ELSE 'OK' END) AS CMT\n"
+            "FROM SA220T A;\n"
+        )
+        formatted = (
+            "SELECT A.ITEMCD\n"
+            "     , (CASE WHEN A.REMARK LIKE '' THEN '' ELSE '?? END) AS CMT\n"
+            "FROM SA220T A;\n"
+        )
+
+        result = verify_sql_formatting_style(original, formatted)
+
+        self.assertFalse(result.success)
+        style_codes = {
+            issue["code"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+        }
+        self.assertIn("unterminated_string_literal", style_codes)
 
     def test_verifier_allows_wide_insert_select_grouped_layout(self):
         grouped = (

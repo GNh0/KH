@@ -92,6 +92,7 @@ The harness does not claim to prove DB semantics. Execution-plan changes, result
 - Do not treat regex preservation checks as proof of DB semantic equivalence.
 - Do not trigger the harness for mention-only risk examples that are not actionable SQL formatting requests.
 - Do not require scalar-to-join conversion for unknown scalar functions when the function body or lookup contract cannot be checked. Preserve those functions and require the formatter to state why conversion was skipped.
+- Do not split same-role table families into unrelated one-letter aliases. For example, related `SA100T/SA110T/SA200T/SA210T` joins may be `B1/B2/B3/B4`, and same-role `BA011T` code lookups may be `E1/E2`; the exact base letter follows the surrounding outer-query role order. This is reviewer/style guidance unless source evidence makes the role family explicit enough for a separate task-specific check.
 - Do not introduce CTEs or `#` temporary tables as a default "cleaner" rewrite. Prefer direct joins, derived tables, aggregate subqueries, and existing stored-procedure style unless there is an explicit request or a concrete technical reason.
 - Do not write `IF EXISTS` guards with `WHERE` subqueries by default. A simple `WHERE A.KEY = @KEY` predicate is fine, but nested `WHERE ... IN (SELECT ...)`, `WHERE EXISTS (SELECT ...)`, or `WHERE COL = (SELECT ...)` must be blocked unless source evidence requires it.
 - Do not write exports, fragments, or verifier output into `C:\GWERP`.

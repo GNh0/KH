@@ -308,6 +308,17 @@ def _check_style(original: str, formatted: str, *, cte_temp_table_reason: str | 
     issues: List[SqlFormattingIssue] = []
     unprotected = _strip_literals_and_comments(formatted)
 
+    if _has_unterminated_string_literal(formatted):
+        issues.append(
+            SqlFormattingIssue(
+                code="unterminated_string_literal",
+                severity="error",
+                message="Formatted SQL appears to contain an unterminated string literal.",
+                evidence=["single-quoted string did not close before the end of SQL text"],
+                check_kind="style",
+            )
+        )
+
     lowercase_tokens = _lowercase_sql_tokens(unprotected)
     if lowercase_tokens:
         issues.append(
@@ -333,6 +344,49 @@ def _check_style(original: str, formatted: str, *, cte_temp_table_reason: str | 
 
 def _extract_string_literals(sql: str) -> List[str]:
     return re.findall(r"'(?:''|[^'])*'", sql, flags=re.DOTALL)
+
+
+def _has_unterminated_string_literal(sql: str) -> bool:
+    in_string = False
+    in_line_comment = False
+    in_block_comment = False
+    index = 0
+    while index < len(sql):
+        char = sql[index]
+        next_char = sql[index + 1] if index + 1 < len(sql) else ""
+
+        if in_line_comment:
+            if char in "\r\n":
+                in_line_comment = False
+            index += 1
+            continue
+
+        if in_block_comment:
+            if char == "*" and next_char == "/":
+                in_block_comment = False
+                index += 2
+            else:
+                index += 1
+            continue
+
+        if not in_string and char == "-" and next_char == "-":
+            in_line_comment = True
+            index += 2
+            continue
+
+        if not in_string and char == "/" and next_char == "*":
+            in_block_comment = True
+            index += 2
+            continue
+
+        if char == "'":
+            if in_string and next_char == "'":
+                index += 2
+                continue
+            in_string = not in_string
+
+        index += 1
+    return in_string
 
 
 def _extract_comments(sql: str) -> List[str]:
