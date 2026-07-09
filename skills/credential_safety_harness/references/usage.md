@@ -48,3 +48,14 @@ This harness is not a secret manager. It only defines the agent-safe protocol fo
 ## Quality bar
 
 A valid use proves that KH can determine presence without seeing the secret. A failed use exposes, stores, echoes, summarizes, or asks the user to paste the secret value.
+
+## Runtime binding
+
+- Execution level: python-module
+- Implementation targets:
+  - `src.skills.credential_safety.CredentialSafetyPlan`
+  - `src.skills.credential_safety.build_credential_safety_plan`
+  - `src.skills.credential_safety.classify_credential_command`
+  - `src.skills.credential_safety.validate_credential_safety_plan`
+- Application path: run the credential policy module before any API call, MCP launch, config read, environment dump, or connector action that may expose a secret.
+- Completion rule: do not report this skill as applied until the plan status is `safe`, `blocked`, or `approval_required` and the evidence proves presence without printing secret values.

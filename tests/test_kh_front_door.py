@@ -306,8 +306,15 @@ class KhFrontDoorTests(unittest.TestCase):
         payload = result.to_dict()
 
         self.assertIn("localized_patch_continuation", payload["classification"]["reasons"])
+        self.assertIn("localized_scope_lock", payload["classification"]["evidence_required"])
         self.assertEqual(payload["immediate_next_skills"], [])
         self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "execution_allowed_localized_patch_with_scope_lock",
+        )
+        self.assertIn("localized_scope_lock", payload["execution_gate"]["required_before_execution"])
+        self.assertIn("unrequested_refactor", payload["execution_gate"]["blocked_actions"])
         self.assertEqual(payload["execution_authorization"]["status"], "allowed")
 
     def test_front_door_korean_direction_only_screen_request_blocks_for_brainstorming(self):
@@ -1318,6 +1325,9 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("audit_findings", payload["classification"]["evidence_required"])
         self.assertIn("readonly_source_audit_request", payload["classification"]["reasons"])
         self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "execution_allowed_readonly_analysis")
+        self.assertIn("file_writes", payload["execution_gate"]["blocked_actions"])
+        self.assertIn("apply_patch", payload["execution_gate"]["blocked_actions"])
         self.assertNotEqual(
             payload["execution_gate"]["status"],
             "blocked_until_large_work_preflight",
@@ -1344,11 +1354,142 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("audit_findings", payload["classification"]["evidence_required"])
         self.assertIn("readonly_source_audit_request", payload["classification"]["reasons"])
         self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "execution_allowed_readonly_analysis")
+        self.assertIn("file_writes", payload["execution_gate"]["blocked_actions"])
+        self.assertIn("apply_patch", payload["execution_gate"]["blocked_actions"])
         self.assertNotEqual(
             payload["execution_gate"]["status"],
             "blocked_until_large_work_preflight",
         )
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_front_door_full_skill_lifecycle_audit_requires_large_preflight(self):
+        cases = [
+            (
+                "\uc2a4\ud0ac,\ud558\ub124\uc2a4 \ub3d9\uc791\uc744 1\ubd80\ud130 \ub05d\uae4c\uc9c0 "
+                "\uc804\uccb4 \ubaa8\ub450 \uc138\uc138\ud558\uac8c \ud558\ub098\uc529 \ub2e4 "
+                "\ub72f\uc5b4\ubcf4\uace0 \uc810\uac80\ud574\uc918"
+            ),
+            (
+                "\uc2a4\ud0ac,\ud558\ub124\uc2a4 \ub3d9\uc791\uc5d0\uc11c 1\ubd80\ud130 \ub05d\uae4c\uc9c0 "
+                "\uc804\uccb4 \uc989 \ubaa8\ub450 \ub2e4 \uc138\uc138\ud558\uac8c \ud558\ub098\uc529 "
+                "\ub2e4 \ub72f\uc5b4\ubcf4\ub77c\uace0"
+            ),
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = build_kh_front_door(prompt, project=Path.cwd(), host="codex")
+                payload = result.to_dict()
+
+                self.assertEqual(payload["classification"]["complexity"], "heavy")
+                self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
+                self.assertIn("full_skill_lifecycle_audit_request", payload["classification"]["reasons"])
+                self.assertIn("skill-catalog", payload["recommended_skills"])
+                self.assertIn("workflow-usability-harness", payload["recommended_skills"])
+                self.assertIn("scenario-evaluation-harness", payload["recommended_skills"])
+                self.assertIn("compound-engineering-harness", payload["recommended_skills"])
+                self.assertEqual(
+                    payload["execution_gate"]["status"],
+                    "blocked_until_large_work_preflight",
+                )
+                self.assertFalse(payload["execution_gate"]["can_execute"])
+                self.assertIn("skill-catalog", payload["immediate_next_skills"])
+                self.assertIn("large_work_orchestration_bundle", payload["execution_gate"]["required_before_execution"])
+
+    def test_front_door_pb_migration_request_keeps_full_skill_lifecycle_audit_gate(self):
+        result = build_kh_front_door(
+            "PB to C# migration harness 포함해서 스킬,하네스 동작을 1부터 끝까지 "
+            "전체 모두 세세하게 하나씩 다 뜯어보고 점검해줘",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "heavy")
+        self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
+        self.assertIn("full_skill_lifecycle_audit_request", payload["classification"]["reasons"])
+        self.assertIn("pb_to_csharp_migration_request", payload["classification"]["reasons"])
+        self.assertIn("skill-catalog", payload["recommended_skills"])
+        self.assertIn("pb-to-csharp-migration-harness", payload["recommended_skills"])
+        self.assertIn("skill-catalog", payload["immediate_next_skills"])
+        self.assertIn("pb-to-csharp-migration-harness", payload["immediate_next_skills"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_large_work_preflight")
+        self.assertIn("skill_execution_evidence_matrix", payload["execution_gate"]["required_before_execution"])
+
+    def test_front_door_kh_runtime_status_question_does_not_trigger_large_preflight(self):
+        result = build_kh_front_door(
+            "\uadf8\ub798\uc11c \uc774\uc81c\ub294 \uc218\uc815\ud588\uc73c\ub2c8\uae50 "
+            "\ub3d9\uc791\ud55c\ub2e4\uace0?",
+            project=Path.cwd(),
+            host="codex",
+            request_context={"project_markers": [".kh"]},
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("kh_runtime_status_question", payload["classification"]["reasons"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_front_door_light_kh_status_has_no_immediate_workflow_gate(self):
+        result = build_kh_front_door("KH UAF status?", project=Path.cwd(), host="codex")
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "light")
+        self.assertEqual(payload["classification"]["recommended_execution"], "direct_answer")
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["immediate_next_skills"], [])
+
+    def test_front_door_folder_needs_dashboard_blocks_for_brainstorming(self):
+        result = build_kh_front_door(
+            r"C:\work\OpsDash folder needs a new inventory dashboard.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertEqual(payload["immediate_next_skills"], ["brainstorming-harness"])
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_gate"]["status"], "blocked_until_brainstorming_handoff")
+
+    def test_front_door_sql_diagnostic_question_does_not_trigger_large_preflight(self):
+        result = build_kh_front_door(
+            "Why does this SQL not update rows? SELECT * FROM BA011T",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("sql_diagnostic_question", payload["classification"]["reasons"])
+        self.assertIn("sql_diagnostic_summary", payload["classification"]["evidence_required"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertNotEqual(payload["execution_gate"]["status"], "blocked_until_large_work_preflight")
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_front_door_compound_handoff_selects_compound_immediate_skill(self):
+        result = build_kh_front_door(
+            "After Plan, Work, and Review, create the Compound handoff and skill candidates.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_summary_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("compound-engineering-harness", payload["recommended_skills"])
+        self.assertEqual(payload["immediate_next_skills"], ["compound-engineering-harness"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
 
     def test_readonly_security_audit_without_edits_stays_medium(self):
         result = build_kh_front_door(
@@ -1365,6 +1506,26 @@ class KhFrontDoorTests(unittest.TestCase):
             "blocked_until_large_work_preflight",
         )
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_readonly_harness_review_allows_source_analysis_without_immediate_gate(self):
+        result = build_kh_front_door(
+            "Read-only review KH routing, completion verification, and PB-to-C# migration handoff/style gates. "
+            "Do not edit files.",
+            project=Path.cwd(),
+            host="codex",
+            request_context={"domain": "software"},
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("readonly_source_audit_request", payload["classification"]["reasons"])
+        self.assertNotIn("pb_to_csharp_migration_request", payload["classification"]["reasons"])
+        self.assertEqual(payload["execution_gate"]["status"], "execution_allowed_readonly_analysis")
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["immediate_next_skills"], [])
+        self.assertEqual(payload["execution_authorization"]["status"], "allowed")
+        self.assertIn("file_writes", payload["execution_gate"]["blocked_actions"])
 
     def test_list_double_click_update_condition_question_does_not_trigger_large_preflight(self):
         result = build_kh_front_door(
@@ -1432,11 +1593,14 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["complexity"], "medium")
         self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
         self.assertIn("localized_patch_continuation", payload["classification"]["reasons"])
+        self.assertIn("localized_scope_lock", payload["classification"]["evidence_required"])
         self.assertTrue(payload["execution_gate"]["can_execute"])
-        self.assertNotEqual(
+        self.assertEqual(
             payload["execution_gate"]["status"],
-            "blocked_until_large_work_preflight",
+            "execution_allowed_localized_patch_with_scope_lock",
         )
+        self.assertIn("localized_scope_lock", payload["execution_gate"]["required_before_execution"])
+        self.assertIn("broad_source_exploration", payload["execution_gate"]["blocked_actions"])
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
 
     def test_context_supplied_localized_patch_does_not_trigger_large_preflight(self):
@@ -1457,11 +1621,14 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["complexity"], "medium")
         self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
         self.assertIn("localized_patch_continuation", payload["classification"]["reasons"])
+        self.assertIn("localized_scope_lock", payload["classification"]["evidence_required"])
         self.assertTrue(payload["execution_gate"]["can_execute"])
-        self.assertNotEqual(
+        self.assertEqual(
             payload["execution_gate"]["status"],
-            "blocked_until_large_work_preflight",
+            "execution_allowed_localized_patch_with_scope_lock",
         )
+        self.assertIn("target_artifact_confirmed", payload["execution_gate"]["required_before_execution"])
+        self.assertIn("unrequested_refactor", payload["execution_gate"]["blocked_actions"])
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
 
     def test_korean_file_reference_localized_css_patch_does_not_trigger_large_preflight(self):
@@ -1477,11 +1644,40 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["complexity"], "medium")
         self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
         self.assertIn("localized_patch_continuation", payload["classification"]["reasons"])
+        self.assertIn("localized_scope_lock", payload["classification"]["evidence_required"])
         self.assertTrue(payload["execution_gate"]["can_execute"])
-        self.assertNotEqual(
+        self.assertEqual(
             payload["execution_gate"]["status"],
-            "blocked_until_large_work_preflight",
+            "execution_allowed_localized_patch_with_scope_lock",
         )
+        self.assertIn("localized_scope_lock", payload["execution_gate"]["required_before_execution"])
+        self.assertIn("broad_source_exploration", payload["execution_gate"]["blocked_actions"])
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_pasted_block_only_patch_keeps_scope_lock_without_file_name(self):
+        result = build_kh_front_door(
+            "Fix only this pasted block/current diff. No refactor and no tests.",
+            project=Path.cwd(),
+            host="codex",
+            request_context={
+                "domain": "software",
+                "has_active_artifact": True,
+                "has_pasted_source": True,
+            },
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["recommended_execution"], "skill_read")
+        self.assertIn("localized_patch_continuation", payload["classification"]["reasons"])
+        self.assertIn("localized_scope_lock", payload["classification"]["evidence_required"])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "execution_allowed_localized_patch_with_scope_lock",
+        )
+        self.assertIn("out_of_scope_changes_blocked", payload["execution_gate"]["required_before_execution"])
+        self.assertIn("unrequested_test_generation", payload["execution_gate"]["blocked_actions"])
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
 
     def test_subagent_packets_require_worker_workspace_decision_for_autonomy_tests(self):

@@ -45,3 +45,14 @@ This harness should be selected before a final answer, branch finish, push, PR, 
 ## Quality bar
 
 A valid use must let another agent answer these questions: what completion was claimed, what changed, what fresh evidence proves it, what failed or could not be checked, what risk remains, and what integration action happened.
+
+## Runtime binding
+
+- Execution level: hybrid-harness
+- Implementation targets:
+  - `src.orchestration.session_postmortem.analyze_codex_session_jsonl`
+  - `src.orchestration.gate_evaluators.evaluate_release_gate`
+  - `src.orchestration.development_progress.derive_review_status`
+- Application path: run verification gates immediately before final claims, commit, push, PR, delivery, or handoff.
+- Policy path: treat this harness as the final completion policy; when fresh evidence is missing, withhold completion and record blocked status instead of relying on prior or generic evidence.
+- Completion rule: do not report this harness as applied until fresh verification evidence, failures/blocked checks, residual risk, and completion status are recorded.

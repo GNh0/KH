@@ -41,3 +41,14 @@ A helper script needs `NCBI_API_KEY` for a higher-rate API call.
 - Presence-check plan validates and resolves implementation targets.
 - Another agent can reproduce the decision without knowing the secret value.
 - Missing credentials are handled by an outside-chat hidden-input command, not by asking the user to paste values into chat.
+
+## Runtime binding
+
+- execution_level: python-module
+- implementation_targets:
+  - `src.skills.credential_safety.CredentialSafetyPlan`
+  - `src.skills.credential_safety.build_credential_safety_plan`
+  - `src.skills.credential_safety.classify_credential_command`
+  - `src.skills.credential_safety.validate_credential_safety_plan`
+- actual_runtime_path: `src.skills.credential_safety.build_credential_safety_plan`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and `python -m unittest tests.test_credential_safety_harness` before claiming credential safety is complete.

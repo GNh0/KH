@@ -11,7 +11,6 @@ TERMINAL_COMPOUND_STATUSES = {
     "ready_for_system_update",
     "no_reusable_learning",
     "completed",
-    "blocked",
 }
 COMPOUND_FOLLOWUP_SKILLS = {
     "workflow-skill-distiller",
@@ -84,6 +83,7 @@ def build_skill_transition_handoff(
     _require_memory_skill_for_candidates(bundle, statuses, issues, required_next_skills)
     _require_parallel_skill_for_parallel_decision(bundle, statuses, issues, required_next_skills)
     _require_role_audit_after_subagent_or_role_claim(statuses, issues, required_next_skills)
+    _require_verification_before_completion(bundle, statuses, phase, issues, required_next_skills)
     _require_compound_closure(bundle, statuses, phase, issues, required_next_skills)
     _require_compound_followup_consistency(bundle, statuses, issues, required_next_skills)
 
@@ -233,6 +233,109 @@ def _require_role_audit_after_subagent_or_role_claim(
         required_next_skills.append("role-execution-audit-harness")
 
 
+def _require_verification_before_completion(
+    bundle: LargeWorkOrchestrationBundle,
+    statuses: Dict[str, SkillApplicationStatus],
+    phase: str,
+    issues: List[SkillTransitionIssue],
+    required_next_skills: List[str],
+) -> None:
+    if phase != "final":
+        return
+    verification_status = statuses.get("verification-before-completion-harness")
+    if verification_status is None or verification_status.status != "applied":
+        issues.append(SkillTransitionIssue(
+            rule="final_requires_verification_before_completion",
+            source_skill="development-lifecycle-harness",
+            required_skill="verification-before-completion-harness",
+            reason="final completion, commit, push, PR, release, or handoff claims require fresh verification evidence",
+        ))
+        required_next_skills.append("verification-before-completion-harness")
+        return
+    if not _has_fresh_verification_evidence(verification_status):
+        issues.append(SkillTransitionIssue(
+            rule="verification_before_completion_requires_fresh_evidence",
+            source_skill="verification-before-completion-harness",
+            required_skill="verification-before-completion-harness",
+            reason="verification-before-completion cannot pass on generic status keys; attach command/result/report evidence",
+        ))
+        required_next_skills.append("verification-before-completion-harness")
+
+
+def _has_fresh_verification_evidence(status: SkillApplicationStatus) -> bool:
+    evidence_keys = set(status.evidence_keys)
+    if not evidence_keys & {
+        "fresh_verification",
+        "verification_command",
+        "verification_result",
+        "test_evidence",
+        "release_gate",
+    }:
+        return False
+    metadata = dict(status.metadata or {})
+    return _has_passed_verification_result(metadata)
+
+
+def _has_passed_verification_result(metadata: Dict[str, Any]) -> bool:
+    command_output = metadata.get("command_output")
+    if isinstance(command_output, dict) and _command_output_passed(command_output):
+        return True
+
+    has_concrete_source = _has_concrete_verification_source(metadata)
+    if has_concrete_source and _value_is_passed(metadata.get("verification_result")):
+        return True
+    if has_concrete_source and _value_is_passed(metadata.get("test_result")):
+        return True
+    if has_concrete_source and _value_is_passed(metadata.get("release_gate")):
+        return True
+
+    results = metadata.get("verification_results") or metadata.get("test_results")
+    if has_concrete_source and isinstance(results, list) and any(_value_is_passed(item) for item in results):
+        return True
+
+    return False
+
+
+def _has_concrete_verification_source(metadata: Dict[str, Any]) -> bool:
+    concrete_keys = {
+        "verification_command",
+        "verification_commands",
+        "test_command",
+        "test_commands",
+        "report_path",
+        "report_paths",
+        "evidence_artifacts",
+    }
+    return any(key in metadata and metadata.get(key) for key in concrete_keys)
+
+
+def _command_output_passed(command_output: Dict[str, Any]) -> bool:
+    command = str(command_output.get("command") or command_output.get("cmd") or "").strip()
+    if not command:
+        return False
+    try:
+        return int(command_output.get("exit_code")) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _value_is_passed(value: Any) -> bool:
+    if isinstance(value, dict):
+        status = value.get("status") or value.get("result") or value.get("outcome")
+        if status is not None:
+            return _value_is_passed(status)
+        if "exit_code" in value:
+            try:
+                return int(value.get("exit_code")) == 0
+            except (TypeError, ValueError):
+                return False
+        return False
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    return normalized in {"pass", "passed", "success", "successful", "ok", "green", "0"}
+
+
 def _require_compound_closure(
     bundle: LargeWorkOrchestrationBundle,
     statuses: Dict[str, SkillApplicationStatus],
@@ -253,6 +356,18 @@ def _require_compound_closure(
             source_skill="development-lifecycle-harness",
             required_skill="compound-engineering-harness",
             reason="after review, compound-engineering-harness must capture learning or record no reusable learning",
+        ))
+        required_next_skills.append("compound-engineering-harness")
+        return
+    if compound_status.status != "applied":
+        issues.append(SkillTransitionIssue(
+            rule="compound_harness_must_be_applied_before_completion",
+            source_skill="compound-engineering-harness",
+            required_skill="compound-engineering-harness",
+            reason=(
+                "compound-engineering-harness must be applied before post-review or final completion; "
+                f"current status is {compound_status.status!r}"
+            ),
         ))
         required_next_skills.append("compound-engineering-harness")
         return

@@ -81,3 +81,14 @@ Another agent should be able to audit a finished session and answer:
 - Were logs, tests, documents, and high-risk actions routed to the appropriate follow-up checks?
 
 The actual_runtime_path is `src.orchestration.kh_front_door.build_kh_front_door`, the repo-root CLI `python -m src.orchestration.kh_front_door`, or the skill-local wrapper `always_on_front_door/scripts/front_door.py`.
+
+## Runtime binding
+
+- Execution level: python-module
+- Implementation targets:
+  - `src.orchestration.kh_front_door.build_kh_front_door`
+  - `src.orchestration.request_classifier.classify_request`
+  - `src.orchestration.plugin_composition.compose_plugin_route`
+  - `src.skills.uaf_skill_catalog.collect_packaged_skills`
+- Application path: run the front-door Python module before project reads, memory lookup, subagent dispatch, or target-folder inspection.
+- Completion rule: do not report this skill as applied until the front-door result records classification, plugin route, skill source, token decision, and applied/skipped/blocked evidence.

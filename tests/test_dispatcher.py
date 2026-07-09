@@ -208,6 +208,18 @@ class AntigravityDispatcherTests(unittest.TestCase):
                     "suppress_progress_panel": True,
                     "memory_root": str(Path(tmp) / ".memory"),
                     "workspace_strategy": "project-local-worktree",
+                    "skill_statuses": {
+                        "verification-before-completion-harness": {
+                            "status": "applied",
+                            "application_mode": "procedural",
+                            "evidence_note": "Native adapter verification passed before completion.",
+                            "evidence_keys": ["fresh_verification", "verification_command"],
+                            "metadata": {
+                                "verification_command": "native-adapter smoke check",
+                                "verification_result": "passed",
+                            },
+                        }
+                    },
                     "goal": {
                         "objective": "build api",
                         "status": "active",

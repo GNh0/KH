@@ -41,3 +41,13 @@ The user did not mention KH, UAF, plugins, skills, harnesses, routing, or orches
 ## Done criteria
 
 The user can give an ordinary task, the host runs intake automatically, and the audit can prove that skill usage was not fabricated.
+
+## Runtime binding
+
+- execution_level: python-module
+- implementation_targets:
+  - `src.orchestration.kh_front_door.build_kh_front_door`
+  - `src.orchestration.request_classifier.classify_request`
+  - `src.orchestration.plugin_composition.compose_plugin_route`
+- actual_runtime_path: `src.orchestration.kh_front_door.build_kh_front_door`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and the front-door/classifier unittest cases before claiming intake behavior is complete.

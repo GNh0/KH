@@ -50,3 +50,13 @@ This harness applies at the end of a feature branch, worktree task, review-fix l
 ## Quality bar
 
 A valid branch finish makes it unambiguous what was changed, what was verified, what was committed or pushed, what remains local, and what cleanup has or has not happened.
+
+## Runtime binding
+
+- Execution level: hybrid-harness
+- Implementation targets:
+  - `src.orchestration.development_progress.DevelopmentRunProgress`
+  - `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts`
+  - `src.orchestration.session_postmortem.analyze_codex_session_jsonl`
+- Application path: run the procedural branch decision after verification evidence and before commit, push, PR, merge, cleanup, or local-only handoff.
+- Completion rule: do not report branch finishing as applied until the branch action, verification state, dirty-worktree treatment, and follow-up/blocked rationale are recorded.

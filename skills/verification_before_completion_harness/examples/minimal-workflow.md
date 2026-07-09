@@ -36,3 +36,13 @@ A KH implementation run has edited three files and is about to report that the t
 - Verification failures are visible in final status.
 - GoalState and progress state contain enough evidence for resume.
 - Catalog validation and the skill smoke check pass.
+
+## Runtime binding
+
+- execution_level: hybrid-harness
+- implementation_targets:
+  - `src.orchestration.session_postmortem.analyze_codex_session_jsonl`
+  - `src.orchestration.gate_evaluators.evaluate_release_gate`
+  - `src.orchestration.development_progress.derive_review_status`
+- actual_runtime_path: `src.orchestration.gate_evaluators.evaluate_release_gate`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and the exact fresh test/build/check command that supports the completion claim.

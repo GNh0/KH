@@ -1048,6 +1048,12 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         | Designer | PR100200.Designer.cs | add explicit GridColumn members | BindingField and Caption match |
         | SQL procedure | sp_PR100200_SAVE procedure | add SAVE @WORKTYPE branch | SP contract passes review |
 
+        ### User directive and approved scope
+        User directive: migrate the confirmed PB outsourcing workflow and preserve the current target style.
+        Approved scope: C# handler, Designer columns, and SAVE branch only. Out-of-scope findings such as
+        unrelated SQL cleanup, library upgrades, or inferred UI convenience logic are proposal-only and do not
+        implement without explicit approval.
+
         ### PB event to C# event mapping
         | PB event | C# method / handler | validation | output |
         | --- | --- | --- | --- |
@@ -1098,6 +1104,108 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertTrue(all(result.metadata["development_spec_coverage"].values()))
         self.assertTrue(all(result.metadata["readiness"].values()))
         self.assertTrue(result.metadata["cross_agent_contract"]["developer_agent_handoff_ready"])
+
+    def test_migration_analysis_document_quality_blocks_missing_user_scope_contract(self):
+        document = """
+        # PR100200 PB-to-C# migration analysis
+
+        Objective: migrate the PowerBuilder production outsourcing workflow for the target operator.
+        PB source evidence: prod_302_a.sru, prod_302_a.srw, DataWindow dw_main, PBL and SRD export.
+        User workflow: button click, selected row validation, popup, save, grid refresh.
+        Target C# implementation scope: WinForms, DevExpress GridColumn members, BindingField assignments,
+        DbParameter-based CallProc, CallViewQuery, Designer.cs changes, and procedure work.
+        Event and call flow: PB event mapping to C# handler with click validation and popup result handling.
+        DB/SP mapping: SELECT, SAVE, INSERT, UPDATE, DELETE, @WORKTYPE, transaction, RAISERROR.
+        Implementation order: analyze PB, update C#, update Designer, update SP, run verification.
+        Constraints and business rules: preserve ORDNUM and ORDSEQ, Korean literals, comments, and row contracts.
+        Manual test scenarios: build verification, manual UI verification, rollback verification, expected DB result.
+        LLM implementation handoff: analysis agent passes this handoff to developer agent with no hidden context.
+
+        ```csharp
+        dbClient.GetDataSetFromSP("sp_PR100200_SELECT", new DbParameter("@WORKTYPE", "LIST"));
+        ```
+
+        ```sql
+        INSERT INTO SA130T (ORGDIV, ORDNUM, ORDSEQ)
+        SELECT A.ORGDIV, A.ORDNUM, A.ORDSEQ
+          FROM PR110T A
+         WHERE A.ORGDIV = @ORGDIV;
+        ```
+
+        ## Cross-agent development specification
+        Analysis agent and developer agent must use this development handoff.
+        target file plan: PR100200.cs, PR100200.Designer.cs, sp_PR100200_SAVE procedure.
+        PB event to C# method mapping: clicked event -> btnSave_Click handler.
+        DataWindow field mapping: DataWindow column ORDNUM -> GridColumn colList_ORDNUM, BindingField ORDNUM, Caption.
+        control layout binding plan: control, TabIndex, BindingField, LabelControl, GridView.
+        SP contract matrix: @WORKTYPE, parameter, result column, DML, procedure contract.
+        style profile contract: author-tagged program key PR100200, fallback program, source hash.
+        implementation task list: implementation task, task list, done criteria, acceptance.
+        verification contract: manual test, expected UI, expected DB, build, rollback.
+        confirmed: PB clicked event. inferred: popup caption. blocked: missing DB schema.
+        """
+
+        result = verify_pb_migration_analysis_document(document)
+
+        self.assertFalse(result.success)
+        self.assertFalse(result.metadata["development_spec_coverage"]["user_directive_scope_contract"])
+        self.assertIn(
+            "user_directive_scope_contract",
+            {
+                issue.get("spec_item")
+                for issue in result.metadata["issues"]
+                if issue["code"] == "migration_analysis_development_spec_missing"
+            },
+        )
+
+    def test_migration_analysis_document_quality_blocks_thin_user_scope_keyword(self):
+        document = """
+        # PR100200 PB-to-C# migration analysis
+
+        Objective: migrate the PowerBuilder production outsourcing workflow for the target operator.
+        PB source evidence: prod_302_a.sru, prod_302_a.srw, DataWindow dw_main, PBL and SRD export.
+        User workflow: button click, selected row validation, popup, save, grid refresh.
+        Target C# implementation scope: WinForms, DevExpress GridColumn members, BindingField assignments,
+        DbParameter-based CallProc, CallViewQuery, Designer.cs changes, and procedure work.
+        Event and call flow: PB event mapping to C# handler with click validation and popup result handling.
+        DB/SP mapping: SELECT, SAVE, INSERT, UPDATE, DELETE, @WORKTYPE, transaction, RAISERROR.
+        Implementation order: analyze PB, update C#, update Designer, update SP, run verification.
+        Constraints and business rules: preserve ORDNUM and ORDSEQ, Korean literals, comments, and row contracts.
+        Manual test scenarios: build verification, manual UI verification, rollback verification, expected DB result.
+        LLM implementation handoff: analysis agent passes this handoff to developer agent with no hidden context.
+
+        ```csharp
+        dbClient.GetDataSetFromSP("sp_PR100200_SELECT", new DbParameter("@WORKTYPE", "LIST"));
+        ```
+
+        ```sql
+        INSERT INTO SA130T (ORGDIV, ORDNUM, ORDSEQ)
+        SELECT A.ORGDIV, A.ORDNUM, A.ORDSEQ
+          FROM PR110T A
+         WHERE A.ORGDIV = @ORGDIV;
+        ```
+
+        ## Cross-agent development specification
+        Analysis agent and developer agent must use this development handoff.
+        target file plan: PR100200.cs, PR100200.Designer.cs, sp_PR100200_SAVE procedure.
+        approved scope: approved scope exists.
+        PB event to C# method mapping: clicked event -> btnSave_Click handler.
+        DataWindow field mapping: DataWindow column ORDNUM -> GridColumn colList_ORDNUM, BindingField ORDNUM, Caption.
+        control layout binding plan: control, TabIndex, BindingField, LabelControl, GridView.
+        SP contract matrix: @WORKTYPE, parameter, result column, DML, procedure contract.
+        style profile contract: author-tagged program key PR100200, fallback program, source hash.
+        implementation task list: implementation task, task list, done criteria, acceptance.
+        verification contract: manual test, expected UI, expected DB, build, rollback.
+        confirmed: PB clicked event. inferred: popup caption. blocked: missing DB schema.
+        """
+
+        result = verify_pb_migration_analysis_document(document)
+
+        self.assertFalse(result.success)
+        details = result.metadata["development_spec_detail_coverage"]["user_directive_scope_contract"]
+        self.assertTrue(details["approved_scope_boundary"])
+        self.assertFalse(details["user_instruction_authority"])
+        self.assertFalse(details["proposal_only_boundary"])
 
     def test_generated_csharp_style_requires_author_tagged_evidence_when_enabled(self):
         missing = verify_migration_generated_csharp_style(

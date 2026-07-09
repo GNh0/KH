@@ -41,3 +41,13 @@ A KH feature worktree has finished implementation and review. The user asked to 
 - Unrelated changes are preserved.
 - Verification and review status are attached to the branch decision.
 - Catalog validation and the skill smoke check pass.
+
+## Runtime binding
+
+- execution_level: hybrid-harness
+- implementation_targets:
+  - `src.orchestration.development_progress.DevelopmentRunProgress`
+  - `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts`
+  - `src.orchestration.session_postmortem.analyze_codex_session_jsonl`
+- actual_runtime_path: `src.orchestration.development_progress.DevelopmentRunProgress`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, git status checks, and relevant branch-finishing tests before reporting a branch decision.

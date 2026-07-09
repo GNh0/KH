@@ -88,3 +88,14 @@ This harness is also the KH-native place to absorb useful external workflow ergo
 A good run is easy for a new session to resume. The next agent should see the latest progress, next task, review state, token decision, Compound handoff, memory candidates, and required next skills without reading the full chat. A good token policy should save context only when it preserves evidence. A good role command should route to existing KH skills instead of creating a new undocumented process.
 
 The harness passes when it makes omissions visible. It fails if the agent can still finish a large task without recording token provider status, progress state, next skills, or resume context.
+
+## Runtime binding
+
+- Execution level: hybrid-harness
+- Implementation targets:
+  - `src.orchestration.workflow_usability_runtime.apply_workflow_usability_runtime`
+  - `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts`
+  - `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider`
+  - `src.orchestration.runtime_memory.record_workflow_memory_candidates`
+- Application path: apply the usability layer during large workflow startup, progress updates, token decisions, Compound handoff, and resume-context creation.
+- Completion rule: do not report this harness as applied until progress state, token provider status, required next skills, and resume/Compound evidence are recorded or blocked.

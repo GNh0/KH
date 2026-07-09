@@ -327,9 +327,9 @@ def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
             evidence_keys=["traceability_matrix"],
         ),
         "verification-before-completion-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Requires fresh verification evidence before completion, commit, push, PR, or release claims.",
+            status="considered_not_needed",
+            application_mode="considered",
+            evidence_note="No completion, commit, push, PR, or release claim has reached the final verification gate yet.",
             evidence_keys=["verification_status", "completion_claim"],
         ),
         "branch-finishing-harness": SkillApplicationStatus(

@@ -49,3 +49,14 @@ This harness should be considered before edits in repositories, especially when 
 ## Quality bar
 
 A valid workspace decision should let another agent know exactly where edits occurred, why that location was safe, what user changes were protected, and what cleanup remains.
+
+## Runtime binding
+
+- Execution level: hybrid-harness
+- Implementation targets:
+  - `src.orchestration.development_progress.WORKSPACE_STRATEGIES`
+  - `skills/worktree_isolation_harness/SKILL.md`
+  - `skills/parallel_orchestration_harness/SKILL.md`
+  - `skills/development_lifecycle_harness/SKILL.md`
+- Application path: choose project-local worktree, host worktree, task folder, or explicit in-place exception before edits or subagent dispatch.
+- Completion rule: do not report workspace isolation as applied until workspace strategy, safe root, in-place exception if any, and cleanup/handoff status are recorded.

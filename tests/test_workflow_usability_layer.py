@@ -563,7 +563,7 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             )
 
             self.assertTrue(workflow_usability_enabled(metadata))
-            self.assertEqual(result.status, "complete")
+            self.assertEqual(result.status, "blocked")
             self.assertTrue(Path(result.progress_path).exists())
             self.assertIn("KH Progress", result.progress_panel)
             self.assertTrue(Path(result.host_progress_panel_path).exists())
@@ -585,8 +585,8 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertIn("memory_candidates_recorded", result.evidence)
             self.assertTrue(Path(result.memory_state["store"]["candidates_path"]).exists())
             self.assertTrue(Path(result.compound["paths"]["compound_handoff"]).exists())
-            self.assertTrue(result.skill_transition_handoff["valid"])
-            self.assertEqual(result.required_next_skills, [])
+            self.assertFalse(result.skill_transition_handoff["valid"])
+            self.assertIn("verification-before-completion-harness", result.required_next_skills)
             progress = read_development_progress(result.progress_path)
             self.assertTrue(validate_development_progress(progress)["valid"])
             self.assertEqual(progress.token_optimizer_status, "used")
@@ -620,7 +620,15 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
                         role="implementer",
                         status="success",
                         message="done",
-                        metadata={"evidence": ["task runner completed"]},
+                        metadata={
+                            "evidence": ["task runner completed"],
+                            "command_output": {
+                                "command": "python -m unittest tests.test_workflow_usability_layer",
+                                "stdout": "OK",
+                                "stderr": "",
+                                "exit_code": 0,
+                            },
+                        },
                     )
                 ],
                 gate_results=[{"role": "code-quality-reviewer", "status": "passed"}],

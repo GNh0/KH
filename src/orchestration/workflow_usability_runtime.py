@@ -231,7 +231,7 @@ def _validate_runtime_skill_transitions(
         workspace_strategy=progress.workspace_strategy or "in-place",
         token_optimizer_status=progress.token_optimizer_status,
         token_optimizer_status_reason=progress.token_optimizer_status_reason,
-        overrides=_runtime_skill_status_overrides(metadata, token_optimization, memory_state),
+        overrides=_runtime_skill_status_overrides(metadata, token_optimization, memory_state, progress),
         parallel_strategy_decision=str(
             metadata.get("parallel_strategy_decision")
             or progress.metadata.get("parallel_strategy_decision")
@@ -259,6 +259,7 @@ def _runtime_skill_status_overrides(
     metadata: Dict[str, Any],
     token_optimization: Dict[str, Any],
     memory_state: Dict[str, Any],
+    progress: DevelopmentRunProgress,
 ) -> Dict[str, Dict[str, Any]]:
     overrides = _metadata_skill_status_overrides(metadata.get("skill_statuses", {}))
     overrides["compound-engineering-harness"] = {
@@ -291,14 +292,90 @@ def _runtime_skill_status_overrides(
             "blocked_reason": str(token_optimization.get("token_optimizer_status_reason", "blocked")),
         }
 
-    if memory_state.get("status") == "candidates_recorded":
+    if memory_state.get("status") in {"candidates_recorded", "already_recorded"}:
         overrides["memory-state-harness"] = {
             "status": "applied",
             "application_mode": "runtime",
-            "evidence_note": "Runtime memory candidate recorder persisted scoped memory candidates.",
+            "evidence_note": "Runtime memory candidate recorder persisted or confirmed scoped memory candidates.",
             "evidence_keys": ["memory_candidates_recorded"],
+            "metadata": {
+                "record_ids": list(memory_state.get("recorded_ids", []) or []),
+                "skipped_ids": list(memory_state.get("skipped_ids", []) or []),
+                "memory_state_status": str(memory_state.get("status", "")),
+            },
+        }
+    if (
+        "verification-before-completion-harness" not in overrides
+        and _progress_has_fresh_verification(progress)
+    ):
+        overrides["verification-before-completion-harness"] = {
+            "status": "applied",
+            "application_mode": "runtime",
+            "evidence_note": "Workflow runtime derived fresh verification evidence from current task and gate progress.",
+            "evidence_keys": ["fresh_verification", "verification_result"],
+            "metadata": {
+                "verification_result": "passed",
+                "task_status": progress.task_status or "complete",
+                "review_status": progress.review_status or "passed",
+                "verification_commands": _progress_verification_commands(progress),
+            },
         }
     return overrides
+
+
+def _progress_has_fresh_verification(progress: DevelopmentRunProgress) -> bool:
+    tasks = list(progress.tasks or [])
+    if not tasks:
+        return False
+    if any(task.status != "complete" for task in tasks):
+        return False
+    if progress.review_status in {"blocked", "review_incomplete"}:
+        return False
+    if any(task.green_status not in {"passed", "not_applicable"} for task in tasks):
+        return False
+    if any(task.spec_review_status in {"blocked", "timeout", "review_incomplete"} for task in tasks):
+        return False
+    if any(task.code_quality_review_status in {"blocked", "timeout", "review_incomplete"} for task in tasks):
+        return False
+    return all(_task_has_fresh_verification(task) for task in tasks)
+
+
+def _task_has_fresh_verification(task: Any) -> bool:
+    for item in task.verification:
+        status = str(item.get("status") or item.get("result") or item.get("verification_result") or "").strip().lower()
+        command = str(item.get("command") or item.get("verification_command") or "").strip()
+        report = str(item.get("report_path") or item.get("artifact_path") or "").strip()
+        if status in {"passed", "success", "ok"} and (command or report):
+            return True
+        if status in {"failed", "error", "blocked", "timeout"}:
+            return False
+    workflow_result = dict(task.metadata.get("workflow_task_result", {}) or {})
+    result_metadata = dict(workflow_result.get("metadata", {}) or {})
+    command_output = dict(result_metadata.get("command_output", {}) or {})
+    command = str(command_output.get("command", "")).strip()
+    if not command:
+        return False
+    try:
+        exit_code = int(command_output.get("exit_code", 1))
+    except (TypeError, ValueError):
+        exit_code = 1
+    return exit_code == 0
+
+
+def _progress_verification_commands(progress: DevelopmentRunProgress) -> List[str]:
+    commands: List[str] = []
+    for task in progress.tasks:
+        for item in task.verification:
+            command = str(item.get("command") or item.get("verification_command") or "").strip()
+            if command:
+                commands.append(command)
+        workflow_result = dict(task.metadata.get("workflow_task_result", {}) or {})
+        result_metadata = dict(workflow_result.get("metadata", {}) or {})
+        command_output = dict(result_metadata.get("command_output", {}) or {})
+        command = str(command_output.get("command", "")).strip()
+        if command:
+            commands.append(command)
+    return commands
 
 
 def _workflow_usability_runtime_status(

@@ -38,3 +38,13 @@ A SaaS MVP plan has six tasks. Task 2 is complete, Task 3 should add validation 
 - Review and verification evidence are attached to the task.
 - Resume can continue from `next_task`.
 - Catalog validation and the skill smoke check pass.
+
+## Runtime binding
+
+- execution_level: hybrid-harness
+- implementation_targets:
+  - `src.orchestration.development_progress.DevelopmentTaskProgress`
+  - `src.orchestration.progress_panel.render_progress_panel`
+  - `src.orchestration.skill_transitions.validate_skill_transitions`
+- actual_runtime_path: `src.orchestration.development_progress.DevelopmentTaskProgress`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and progress/skill-transition tests before moving to the next task.

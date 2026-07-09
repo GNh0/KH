@@ -45,3 +45,13 @@ This harness applies to code failures, test failures, local server issues, brows
 ## Quality bar
 
 A valid debugging run should let another agent see the original symptom, the root cause, the smallest patch, the regression evidence, and exactly why the final verification passed or remains blocked.
+
+## Runtime binding
+
+- Execution level: hybrid-harness
+- Implementation targets:
+  - `src.harness.evaluator.Evaluator`
+  - `src.orchestration.gate_evaluators.build_review_finding`
+  - `src.orchestration.gate_evaluators.build_qa_check`
+- Application path: run diagnosis before patching, then isolate the smallest fix and attach regression evidence before completion.
+- Completion rule: do not report this harness as applied until original symptom, root cause, patch boundary, verification command, and pass/fail/blocked status are recorded.

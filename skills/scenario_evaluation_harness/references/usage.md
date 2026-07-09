@@ -89,3 +89,14 @@ If the matrix grows too large or slow, remove duplicate prompts rather than weak
 ## Quality bar
 
 A useful baseline run covers at least four SIDE groups, seven domains, and all four signal categories. A useful stress run covers at least 190 scenarios, at least eight SIDE groups, at least 25 domains, and more than 360 meaningful signals. A useful interactive SIDE smoke covers every packaged skill/harness, has no invented skill names, and reports token usage savings where optimization is expected. A useful interactive SIDE stress run covers at least 70 turns, 14 conversations, a 10-turn conversation, three multi-skill overlap cases, and five token-usage comparison cases. A release-quality run has no unexpected failures, a durable trace for investigations, and tests that lock in any newly fixed boundary.
+
+## Runtime binding
+
+- Execution level: python-module
+- Implementation targets:
+  - `src.orchestration.scenario_evaluator.default_scenarios`
+  - `src.orchestration.scenario_evaluator.stress_scenarios`
+  - `src.orchestration.scenario_evaluator.evaluate_scenarios`
+  - `src.orchestration.interactive_side_evaluator.evaluate_skill_side_turns`
+- Application path: run deterministic scenario matrices after routing or skill changes and before release-ready claims.
+- Completion rule: do not report scenario evaluation as applied until pass/fail counts, unexpected failures, signal categories, and durable trace/evidence are recorded.

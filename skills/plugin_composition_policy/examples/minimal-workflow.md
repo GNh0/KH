@@ -84,3 +84,13 @@ Continuation pressure test:
 - `tests.test_plugin_composition_policy` passes.
 - `plugin-composition-policy` is listed in the packaged skill catalog and plugin manifests.
 - actual_runtime_path: `src.orchestration.plugin_composition.compose_plugin_route`.
+
+## Runtime binding
+
+- execution_level: python-module
+- implementation_targets:
+  - `src.orchestration.plugin_composition.compose_plugin_route`
+  - `src.orchestration.plugin_composition.PluginCompositionDecision`
+  - `src.orchestration.request_classifier.classify_request`
+- actual_runtime_path: `src.orchestration.plugin_composition.compose_plugin_route`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and `python -m unittest tests.test_plugin_composition_policy` before claiming provider routing is complete.

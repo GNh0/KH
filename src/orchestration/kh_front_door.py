@@ -190,12 +190,11 @@ class KhFrontDoorResult:
             "execution_gate": _compact_execution_gate(self.execution_gate),
             "token_optimizer": token_summary,
             "skill_source": _compact_skill_source(self.skill_source),
+            "immediate_next_skills": list(self.immediate_next_skills),
         }
         domain = self.classification.get("domain")
         if domain and domain != "general":
             payload["classification"]["domain"] = domain
-        if self.immediate_next_skills:
-            payload["immediate_next_skills"] = list(self.immediate_next_skills)
         action_codes = _compact_required_next_action_codes(
             self.execution_authorization,
             self.immediate_next_skills,
@@ -649,7 +648,13 @@ def _recommended_skills(classification: Dict[str, Any], plugin_route: Dict[str, 
     skills.extend(str(item) for item in classification.get("required_harnesses", []))
     skills.extend(str(item) for item in classification.get("cross_cutting", []))
     controller = plugin_route.get("controller", {}) or {}
-    if controller.get("provider_id") == "kh":
+    if (
+        controller.get("provider_id") == "kh"
+        and (
+            classification.get("recommended_execution") != "direct_answer"
+            or classification.get("domain") == "general"
+        )
+    ):
         skills.append("workflow-usability-harness")
     if _needs_sql_formatting_style_harness(classification, plugin_route):
         skills.append("sql-formatting-style-harness")
@@ -804,6 +809,9 @@ def _immediate_next_skills(
         ]
         return [skill for skill in ordered if skill in recommended][:2]
 
+    if status == "execution_allowed_readonly_analysis":
+        return credential_first
+
     if "localized_patch_continuation" in set(classification.get("reasons", []) or []):
         return credential_first
 
@@ -818,16 +826,31 @@ def _immediate_next_skills(
         return _dedupe([*credential_first, *(["brainstorming-harness"] if "brainstorming-harness" in recommended else [])])
 
     if status == "blocked_until_large_work_preflight":
-        ordered = [
-            "credential-safety-harness",
-            "goal-state-harness",
-            "pb-to-csharp-migration-harness",
-            "workflow-usability-harness",
-            "host-agent-orchestration",
-            "parallel-orchestration-harness",
-            "role-execution-audit-harness",
-            "verification-before-completion-harness",
-        ]
+        if "full_skill_lifecycle_audit_request" in set(classification.get("reasons", []) or []):
+            ordered = [
+                "credential-safety-harness",
+                "goal-state-harness",
+                "skill-catalog",
+                "pb-to-csharp-migration-harness",
+                "workflow-usability-harness",
+                "host-agent-orchestration",
+                "role-execution-audit-harness",
+                "scenario-evaluation-harness",
+                "review-gate-harness",
+                "verification-before-completion-harness",
+                "compound-engineering-harness",
+            ]
+        else:
+            ordered = [
+                "credential-safety-harness",
+                "goal-state-harness",
+                "pb-to-csharp-migration-harness",
+                "workflow-usability-harness",
+                "host-agent-orchestration",
+                "parallel-orchestration-harness",
+                "role-execution-audit-harness",
+                "verification-before-completion-harness",
+            ]
         return [skill for skill in ordered if skill in recommended][:4]
 
     if _needs_sql_formatting_style_harness(classification, plugin_route):
@@ -835,6 +858,14 @@ def _immediate_next_skills(
 
     if controller_id and controller_id not in {"kh", "none"}:
         return credential_first
+
+    if "compound_handoff_request" in set(classification.get("reasons", []) or []):
+        return _dedupe(
+            [
+                *credential_first,
+                *(["compound-engineering-harness"] if "compound-engineering-harness" in recommended else []),
+            ]
+        )
 
     ordered = [
         "credential-safety-harness",
@@ -1673,6 +1704,59 @@ def _execution_gate(
     recommended_skills: Sequence[str],
 ) -> Dict[str, Any]:
     reasons = set(classification.get("reasons", []) or [])
+    if reasons & {"readonly_source_audit_request", "readonly_source_condition_question"}:
+        return {
+            "status": "execution_allowed_readonly_analysis",
+            "can_execute": True,
+            "reason": (
+                "Read-only source analysis is allowed, but user intent explicitly excludes edits or implementation."
+            ),
+            "required_before_execution": [],
+            "allowed_setup_actions": ["read_target_source", "inspect_current_artifact", "report_findings"],
+            "blocked_actions": [
+                "implementation",
+                "file_writes",
+                "db_writes",
+                "apply_patch",
+                "Set-Content",
+                "Out-File",
+                "Move-Item",
+                "Copy-Item",
+                "destructive_commands",
+                "completion_claim_for_unrequested_edits",
+            ],
+        }
+    if "localized_patch_continuation" in reasons:
+        return {
+            "status": "execution_allowed_localized_patch_with_scope_lock",
+            "can_execute": True,
+            "reason": (
+                "A bounded current-artifact patch is allowed only inside the user-specified target, selector, "
+                "line, pasted block, or active artifact scope."
+            ),
+            "required_before_execution": [
+                "localized_scope_lock",
+                "target_artifact_confirmed",
+                "out_of_scope_changes_blocked",
+            ],
+            "allowed_setup_actions": [
+                "read_target_source",
+                "inspect_current_artifact",
+                "apply_bounded_patch",
+                "report_localized_patch_evidence",
+            ],
+            "blocked_actions": [
+                "parent_or_sibling_folder_scan",
+                "broad_source_exploration",
+                "unrelated_file_reads",
+                "unrequested_refactor",
+                "new_feature_scope",
+                "unrequested_test_generation",
+                "architecture_change",
+                "dependency_upgrade",
+                "completion_claim_for_unrequested_edits",
+            ],
+        }
     if "user_stop_or_pause_request" in reasons:
         return {
             "status": "blocked_until_user_stop_checkpoint",
@@ -1845,6 +1929,24 @@ def _execution_gate(
             ]
         ):
             required_before_execution.append("deliverable_render_quality_plan")
+        if "full_skill_lifecycle_audit_request" in reasons:
+            required_before_execution = _dedupe(
+                [
+                    *required_before_execution,
+                    *[
+                        str(item)
+                        for item in classification.get("evidence_required", []) or []
+                        if str(item)
+                        in {
+                            "full_skill_catalog_matrix",
+                            "front_door_lifecycle_trace",
+                            "skill_execution_evidence_matrix",
+                            "scenario_regression_results",
+                            "compound_handoff",
+                        }
+                    ],
+                ]
+            )
         return {
             "status": "blocked_until_large_work_preflight",
             "can_execute": False,

@@ -45,3 +45,14 @@ The goal is not to run every KH skill heavily. The goal is to expose the right s
 The workflow is done when a new agent can open the project, call the session-start context helper, see recommended reads, view the progress panel, find the Compound handoff, and know which next KH skill should run. For completed work, the Compound handoff must either contain learning candidates with update and regression plans or an explicit no-reusable-learning rationale.
 
 No durable memory is promoted by this minimal workflow. Durable memory requires explicit user approval and scope.
+
+## Runtime binding
+
+- execution_level: hybrid-harness
+- implementation_targets:
+  - `src.orchestration.workflow_usability_runtime.apply_workflow_usability_runtime`
+  - `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts`
+  - `src.orchestration.token_optimizer_provider.resolve_token_optimizer_provider`
+  - `src.orchestration.runtime_memory.record_workflow_memory_candidates`
+- actual_runtime_path: `src.orchestration.workflow_usability_runtime.apply_workflow_usability_runtime`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and workflow usability/runtime tests before claiming progress, token, memory, or Compound handoff behavior is complete.

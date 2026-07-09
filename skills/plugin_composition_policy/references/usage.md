@@ -71,3 +71,13 @@ Provider capability examples:
 ## Quality bar
 
 The policy is correct when a user can start naturally without choosing a plugin, installed providers can change without breaking routing, and plugin mandatory rules apply only inside a selected delegated scope. It is not correct if every creative request is captured by one provider, if KH is forced when another provider is clearly being resumed, or if hybrid tasks are flattened into an awkward single-plugin route.
+
+## Runtime binding
+
+- Execution level: python-module
+- Implementation targets:
+  - `src.orchestration.plugin_composition.compose_plugin_route`
+  - `src.orchestration.plugin_composition.PluginCompositionDecision`
+  - `src.orchestration.request_classifier.classify_request`
+- Application path: run provider composition after request classification and before applying any provider-specific MUST/ALWAYS rule.
+- Completion rule: do not report this skill as applied until the route, controller, assistants, ignored self-forcing providers, and unavailable capability fallbacks are recorded.

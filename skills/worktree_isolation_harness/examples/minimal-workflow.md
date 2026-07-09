@@ -39,3 +39,14 @@ The user asks for a multi-file SaaS feature in a Git repository. The current che
 - In-place exceptions are explicit.
 - Subagent and branch finishing stages can reuse the strategy evidence.
 - Catalog validation and the skill smoke check pass.
+
+## Runtime binding
+
+- execution_level: hybrid-harness
+- implementation_targets:
+  - `src.orchestration.development_progress.WORKSPACE_STRATEGIES`
+  - `skills/worktree_isolation_harness/SKILL.md`
+  - `skills/parallel_orchestration_harness/SKILL.md`
+  - `skills/development_lifecycle_harness/SKILL.md`
+- actual_runtime_path: `src.orchestration.development_progress.WORKSPACE_STRATEGIES`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, git status/root checks, and the workflow tests that use the selected workspace strategy.

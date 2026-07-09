@@ -201,6 +201,17 @@ PB_MIGRATION_DEVELOPMENT_SPEC_RULES = {
         r"\bprocedure\b",
         r"\ud30c\uc77c\s*\uacc4\ud68d",
     ),
+    "user_directive_scope_contract": (
+        r"\buser\s+directive\b",
+        r"\bapproved\s+scope\b",
+        r"\bexplicit\s+approval\b",
+        r"\bout[-\s]?of[-\s]?scope\b",
+        r"\bproposal[-\s]?only\b",
+        r"\bdo\s+not\s+implement\b",
+        r"\uc0ac\uc6a9\uc790\s*\uc9c0\uc2dc",
+        r"\uc2b9\uc778\s*\ubc94\uc704",
+        r"\uc81c\uc548\s*\uc804\uc6a9",
+    ),
     "pb_to_csharp_event_mapping": (
         r"\bPB\s+event\b",
         r"\bC#\s+(?:method|handler|event)\b",
@@ -1455,6 +1466,44 @@ def build_pb_to_csharp_migration_plan(
     )
 
 
+def _user_directive_scope_contract_coverage(text: str) -> Dict[str, bool]:
+    """Check the user-scope lock as a small contract, not a one-word match."""
+    source = str(text or "")
+    rule_groups = {
+        "user_instruction_authority": (
+            r"\buser\s+directive\b",
+            r"\blatest\s+user\s+instruction\b",
+            r"\bpasted\s+(?:current\s+)?(?:code|sql|source)\b",
+            r"\bnamed\s+path\b",
+            r"\bscreenshot\b",
+            r"\bverified\s+artifact\b",
+            r"\uc0ac\uc6a9\uc790\s*\uc9c0\uc2dc",
+            r"\ubd99\uc5ec\uc900\s*(?:\ud604\uc7ac\s*)?(?:\ucf54\ub4dc|SQL|\uc18c\uc2a4)",
+        ),
+        "approved_scope_boundary": (
+            r"\bapproved\s+scope\b",
+            r"\bapproved\s+edits?\b",
+            r"\bexact\s+requested\s+work\b",
+            r"\bexcluded\s+changes?\b",
+            r"\bout[-\s]?of[-\s]?scope\b",
+            r"\uc2b9\uc778\s*\ubc94\uc704",
+            r"\uc81c\uc678\s*\ubcc0\uacbd",
+        ),
+        "proposal_only_boundary": (
+            r"\bproposal[-\s]?only\b",
+            r"\bexplicit\s+approval\b",
+            r"\bdo\s+not\s+implement\b",
+            r"\brequire(?:s|d)?\s+approval\b",
+            r"\uc81c\uc548\s*\uc804\uc6a9",
+            r"\uba85\uc2dc\s*\uc2b9\uc778",
+        ),
+    }
+    return {
+        name: any(re.search(pattern, source, flags=re.IGNORECASE) for pattern in patterns)
+        for name, patterns in rule_groups.items()
+    }
+
+
 def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
     """Require a composition- and evidence-complete PB-to-C# analysis handoff before C# generation."""
     text = str(markdown_text or "")
@@ -1468,6 +1517,7 @@ def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
     section_coverage: Dict[str, bool] = {}
     evidence_anchor_coverage: Dict[str, bool] = {}
     development_spec_coverage: Dict[str, bool] = {}
+    development_spec_detail_coverage: Dict[str, Dict[str, bool]] = {}
     readiness: Dict[str, bool] = {}
     issues: List[Dict[str, Any]] = []
 
@@ -1521,7 +1571,12 @@ def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
             )
 
     for item, patterns in PB_MIGRATION_DEVELOPMENT_SPEC_RULES.items():
-        covered = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+        if item == "user_directive_scope_contract":
+            detail = _user_directive_scope_contract_coverage(text)
+            development_spec_detail_coverage[item] = detail
+            covered = all(detail.values())
+        else:
+            covered = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
         development_spec_coverage[item] = covered
         if not covered:
             issues.append(
@@ -1529,6 +1584,11 @@ def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
                     "code": "migration_analysis_development_spec_missing",
                     "severity": "error",
                     "spec_item": item,
+                    "missing_detail": [
+                        name
+                        for name, present in development_spec_detail_coverage.get(item, {}).items()
+                        if not present
+                    ],
                     "message": (
                         "The PB-to-C# analysis handoff must be detailed enough for a separate developer agent "
                         "to implement from the analysis output without re-inferring PB behavior."
@@ -1550,6 +1610,7 @@ def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
         "section_coverage": section_coverage,
         "evidence_anchor_coverage": evidence_anchor_coverage,
         "development_spec_coverage": development_spec_coverage,
+        "development_spec_detail_coverage": development_spec_detail_coverage,
         "cross_agent_contract": {
             "analysis_agent_output": "migration analysis plus development specification",
             "developer_agent_input": "same document; no hidden chat context or source re-inference required",

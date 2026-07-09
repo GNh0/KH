@@ -191,6 +191,18 @@ class WorkflowDispatchTests(unittest.TestCase):
         metadata["token_optimizer_provider"] = "hybrid"
         metadata["suppress_progress_panel"] = True
         metadata["workspace_strategy"] = "project-local-worktree"
+        metadata["skill_statuses"] = {
+            "verification-before-completion-harness": {
+                "status": "applied",
+                "application_mode": "procedural",
+                "evidence_note": "Local workflow smoke verification passed before completion.",
+                "evidence_keys": ["fresh_verification", "verification_command"],
+                "metadata": {
+                    "verification_command": "local workflow smoke check",
+                    "verification_result": "passed",
+                },
+            }
+        }
         metadata["goal"] = {
             "objective": "build api",
             "status": "active",

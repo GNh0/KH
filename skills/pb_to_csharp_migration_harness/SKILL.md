@@ -41,6 +41,11 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - `pasted-source`: the user pasted SRU/SRW/SRD/C#/SQL; treat pasted text as authoritative.
    - `partial-reference`: some exported PB, converter, C# samples, SP text, or DB access exists.
    - `full-reference`: exported PB source, target C# samples, SP style reference, and optional DB verification are available.
+   Scope lock before implementation:
+   - treat the latest explicit user instruction, pasted current code, pasted SQL, screenshot, named path, and verified source artifact as higher priority than model preference or generic cleanup advice;
+   - keep `confirmed`, `inferred`, `blocked`, and `proposal-only` findings separate in analysis and final reports;
+   - do not implement out-of-scope fixes, inferred UI convenience logic, SQL cleanup, dependency upgrades, or alternate architecture just because they look better;
+   - when the user asks for a review, analysis, or style correction, return findings and proposed changes unless they explicitly approve edits.
 2. Build a `pb-to-csharp` migration plan with `src.skills.pb_to_csharp_migration.build_pb_to_csharp_migration_plan`.
 3. Resolve exact identifiers before broad filtering:
    - map requested program, PB object, DataWindow, table, procedure, C# class, Designer member, grid, and control names before making style or migration claims;
@@ -54,7 +59,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
    - trace `.sru` entrypoints, `.srw` window logic, and linked `.srd` DataWindows;
    - never write exports into the source PBL tree.
 5. If only bundled references are available, use the packaged PB export and analysis rules to produce a bounded plan, not a false claim of source parity.
-6. Before generating C# implementation code, produce and verify a substantial migration analysis plus development specification `.md` handoff. The 019f178e PR100200/PROD_302_A analysis is the minimum composition-quality floor, not a line-count target: it must be detailed enough for a separate developer agent to implement from the analysis output without hidden chat context or source re-inference. The handoff must cover objective/operator, PB source evidence, user workflow, C# scope, event/call flow, DB/SP mapping, transaction/error behavior, implementation order, constraints/business rules, manual tests, LLM handoff, target file plan, PB-event-to-C# mapping, DataWindow/control/BindingField mapping, SP contract matrix, style-profile/fallback basis, implementation task breakdown, verification contract, and confirmed/inferred/blocked split. Run `verify_pb_migration_analysis_document` or record a blocked reason before proceeding.
+6. Before generating C# implementation code, produce and verify a substantial migration analysis plus development specification `.md` handoff. The 019f178e PR100200/PROD_302_A analysis is the minimum composition-quality floor, not a line-count target: it must be detailed enough for a separate developer agent to implement from the analysis output without hidden chat context or source re-inference. The handoff must cover objective/operator, PB source evidence, user workflow, C# scope, event/call flow, DB/SP mapping, transaction/error behavior, implementation order, constraints/business rules, manual tests, LLM handoff, target file plan, user directive and approved scope, PB-event-to-C# mapping, DataWindow/control/BindingField mapping, SP contract matrix, style-profile/fallback basis, implementation task breakdown, verification contract, and confirmed/inferred/blocked/proposal-only split. Run `verify_pb_migration_analysis_document` or record a blocked reason before proceeding.
 7. Map DataWindow fields/layout:
    - use `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`, `resolve_csharp_grid_column_prefix`, `resolve_csharp_grid_control_names`, and `generate_devexpress_grid_xml` for DataWindowToXml-compatible grid columns, matched captions, C# grid names, C# column names, and converter GridView defaults;
    - treat that mapping as grid-column scaffolding, not full PB coordinate or control migration;
@@ -98,6 +103,7 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - PB source trace summary: PBL/object, `.sru`, `.srw`, linked `.srd`, event/retrieve/update/save paths, and missing evidence.
 - Identifier resolution summary: requested program/object/DataWindow/table/procedure/control, exact match, no-hit/partial-hit/ambiguous-hit status, search scope, and fallback basis.
 - Migration analysis plus development specification `.md` handoff quality result: required section coverage, evidence-anchor coverage, development-spec coverage, cross-agent developer handoff readiness, telemetry counts for review only, and blocked reason when the handoff is not implementation-ready.
+- User directive and approved scope contract: exact user-requested work, explicitly approved edits, out-of-scope observations, proposal-only findings, and unapproved implementation blockers.
 - Confirmed vs inferred behavior map when PB source is absent and the user provided only behavior descriptions.
 - DataWindow mapping summary: field names, generated grid column names, unsupported layout semantics, and converter fallback status.
 - DataWindow naming summary: selected `grd*/gvw*` names, selected `col*_<COLUMN>` prefix, matched captions, and fallback fields when captions were not provable.
@@ -121,8 +127,11 @@ description: Use when migrating, analyzing, planning, reviewing, or implementing
 - Do not treat missing PblScripter as missing export capability when direct ORCA is available. Direct ORCA is a first-class export provider, but it must use a matching PB runtime/ORCA version.
 - Do not open or export an unknown-version PBL as if source evidence is proven. Probe/list first, record the suspected PB version, and block full source parity until the version/runtime is confirmed.
 - Do not claim full PB behavior parity from binary strings or file names alone.
+- Do not treat a user requirement as vague just because implementation details are missing. Preserve the explicit requested scope, ask or block for missing evidence, and keep agent-suggested improvements separate from approved work.
+- Do not let the agent's own discovery outrank the user's latest instruction, pasted current code, named path, screenshot, or verified artifact.
+- Do not implement proposal-only findings unless the user explicitly approves them.
 - Do not start generated C# implementation from a short log-level analysis. The migration analysis `.md` handoff must be compositionally as useful as the 019f178e baseline and must pass `verify_pb_migration_analysis_document` or remain blocked. Do not judge quality by raw line count, heading count, or code-block count.
-- Do not let an analysis agent hand off only narrative notes to a developer agent. The handoff must include target file plan, PB-to-C# event mapping, DataWindow/control/BindingField mapping, SP contract matrix, implementation task breakdown, verification contract, and confirmed/inferred/blocked split.
+- Do not let an analysis agent hand off only narrative notes to a developer agent. The handoff must include target file plan, user directive and approved scope, PB-to-C# event mapping, DataWindow/control/BindingField mapping, SP contract matrix, implementation task breakdown, verification contract, and confirmed/inferred/blocked/proposal-only split.
 - Do not treat DataWindowToXml-style output as a full visual layout migration; it is a column-to-grid XML helper.
 - Do not search the DB for KH-authored procedures on every run; use the fixed packaged SP style unless the user explicitly asks to refresh it.
 - Do not treat TY/C_KONE110, KoneLib, or any other project name as the universal C# baseline. They are sample references only when the target project provides them.

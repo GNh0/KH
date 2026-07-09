@@ -79,6 +79,35 @@ class RuntimeMemoryTests(unittest.TestCase):
             self.assertEqual(result["blocked"][0]["record_id"], "external-only")
             self.assertFalse(memory_root.exists())
 
+    def test_duplicate_workflow_memory_candidate_still_has_state_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            memory_root = root / ".memory"
+            candidate = MemoryRecord(
+                record_id="repeat-lesson",
+                kind="lesson",
+                content="Repeat candidate should not block a later workflow handoff.",
+                scope="project",
+                source="test",
+            )
+
+            first = record_workflow_memory_candidates(
+                str(root),
+                {"memory_root": str(memory_root), "memory_provider": "local"},
+                [candidate],
+            )
+            second = record_workflow_memory_candidates(
+                str(root),
+                {"memory_root": str(memory_root), "memory_provider": "local"},
+                [candidate],
+            )
+
+            self.assertEqual(first["status"], "candidates_recorded")
+            self.assertEqual(second["status"], "already_recorded")
+            self.assertEqual(second["recorded_count"], 0)
+            self.assertEqual(second["skipped_count"], 1)
+            self.assertIn("memory_candidates_recorded", second["evidence"])
+
     def test_active_memory_preflight_recalls_and_writes_bounded_prompt_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

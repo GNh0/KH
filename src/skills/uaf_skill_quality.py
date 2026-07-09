@@ -314,10 +314,20 @@ def audit_skill_packaging_quality(
         for item in skill_reports
         if item["quality_score"] < item["minimum_required_score"]
     ]
+    skills_with_quality_gaps = [
+        {
+            "name": item["name"],
+            "score": item["quality_score"],
+            "gaps": item["quality_gaps"],
+        }
+        for item in skill_reports
+        if item["quality_gaps"]
+    ]
     lowest_score = min((item["quality_score"] for item in skill_reports), default=0.0)
     return {
         "success": not packaging_issues and not low_quality,
         "quality_success": not low_quality,
+        "quality_gap_count": len(skills_with_quality_gaps),
         "total_skills": len(skill_reports),
         "valid_skills": sum(1 for item in skill_reports if item["valid"]),
         "invalid_skills": sum(1 for item in skill_reports if not item["valid"]),
@@ -330,6 +340,7 @@ def audit_skill_packaging_quality(
         "required_support_files": sorted(REQUIRED_SUPPORT_FILES),
         "smoke_scripts_executed": bool(run_smoke_scripts),
         "low_quality_skills": low_quality,
+        "skills_with_quality_gaps": skills_with_quality_gaps,
         "skills": sorted(skill_reports, key=lambda item: item["name"]),
     }
 
@@ -525,7 +536,7 @@ def _score_skill_quality(
         "example must expose actual runtime path",
     )
 
-    _add(components, "failure_safety", 0.25, "## Common mistakes" in skill_md, gaps, "SKILL.md needs common mistakes")
+    _add(components, "failure_safety", 0.25, "## common mistakes" in skill_md.lower(), gaps, "SKILL.md needs common mistakes")
     _add(components, "failure_safety", 0.25, "## Failure handling" in usage, gaps, "usage reference needs failure handling")
     _add(components, "failure_safety", 0.20, "do not" in combined, gaps, "skill should include explicit do-not constraints")
     _add(
@@ -1198,6 +1209,8 @@ def main() -> int:
             "invalid_skills": report["invalid_skills"],
             "lowest_quality_score": report["lowest_quality_score"],
             "low_quality_skills": report["low_quality_skills"],
+            "quality_gap_count": report["quality_gap_count"],
+            "skills_with_quality_gaps": report["skills_with_quality_gaps"],
         }, ensure_ascii=False, indent=2))
         return 0 if report["success"] else 1
     print(json.dumps(report, ensure_ascii=False, indent=2))

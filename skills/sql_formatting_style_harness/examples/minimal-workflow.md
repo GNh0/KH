@@ -39,3 +39,14 @@ An agent formats a stored procedure and claims it followed the host-local `sql-f
 - Style checks pass.
 - DB/semantic limits are explicitly reported.
 - The host-local `sql-formatting` skill remains the formatter; KH only verifies evidence.
+
+## Runtime binding
+
+- execution_level: python-module
+- implementation_targets:
+  - `src.skills.sql_formatting_style.verify_sql_formatting_style`
+  - `src.skills.sql_formatting_style.resolve_style_contract_source`
+  - `src.skills.sql_formatting_style.extract_powerbuilder_sql_fragments`
+  - `src.skills.sql_formatting_style.build_powerbuilder_sql_validation_plan`
+- actual_runtime_path: `src.skills.sql_formatting_style.verify_sql_formatting_style`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and `python -m unittest tests.test_sql_formatting_style_harness` before emitting SQL style claims.

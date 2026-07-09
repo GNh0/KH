@@ -42,3 +42,13 @@ The agent must classify the request before choosing a UAF runtime depth. The goa
 - High-risk prompts include evidence and risk requirements.
 - The selected runtime depth is the lightest route that can satisfy the request safely.
 - No user-facing deliverables or hidden state are created by classification alone.
+
+## Runtime binding
+
+- execution_level: python-module
+- implementation_targets:
+  - `src.orchestration.request_classifier.classify_request`
+  - `src.orchestration.request_classifier.RequestClassification`
+  - `src.skills.demo_scenarios.run_skill_demo`
+- actual_runtime_path: `src.orchestration.request_classifier.classify_request`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and `python -m unittest tests.test_request_classifier` before claiming route behavior is stable.

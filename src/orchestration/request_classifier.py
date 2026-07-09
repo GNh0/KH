@@ -859,6 +859,12 @@ LOCALIZED_PATCH_SCOPE_TERMS = {
     "tiny patch",
     "current file",
     "target file",
+    "this block",
+    "current block",
+    "pasted block",
+    "this pasted block",
+    "current diff",
+    "this diff",
     "\uc140\ub809\ud130",
     "\uc120\ud0dd\uc790",
     "\ud55c \uc904",
@@ -872,6 +878,12 @@ LOCALIZED_PATCH_SCOPE_TERMS = {
 LOCALIZED_PATCH_CONTEXT_KEYS = {
     "localized_patch_context",
     "small_patch_context",
+    "has_pasted_source",
+    "pasted_source",
+    "pasted_source_context",
+    "current_diff",
+    "diff_context",
+    "active_diff",
     "target_selector",
     "target_line",
     "target_symbol",
@@ -1475,6 +1487,10 @@ PRODUCT_DISCOVERY_ACTION_TERMS = {
     "create",
     "develop",
     "make",
+    "need",
+    "needs",
+    "want",
+    "wants",
     "start",
     "plan",
     "planned",
@@ -2360,13 +2376,17 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
     if _is_high_risk(normalized, domain, context):
         return _high_risk_classification(domain, cross_cutting, evidence_required, reasons)
 
-    if _is_pb_to_csharp_migration_request(normalized):
-        return _complex_extraction_deliverable_classification(
-            "software",
-            cross_cutting,
-            evidence_required,
-            [*reasons, "pb_to_csharp_migration_request"],
-            extra_harnesses=["pb-to-csharp-migration-harness"],
+    pb_migration_requested = _is_pb_to_csharp_migration_request(normalized)
+    if _is_readonly_source_audit_request(normalized, domain):
+        return _classification(
+            complexity="medium",
+            domain="software" if domain == "general" else domain,
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "source_summary", "audit_findings"]),
+            reasons=[*reasons, "readonly_source_audit_request"],
+            confidence=0.8,
         )
 
     if _is_provider_meta_review_request(normalized):
@@ -2381,6 +2401,61 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             confidence=0.78,
         )
 
+    if _is_full_skill_lifecycle_audit_request(normalized):
+        lifecycle_skills = [
+            "request-complexity-router",
+            "skill-catalog",
+            "workflow-usability-harness",
+            "scenario-evaluation-harness",
+            "review-gate-harness",
+            "verification-before-completion-harness",
+            "compound-engineering-harness",
+        ]
+        lifecycle_required = [
+            "skill-catalog",
+            "workflow-usability-harness",
+            "scenario-evaluation-harness",
+            "review-gate-harness",
+            "verification-before-completion-harness",
+            "compound-engineering-harness",
+        ]
+        if pb_migration_requested:
+            lifecycle_skills.append("pb-to-csharp-migration-harness")
+            lifecycle_required.append("pb-to-csharp-migration-harness")
+        return _classification(
+            complexity="heavy",
+            domain="software",
+            recommended_execution="role_dag",
+            cross_cutting=cross_cutting,
+            recommended_skills=_dedupe(lifecycle_skills),
+            required_harnesses=_dedupe(lifecycle_required),
+            evidence_required=_dedupe(
+                [
+                    *evidence_required,
+                    "full_skill_catalog_matrix",
+                    "front_door_lifecycle_trace",
+                    "skill_execution_evidence_matrix",
+                    "scenario_regression_results",
+                    "compound_handoff",
+                ]
+            ),
+            reasons=[
+                *reasons,
+                *(["pb_to_csharp_migration_request"] if pb_migration_requested else []),
+                "full_skill_lifecycle_audit_request",
+            ],
+            confidence=0.86,
+        )
+
+    if pb_migration_requested:
+        return _complex_extraction_deliverable_classification(
+            "software",
+            cross_cutting,
+            evidence_required,
+            [*reasons, "pb_to_csharp_migration_request"],
+            extra_harnesses=["pb-to-csharp-migration-harness"],
+        )
+
     if _is_sql_formatting_style_request(normalized):
         return _classification(
             complexity="medium",
@@ -2393,15 +2468,47 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             confidence=0.78,
         )
 
-    if _is_readonly_source_audit_request(normalized, domain):
+    if _is_sql_diagnostic_question(normalized):
         return _classification(
             complexity="medium",
-            domain="software" if domain == "general" else domain,
+            domain="software",
             recommended_execution="skill_read",
             cross_cutting=cross_cutting,
             recommended_skills=["request-complexity-router"],
-            evidence_required=_dedupe([*evidence_required, "source_summary", "audit_findings"]),
-            reasons=[*reasons, "readonly_source_audit_request"],
+            evidence_required=_dedupe([*evidence_required, "source_summary", "sql_diagnostic_summary"]),
+            reasons=[*reasons, "sql_diagnostic_question"],
+            confidence=0.77,
+        )
+
+    if _is_kh_runtime_status_question(normalized, context):
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router", "workflow-usability-harness"],
+            evidence_required=_dedupe([*evidence_required, "runtime_status_evidence"]),
+            reasons=[*reasons, "kh_runtime_status_question"],
+            confidence=0.76,
+        )
+
+    if _is_compound_handoff_request(normalized):
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router", "compound-engineering-harness"],
+            required_harnesses=["compound-engineering-harness"],
+            evidence_required=_dedupe(
+                [
+                    *evidence_required,
+                    "compound_capture",
+                    "compound_handoff",
+                    "learning_candidates_or_no_learning_rationale",
+                ]
+            ),
+            reasons=[*reasons, "compound_handoff_request"],
             confidence=0.8,
         )
 
@@ -2469,7 +2576,7 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             recommended_execution="skill_read",
             cross_cutting=cross_cutting,
             recommended_skills=["request-complexity-router"],
-            evidence_required=_dedupe([*evidence_required, "localized_patch_evidence"]),
+            evidence_required=_dedupe([*evidence_required, "localized_patch_evidence", "localized_scope_lock"]),
             reasons=[*reasons, "localized_patch_continuation"],
             confidence=0.8,
         )
@@ -3351,6 +3458,178 @@ SQL_FORMATTING_STYLE_SUBJECT_TERMS = {
 SQL_NAMED_DML_RE = re.compile(r"\b(?:insert|update|delete|merge)\b", re.IGNORECASE)
 
 
+def _is_full_skill_lifecycle_audit_request(normalized: str) -> bool:
+    skill_terms = {
+        "skill",
+        "skills",
+        "harness",
+        "harnesses",
+        "front-door",
+        "front door",
+        "\uc2a4\ud0ac",
+        "\ud558\ub124\uc2a4",
+        "\ud504\ub7f0\ud2b8\ub3c4\uc5b4",
+    }
+    total_terms = {
+        "all",
+        "every",
+        "entire",
+        "whole",
+        "full",
+        "end-to-end",
+        "from start to finish",
+        "start to finish",
+        "one by one",
+        "\uc804\uccb4",
+        "\ubaa8\ub450",
+        "\uc2f9\ub2e4",
+        "\ud558\ub098\uc529",
+        "\ud558\ub098\ub3c4 \ube60\uc9d0\uc5c6\uc774",
+        "1\ubd80\ud130 \ub05d",
+        "1\ubd80\ud130 \ub05d\uae4c\uc9c0",
+        "\uc2dc\uc791\ubd80\ud130 \uc885\ub8cc",
+        "\ucc98\uc74c\ubd80\ud130 \ub05d",
+        "\uc2dc\uc791\ubd80\ud130 \ub05d",
+        "\uc804.\uccb4",
+    }
+    audit_terms = {
+        "audit",
+        "inspect",
+        "review",
+        "check",
+        "verify",
+        "validate",
+        "tear down",
+        "trace",
+        "\uc810\uac80",
+        "\ud655\uc778",
+        "\uac80\uc99d",
+        "\uac80\ud1a0",
+        "\uac10\uc0ac",
+        "\ubd84\uc11d",
+        "\ubcf4\ub77c",
+        "\ubcf4\ub77c\uace0",
+        "\ubd10\ub77c",
+        "\ubd10",
+        "\ub72f\uc5b4",
+        "\ub72f\uc5b4\ubcf4",
+        "\ub72f\uc5b4\ubcf4\ub77c",
+        "\ub72f\uc5b4\ubcf4\ub77c\uace0",
+    }
+    return (
+        _contains_any(normalized, skill_terms)
+        and _contains_any(normalized, total_terms)
+        and _contains_any(normalized, audit_terms)
+    )
+
+
+def _is_kh_runtime_status_question(normalized: str, context: dict) -> bool:
+    if _has_mutation_command(normalized) or _has_conditional_mutation_command(normalized):
+        return False
+    has_kh_context = _has_audit_repair_context(context) or _contains_any(
+        normalized,
+        {
+            "kh",
+            "uaf",
+            "skill",
+            "skills",
+            "harness",
+            "harnesses",
+            "front-door",
+            "front door",
+            "\uc2a4\ud0ac",
+            "\ud558\ub124\uc2a4",
+            "\ud504\ub7f0\ud2b8\ub3c4\uc5b4",
+        },
+    )
+    if not has_kh_context:
+        return False
+    status_terms = {
+        "does it work",
+        "is it working",
+        "now works",
+        "working now",
+        "fixed now",
+        "after the fix",
+        "after upgrade",
+        "\ub3d9\uc791",
+        "\ub418\ub0d0",
+        "\ub418\ub294\uac70",
+        "\ub418\ub294\uc9c0",
+        "\ub410\ub0d0",
+        "\ub410\ub2e4",
+        "\uc548\ud55c\uac70",
+        "\uc548 \ud55c\uac70",
+        "\uc548\ub418",
+        "\uc548 \ub418",
+    }
+    repair_context_terms = {
+        "now",
+        "after",
+        "fixed",
+        "patched",
+        "upgrade",
+        "upgraded",
+        "\uc774\uc81c",
+        "\uc9c0\uae08",
+        "\uc218\uc815",
+        "\ud328\uce58",
+        "\uc5c5\uadf8\ub808\uc774\ub4dc",
+        "\uc9c0\uae08\uae4c\uc9c0",
+    }
+    return _contains_any(normalized, status_terms) and _contains_any(normalized, repair_context_terms)
+
+
+def _is_compound_handoff_request(normalized: str) -> bool:
+    compound_terms = {
+        "compound",
+        "compound handoff",
+        "compound capture",
+        "learning candidate",
+        "learning candidates",
+        "skill candidate",
+        "skill candidates",
+        "scenario candidate",
+        "scenario candidates",
+        "memory candidate",
+        "memory candidates",
+        "\ucef4\ud30c\uc6b4\ub4dc",
+        "\ud559\uc2b5 \ud6c4\ubcf4",
+        "\uc2a4\ud0ac \ud6c4\ubcf4",
+        "\uc2dc\ub098\ub9ac\uc624 \ud6c4\ubcf4",
+        "\uba54\ubaa8\ub9ac \ud6c4\ubcf4",
+    }
+    lifecycle_terms = {
+        "after plan",
+        "after work",
+        "after review",
+        "plan, work, and review",
+        "plan work review",
+        "\uacc4\ud68d",
+        "\uc791\uc5c5",
+        "\ub9ac\ubdf0",
+        "\uac80\ud1a0",
+    }
+    handoff_terms = {
+        "handoff",
+        "capture",
+        "candidate",
+        "candidates",
+        "create",
+        "write",
+        "\ud578\ub4dc\uc624\ud504",
+        "\ucea1\ucc98",
+        "\ud6c4\ubcf4",
+        "\ub9cc\ub4e4",
+        "\uc791\uc131",
+    }
+    return (
+        _contains_any(normalized, compound_terms)
+        and _contains_any(normalized, lifecycle_terms)
+        and _contains_any(normalized, handoff_terms)
+    )
+
+
 def _is_sql_formatting_style_request(normalized: str) -> bool:
     if not _contains_any(normalized, SQL_FORMATTING_STYLE_ACTION_TERMS):
         return False
@@ -3410,6 +3689,32 @@ def _is_sql_diagnostic_question_without_output_request(normalized: str) -> bool:
     if _contains_any(normalized, {"why", "explain", "\uc65c", "\uc124\uba85", "\uc6d0\uc778", "\ubb50\uac00"}):
         return not _contains_any(normalized, {"\uc791\uc131", "\ub9cc\ub4e4", "\uc815\ub9ac", "write", "create", "generate", "format", "clean"})
     return False
+
+
+def _is_sql_diagnostic_question(normalized: str) -> bool:
+    if not _looks_like_sql_or_tsql_payload(normalized):
+        return False
+    if _contains_any(normalized, SQL_FORMATTING_STYLE_ACTION_TERMS):
+        return False
+    return _is_sql_diagnostic_question_without_output_request(normalized) or _contains_any(
+        normalized,
+        {
+            "not update",
+            "does not update",
+            "doesn't update",
+            "not insert",
+            "not delete",
+            "no rows",
+            "zero rows",
+            "affected rows",
+            "why no",
+            "\uc5c5\ub370\uc774\ud2b8\uac00 \uc548",
+            "\uc218\uc815\uc774 \uc548",
+            "\uc800\uc7a5\uc774 \uc548",
+            "\ud589\uc774 \uc5c6",
+            "\uac74\uc774 \uc5c6",
+        },
+    )
 
 
 def _is_provider_meta_review_request(normalized: str) -> bool:
@@ -4194,6 +4499,8 @@ def _is_unapproved_product_discovery_request(normalized: str, context: dict, dom
         "local",
         "travel",
         "education",
+        "hr",
+        "career",
     }:
         return False
     if _has_blocking_discovery_specificity(normalized):

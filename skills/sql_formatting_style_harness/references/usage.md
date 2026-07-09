@@ -75,3 +75,14 @@ For PowerBuilder/PBL validation, keep the sweep bounded and source-safe:
 6. Report broad PBL sweep status separately from unit-test fixture coverage.
 
 The packaged implementation includes the bounded hook and fixture coverage. It does not perform a broad source-tree sweep unless explicitly run with an external output directory.
+
+## Runtime binding
+
+- Execution level: python-module
+- Implementation targets:
+  - `src.skills.sql_formatting_style.verify_sql_formatting_style`
+  - `src.skills.sql_formatting_style.resolve_style_contract_source`
+  - `src.skills.sql_formatting_style.extract_powerbuilder_sql_fragments`
+  - `src.skills.sql_formatting_style.build_powerbuilder_sql_validation_plan`
+- Application path: run the host-local SQL formatter first when available, then run this verifier before emitting SQL, DB writes, or final SQL claims.
+- Completion rule: do not report this harness as applied until the verifier returns pass/fail/blocked evidence or a provider-unavailable rationale.

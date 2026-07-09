@@ -763,6 +763,9 @@ def record_workflow_memory_candidates(
     status = "candidates_recorded" if recorded else "already_recorded"
     if blocked and not recorded:
         status = "blocked"
+    evidence = ["memory-state-harness"]
+    if status in {"candidates_recorded", "already_recorded"}:
+        evidence.append("memory_candidates_recorded")
     return {
         "status": status,
         "provider": provider,
@@ -776,7 +779,7 @@ def record_workflow_memory_candidates(
         "skipped_ids": skipped,
         "blocked": blocked,
         "promotion": "candidates_only",
-        "evidence": ["memory-state-harness", "memory_candidates_recorded"] if recorded else ["memory-state-harness"],
+        "evidence": evidence,
     }
 
 

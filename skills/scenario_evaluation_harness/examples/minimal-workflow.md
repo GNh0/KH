@@ -49,3 +49,13 @@ The `actual_runtime_path` is `src.orchestration.scenario_evaluator` for determin
 - The interactive SIDE stress run has varied conversation lengths, multi-skill overlap cases, route/execution-level statistics, and token usage comparisons.
 - New useful failures are preserved as regression tests.
 - The final report is short enough to compare across releases and concrete enough to drive the next improvement.
+
+## Runtime binding
+
+- execution_level: python-module
+- implementation_targets:
+  - `src.orchestration.scenario_evaluator.evaluate_scenarios`
+  - `src.orchestration.scenario_evaluator.build_scenario_report`
+  - `src.orchestration.interactive_side_evaluator.evaluate_skill_side_turns`
+- actual_runtime_path: `src.orchestration.scenario_evaluator.evaluate_scenarios`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, `python -m src.orchestration.scenario_evaluator --summary --stress`, and `python -m src.orchestration.interactive_side_evaluator --summary --skills --stress`.

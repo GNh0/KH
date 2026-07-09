@@ -76,3 +76,13 @@ Keep the router principle-based. Keyword rules are only guardrails for obvious d
 ## Quality bar
 
 A valid use of `request-complexity-router` must make UAF cheaper for simple work and stricter for high-impact work. Another agent should be able to answer why the request did or did not trigger GoalState, role DAG, QA, review, or high-risk evidence.
+
+## Runtime binding
+
+- Execution level: python-module
+- Implementation targets:
+  - `src.orchestration.request_classifier.classify_request`
+  - `src.orchestration.request_classifier.RequestClassification`
+  - `src.skills.demo_scenarios.run_skill_demo`
+- Application path: run classification once before broad context reads, implementation, workflow escalation, or direct-answer completion.
+- Completion rule: do not report routing as applied until complexity, domain, execution mode, required harnesses, evidence requirements, and reasons are recorded.

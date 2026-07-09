@@ -92,6 +92,92 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertNotIn("goal-state-harness", result.required_harnesses)
         self.assertNotEqual(result.recommended_execution, "role_dag")
 
+    def test_full_skill_lifecycle_audit_does_not_fall_to_direct_answer(self):
+        cases = [
+            (
+                "\uc2a4\ud0ac,\ud558\ub124\uc2a4 \ub3d9\uc791\uc744 1\ubd80\ud130 \ub05d\uae4c\uc9c0 "
+                "\uc804\uccb4 \ubaa8\ub450 \uc138\uc138\ud558\uac8c \ud558\ub098\uc529 \ub2e4 "
+                "\ub72f\uc5b4\ubcf4\uace0 \uc810\uac80\ud574\uc918"
+            ),
+            (
+                "\uc2a4\ud0ac,\ud558\ub124\uc2a4 \ub3d9\uc791\uc5d0\uc11c 1\ubd80\ud130 \ub05d\uae4c\uc9c0 "
+                "\uc804\uccb4 \uc989 \ubaa8\ub450 \ub2e4 \uc138\uc138\ud558\uac8c \ud558\ub098\uc529 "
+                "\ub2e4 \ub72f\uc5b4\ubcf4\ub77c\uace0"
+            ),
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+
+                self.assertEqual(result.complexity, "heavy")
+                self.assertEqual(result.domain, "software")
+                self.assertEqual(result.recommended_execution, "role_dag")
+                self.assertIn("skill-catalog", result.required_harnesses)
+                self.assertIn("workflow-usability-harness", result.required_harnesses)
+                self.assertIn("scenario-evaluation-harness", result.required_harnesses)
+                self.assertIn("compound-engineering-harness", result.required_harnesses)
+                self.assertIn("full_skill_lifecycle_audit_request", result.reasons)
+                self.assertIn("skill_execution_evidence_matrix", result.evidence_required)
+
+    def test_pb_migration_request_does_not_swallow_full_skill_lifecycle_audit(self):
+        result = classify_request(
+            "PB to C# migration harness 포함해서 스킬,하네스 동작을 1부터 끝까지 "
+            "전체 모두 세세하게 하나씩 다 뜯어보고 점검해줘"
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertIn("full_skill_lifecycle_audit_request", result.reasons)
+        self.assertIn("pb_to_csharp_migration_request", result.reasons)
+        self.assertIn("skill-catalog", result.required_harnesses)
+        self.assertIn("scenario-evaluation-harness", result.required_harnesses)
+        self.assertIn("pb-to-csharp-migration-harness", result.required_harnesses)
+        self.assertIn("skill_execution_evidence_matrix", result.evidence_required)
+
+    def test_kh_runtime_status_question_does_not_escalate_to_role_dag(self):
+        result = classify_request(
+            "\uadf8\ub798\uc11c \uc774\uc81c\ub294 \uc218\uc815\ud588\uc73c\ub2c8\uae50 "
+            "\ub3d9\uc791\ud55c\ub2e4\uace0?",
+            context={"project_markers": [".kh"]},
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("workflow-usability-harness", result.recommended_skills)
+        self.assertIn("runtime_status_evidence", result.evidence_required)
+        self.assertIn("kh_runtime_status_question", result.reasons)
+        self.assertNotEqual(result.recommended_execution, "role_dag")
+
+    def test_folder_needs_dashboard_routes_to_brainstorming(self):
+        result = classify_request(r"C:\work\OpsDash folder needs a new inventory dashboard.")
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", result.required_harnesses)
+        self.assertIn("brainstorm_handoff", result.evidence_required)
+
+    def test_sql_diagnostic_question_with_payload_is_not_large_work(self):
+        result = classify_request("Why does this SQL not update rows? SELECT * FROM BA011T")
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("sql_diagnostic_question", result.reasons)
+        self.assertIn("sql_diagnostic_summary", result.evidence_required)
+        self.assertNotIn("goal-state-harness", result.required_harnesses)
+
+    def test_explicit_compound_handoff_selects_compound_harness(self):
+        result = classify_request("After Plan, Work, and Review, create the Compound handoff and skill candidates.")
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("compound-engineering-harness", result.required_harnesses)
+        self.assertIn("compound_handoff_request", result.reasons)
+        self.assertIn("compound_capture", result.evidence_required)
+        self.assertIn("compound_handoff", result.evidence_required)
+
     def test_source_condition_mutation_commands_route_heavy(self):
         cases = [
             "\uccb4\ud06c\ub85c\uc9c1 \uc218\uc815\ud574\uc918",
@@ -1242,6 +1328,19 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertEqual(result.complexity, complexity)
                 self.assertEqual(result.domain, domain)
                 self.assertEqual(result.recommended_execution, route)
+
+    def test_readonly_harness_review_mentioning_pb_to_csharp_is_not_migration_execution(self):
+        result = classify_request(
+            "Read-only review KH routing, completion verification, and PB-to-C# migration handoff/style gates. "
+            "Do not edit files.",
+            context={"domain": "software"},
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("readonly_source_audit_request", result.reasons)
+        self.assertNotIn("pb_to_csharp_migration_request", result.reasons)
+        self.assertIn("audit_findings", result.evidence_required)
 
     def test_side_wave_document_history_and_simple_drafting_boundaries(self):
         cases = [

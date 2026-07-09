@@ -45,3 +45,13 @@ This harness is appropriate after brainstorming/spec/architecture produced an ap
 ## Quality bar
 
 A valid plan execution run should make progress visible, resumable, reviewable, and bounded. Another agent should be able to open progress state and know exactly which task is active, what passed, what failed, what was committed, and what comes next.
+
+## Runtime binding
+
+- Execution level: hybrid-harness
+- Implementation targets:
+  - `src.orchestration.development_progress.DevelopmentTaskProgress`
+  - `src.orchestration.progress_panel.render_progress_panel`
+  - `src.orchestration.skill_transitions.validate_skill_transitions`
+- Application path: drive the written plan task by task, updating progress state before and after each implementation, review, verification, and handoff step.
+- Completion rule: do not report plan execution as applied until active task, next task, evidence, review state, and blocked/complete status are recorded.

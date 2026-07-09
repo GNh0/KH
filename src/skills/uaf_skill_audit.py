@@ -214,7 +214,7 @@ def _test_evidence_for_target(ref: str, target: Dict[str, Any], test_index: Dict
     tokens = _coverage_tokens(ref, target)
     evidence = []
     for path, content in test_index.items():
-        if any(token and token in content for token in tokens):
+        if any(_content_has_executable_test_evidence(content, token) for token in tokens):
             evidence.append(path)
     return evidence
 
@@ -222,18 +222,56 @@ def _test_evidence_for_target(ref: str, target: Dict[str, Any], test_index: Dict
 def _coverage_tokens(ref: str, target: Dict[str, Any]) -> List[str]:
     tokens = [ref]
     parts = ref.split(".")
-    if parts:
+    if parts and not ref.startswith("skills/"):
         tokens.append(parts[-1])
     path = target.get("path", "")
     if path:
-        stem = Path(path).stem
-        tokens.append(stem)
+        target_path = Path(path)
+        stem = target_path.stem
+        if target_path.suffix == ".py" and _is_meaningful_coverage_token(stem):
+            tokens.append(stem)
         try:
             rel = Path(path).resolve().relative_to(PROJECT_ROOT).as_posix()
             tokens.append(rel)
         except ValueError:
             pass
     return sorted(set(tokens), key=len, reverse=True)
+
+
+def _content_mentions_token(content: str, token: str) -> bool:
+    if not token:
+        return False
+    if re.search(r"[^A-Za-z0-9_]", token):
+        return token in content
+    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(token)}(?![A-Za-z0-9_])", content) is not None
+
+
+def _content_has_executable_test_evidence(content: str, token: str) -> bool:
+    if not _content_mentions_token(content, token):
+        return False
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        if not _content_mentions_token(line, token):
+            continue
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        window = "\n".join(lines[max(0, index - 2): index + 3])
+        if re.search(
+            r"\b("
+            r"assert|assertEqual|assertIn|assertTrue|assertFalse|assertRegex|"
+            r"import|from|subprocess\.run|check_output|run_module|"
+            r"resolve_target|audit_packaged_skills|extract_implementation_targets|"
+            r"verify_|build_|classify_|validate_|collect_|read_text|exists|is_file"
+            r")\b",
+            window,
+        ):
+            return True
+    return False
+
+
+def _is_meaningful_coverage_token(token: str) -> bool:
+    return len(token) >= 6 and token.lower() not in {"skill", "skills", "test", "tests", "script", "scripts"}
 
 
 def main() -> int:

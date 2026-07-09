@@ -37,3 +37,13 @@ A verification check fails after a feature change. The output says the generated
 - Regression evidence exists or a no-regression rationale is recorded.
 - Original failure and broader relevant checks are accounted for.
 - Catalog validation and the skill smoke check pass.
+
+## Runtime binding
+
+- execution_level: hybrid-harness
+- implementation_targets:
+  - `src.harness.evaluator.Evaluator`
+  - `src.orchestration.gate_evaluators.build_review_finding`
+  - `src.orchestration.gate_evaluators.build_qa_check`
+- actual_runtime_path: `src.harness.evaluator.Evaluator`
+- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and the failing/passing regression command captured in the debug record.

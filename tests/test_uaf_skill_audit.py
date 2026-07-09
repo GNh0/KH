@@ -2,7 +2,12 @@ import unittest
 import subprocess
 import sys
 
-from src.skills.uaf_skill_audit import audit_packaged_skills, extract_implementation_targets
+from src.skills.uaf_skill_audit import (
+    PROJECT_ROOT,
+    _test_evidence_for_target,
+    audit_packaged_skills,
+    extract_implementation_targets,
+)
 
 
 class UafSkillAuditTests(unittest.TestCase):
@@ -53,6 +58,22 @@ class UafSkillAuditTests(unittest.TestCase):
         ]
 
         self.assertEqual(missing, [])
+
+    def test_skill_md_stem_does_not_count_as_test_evidence(self):
+        target = {
+            "ref": "skills/example_harness/SKILL.md",
+            "status": "resolved",
+            "path": str(PROJECT_ROOT / "skills" / "example_harness" / "SKILL.md"),
+        }
+        test_index = {
+            "tests/test_example.py": "This test mentions SKILL.md and skill folders generically.",
+            "tests/test_fixture_only.py": "fixture = 'skills/example_harness/SKILL.md'",
+            "tests/test_real_path.py": "self.assertIn('skills/example_harness/SKILL.md', resolved_paths)",
+        }
+
+        evidence = _test_evidence_for_target(target["ref"], target, test_index)
+
+        self.assertEqual(evidence, ["tests/test_real_path.py"])
 
     def test_audit_success_requires_no_unresolved_targets_or_missing_executable_evidence(self):
         report = audit_packaged_skills()

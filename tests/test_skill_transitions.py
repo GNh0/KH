@@ -4,6 +4,21 @@ from src.orchestration.skill_application import build_large_work_orchestration_b
 from src.orchestration.skill_transitions import validate_skill_transitions
 
 
+def _fresh_verification_override():
+    return {
+        "verification-before-completion-harness": {
+            "status": "applied",
+            "application_mode": "procedural",
+            "evidence_note": "Fresh verification ran before final transition.",
+            "evidence_keys": ["fresh_verification", "verification_command"],
+            "metadata": {
+                "verification_command": "python -m unittest tests.test_skill_transitions",
+                "verification_result": "passed",
+            },
+        }
+    }
+
+
 class SkillTransitionTests(unittest.TestCase):
     def test_post_review_requires_compound_closure(self):
         bundle = build_large_work_orchestration_bundle(
@@ -28,12 +43,60 @@ class SkillTransitionTests(unittest.TestCase):
                 "no_reusable_learning_rationale": "One-off typo fix; no reusable workflow change.",
                 "next_skills": [],
             },
+            overrides=_fresh_verification_override(),
         )
 
         validation = validate_skill_transitions(bundle, phase="final")
 
         self.assertTrue(validation["valid"], validation)
         self.assertIn("skill_transition_policy_passed", validation["evidence"])
+
+    def test_blocked_compound_handoff_is_not_terminal_closure(self):
+        bundle = build_large_work_orchestration_bundle(
+            objective="Capture a blocked reusable lesson.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="used",
+            compound_handoff={
+                "status": "blocked",
+                "blocked_reason": "missing reviewed learning summary",
+                "next_skills": [],
+            },
+            overrides=_fresh_verification_override(),
+        )
+
+        validation = validate_skill_transitions(bundle, phase="final")
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("compound-engineering-harness", validation["required_next_skills"])
+        self.assertEqual(validation["issues"][0]["rule"], "compound_handoff_must_close")
+
+    def test_blocked_compound_skill_status_cannot_close_with_no_learning_handoff(self):
+        bundle = build_large_work_orchestration_bundle(
+            objective="Blocked compound capture must stay blocked.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="used",
+            compound_handoff={
+                "status": "no_reusable_learning",
+                "no_reusable_learning_rationale": "No reusable lesson after review.",
+                "next_skills": [],
+            },
+            overrides={
+                **_fresh_verification_override(),
+                "compound-engineering-harness": {
+                    "status": "blocked",
+                    "application_mode": "blocked",
+                    "evidence_note": "Compound capture blocked before review summary was written.",
+                    "evidence_keys": [],
+                    "blocked_reason": "missing reviewed learning summary",
+                },
+            },
+        )
+
+        validation = validate_skill_transitions(bundle, phase="final")
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("compound-engineering-harness", validation["required_next_skills"])
+        self.assertEqual(validation["issues"][0]["rule"], "compound_harness_must_be_applied_before_completion")
 
     def test_memory_candidates_force_memory_state_harness(self):
         bundle = build_large_work_orchestration_bundle(
@@ -51,6 +114,7 @@ class SkillTransitionTests(unittest.TestCase):
                 "status": "ready_for_system_update",
                 "next_skills": ["memory-state-harness"],
             },
+            overrides=_fresh_verification_override(),
         )
 
         validation = validate_skill_transitions(bundle, phase="final")
@@ -65,6 +129,7 @@ class SkillTransitionTests(unittest.TestCase):
             workspace_strategy="project-local-worktree",
             token_optimizer_status="used",
             overrides={
+                **_fresh_verification_override(),
                 "subagent-review-pipeline": {
                     "status": "applied",
                     "application_mode": "procedural",
@@ -90,6 +155,7 @@ class SkillTransitionTests(unittest.TestCase):
             workspace_strategy="project-local-worktree",
             token_optimizer_status="considered_not_needed",
             overrides={
+                **_fresh_verification_override(),
                 "subagent-review-pipeline": {
                     "status": "applied",
                     "application_mode": "procedural",
@@ -129,6 +195,7 @@ class SkillTransitionTests(unittest.TestCase):
                 "status": "ready_for_system_update",
                 "next_skills": ["workflow-skill-distiller", "scenario-evaluation-harness"],
             },
+            overrides=_fresh_verification_override(),
         )
 
         validation = validate_skill_transitions(bundle, phase="final")
@@ -156,6 +223,7 @@ class SkillTransitionTests(unittest.TestCase):
                 "next_skills": ["workflow-skill-distiller", "memory-state-harness"],
             },
             overrides={
+                **_fresh_verification_override(),
                 "subagent-review-pipeline": {
                     "status": "applied",
                     "application_mode": "procedural",
@@ -200,6 +268,7 @@ class SkillTransitionTests(unittest.TestCase):
                 "next_skills": ["workflow-skill-distiller"],
             },
             overrides={
+                **_fresh_verification_override(),
                 "workflow-skill-distiller": {
                     "status": "applied",
                     "application_mode": "procedural",
@@ -214,6 +283,143 @@ class SkillTransitionTests(unittest.TestCase):
         self.assertFalse(validation["valid"])
         self.assertIn("workflow-skill-distiller", validation["required_next_skills"])
         self.assertEqual(validation["issues"][0]["rule"], "compound_next_skill_requires_followup_evidence")
+
+    def test_final_transition_requires_fresh_verification(self):
+        bundle = build_large_work_orchestration_bundle(
+            objective="Claim final completion.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="used",
+            compound_handoff={
+                "status": "no_reusable_learning",
+                "no_reusable_learning_rationale": "No reusable lesson after verification test.",
+            },
+        )
+
+        validation = validate_skill_transitions(bundle, phase="final")
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("verification-before-completion-harness", validation["required_next_skills"])
+        self.assertEqual(validation["issues"][0]["rule"], "final_requires_verification_before_completion")
+
+    def test_generic_verification_status_does_not_satisfy_final_transition(self):
+        overrides = {
+            "verification-before-completion-harness": {
+                "status": "applied",
+                "application_mode": "procedural",
+                "evidence_note": "Generic status was recorded without command evidence.",
+                "evidence_keys": ["verification_status", "completion_claim"],
+            }
+        }
+        bundle = build_large_work_orchestration_bundle(
+            objective="Claim final completion with generic evidence.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="used",
+            compound_handoff={
+                "status": "no_reusable_learning",
+                "no_reusable_learning_rationale": "No reusable lesson after verification test.",
+            },
+            overrides=overrides,
+        )
+
+        validation = validate_skill_transitions(bundle, phase="final")
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("verification-before-completion-harness", validation["required_next_skills"])
+        self.assertEqual(
+            validation["issues"][0]["rule"],
+            "verification_before_completion_requires_fresh_evidence",
+        )
+
+    def test_verification_result_without_command_does_not_satisfy_final_transition(self):
+        overrides = {
+            "verification-before-completion-harness": {
+                "status": "applied",
+                "application_mode": "procedural",
+                "evidence_note": "Result text was recorded without command, report, or artifact evidence.",
+                "evidence_keys": ["fresh_verification", "verification_result"],
+                "metadata": {"verification_result": "passed"},
+            }
+        }
+        bundle = build_large_work_orchestration_bundle(
+            objective="Claim final completion with result text only.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="used",
+            compound_handoff={
+                "status": "no_reusable_learning",
+                "no_reusable_learning_rationale": "No reusable lesson after verification test.",
+            },
+            overrides=overrides,
+        )
+
+        validation = validate_skill_transitions(bundle, phase="final")
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("verification-before-completion-harness", validation["required_next_skills"])
+        self.assertEqual(
+            validation["issues"][0]["rule"],
+            "verification_before_completion_requires_fresh_evidence",
+        )
+
+    def test_verification_command_without_result_does_not_satisfy_final_transition(self):
+        overrides = {
+            "verification-before-completion-harness": {
+                "status": "applied",
+                "application_mode": "procedural",
+                "evidence_note": "Command text was recorded without pass/fail result.",
+                "evidence_keys": ["fresh_verification", "verification_command"],
+                "metadata": {"verification_command": "python -m unittest discover -s tests -q"},
+            }
+        }
+        bundle = build_large_work_orchestration_bundle(
+            objective="Claim final completion with command text only.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="used",
+            compound_handoff={
+                "status": "no_reusable_learning",
+                "no_reusable_learning_rationale": "No reusable lesson after verification test.",
+            },
+            overrides=overrides,
+        )
+
+        validation = validate_skill_transitions(bundle, phase="final")
+
+        self.assertFalse(validation["valid"])
+        self.assertIn("verification-before-completion-harness", validation["required_next_skills"])
+        self.assertEqual(
+            validation["issues"][0]["rule"],
+            "verification_before_completion_requires_fresh_evidence",
+        )
+
+    def test_successful_command_output_satisfies_final_transition(self):
+        overrides = {
+            "verification-before-completion-harness": {
+                "status": "applied",
+                "application_mode": "procedural",
+                "evidence_note": "Command output includes exit_code 0.",
+                "evidence_keys": ["fresh_verification", "verification_command"],
+                "metadata": {
+                    "command_output": {
+                        "command": "python -m unittest tests.test_skill_transitions",
+                        "exit_code": 0,
+                    }
+                },
+            }
+        }
+        bundle = build_large_work_orchestration_bundle(
+            objective="Claim final completion with concrete command output.",
+            workspace_strategy="project-local-worktree",
+            token_optimizer_status="used",
+            compound_handoff={
+                "status": "no_reusable_learning",
+                "no_reusable_learning_rationale": "No reusable lesson after verification test.",
+            },
+            overrides=overrides,
+        )
+
+        validation = validate_skill_transitions(bundle, phase="final")
+
+        self.assertTrue(validation["valid"], validation)
+        self.assertIn("skill_transition_policy_passed", validation["evidence"])
 
 
 if __name__ == "__main__":
