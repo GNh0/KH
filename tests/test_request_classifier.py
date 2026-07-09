@@ -113,6 +113,44 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertIn("source_condition_mutation_command", result.reasons)
                 self.assertIn("goal-state-harness", result.required_harnesses)
 
+    def test_user_stop_or_pause_routes_to_goal_interruption(self):
+        cases = [
+            "잠깐 멈춰. 지금 하던 작업 계속하지 말고 내일 다시 이어서 하자.",
+            "pause this run and resume tomorrow",
+            "do not continue this work; write a resume checkpoint",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("goal-state-harness", result.required_harnesses)
+                self.assertIn("user_stop_or_pause_request", result.reasons)
+                self.assertIn("interruption_checkpoint", result.evidence_required)
+
+    def test_korean_direction_only_screen_request_routes_to_brainstorming(self):
+        result = classify_request(
+            "새 고객지원 운영 화면을 만들고 싶어. 아직 구현하지 말고 방향, 범위, 선택지만 먼저 정리해줘."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("brainstorming-harness", result.required_harnesses)
+        self.assertIn("brainstorm_handoff", result.evidence_required)
+
+    def test_readonly_security_audit_does_not_escalate_to_heavy_implementation(self):
+        result = classify_request(
+            "Review this API handler for SQL injection risk. Do not implement fixes yet; tell me what evidence you need."
+        )
+
+        self.assertEqual(result.complexity, "medium")
+        self.assertEqual(result.domain, "software")
+        self.assertEqual(result.recommended_execution, "skill_read")
+        self.assertIn("readonly_source_audit_request", result.reasons)
+        self.assertIn("audit_findings", result.evidence_required)
+        self.assertNotIn("goal-state-harness", result.required_harnesses)
+
     def test_localized_patch_continuation_does_not_trigger_role_dag(self):
         cases = [
             (

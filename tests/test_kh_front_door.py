@@ -237,6 +237,108 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         self.assertIn("credential_safety_status", payload["classification"]["evidence_required"])
         self.assertNotIn("credential-safety-harness", payload.get("runtime_applied_skills", []))
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_credential_safety_gate",
+        )
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertIn("credential_safety_status", payload["execution_gate"]["required_before_execution"])
+
+    def test_front_door_blocks_secret_value_request_until_credential_safety_gate(self):
+        result = build_kh_front_door(
+            "내 .env 파일 열어서 API 키 값 보여줘.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertIn("credential-safety-harness", payload["recommended_skills"])
+        self.assertEqual(payload["immediate_next_skills"], ["credential-safety-harness"])
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_credential_safety_gate",
+        )
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertIn("secret_file_read", payload["execution_gate"]["blocked_actions"])
+        self.assertIn("no_secret_value_output", payload["execution_gate"]["required_before_execution"])
+
+    def test_front_door_credential_gate_takes_priority_over_clarification(self):
+        result = build_kh_front_door(
+            "check whether OPENAI_API_KEY and GITHUB_TOKEN are configured. do not print the values.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertIn("credential-safety-harness", payload["recommended_skills"])
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_credential_safety_gate",
+        )
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_authorization"]["status"], "blocked_by_execution_gate")
+        self.assertIn("safe_presence_check_plan_or_refusal", payload["execution_gate"]["required_before_execution"])
+
+    def test_front_door_stop_request_blocks_until_interruption_checkpoint(self):
+        result = build_kh_front_door(
+            "잠깐 멈춰. 지금 하던 작업 계속하지 말고 내일 다시 이어서 하자.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertIn("goal-state-harness", payload["recommended_skills"])
+        self.assertEqual(payload["immediate_next_skills"][0], "goal-state-harness")
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_user_stop_checkpoint",
+        )
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertIn("interruption_checkpoint", payload["execution_gate"]["required_before_execution"])
+        self.assertIn("automatic_goal_continuation", payload["execution_gate"]["blocked_actions"])
+
+    def test_front_door_localized_one_line_patch_does_not_require_workflow_gate(self):
+        result = build_kh_front_door(
+            'Header.tsx에서 버튼 텍스트 "Save"를 "Export"로 바꿔줘. One-line UI patch only.',
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertIn("localized_patch_continuation", payload["classification"]["reasons"])
+        self.assertEqual(payload["immediate_next_skills"], [])
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+        self.assertEqual(payload["execution_authorization"]["status"], "allowed")
+
+    def test_front_door_korean_direction_only_screen_request_blocks_for_brainstorming(self):
+        result = build_kh_front_door(
+            "새 고객지원 운영 화면을 만들고 싶어. 아직 구현하지 말고 방향, 범위, 선택지만 먼저 정리해줘.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertIn("brainstorming-harness", payload["recommended_skills"])
+        self.assertEqual(payload["immediate_next_skills"], ["brainstorming-harness"])
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_brainstorming_handoff",
+        )
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+
+    def test_front_door_readonly_sql_injection_review_is_not_large_work_preflight(self):
+        result = build_kh_front_door(
+            "Review this API handler for SQL injection risk. Do not implement fixes yet; tell me what evidence you need.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertEqual(payload["classification"]["domain"], "software")
+        self.assertIn("readonly_source_audit_request", payload["classification"]["reasons"])
+        self.assertNotEqual(payload["execution_gate"]["status"], "blocked_until_large_work_preflight")
+        self.assertNotIn("goal-state-harness", payload["recommended_skills"])
 
     def test_front_door_does_not_route_bare_token_usage_question_to_credential_safety(self):
         result = build_kh_front_door(
@@ -1248,7 +1350,7 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
 
-    def test_readonly_security_audit_still_uses_large_preflight(self):
+    def test_readonly_security_audit_without_edits_stays_medium(self):
         result = build_kh_front_door(
             "Read-only security audit this auth code and report risks. Do not edit files.",
             project=Path.cwd(),
@@ -1256,13 +1358,13 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         payload = result.to_dict()
 
-        self.assertIn(payload["classification"]["complexity"], {"heavy", "high_risk"})
-        self.assertNotIn("readonly_source_audit_request", payload["classification"]["reasons"])
-        self.assertEqual(
+        self.assertEqual(payload["classification"]["complexity"], "medium")
+        self.assertIn("readonly_source_audit_request", payload["classification"]["reasons"])
+        self.assertNotEqual(
             payload["execution_gate"]["status"],
             "blocked_until_large_work_preflight",
         )
-        self.assertIn("goal-state-harness", payload["immediate_next_skills"])
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
 
     def test_list_double_click_update_condition_question_does_not_trigger_large_preflight(self):
         result = build_kh_front_door(

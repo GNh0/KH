@@ -152,6 +152,24 @@ EXPLANATION_ONLY_TERMS = {
     "\uc774\uc720",
     "\uc124\uba85",
 }
+USER_STOP_OR_PAUSE_TERMS = {
+    "stop",
+    "pause",
+    "halt",
+    "cancel this run",
+    "do not continue",
+    "don't continue",
+    "continue tomorrow",
+    "resume tomorrow",
+    "\uba48\ucdb0",
+    "\uc911\uc9c0",
+    "\uc77c\uc2dc\uc911\uc9c0",
+    "\uadf8\ub9cc",
+    "\uacc4\uc18d\ud558\uc9c0 \ub9c8",
+    "\uacc4\uc18d\ud558\uc9c0\ub9c8",
+    "\ub0b4\uc77c \ub2e4\uc2dc",
+    "\ub0b4\uc77c \uc774\uc5b4\uc11c",
+}
 
 MEMORY_STATE_REQUEST_TERMS = {
     "persistent memory",
@@ -653,6 +671,9 @@ READONLY_SOURCE_AUDIT_BOUNDARY_TERMS = {
     "do not change",
     "don't change",
     "dont change",
+    "do not implement",
+    "don't implement",
+    "dont implement",
     "no edits",
     "no edit",
     "no changes",
@@ -682,6 +703,9 @@ READONLY_SOURCE_AUDIT_SOURCE_TERMS = {
     "runtime",
     "test",
     "tests",
+    "api",
+    "handler",
+    "endpoint",
     "branch",
     "checkout",
     "\ucf54\ub4dc",
@@ -1441,6 +1465,9 @@ PRODUCT_DISCOVERY_OBJECT_TERMS = {
     "\uc544\uc774\ub514\uc5b4",
     "\uc6b4\uc601\uc9c0\uc6d0",
     "\uc5c5\ubb34\uad00\ub9ac",
+    "\ud654\uba74",
+    "\uc6b4\uc601 \ud654\uba74",
+    "\uace0\uac1d\uc9c0\uc6d0",
 }
 PRODUCT_DISCOVERY_ACTION_TERMS = {
     "build",
@@ -1483,6 +1510,8 @@ DOMAIN_DISCOVERY_OBJECT_TERMS = PRODUCT_DISCOVERY_OBJECT_TERMS | {
     "\uc5c5\ubb34\ud750\ub984",
     "\ud504\ub85c\uc138\uc2a4",
     "\uc6b4\uc601",
+    "\ud654\uba74",
+    "\uc6b4\uc601 \ud654\uba74",
     "\ubd84\uc11d",
     "\ub9ac\uc11c\uce58",
     "\uc5f0\uad6c",
@@ -2283,6 +2312,30 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
         cross_cutting.append("credential-safety-harness")
         evidence_required.append("credential_safety_status")
         reasons.append("credential_or_secret_boundary")
+
+    if _is_user_stop_or_pause_request(normalized):
+        return _classification(
+            complexity="medium",
+            domain=domain,
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=[
+                "request-complexity-router",
+                "goal-state-harness",
+                "workflow-usability-harness",
+            ],
+            required_harnesses=["goal-state-harness"],
+            evidence_required=_dedupe(
+                [
+                    *evidence_required,
+                    "metadata.user_stop_requested",
+                    "interruption_checkpoint",
+                    "scoped_memory_resume_record",
+                ]
+            ),
+            reasons=[*reasons, "user_stop_or_pause_request"],
+            confidence=0.86,
+        )
 
     memory_requested = _is_memory_state_request(normalized)
     if memory_requested and "resume_context_required" in reasons:
@@ -3873,7 +3926,7 @@ def _is_readonly_source_condition_question(normalized: str) -> bool:
 
 
 def _is_readonly_source_audit_request(normalized: str, domain: str) -> bool:
-    if domain == "security" or _contains_any(normalized, SECURITY_HIGH_RISK_TERMS | EXTRA_SECURITY_HIGH_RISK_TERMS):
+    if _contains_any(normalized, SECURITY_HIGH_RISK_TERMS | EXTRA_SECURITY_HIGH_RISK_TERMS):
         return False
     if not _contains_any(normalized, READONLY_SOURCE_AUDIT_BOUNDARY_TERMS):
         return False
@@ -3886,6 +3939,14 @@ def _is_readonly_source_audit_request(normalized: str, domain: str) -> bool:
     if not has_source_context:
         return False
     return not _contains_any(normalized, READONLY_SOURCE_AUDIT_MUTATION_TERMS)
+
+
+def _is_user_stop_or_pause_request(normalized: str) -> bool:
+    if not _contains_any(normalized, USER_STOP_OR_PAUSE_TERMS):
+        return False
+    if _contains_any(normalized, {"can i stop", "stop taking", "stop loss", "stop word"}):
+        return False
+    return True
 
 
 def _is_source_condition_mutation_command(normalized: str) -> bool:

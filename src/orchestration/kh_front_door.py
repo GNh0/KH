@@ -796,6 +796,24 @@ def _immediate_next_skills(
     )
 
     status = str(execution_gate.get("status") or "")
+    if status == "blocked_until_user_stop_checkpoint":
+        ordered = [
+            "goal-state-harness",
+            "workflow-usability-harness",
+            "context-state-harness",
+        ]
+        return [skill for skill in ordered if skill in recommended][:2]
+
+    if "localized_patch_continuation" in set(classification.get("reasons", []) or []):
+        return credential_first
+
+    if status == "blocked_until_credential_safety_gate":
+        ordered = [
+            "credential-safety-harness",
+            "command-output-harness",
+        ]
+        return [skill for skill in ordered if skill in recommended]
+
     if status == "blocked_until_brainstorming_handoff":
         return _dedupe([*credential_first, *(["brainstorming-harness"] if "brainstorming-harness" in recommended else [])])
 
@@ -1232,6 +1250,8 @@ def _micro_gate_status(value: Any) -> str:
         "blocked_until_large_work_preflight": "preflight",
         "blocked_until_brainstorming_handoff": "brainstorm",
         "blocked_until_clarification": "clarify",
+        "blocked_until_credential_safety_gate": "credential",
+        "blocked_until_user_stop_checkpoint": "stop",
     }
     return mapping.get(str(value or ""), str(value or ""))
 
@@ -1652,6 +1672,73 @@ def _execution_gate(
     plugin_route: Dict[str, Any],
     recommended_skills: Sequence[str],
 ) -> Dict[str, Any]:
+    reasons = set(classification.get("reasons", []) or [])
+    if "user_stop_or_pause_request" in reasons:
+        return {
+            "status": "blocked_until_user_stop_checkpoint",
+            "can_execute": False,
+            "reason": (
+                "User requested stop, pause, or resume-later behavior; no further task work may run until "
+                "goal-state-harness records the interruption checkpoint and scoped resume record."
+            ),
+            "required_before_execution": [
+                "goal-state-harness",
+                "metadata.user_stop_requested",
+                "interruption_checkpoint",
+                "scoped_memory_resume_record",
+            ],
+            "allowed_setup_actions": [
+                "read_goal_state_docs",
+                "record_user_stop_requested",
+                "write_interruption_checkpoint",
+                "write_scoped_resume_record",
+            ],
+            "blocked_actions": [
+                "memory_lookup_for_continuation",
+                "source_reads",
+                "implementation",
+                "file_writes",
+                "db_writes",
+                "verification",
+                "subagent_dispatch",
+                "completion_claim",
+                "automatic_goal_continuation",
+            ],
+        }
+    if "credential-safety-harness" in recommended_skills and _needs_credential_safety_harness(classification):
+        return {
+            "status": "blocked_until_credential_safety_gate",
+            "can_execute": False,
+            "reason": (
+                "Credential or secret boundaries were detected; no file, environment, shell, source, or DB read "
+                "may run until credential-safety-harness records either a safe presence-check plan or an explicit refusal."
+            ),
+            "required_before_execution": [
+                "credential-safety-harness",
+                "credential_safety_status",
+                "safe_presence_check_plan_or_refusal",
+                "no_secret_value_output",
+            ],
+            "allowed_setup_actions": [
+                "read_credential_safety_docs",
+                "record_credential_safety_status",
+                "record_safe_presence_check_plan_or_refusal",
+            ],
+            "blocked_actions": [
+                "secret_file_read",
+                "environment_value_print",
+                "Get-Content .env",
+                "cat .env",
+                "echo $env:*",
+                "printenv",
+                "source_reads",
+                "db_reads",
+                "implementation",
+                "verification",
+                "subagent_dispatch",
+                "completion_claim",
+            ],
+        }
     if classification.get("complexity") == "ambiguous" or classification.get("recommended_execution") == "clarify":
         return {
             "status": "blocked_until_clarification",
