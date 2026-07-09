@@ -746,9 +746,13 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
     required_keys = {
         "schema_version",
         "skill",
+        "scenario_id",
+        "execution_level",
+        "generated_at",
         "success_case",
         "blocked_or_failure_case",
         "contracts",
+        "demo_specificity",
         "host_metadata",
         "artifacts",
         "verification",
@@ -759,6 +763,14 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
         errors.append("schema_version must be 1.0")
     if payload.get("skill") != skill_name:
         errors.append("skill name mismatch")
+    expected_scenario_id = f"demo-{_demo_safe_id(skill_name)}"
+    if payload.get("scenario_id") != expected_scenario_id:
+        errors.append("scenario_id must be skill-specific")
+    if payload.get("execution_level") not in {"python-module", "hybrid-harness", "procedure-policy"}:
+        errors.append("execution_level invalid")
+    generated_at = str(payload.get("generated_at", ""))
+    if not generated_at.endswith("Z"):
+        errors.append("generated_at must be UTC-style Z timestamp")
 
     success_case = dict(payload.get("success_case", {}) or {})
     if success_case.get("status") != "passed":
@@ -767,6 +779,11 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
         errors.append("success_case.contract_type missing")
     if not success_case.get("evidence"):
         errors.append("success_case evidence missing")
+    success_context = dict(success_case.get("skill_demo_context", {}) or {})
+    if success_context.get("skill") != skill_name:
+        errors.append("success_case skill_demo_context missing skill")
+    if success_context.get("scenario_id") != expected_scenario_id:
+        errors.append("success_case skill_demo_context scenario mismatch")
 
     blocked_case = dict(payload.get("blocked_or_failure_case", {}) or {})
     if blocked_case.get("status") not in {"blocked", "failed"}:
@@ -779,6 +796,13 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
         errors.append("blocked/failure remediation missing")
     if blocked_case.get("non_destructive") is not True:
         errors.append("blocked/failure case must be non_destructive")
+    blocked_context = dict(blocked_case.get("skill_demo_context", {}) or {})
+    if blocked_context.get("skill") != skill_name:
+        errors.append("blocked_or_failure_case skill_demo_context missing skill")
+    if blocked_context.get("scenario_id") != expected_scenario_id:
+        errors.append("blocked_or_failure_case skill_demo_context scenario mismatch")
+    if success_case.get("payload") == blocked_case.get("payload"):
+        errors.append("success and blocked/failure payloads must be distinct")
 
     contracts = list(payload.get("contracts", []) or [])
     if not contracts:
@@ -794,6 +818,55 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
             errors.append(f"contract {index} did not roundtrip")
         if contract.get("source") not in {"dataclass", "gate-result", "policy-result", "artifact-validator"}:
             errors.append(f"contract {index} source invalid")
+
+    specificity = dict(payload.get("demo_specificity", {}) or {})
+    if specificity.get("skill") != skill_name:
+        errors.append("demo_specificity skill mismatch")
+    if specificity.get("scenario_id") != expected_scenario_id:
+        errors.append("demo_specificity scenario mismatch")
+    if not str(specificity.get("scenario_function", "")).endswith("_scenario"):
+        errors.append("demo_specificity scenario_function invalid")
+    for key in [
+        "success_context_bound",
+        "blocked_context_bound",
+        "success_and_blocked_are_distinct",
+        "artifact_namespace_bound",
+    ]:
+        if specificity.get(key) is not True:
+            errors.append(f"demo_specificity {key} must be true")
+    implementation_targets = list(specificity.get("declared_implementation_targets", []) or [])
+    if not implementation_targets:
+        errors.append("demo_specificity declared_implementation_targets empty")
+    allowed_target_status = {"resolved", "template", "packaged_test_reference"}
+    unresolved_targets = [
+        str(target.get("ref", ""))
+        for target in implementation_targets
+        if target.get("status") not in allowed_target_status
+    ]
+    if unresolved_targets:
+        errors.append(f"demo_specificity unresolved implementation targets: {', '.join(unresolved_targets[:3])}")
+    if not specificity.get("resolved_implementation_targets"):
+        errors.append("demo_specificity resolved_implementation_targets empty")
+    probe = dict(specificity.get("skill_specific_probe", {}) or {})
+    if probe.get("skill") != skill_name:
+        errors.append("demo_specificity skill_specific_probe skill mismatch")
+    if not probe.get("primary_target"):
+        errors.append("demo_specificity skill_specific_probe primary_target missing")
+    if probe.get("primary_target_status") not in allowed_target_status:
+        errors.append("demo_specificity skill_specific_probe primary_target_status invalid")
+    if probe.get("scenario_function") != specificity.get("scenario_function"):
+        errors.append("demo_specificity skill_specific_probe scenario mismatch")
+    if probe.get("proof_kind") != "implementation-target-resolution-plus-contract-demo":
+        errors.append("demo_specificity skill_specific_probe proof_kind invalid")
+    if not probe.get("contract_modules"):
+        errors.append("demo_specificity skill_specific_probe contract_modules empty")
+    unique_markers = [str(marker) for marker in specificity.get("unique_markers", []) or []]
+    if len(unique_markers) < 5:
+        errors.append("demo_specificity unique_markers too shallow")
+    if skill_name not in unique_markers:
+        errors.append("demo_specificity unique_markers missing skill name")
+    if expected_scenario_id not in unique_markers:
+        errors.append("demo_specificity unique_markers missing scenario id")
 
     host = dict(payload.get("host_metadata", {}) or {})
     if host.get("selected_host") not in {"local", "codex", "antigravity-style", "claude-code"}:
@@ -841,6 +914,10 @@ def _validate_demo_payload(skill_name: str, payload: Dict[str, Any], output_dir:
     if generated_paths != declared_paths:
         errors.append("artifact manifest does not declare every generated file")
     return errors
+
+
+def _demo_safe_id(value: str) -> str:
+    return "".join(ch.lower() if ch.isalnum() else "-" for ch in value).strip("-")
 
 
 def _path_is_relative_to(path: Path, root: Path) -> bool:

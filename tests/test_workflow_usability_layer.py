@@ -125,6 +125,29 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertEqual(handoff["status"], "ready_for_system_update")
             self.assertIn("compound_artifacts_written", result.evidence)
 
+    def test_progress_compound_does_not_auto_invent_no_learning_rationale(self):
+        progress = DevelopmentRunProgress(
+            run_id="run-no-learning",
+            objective="Finish a reviewed change without explicit learning capture.",
+            workspace_strategy="in-place",
+            tasks=[
+                DevelopmentTaskProgress(
+                    task_id="task-1",
+                    title="Finish change",
+                    status="complete",
+                    spec_review_status="passed",
+                    code_quality_review_status="passed",
+                )
+            ],
+        )
+
+        artifacts = build_progress_compound_artifacts(progress)
+
+        self.assertEqual(artifacts.handoff["status"], "blocked")
+        self.assertIn("learning_or_no_learning_rationale", artifacts.handoff["blocked_reason"])
+        self.assertEqual(artifacts.capture.no_reusable_learning_rationale, "")
+        self.assertEqual(artifacts.capture.metadata["compound_learning_status"], "missing")
+
     def test_token_optimizer_provider_policy_separates_provider_from_passthrough_status(self):
         self.assertTrue(validate_token_optimizer_provider("kh")["valid"])
         invalid_passthrough = validate_token_optimizer_provider("passthrough")

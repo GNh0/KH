@@ -156,7 +156,7 @@ Direct Windows clone:
 ```powershell
 git clone https://github.com/GNh0/KH.git "$env:USERPROFILE\plugins\kh-uaf"
 cd "$env:USERPROFILE\plugins\kh-uaf"
-python -m src.skills.uaf_skill_catalog --check
+python -m src.skills.uaf_skill_catalog --check --summary
 ```
 
 The root `plugin.json` is the UAF runtime manifest. The Codex plugin manifest is `.codex-plugin/plugin.json`.
@@ -170,7 +170,7 @@ Global Windows install:
 ```powershell
 git clone https://github.com/GNh0/KH.git "$env:USERPROFILE\.gemini\config\plugins\kh-uaf"
 cd "$env:USERPROFILE\.gemini\config\plugins\kh-uaf"
-python -m src.skills.uaf_skill_catalog --check
+python -m src.skills.uaf_skill_catalog --check --summary
 ```
 
 Global macOS/Linux install:
@@ -178,7 +178,7 @@ Global macOS/Linux install:
 ```bash
 git clone https://github.com/GNh0/KH.git ~/.gemini/config/plugins/kh-uaf
 cd ~/.gemini/config/plugins/kh-uaf
-python -m src.skills.uaf_skill_catalog --check
+python -m src.skills.uaf_skill_catalog --check --summary
 ```
 
 Workspace-local bootstrap path:
@@ -289,8 +289,8 @@ Useful commands:
 ```bash
 python -m src.skills.uaf_skill_catalog --list
 python -m src.skills.uaf_skill_catalog --read orchestration-role-graph
-python -m src.skills.uaf_skill_catalog --check
-python -m src.skills.uaf_skill_quality
+python -m src.skills.uaf_skill_catalog --check --summary
+python -m src.skills.uaf_skill_quality --summary
 python skills/token_optimizer/scripts/demo.py --output-dir ./tmp/token-demo
 ```
 
@@ -326,8 +326,8 @@ Before publishing:
 ```bash
 python -m json.tool plugin.json
 python -m json.tool .codex-plugin/plugin.json
-python -m src.skills.uaf_skill_catalog --check
-python -m src.skills.uaf_skill_quality
+python -m src.skills.uaf_skill_catalog --check --summary
+python -m src.skills.uaf_skill_quality --summary
 python -m src.benchmarks.kh_bench_verified --summary
 python -m src.benchmarks.practical_quality_gate --summary
 python -m unittest discover -s tests

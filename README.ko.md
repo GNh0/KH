@@ -101,7 +101,7 @@ python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --platf
 `codex-runtime` branch에서는 runtime 포장 상태를 중심으로 확인합니다.
 
 ```bash
-python -B -m src.skills.uaf_skill_catalog --check
+python -B -m src.skills.uaf_skill_catalog --check --summary
 python -B -m src.orchestration.plugin_install_audit --summary
 python -m json.tool plugin.json
 python -m json.tool .codex-plugin/plugin.json

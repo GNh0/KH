@@ -273,6 +273,22 @@ class UafSkillCatalogTests(unittest.TestCase):
             self.assertEqual(result["skills"][0]["relative_path"], "custom_harness/SKILL.md")
             self.assertNotIn("path", result["skills"][0])
 
+    def test_catalog_check_summary_avoids_full_skill_dump(self):
+        completed = subprocess.run(
+            [sys.executable, "-m", "src.skills.uaf_skill_catalog", "--check", "--summary"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertTrue(payload["success"], payload)
+        self.assertEqual(payload["total_skills"], 42)
+        self.assertEqual(payload["invalid_skills"], 0)
+        self.assertIn("issue_count", payload)
+        self.assertNotIn('"skills": [', completed.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

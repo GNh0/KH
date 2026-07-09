@@ -76,6 +76,7 @@ from src.skills.pb_to_csharp_migration import (
     resolve_csharp_control_stack,
 )
 from src.skills.uaf_skill_catalog import collect_packaged_skills
+from src.skills.uaf_skill_audit import extract_implementation_targets, resolve_target
 from src.skills.workflow_distiller import build_skill_scaffold, should_distill_workflow
 from src.core.snapshot_manager import SnapshotManager
 
@@ -161,7 +162,9 @@ def run_skill_demo(
     os.environ["UAF_PROJECT_LOCAL_STATE"] = "0"
     try:
         scenario = _scenario_for(skill_name)
+        scenario_function = getattr(scenario, "__name__", "")
         scenario_result = scenario(skill_name, output, root)
+        scenario_result = _attach_skill_demo_context(skill_name, scenario_function, scenario_result)
         artifacts = list(scenario_result["artifacts"])
         evidence_artifact = _write_demo_evidence_artifact(
             output,
@@ -178,6 +181,7 @@ def run_skill_demo(
             skill_dir=skill_path,
             execution_level=metadata.get("execution_level", "procedure-policy"),
         )
+        implementation_targets = _implementation_target_probes(skill_path, root)
         verification = _verification(
             contracts=scenario_result["contracts"],
             artifacts=artifacts,
@@ -192,6 +196,17 @@ def run_skill_demo(
             "success_case": scenario_result["success_case"],
             "blocked_or_failure_case": scenario_result["blocked_or_failure_case"],
             "contracts": scenario_result["contracts"],
+            "demo_specificity": _demo_specificity(
+                skill_name=skill_name,
+                scenario_function=scenario_function,
+                execution_level=metadata.get("execution_level", "procedure-policy"),
+                success_case=scenario_result["success_case"],
+                blocked_case=scenario_result["blocked_or_failure_case"],
+                contracts=scenario_result["contracts"],
+                implementation_targets=implementation_targets,
+                artifacts=artifacts,
+                output_dir=output,
+            ),
             "host_metadata": host_metadata,
             "artifacts": artifacts,
             "verification": verification,
@@ -245,7 +260,109 @@ def _scenario_for(skill_name: str) -> Callable[[str, Path, Path], Dict[str, Any]
         if skill_name == "scenario-evaluation-harness":
             return _scenario_evaluation_scenario
         return _routing_scenario
-    return _gate_scenario
+    raise ValueError(f"no runnable demo scenario registered for packaged skill: {skill_name}")
+
+
+def _attach_skill_demo_context(
+    skill_name: str,
+    scenario_function: str,
+    scenario_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Bind shared scenario families to the exact packaged skill under test."""
+    result = dict(scenario_result)
+    context = {
+        "skill": skill_name,
+        "scenario_id": f"demo-{_safe_id(skill_name)}",
+        "scenario_function": scenario_function,
+    }
+    success_case = dict(result.get("success_case", {}) or {})
+    blocked_case = dict(result.get("blocked_or_failure_case", {}) or {})
+    success_case["skill_demo_context"] = dict(context)
+    blocked_case["skill_demo_context"] = dict(context)
+    evidence = list(success_case.get("evidence", []) or [])
+    marker = f"skill-specific demo context: {skill_name} via {scenario_function}"
+    if marker not in evidence:
+        evidence.append(marker)
+    success_case["evidence"] = evidence
+    result["success_case"] = success_case
+    result["blocked_or_failure_case"] = blocked_case
+    return result
+
+
+def _implementation_target_probes(skill_path: Path, repo_root: Path) -> List[Dict[str, Any]]:
+    skill_md = skill_path / "SKILL.md" if skill_path.is_dir() else skill_path
+    content = skill_md.read_text(encoding="utf-8")
+    targets = extract_implementation_targets(content)
+    probes: List[Dict[str, Any]] = []
+    for target in targets:
+        resolved = resolve_target(target, repo_root)
+        probes.append({
+            "ref": resolved.get("ref", target),
+            "status": resolved.get("status", "unknown"),
+            "path": resolved.get("path", ""),
+            "object_type": resolved.get("object_type", ""),
+            "proof": "resolved_by_demo_target_probe",
+        })
+    return probes
+
+
+def _demo_specificity(
+    skill_name: str,
+    scenario_function: str,
+    execution_level: str,
+    success_case: Dict[str, Any],
+    blocked_case: Dict[str, Any],
+    contracts: List[Dict[str, Any]],
+    implementation_targets: List[Dict[str, Any]],
+    artifacts: List[Dict[str, Any]],
+    output_dir: Path,
+) -> Dict[str, Any]:
+    scenario_id = f"demo-{_safe_id(skill_name)}"
+    contract_names = [str(contract.get("name", "")) for contract in contracts]
+    contract_modules = [str(contract.get("module", "")) for contract in contracts]
+    artifact_paths = [str(artifact.get("path", "")) for artifact in artifacts]
+    success_context = dict(success_case.get("skill_demo_context", {}) or {})
+    blocked_context = dict(blocked_case.get("skill_demo_context", {}) or {})
+    allowed_target_status = {"resolved", "template", "packaged_test_reference"}
+    resolved_targets = [
+        target for target in implementation_targets
+        if target.get("status") in allowed_target_status
+    ]
+    primary_target = resolved_targets[0] if resolved_targets else {}
+    return {
+        "skill": skill_name,
+        "scenario_id": scenario_id,
+        "scenario_function": scenario_function,
+        "execution_level": execution_level,
+        "success_context_bound": success_context.get("skill") == skill_name
+        and success_context.get("scenario_id") == scenario_id
+        and success_context.get("scenario_function") == scenario_function,
+        "blocked_context_bound": blocked_context.get("skill") == skill_name
+        and blocked_context.get("scenario_id") == scenario_id
+        and blocked_context.get("scenario_function") == scenario_function,
+        "success_and_blocked_are_distinct": success_case.get("status") != blocked_case.get("status")
+        and success_case.get("payload") != blocked_case.get("payload"),
+        "artifact_namespace_bound": all(_is_relative_to(Path(path), output_dir) for path in artifact_paths),
+        "declared_implementation_targets": list(implementation_targets),
+        "resolved_implementation_targets": [target.get("ref", "") for target in resolved_targets],
+        "skill_specific_probe": {
+            "skill": skill_name,
+            "primary_target": primary_target.get("ref", ""),
+            "primary_target_status": primary_target.get("status", ""),
+            "scenario_function": scenario_function,
+            "contract_modules": contract_modules,
+            "proof_kind": "implementation-target-resolution-plus-contract-demo",
+        },
+        "contract_names": contract_names,
+        "unique_markers": [
+            skill_name,
+            scenario_id,
+            scenario_function,
+            execution_level,
+            str(primary_target.get("ref", "")),
+            ",".join(contract_names[:5]),
+        ],
+    }
 
 
 def _pb_to_csharp_migration_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:

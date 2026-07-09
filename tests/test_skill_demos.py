@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from src.skills.demo_scenarios import _scenario_for
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 
 
@@ -95,6 +96,7 @@ class SkillDemoTests(unittest.TestCase):
             "success_case",
             "blocked_or_failure_case",
             "contracts",
+            "demo_specificity",
             "host_metadata",
             "artifacts",
             "verification",
@@ -106,6 +108,24 @@ class SkillDemoTests(unittest.TestCase):
         self.assertTrue(payload["success_case"]["evidence"])
         self.assertIn("expected_behavior", payload["success_case"])
         self.assertIn("side_effects", payload["success_case"])
+        self.assertEqual(payload["success_case"]["skill_demo_context"]["skill"], skill_name)
+        self.assertEqual(payload["success_case"]["skill_demo_context"]["scenario_id"], payload["scenario_id"])
+        if skill_name in {"token-optimizer", "command-output-harness"}:
+            success_payload = payload["success_case"]["payload"]
+            token_usage = success_payload["metadata"]["token_usage"]
+            self.assertEqual(token_usage["strategy"], "command-output")
+            self.assertEqual(token_usage["where_saved"]["strategy"], "command-output")
+            self.assertGreater(token_usage["without_token_optimizer"], token_usage["with_token_optimizer"])
+            self.assertGreater(token_usage["estimated_tokens_saved"], 0)
+            self.assertGreater(token_usage["token_savings_ratio"], 0.5)
+            self.assertTrue(success_payload["preserved_required_facts"])
+            for fact in [
+                "tests/test_invoice.py::test_total_rounding FAILED",
+                "AssertionError",
+                "119999 == 120000",
+                "exit code: 1",
+            ]:
+                self.assertIn(fact, success_payload["stdout"])
 
         self.assertIn(payload["blocked_or_failure_case"]["status"], {"blocked", "failed"})
         self.assertIn("contract_type", payload["blocked_or_failure_case"])
@@ -116,6 +136,9 @@ class SkillDemoTests(unittest.TestCase):
         self.assertIn("expected_behavior", payload["blocked_or_failure_case"])
         self.assertIn("remediation", payload["blocked_or_failure_case"])
         self.assertTrue(payload["blocked_or_failure_case"]["non_destructive"])
+        self.assertEqual(payload["blocked_or_failure_case"]["skill_demo_context"]["skill"], skill_name)
+        self.assertEqual(payload["blocked_or_failure_case"]["skill_demo_context"]["scenario_id"], payload["scenario_id"])
+        self.assertNotEqual(payload["success_case"].get("payload"), payload["blocked_or_failure_case"].get("payload"))
 
         self.assertTrue(payload["contracts"], "demo must name at least one UAF contract")
         for contract in payload["contracts"]:
@@ -124,6 +147,30 @@ class SkillDemoTests(unittest.TestCase):
             self.assertTrue(contract["fields_checked"], contract)
             self.assertTrue(contract["roundtrip_checked"], contract)
             self.assertIn(contract["source"], {"dataclass", "gate-result", "policy-result", "artifact-validator"})
+
+        specificity = payload["demo_specificity"]
+        self.assertEqual(specificity["skill"], skill_name)
+        self.assertEqual(specificity["scenario_id"], payload["scenario_id"])
+        self.assertTrue(specificity["scenario_function"].endswith("_scenario"))
+        self.assertTrue(specificity["success_context_bound"])
+        self.assertTrue(specificity["blocked_context_bound"])
+        self.assertTrue(specificity["success_and_blocked_are_distinct"])
+        self.assertTrue(specificity["artifact_namespace_bound"])
+        self.assertTrue(specificity["declared_implementation_targets"])
+        self.assertTrue(specificity["resolved_implementation_targets"])
+        self.assertEqual(specificity["skill_specific_probe"]["skill"], skill_name)
+        self.assertTrue(specificity["skill_specific_probe"]["primary_target"])
+        self.assertIn(
+            specificity["skill_specific_probe"]["primary_target_status"],
+            {"resolved", "template", "packaged_test_reference"},
+        )
+        self.assertEqual(
+            specificity["skill_specific_probe"]["proof_kind"],
+            "implementation-target-resolution-plus-contract-demo",
+        )
+        self.assertTrue(specificity["skill_specific_probe"]["contract_modules"])
+        self.assertIn(skill_name, specificity["unique_markers"])
+        self.assertIn(payload["scenario_id"], specificity["unique_markers"])
 
         self.assertIn(payload["host_metadata"]["selected_host"], {"local", "codex", "antigravity-style", "claude-code"})
         self.assertGreaterEqual(len(payload["host_metadata"]["host_differences"]), 3)
@@ -153,6 +200,10 @@ class SkillDemoTests(unittest.TestCase):
         declared_paths = {Path(artifact["path"]).resolve() for artifact in payload["artifacts"]}
         generated_paths = {path.resolve() for path in output_dir.rglob("*") if path.is_file()}
         self.assertEqual(generated_paths, declared_paths)
+
+    def test_unknown_skill_cannot_fall_back_to_generic_gate_demo(self):
+        with self.assertRaises(ValueError):
+            _scenario_for("new-unmapped-skill")
 
 
 if __name__ == "__main__":

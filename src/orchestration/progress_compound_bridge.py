@@ -55,8 +55,7 @@ def build_progress_compound_capture(progress: DevelopmentRunProgress) -> Compoun
         regression_checks = ["Run focused tests for the workflow area touched by this progress run."]
 
     no_learning = str(progress.metadata.get("no_reusable_learning_rationale", "")).strip()
-    if not learnings and not no_learning:
-        no_learning = "No explicit reusable learning candidate was recorded in development progress."
+    learning_status = "captured" if learnings else ("explicit_no_learning" if no_learning else "missing")
 
     return CompoundCapture(
         objective=progress.objective,
@@ -77,6 +76,7 @@ def build_progress_compound_capture(progress: DevelopmentRunProgress) -> Compoun
             "token_optimizer_status": progress.token_optimizer_status,
             "token_optimizer_status_reason": progress.token_optimizer_status_reason,
             "workspace_strategy": progress.workspace_strategy,
+            "compound_learning_status": learning_status,
         },
     )
 

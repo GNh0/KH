@@ -233,9 +233,23 @@ def read_skill(skill_name: str) -> None:
     print(read_packaged_skill(skill_name))
 
 
-def check_skills(skills_dir: str = PACKAGED_SKILLS_DIR) -> int:
+def _catalog_check_summary(report: Any) -> Dict[str, Any]:
+    invalid_skills = [result.name for result in report.results if not result.valid]
+    issue_count = sum(len(result.issues) for result in report.results) + len(report.issues)
+    return {
+        "success": report.success,
+        "total_skills": report.total_skills,
+        "valid_skills": report.valid_skills,
+        "invalid_skills": report.invalid_skills,
+        "issue_count": issue_count,
+        "invalid_skill_names": invalid_skills,
+    }
+
+
+def check_skills(skills_dir: str = PACKAGED_SKILLS_DIR, *, summary: bool = False) -> int:
     report = validate_skill_folders(skills_dir)
-    print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+    payload = _catalog_check_summary(report) if summary else report.to_dict()
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0 if report.success else 1
 
 
@@ -246,6 +260,7 @@ if __name__ == "__main__":
     parser.add_argument("--list", action="store_true", help="List packaged UAF skills in JSON format")
     parser.add_argument("--read", type=str, help="Read a packaged UAF skill by name")
     parser.add_argument("--check", action="store_true", help="Validate packaged UAF skill folders and exit non-zero on errors")
+    parser.add_argument("--summary", action="store_true", help="Print compact check output instead of the full validation JSON")
     args = parser.parse_args()
 
     if args.list:
@@ -253,6 +268,6 @@ if __name__ == "__main__":
     elif args.read:
         read_skill(args.read)
     elif args.check:
-        sys.exit(check_skills())
+        sys.exit(check_skills(summary=args.summary))
     else:
         parser.print_help()
