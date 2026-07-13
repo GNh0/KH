@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Set
 
+from src.orchestration.goal_ledger import GoalLedger
 from src.orchestration.plugin_composition import looks_like_sql_output_request
 from src.orchestration.request_classifier import classify_request
 from src.orchestration.session_postmortem import analyze_codex_session_jsonl
@@ -51,8 +53,9 @@ RUNTIME_MARKERS = {
         "summarize_agent_transcript",
         "runtime_token_optimization",
         "estimated_tokens_saved",
-        "actual_tokens_saved",
-        "actual_usage",
+        "estimated_payload_tokens_saved",
+        "host_actual_tokens_used",
+        "host_actual_token_evidence",
     ],
     "memory-state-harness": [
         "MemoryStore",
@@ -360,9 +363,10 @@ ACCEPTANCE_OUTPUT_MARKERS = {
     "token-optimizer": {
         "token_decision": ["token_optimizer_status", "runtime_token_optimization", "token optimization"],
         "savings_or_passthrough": [
-            "actual_tokens_saved",
-            "actual_usage",
             "estimated_tokens_saved",
+            "estimated_payload_tokens_saved",
+            "host_actual_tokens_used",
+            "host_actual_token_evidence",
             "tokens saved",
             "passthrough",
             "considered_not_needed",
@@ -406,6 +410,8 @@ class SessionTextRecord:
     text: str
     payload_type: str
     role: str = ""
+    call_id: str = ""
+    name: str = ""
 
 
 @dataclass(frozen=True)
@@ -426,7 +432,19 @@ class SessionSkillAudit:
 def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     path = Path(session_path)
     postmortem = analyze_codex_session_jsonl(path)
+    postmortem_data = postmortem.to_dict()
+    scoped_goal_evidence = _scoped_current_goal_evidence(path)
+    goal_terminal_evidence = _terminal_goal_state_evidence(
+        path,
+        postmortem_data,
+        scoped_goal_evidence,
+    )
     text_records = _session_text_records(path)
+    if scoped_goal_evidence.get("valid") and str(
+        (postmortem_data.get("completion_guard", {}) or {}).get("latest_goal_status", "")
+    ) != "active":
+        text_records.append(_goal_ledger_evidence_record(scoped_goal_evidence))
+    sql_formatting_audit = _host_local_sql_formatting_audit(path)
     texts = [record.text for record in text_records]
     active_texts = [_strip_passive_prefix(text) for text in texts if not _is_passive_text(text)]
     sql_scope_texts = [
@@ -438,7 +456,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     catalog = collect_packaged_skills()
     skills = catalog.get("skills", [])
     required = _required_skills(
-        postmortem.to_dict(),
+        postmortem_data,
         combined_text,
         active_texts,
         sql_scope_texts=sql_scope_texts,
@@ -452,13 +470,40 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
         observations = _observations(text_records, aliases, name)
         status = observations["status"]
         is_required = name in required
+        if name == "sql-formatting-style-harness" and sql_formatting_audit["required"]:
+            if sql_formatting_audit["verifier_executed"]:
+                status = "applied"
+                observations["runtime_hits"] = max(1, int(observations["runtime_hits"]))
+            elif status == "applied":
+                status = "considered" if sql_formatting_audit["provider_selected"] else "mentioned"
+                observations["runtime_hits"] = 0
+        if (
+            name == "goal-state-harness"
+            and goal_terminal_evidence.get("valid")
+            and int((postmortem_data.get("completion_guard", {}) or {}).get("task_complete_count", 0) or 0) > 0
+        ):
+            status = "applied"
+            observations["runtime_hits"] = max(1, int(observations["runtime_hits"]))
         acceptance = _acceptance_for_skill(
             skill_name=name,
             required=is_required,
             status=status,
             observations=observations,
-            postmortem=postmortem.to_dict(),
+            postmortem=postmortem_data,
         )
+        if name == "sql-formatting-style-harness":
+            acceptance = _sql_style_harness_acceptance(
+                sql_formatting_audit,
+                required=is_required,
+                default=acceptance,
+            )
+        if name == "goal-state-harness":
+            acceptance = _goal_terminal_acceptance(
+                goal_terminal_evidence,
+                postmortem_data,
+                required=is_required,
+                default=acceptance,
+            )
         row = {
             "name": name,
             "execution_level": skill.get("execution_level", ""),
@@ -509,16 +554,28 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_cross_scope_context_issues(path))
     issues.extend(_global_memory_scope_issues(path))
     issues.extend(_target_substitution_issues(path))
-    issues.extend(_host_local_sql_formatting_issues(path))
+    issues.extend(sql_formatting_audit["issues"])
     issues.extend(_brainstorming_target_inspection_issues(path))
     issues.extend(_brainstorm_option_choice_execution_issues(path))
     issues.extend(_brainstorming_depth_issues(path))
-    issues.extend(_subagent_strategy_issues(path, postmortem.to_dict()))
-    issues.extend(_orchestration_decision_issues(path, postmortem.to_dict()))
-    issues.extend(_postmortem_guard_issues(postmortem.to_dict()))
-    issues.extend(_goal_state_completion_absence_issues(path, skill_rows, postmortem.to_dict()))
+    issues.extend(_subagent_strategy_issues(path, postmortem_data))
+    issues.extend(_orchestration_decision_issues(path, postmortem_data))
+    issues.extend(_postmortem_guard_issues(postmortem_data))
+    issues.extend(
+        _goal_state_completion_absence_issues(
+            path,
+            skill_rows,
+            postmortem_data,
+            terminal_evidence=goal_terminal_evidence,
+        )
+    )
     coverage = _coverage(skill_rows)
-    usage_summary = _skill_usage_summary(skill_rows, issues, postmortem.to_dict())
+    usage_summary = _skill_usage_summary(skill_rows, issues, postmortem_data)
+    usage_summary["sql_formatting_evidence"] = {
+        key: value
+        for key, value in sql_formatting_audit.items()
+        if key != "issues"
+    }
     return SessionSkillAudit(
         session_id=postmortem.session_id,
         path=str(path),
@@ -688,21 +745,25 @@ def _goal_state_completion_absence_issues(
     path: Path,
     skill_rows: List[Dict[str, Any]],
     postmortem: Dict[str, Any],
+    *,
+    terminal_evidence: Dict[str, Any] | None = None,
 ) -> List[Dict[str, Any]]:
-    goal_row = next((row for row in skill_rows if row.get("name") == "goal-state-harness"), {})
-    goal_required = bool(goal_row.get("required")) or _front_door_selected_skill(path, "goal-state-harness")
-    if not goal_required:
-        return []
-
     completion_guard = postmortem.get("completion_guard", {}) or {}
     task_complete_count = int(completion_guard.get("task_complete_count", 0) or 0)
     if task_complete_count <= 0:
         return []
 
     latest_status = str(completion_guard.get("latest_goal_status", "") or "")
-    if latest_status == "active":
+    goal_row = next((row for row in skill_rows if row.get("name") == "goal-state-harness"), {})
+    goal_required = bool(goal_row.get("required")) or _front_door_selected_skill(path, "goal-state-harness")
+    evidence = terminal_evidence or _terminal_goal_state_evidence(
+        path,
+        postmortem,
+        _scoped_current_goal_evidence(path),
+    )
+    if evidence.get("valid"):
         return []
-    if _has_terminal_goal_state_evidence(path, latest_status):
+    if not goal_required and latest_status not in {"active", "complete", "blocked"} and not evidence.get("observed"):
         return []
 
     return [
@@ -711,21 +772,66 @@ def _goal_state_completion_absence_issues(
             "status": "missing_terminal_goal_state",
             "severity": "P0",
             "reason": (
-                "goal-state-harness was required or selected, but task_complete was emitted without "
-                "terminal GoalState evidence"
+                "task_complete was emitted while the latest GoalState was active"
+                if latest_status == "active"
+                else "goal-state-harness was required or selected, but task_complete was emitted without "
+                "validated terminal GoalState evidence"
             ),
             "action": (
                 "Before final task_complete, create or update GoalState and close it as complete/blocked; "
                 "if the host cannot do that, report blocked instead of claiming completion."
             ),
+            "terminal_evidence_source": str(evidence.get("source", "")),
+            "validation_errors": list(evidence.get("errors", [])),
         }
     ]
 
 
-def _has_terminal_goal_state_evidence(path: Path, latest_status: str) -> bool:
-    if latest_status in {"complete", "blocked"}:
-        return True
-    terminal_updates = 0
+def _terminal_goal_state_evidence(
+    path: Path,
+    postmortem: Dict[str, Any],
+    scoped_goal_evidence: Dict[str, Any],
+) -> Dict[str, Any]:
+    completion_guard = postmortem.get("completion_guard", {}) or {}
+    latest_status = str(completion_guard.get("latest_goal_status", "") or "")
+    thread_goal = _merged_thread_goal_state(path)
+    thread_status = str(thread_goal.get("status", "") or latest_status)
+    if latest_status == "active" or thread_status == "active":
+        return {
+            "valid": False,
+            "observed": True,
+            "source": "thread_goal_updated",
+            "state": thread_goal,
+            "errors": ["latest_goal_status_active"],
+        }
+
+    errors: List[str] = []
+    if thread_status in {"complete", "blocked"}:
+        validation = _validate_terminal_goal_state(thread_goal)
+        if validation["valid"]:
+            return {
+                "valid": True,
+                "observed": True,
+                "source": "thread_goal_updated",
+                "state": validation["state"],
+                "errors": [],
+            }
+        errors.extend(validation["errors"])
+
+    if scoped_goal_evidence.get("valid"):
+        return dict(scoped_goal_evidence)
+    errors.extend(str(item) for item in scoped_goal_evidence.get("errors", []) if str(item))
+    return {
+        "valid": False,
+        "observed": bool(thread_goal or scoped_goal_evidence.get("observed")),
+        "source": "thread_goal_updated" if thread_goal else str(scoped_goal_evidence.get("source", "")),
+        "state": thread_goal or scoped_goal_evidence.get("state", {}),
+        "errors": _dedupe_text(errors),
+    }
+
+
+def _merged_thread_goal_state(path: Path) -> Dict[str, Any]:
+    state: Dict[str, Any] = {}
     for event in _session_payload_events(path):
         payload = event.get("payload", {})
         if not isinstance(payload, dict):
@@ -733,10 +839,229 @@ def _has_terminal_goal_state_evidence(path: Path, latest_status: str) -> bool:
         if str(payload.get("type", "")) != "thread_goal_updated":
             continue
         goal = payload.get("goal", {}) or {}
-        status = str(goal.get("status", ""))
-        if status in {"complete", "blocked"}:
-            terminal_updates += 1
-    return terminal_updates > 0
+        if not isinstance(goal, dict):
+            continue
+        objective = str(goal.get("objective", "") or "")
+        if objective and state.get("objective") and objective != state.get("objective"):
+            state = {}
+        state.update(goal)
+    return state
+
+
+def _scoped_current_goal_evidence(path: Path) -> Dict[str, Any]:
+    metadata = _session_metadata(path)
+    project_dir = str(metadata.get("cwd", "") or "").strip()
+    thread_id = str(metadata.get("id", "") or metadata.get("thread_id", "")).strip()
+    if not project_dir:
+        return {"valid": False, "observed": False, "source": "", "state": {}, "errors": []}
+
+    candidates: List[tuple[str, Path]] = []
+    try:
+        if thread_id:
+            candidates.append(("chat_current_goal", GoalLedger(project_dir, thread_id=thread_id).current_goal_path))
+        candidates.append(("project_current_goal", GoalLedger(project_dir).current_goal_path))
+    except (OSError, ValueError):
+        return {
+            "valid": False,
+            "observed": False,
+            "source": "",
+            "state": {},
+            "errors": ["scoped_current_goal_path_unavailable"],
+        }
+
+    observed = False
+    errors: List[str] = []
+    seen: Set[str] = set()
+    for scope, candidate in candidates:
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if not candidate.is_file():
+            continue
+        observed = True
+        try:
+            if candidate.stat().st_size > 1_000_000:
+                errors.append(f"{scope}:current_goal_too_large")
+                continue
+            raw = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            errors.append(f"{scope}:current_goal_unreadable")
+            continue
+        if not isinstance(raw, dict):
+            errors.append(f"{scope}:current_goal_not_object")
+            continue
+        validation = _validate_terminal_goal_state(raw)
+        if validation["valid"]:
+            return {
+                "valid": True,
+                "observed": True,
+                "source": scope,
+                "path": str(candidate),
+                "state": validation["state"],
+                "errors": [],
+            }
+        errors.extend(f"{scope}:{item}" for item in validation["errors"])
+    return {
+        "valid": False,
+        "observed": observed,
+        "source": "scoped_current_goal" if observed else "",
+        "state": {},
+        "errors": _dedupe_text(errors),
+    }
+
+
+def _validate_terminal_goal_state(raw: Dict[str, Any]) -> Dict[str, Any]:
+    nested = raw.get("goal", {}) if isinstance(raw.get("goal"), dict) else {}
+    state = dict(nested)
+    errors: List[str] = []
+    for key in [
+        "objective",
+        "status",
+        "success_criteria",
+        "evidence_required",
+        "evidence",
+        "blocked_reason",
+        "metadata",
+    ]:
+        if key not in raw:
+            continue
+        if key in nested and nested.get(key) != raw.get(key):
+            errors.append(f"inconsistent_{key}")
+        state[key] = raw.get(key)
+
+    schema_version = raw.get("schema_version")
+    if schema_version is not None and (not isinstance(schema_version, int) or schema_version < 1):
+        errors.append("invalid_schema_version")
+    objective = str(state.get("objective", "") or "").strip()
+    if not objective:
+        errors.append("objective_missing")
+    status = str(state.get("status", "") or "").strip().lower()
+    if status not in {"complete", "blocked"}:
+        errors.append("status_not_terminal")
+
+    success_criteria = _validated_goal_list(state, "success_criteria", errors)
+    evidence_required = _validated_goal_list(state, "evidence_required", errors)
+    evidence = _validated_goal_list(state, "evidence", errors)
+    metadata = state.get("metadata", {}) if isinstance(state.get("metadata"), dict) else {}
+    metadata_value = state.get("metadata")
+    if metadata_value is not None and metadata_value != {} and not isinstance(metadata_value, dict):
+        errors.append("metadata_not_object")
+
+    if status == "complete":
+        if (success_criteria or evidence_required) and not evidence:
+            errors.append("completion_evidence_missing")
+        missing_evidence = metadata.get("missing_evidence", [])
+        if isinstance(missing_evidence, list) and missing_evidence:
+            errors.append("metadata_missing_evidence_not_empty")
+        elif missing_evidence is not None and missing_evidence != []:
+            errors.append("metadata_missing_evidence_invalid")
+        evidence_values = {_normalized_goal_evidence(item) for item in evidence}
+        alias_matches = metadata.get("evidence_alias_matches", {})
+        if not isinstance(alias_matches, dict):
+            alias_matches = {}
+            errors.append("evidence_alias_matches_not_object")
+        for required in evidence_required:
+            required_key = _normalized_goal_evidence(required)
+            alias_value = _normalized_goal_evidence(alias_matches.get(required, ""))
+            if required_key not in evidence_values and (not alias_value or alias_value not in evidence_values):
+                errors.append(f"required_evidence_missing:{required}")
+    elif status == "blocked" and not str(state.get("blocked_reason", "") or "").strip():
+        errors.append("blocked_reason_missing")
+
+    state["status"] = status
+    state["objective"] = objective
+    state["success_criteria"] = success_criteria
+    state["evidence_required"] = evidence_required
+    state["evidence"] = evidence
+    return {"valid": not errors, "state": state, "errors": _dedupe_text(errors)}
+
+
+def _validated_goal_list(state: Dict[str, Any], key: str, errors: List[str]) -> List[str]:
+    value = state.get(key, [])
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        errors.append(f"{key}_not_list")
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def _normalized_goal_evidence(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+
+def _session_metadata(path: Path) -> Dict[str, Any]:
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "session_meta" and isinstance(event.get("payload"), dict):
+            return dict(event["payload"])
+    return {}
+
+
+def _goal_ledger_evidence_record(evidence: Dict[str, Any]) -> SessionTextRecord:
+    state = evidence.get("state", {}) if isinstance(evidence.get("state"), dict) else {}
+    return SessionTextRecord(
+        text=json.dumps(
+            {
+                "skill": "goal-state-harness",
+                "status": "applied",
+                "goalstate": "validated terminal state",
+                "goal_ledger": evidence.get("path", "current_goal.json"),
+                "success_criteria": state.get("success_criteria", []),
+                "evidence_required": state.get("evidence_required", []),
+                "missing_evidence": [],
+                "blocked_reason": state.get("blocked_reason", ""),
+            },
+            ensure_ascii=False,
+        ),
+        payload_type="goal_ledger_evidence",
+        role="runtime",
+    )
+
+
+def _goal_terminal_acceptance(
+    terminal_evidence: Dict[str, Any],
+    postmortem: Dict[str, Any],
+    *,
+    required: bool,
+    default: Dict[str, Any],
+) -> Dict[str, Any]:
+    task_complete_count = int(
+        ((postmortem.get("completion_guard", {}) or {}).get("task_complete_count", 0)) or 0
+    )
+    if task_complete_count <= 0:
+        return default
+    required_outputs = list(ACCEPTANCE_OUTPUT_MARKERS.get("goal-state-harness", {}).keys())
+    if terminal_evidence.get("valid"):
+        return {
+            "status": "passed",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": required_outputs,
+            "missing_outputs": [],
+        }
+    if not required:
+        return default
+    return {
+        "status": "blocked",
+        "required_outputs": required_outputs,
+        "satisfied_outputs": [],
+        "missing_outputs": required_outputs,
+    }
+
+
+def _dedupe_text(values: Iterable[str]) -> List[str]:
+    result: List[str] = []
+    for value in values:
+        text = str(value)
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
@@ -2172,182 +2497,794 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
 
 
 def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
-    records = [
-        record
-        for record in _session_text_records(path)
-        if (
-            not _is_passive_text(record.text)
-            or _looks_like_sql_formatting_application(record)
-            or _looks_like_sql_formatting_style_verifier(record)
-            or _looks_like_sql_formatting_style_verifier_failed(record)
-            or _looks_like_sql_style_verifier_blocked(record)
-        )
-    ]
-    request_index = -1
-    for index, record in enumerate(records):
-        if record.role == "user" and looks_like_sql_output_request(record.text.lower()):
-            request_index = index
-            break
-    if request_index < 0:
-        return []
+    return list(_host_local_sql_formatting_audit(path)["issues"])
 
-    first_sql_action_index = -1
-    first_sql_action_kind = ""
-    first_sql_skill_index = -1
+
+def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
+    records = _session_text_records(path)
+    result: Dict[str, Any] = {
+        "required": False,
+        "status": "not_required",
+        "states": [],
+        "provider_selected": False,
+        "provider_inspected": False,
+        "formatter_application_proven": False,
+        "verifier_executed": False,
+        "verifier_failed": False,
+        "verifier_pending": False,
+        "verifier_evidence_unbound": False,
+        "verified_before_output": False,
+        "verification_id": "",
+        "binding_errors": [],
+        "action_kind": "",
+        "issues": [],
+    }
+
+    request_index = next(
+        (
+            index
+            for index, record in enumerate(records)
+            if record.role == "user"
+            and not _is_passive_text(record.text)
+            and looks_like_sql_output_request(record.text.lower())
+        ),
+        -1,
+    )
+    if request_index < 0:
+        return result
+
+    action_index = -1
+    action_kind = ""
     for index, record in enumerate(records[request_index + 1 :], request_index + 1):
         lowered = record.text.lower()
-        if first_sql_skill_index < 0 and _looks_like_sql_formatting_application(record):
-            first_sql_skill_index = index
-        if record.role == "assistant" and _looks_like_sql_answer(lowered):
-            first_sql_action_index = index
-            first_sql_action_kind = "sql_output"
+        if (
+            record.role == "assistant"
+            or record.payload_type in {"agent_message", "task_complete"}
+        ) and _looks_like_sql_answer(lowered):
+            action_index = index
+            action_kind = "sql_output"
             break
         if _looks_like_sql_db_write(record):
-            first_sql_action_index = index
-            first_sql_action_kind = "db_write"
+            action_index = index
+            action_kind = "db_write"
             break
+    if action_index < 0:
+        return result
 
-    if first_sql_action_index < 0:
-        return []
-    if first_sql_skill_index >= 0 and first_sql_skill_index < first_sql_action_index:
-        first_verifier_index = -1
-        first_failed_verifier_index = -1
-        first_blocked_index = -1
-        for index, record in enumerate(records[first_sql_skill_index + 1 : first_sql_action_index], first_sql_skill_index + 1):
-            if first_verifier_index < 0 and _looks_like_sql_formatting_style_verifier(record):
-                first_verifier_index = index
-            if first_failed_verifier_index < 0 and _looks_like_sql_formatting_style_verifier_failed(record):
-                first_failed_verifier_index = index
-            if first_blocked_index < 0 and _looks_like_sql_style_verifier_blocked(record):
-                first_blocked_index = index
-        if first_verifier_index >= 0 or first_blocked_index >= 0:
-            return []
-        if first_failed_verifier_index >= 0:
-            return [
-                {
-                    "skill": "sql-formatting-style-harness",
-                    "status": "sql_formatting_style_verifier_failed_before_output",
-                    "severity": "P1",
-                    "reason": "SQL formatting verifier failed or blocked mechanically, but SQL output was still emitted.",
-                    "action": (
-                        "Fix the SQL formatting until `verify_sql_formatting_style` passes, or return the original SQL "
-                        "with a blocked/needs-review explanation instead of presenting failed formatted SQL as final."
-                    ),
-                    "verifier": _short(records[first_failed_verifier_index].text),
-                    "samples": [_short(records[first_sql_action_index].text)],
-                }
-            ]
-        action_phrase = "DB write" if first_sql_action_kind == "db_write" else "SQL output"
-        return [
-            {
-                "skill": "sql-formatting-style-harness",
-                "status": "missing_sql_formatting_style_verifier",
-                "severity": "P1",
-                "reason": f"SQL formatting routed through the host-local skill, but KH did not record verifier evidence before {action_phrase}.",
-                "action": "Run or record `verify_sql_formatting_style` / `src.skills.sql_formatting_style` evidence before emitting final SQL, DB writes, or final claims; otherwise record a blocked reason first.",
-                "samples": [_short(records[first_sql_action_index].text)],
-            }
-        ]
-
-    return [
-        {
-            "skill": "sql-formatting",
-            "status": "missing_before_sql_output",
-            "severity": "P1",
-            "reason": (
-                "An actionable SQL output request received SQL before the host-local "
-                "sql-formatting skill or sql-formatting provider route was applied."
-            ),
-            "action": (
-                "Route actionable SQL output through the host-local sql-formatting skill first, "
-                "then use sql-formatting-style-harness when KH verification evidence is required."
-            ),
-            "samples": [_short(records[first_sql_action_index].text)],
-        }
+    result["required"] = True
+    result["action_kind"] = action_kind
+    before_action = range(request_index + 1, action_index)
+    selected_indices = [
+        index
+        for index in before_action
+        if records[index].payload_type in {"function_call_output", "custom_tool_call_output"}
+        and _has_sql_formatting_route_evidence(records[index].text.lower())
+    ]
+    inspected_indices = []
+    for index in before_action:
+        if not _looks_like_sql_formatting_provider_inspection(records[index]):
+            continue
+        output_index = _correlated_successful_provider_read_output(records, index, action_index)
+        if output_index >= 0:
+            inspected_indices.append(output_index)
+    verifier_calls = [
+        index
+        for index in before_action
+        if _invokes_sql_formatting_verifier(records[index])
+    ]
+    verifier_outputs = [
+        index
+        for index in before_action
+        if _is_sql_verifier_output_candidate(records[index])
     ]
 
+    result["provider_selected"] = bool(selected_indices)
+    result["provider_inspected"] = bool(inspected_indices)
+    result["verifier_executed"] = bool(verifier_calls)
+    states: List[str] = []
+    if result["provider_selected"]:
+        states.append("provider_selected")
+    if result["provider_inspected"]:
+        states.append("provider_inspected")
+    if result["verifier_executed"]:
+        states.append("verifier_executed")
 
-def _looks_like_sql_formatting_application(record: SessionTextRecord) -> bool:
-    lowered = record.text.lower()
-    if record.payload_type in {"function_call", "custom_tool_call"}:
-        return (
-            ("sql-formatting" in lowered or "sql_formatting" in lowered or "sql formatting" in lowered)
-            and ("skill.md" in lowered or "\\sql-formatting\\" in lowered or "/sql-formatting/" in lowered)
+    final_sql = _extract_actionable_sql(records[action_index], action_kind)
+    binding_errors: List[str] = []
+    latest_evaluation: Dict[str, Any] = {}
+    used_output_indices: Set[int] = set()
+    for call_index in verifier_calls:
+        output_index, correlation_error = _correlated_sql_verifier_output(
+            records,
+            call_index,
+            action_index,
         )
-    if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
-        return False
-    return _has_sql_formatting_route_evidence(lowered)
+        if correlation_error:
+            _append_unique_text(binding_errors, correlation_error)
+        if output_index < 0:
+            latest_evaluation = {"status": "unbound", "errors": [correlation_error or "verifier_output_missing"]}
+            continue
+        used_output_indices.add(output_index)
+        latest_evaluation = _evaluate_sql_verifier_output(
+            records[output_index],
+            records[call_index],
+            final_sql,
+            records=records,
+            request_index=request_index,
+            call_index=call_index,
+        )
+        if (
+            latest_evaluation.get("status") in {"passed", "pending"}
+            and not any(index < call_index for index in inspected_indices)
+        ):
+            latest_evaluation = {
+                "status": "unbound",
+                "errors": ["provider_inspection_not_before_verifier"],
+            }
+        for error in latest_evaluation.get("errors", []):
+            _append_unique_text(binding_errors, str(error))
 
-def _looks_like_sql_formatting_style_verifier(record: SessionTextRecord) -> bool:
-    return _sql_formatting_style_verifier_status(record) == "passed"
+    if not verifier_calls and verifier_outputs:
+        _append_unique_text(binding_errors, "verifier_output_without_call")
+        latest_evaluation = {"status": "unbound", "errors": ["verifier_output_without_call"]}
+    elif verifier_calls:
+        unmatched_outputs = [index for index in verifier_outputs if index not in used_output_indices]
+        if unmatched_outputs and not latest_evaluation:
+            _append_unique_text(binding_errors, "verifier_output_without_correlated_call")
+            latest_evaluation = {"status": "unbound", "errors": ["verifier_output_without_correlated_call"]}
 
+    verifier_status = str(latest_evaluation.get("status", ""))
+    if verifier_status in {"passed", "pending"} and binding_errors:
+        verifier_status = "unbound"
+    if verifier_status == "failed":
+        result["verifier_failed"] = True
+        states.append("verifier_failed")
+    elif verifier_status == "pending":
+        result["verifier_pending"] = True
+        states.append("verifier_pending")
+    elif verifier_status == "unbound":
+        result["verifier_evidence_unbound"] = True
+        states.append("verifier_evidence_unbound")
 
-def _looks_like_sql_formatting_style_verifier_failed(record: SessionTextRecord) -> bool:
-    return _sql_formatting_style_verifier_status(record) == "failed"
+    verifier_bound = verifier_status == "passed"
+    verified = bool(result["provider_inspected"] and result["verifier_executed"] and verifier_bound)
+    if verified:
+        result["formatter_application_proven"] = True
+        result["verified_before_output"] = True
+        result["verification_id"] = str(latest_evaluation.get("verification_id", ""))
+        result["status"] = "verified_before_output"
+        states.append("verified_before_output")
+    else:
+        result["status"] = (
+            "verifier_failed"
+            if result["verifier_failed"]
+            else "verifier_pending"
+            if result["verifier_pending"]
+            else "verifier_evidence_unbound"
+            if result["verifier_evidence_unbound"]
+            else "formatter_application_not_proven"
+        )
+        states.append("formatter_application_not_proven")
 
+    result["states"] = states
+    result["binding_errors"] = binding_errors
+    if verified:
+        return result
 
-def _sql_formatting_style_verifier_status(record: SessionTextRecord) -> str:
-    lowered = record.text.lower()
-    if record.payload_type not in {"function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"}:
-        return ""
-    if not any(
-        marker in lowered
-        for marker in [
-            "verify_sql_formatting_style",
-            "src.skills.sql_formatting_style",
-            "sql-formatting-style-harness",
-            "sql_formatting_style",
-            "mechanical_checks",
-            "style_contract_source",
+    action_phrase = "DB write" if action_kind == "db_write" else "final SQL output"
+    sample = [_short(records[action_index].text)]
+    result["issues"].extend(
+        [
+            {
+                "skill": "sql-formatting",
+                "status": "missing_before_sql_output",
+                "severity": "P1",
+                "reason": (
+                    f"An actionable SQL request reached {action_phrase} without provider inspection and "
+                    "bound verifier evidence proving the formatted SQL. Provider selection alone is not application."
+                ),
+                "action": (
+                    "Inspect the host-local sql-formatting contract, apply it, then execute "
+                    "`verify_sql_formatting_style` and bind its successful evidence to the final SQL."
+                ),
+                "evidence_states": list(states),
+                "samples": sample,
+            },
+            {
+                "skill": "sql-formatting",
+                "status": "formatter_application_not_proven",
+                "severity": "P1",
+                "reason": (
+                    "The session did not prove that the host-local SQL formatting contract was applied "
+                    f"before {action_phrase}. Reading SKILL.md is inspection only."
+                ),
+                "action": "Require provider inspection plus successful, bound SQL verifier execution before actionable output.",
+                "evidence_states": list(states),
+                "samples": sample,
+            },
         ]
-    ):
-        return ""
-    if record.payload_type in {"function_call", "custom_tool_call"}:
-        return ""
-    if _looks_like_sql_style_verifier_blocked(record):
-        return "blocked"
+    )
+    if result["verifier_pending"]:
+        result["issues"].append(
+            {
+                "skill": "sql-formatting-style-harness",
+                "status": "verifier_pending",
+                "severity": "P1",
+                "reason": (
+                    "The scalar refactor is mechanically valid but remains pending authenticated "
+                    "runtime semantic verification."
+                ),
+                "action": "Keep the refactor pending until release_readiness is ready.",
+                "binding_errors": list(binding_errors),
+                "samples": sample,
+            }
+        )
+    elif result["verifier_failed"]:
+        result["issues"].append(
+            {
+                "skill": "sql-formatting-style-harness",
+                "status": "verifier_failed",
+                "severity": "P1",
+                "reason": "The executed SQL formatting verifier failed before actionable SQL was emitted.",
+                "action": "Fix the mechanical or alias failures and rerun the verifier before output.",
+                "binding_errors": list(binding_errors),
+                "samples": sample,
+            }
+        )
+    elif result["verifier_evidence_unbound"]:
+        result["issues"].append(
+            {
+                "skill": "sql-formatting-style-harness",
+                "status": "verifier_evidence_unbound",
+                "severity": "P1",
+                "reason": (
+                    "SQL verifier evidence could not be bound to an actual preceding verifier call and the exact final SQL."
+                ),
+                "action": (
+                    "Correlate call IDs when present; otherwise keep call/output adjacent and provide all verifier hashes, "
+                    "verification_id, mechanical status, alias status, and exact final SQL binding."
+                ),
+                "binding_errors": list(binding_errors),
+                "samples": sample,
+            }
+        )
+    return result
 
-    data = _json_object_from_text(record.text)
+
+def _looks_like_sql_formatting_provider_inspection(record: SessionTextRecord) -> bool:
+    if record.payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    lowered = record.text.lower()
+    if not re.search(r"(?:^|[\\/])sql[-_]formatting[\\/]skill\.md\b", lowered):
+        return False
+    return any(
+        marker in lowered
+        for marker in ["get-content", "read_file", "read_text", "open_file", "cat ", "type "]
+    )
+
+
+def _correlated_successful_provider_read_output(
+    records: List[SessionTextRecord],
+    call_index: int,
+    action_index: int,
+) -> int:
+    call = records[call_index]
+    if call.call_id:
+        for index in range(call_index + 1, action_index):
+            record = records[index]
+            if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+                continue
+            if record.call_id == call.call_id:
+                return index if _successful_provider_read_output(record) else -1
+        return -1
+
+    limit = min(action_index, call_index + 7)
+    for index in range(call_index + 1, limit):
+        record = records[index]
+        if record.payload_type in {"function_call", "custom_tool_call"}:
+            break
+        if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+            continue
+        if record.call_id:
+            return -1
+        return index if _successful_provider_read_output(record) else -1
+    return -1
+
+
+def _successful_provider_read_output(record: SessionTextRecord) -> bool:
+    text = record.text.strip()
+    if not _successful_tool_output_text(text):
+        return False
+    return any(_valid_sql_formatting_skill_contract(item) for item in _provider_output_texts(text))
+
+
+def _successful_tool_output_text(text: str) -> bool:
+    if not text.strip():
+        return False
+    data = _json_object_from_text(text)
     if data:
-        metadata = data.get("metadata", {}) if isinstance(data.get("metadata"), dict) else {}
-        mechanical = data.get("mechanical_checks", {})
-        if not isinstance(mechanical, dict):
-            mechanical = metadata.get("mechanical_checks", {}) if isinstance(metadata.get("mechanical_checks"), dict) else {}
-        status = str(data.get("status", "") or metadata.get("status", "")).strip().lower()
-        mechanical_status = str(mechanical.get("status", "")).strip().lower()
+        status = str(data.get("status", "") or "").strip().lower()
         success = data.get("success")
         exit_code = data.get("exit_code")
-        error_count = data.get("error_count")
-        if not isinstance(error_count, int):
-            stdout_data = _json_object_from_text(str(data.get("stdout", "")))
-            error_count = stdout_data.get("error_count") if isinstance(stdout_data.get("error_count"), int) else None
-            if not status:
-                status = str(stdout_data.get("status", "")).strip().lower()
-        if success is False or status in {"failed", "failure", "blocked", "error"} or mechanical_status in {"failed", "failure", "blocked", "error"}:
-            return "failed"
-        if isinstance(error_count, int) and error_count > 0:
-            return "failed"
+        if success is False or status in {"blocked", "error", "failed", "failure"}:
+            return False
         if isinstance(exit_code, int) and exit_code != 0:
-            return "failed"
-        if success is True or status in {"passed", "pass", "ok", "success"} or mechanical_status in {"passed", "pass", "ok", "success"}:
-            return "passed"
+            return False
+    lowered = text.lower()
+    return not bool(
+        re.search(r"\bexit code\s*:\s*[1-9]\d*\b", lowered)
+        or any(
+            marker in lowered
+            for marker in [
+                "script failed",
+                "cannot find path",
+                "no such file",
+                "permission denied",
+                "access is denied",
+            ]
+        )
+    )
 
-    if any(marker in lowered for marker in ['"success": false', "'success': false", "status=failed", "status: failed"]):
-        return "failed"
-    if any(marker in lowered for marker in ['"status": "failed"', "'status': 'failed'", '"status": "blocked"', "'status': 'blocked'"]):
-        return "failed"
-    if any(marker in lowered for marker in ['"error_count": 0', "'error_count': 0", '"status": "passed"', "'status': 'passed'", "status=passed"]):
-        return "passed"
+
+def _provider_output_texts(text: str) -> List[str]:
+    candidates = [text, _strip_passive_prefix(text)]
+    data = _json_object_from_text(text)
+    for key in ["stdout", "output", "content", "text"]:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value)
+    return candidates
+
+
+def _valid_sql_formatting_skill_contract(text: str) -> bool:
+    match = re.match(r"^\s*---\s*\r?\n(.*?)\r?\n---\s*\r?\n(.*)$", text, re.DOTALL)
+    if not match:
+        return False
+    frontmatter, body = match.groups()
+    name_match = re.search(r"(?im)^name\s*:\s*['\"]?([^'\"\r\n]+)", frontmatter)
+    description_match = re.search(r"(?im)^description\s*:\s*\S", frontmatter)
+    if not name_match or name_match.group(1).strip().lower() != "sql-formatting":
+        return False
+    if not description_match:
+        return False
+    lowered = body.lower()
+    preservation_terms = [
+        "preserve original sql logic",
+        "preserve sql logic",
+        "preserve string literals",
+        "string literals unchanged",
+    ]
+    return "sql" in lowered and any(marker in lowered for marker in preservation_terms)
+
+
+def _invokes_sql_formatting_verifier(record: SessionTextRecord) -> bool:
+    if record.payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    name = record.name.lower().replace("-", "_")
+    lowered = record.text.lower()
+    if "verify_sql_formatting_style" in name:
+        return True
+    if name in {"src.skills.sql_formatting_style", "sql_formatting_style"}:
+        return True
+    if not any(marker in name for marker in ["shell", "exec", "command", "powershell"]):
+        return False
+    if any(marker in lowered for marker in ["get-content", "select-string", "rg ", "git grep"]):
+        return False
+    return bool(
+        re.search(r"\bpython(?:\.exe)?\b[^\r\n]*(?:-m\s+src\.skills\.sql_formatting_style|sql_formatting_style\.py)", lowered)
+        or re.search(r"\bpython(?:\.exe)?\b[^\r\n]*verify_sql_formatting_style\s*\(", lowered)
+    )
+
+
+def _is_sql_verifier_output_candidate(record: SessionTextRecord) -> bool:
+    if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+        return False
+    layers = _sql_verifier_data_layers(record.text)
+    if not layers:
+        return False
+    return any(
+        _sql_evidence_value(layers, key) is not None
+        and _sql_evidence_value(layers, key) != ""
+        for key in [
+            "original_sha256",
+            "formatted_sha256",
+            "style_contract_sha256",
+            "verification_id",
+            "mechanical_checks",
+            "alias_role_plan_validation",
+        ]
+    ) or any(
+        marker in record.text.lower()
+        for marker in ["verify_sql_formatting_style", "src.skills.sql_formatting_style"]
+    )
+
+
+def _correlated_sql_verifier_output(
+    records: List[SessionTextRecord],
+    call_index: int,
+    action_index: int,
+) -> tuple[int, str]:
+    call = records[call_index]
+    if call.call_id:
+        for index in range(call_index + 1, action_index):
+            record = records[index]
+            if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+                continue
+            if record.call_id == call.call_id:
+                return index, ""
+        if any(
+            records[index].call_id
+            and records[index].call_id != call.call_id
+            and _is_sql_verifier_output_candidate(records[index])
+            for index in range(call_index + 1, action_index)
+        ):
+            return -1, "verifier_output_call_id_mismatch"
+        return -1, "verifier_output_missing"
+
+    limit = min(action_index, call_index + 7)
+    for index in range(call_index + 1, limit):
+        record = records[index]
+        if _invokes_sql_formatting_verifier(record):
+            break
+        if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+            continue
+        if record.call_id:
+            return -1, "verifier_output_call_id_mismatch"
+        return index, ""
+    return -1, "verifier_output_missing"
+
+
+def _evaluate_sql_verifier_output(
+    record: SessionTextRecord,
+    call: SessionTextRecord,
+    final_sql: str | None,
+    *,
+    records: List[SessionTextRecord],
+    request_index: int,
+    call_index: int,
+) -> Dict[str, Any]:
+    layers = _sql_verifier_data_layers(record.text)
+    if not layers:
+        return {"status": "unbound", "errors": ["verifier_output_not_structured"]}
+
+    overall_status = _normalized_evidence_status(_sql_evidence_value(layers, "status"))
+    mechanical_status = _structured_evidence_status(layers, "mechanical_checks", "mechanical_status")
+    alias_status = _alias_role_plan_validation_status(layers)
+    success = _sql_evidence_value(layers, "success")
+    exit_code = _sql_evidence_value(layers, "exit_code")
+    error_count = _sql_evidence_value(layers, "error_count")
+    pending_scalar_refactor = _is_pending_scalar_refactor(layers)
+    failed_statuses = {"failed", "failure", "blocked", "error"}
+    if (
+        not pending_scalar_refactor
+        and (
+            success is False
+            or overall_status in failed_statuses
+            or mechanical_status in failed_statuses
+            or alias_status in failed_statuses | {"required", "conflict"}
+            or isinstance(exit_code, int) and exit_code != 0
+            or isinstance(error_count, int) and error_count > 0
+        )
+    ):
+        return {"status": "failed", "errors": []}
+
+    errors: List[str] = []
+    passed_statuses = {"passed", "pass", "ok", "success"}
+    if not pending_scalar_refactor and success is not True and overall_status not in passed_statuses:
+        errors.append("verifier_success_not_proven")
+    if mechanical_status not in passed_statuses | {"mechanically_valid"}:
+        errors.append("mechanical_status_not_passed")
+    if not alias_status:
+        errors.append("alias_role_plan_validation_missing")
+    elif alias_status not in {"not_needed", "verified"}:
+        errors.append("alias_role_plan_validation_not_accepted")
+
+    hashes: Dict[str, str] = {}
+    for key in ["original_sha256", "formatted_sha256", "style_contract_sha256"]:
+        value = str(_sql_evidence_value(layers, key) or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            errors.append(f"{key}_missing_or_invalid")
+        else:
+            hashes[key] = value
+    verification_id = str(_sql_evidence_value(layers, "verification_id") or "").strip()
+    if not verification_id:
+        errors.append("verification_id_missing")
+
+    call_data = _json_object_from_text(call.text)
+    call_original_sql = call_data.get("original_sql")
+    call_formatted_sql = call_data.get("formatted_sql")
+    if not isinstance(call_original_sql, str):
+        errors.append("original_sql_call_scope_missing")
+    elif hashes.get("original_sha256"):
+        call_original_hash = hashlib.sha256(call_original_sql.encode("utf-8")).hexdigest()
+        if hashes["original_sha256"] != call_original_hash:
+            errors.append("original_sha256_mismatch")
+        elif not _original_sql_bound_to_session_source(
+            records,
+            request_index=request_index,
+            call_index=call_index,
+            original_sql=call_original_sql,
+        ):
+            errors.append("original_sql_not_bound_to_session_source")
+    if not isinstance(call_formatted_sql, str):
+        errors.append("formatted_sql_call_scope_missing")
+    elif hashes.get("formatted_sha256"):
+        call_formatted_hash = hashlib.sha256(call_formatted_sql.encode("utf-8")).hexdigest()
+        if hashes["formatted_sha256"] != call_formatted_hash:
+            errors.append("formatted_sha256_call_mismatch")
+    if final_sql is None:
+        errors.append("final_sql_not_exactly_extractable")
+    elif hashes.get("formatted_sha256"):
+        actual_hash = hashlib.sha256(final_sql.encode("utf-8")).hexdigest()
+        if hashes["formatted_sha256"] != actual_hash:
+            errors.append("formatted_sha256_mismatch")
+
+    return {
+        "status": "unbound" if errors else ("pending" if pending_scalar_refactor else "passed"),
+        "errors": errors,
+        "verification_id": verification_id,
+    }
+
+
+def _is_pending_scalar_refactor(layers: List[Dict[str, Any]]) -> bool:
+    operation = _normalized_evidence_status(_sql_evidence_value(layers, "operation"))
+    overall_status = _normalized_evidence_status(_sql_evidence_value(layers, "status"))
+    release_status = ""
+    scalar_status = ""
+    for layer in layers:
+        release = layer.get("release_readiness")
+        if isinstance(release, dict) and not release_status:
+            release_status = _normalized_evidence_status(release.get("status"))
+        semantic = layer.get("semantic_refactor_evidence")
+        if isinstance(semantic, dict):
+            scalar = semantic.get("scalar_function_refactor")
+            if isinstance(scalar, dict) and not scalar_status:
+                scalar_status = _normalized_evidence_status(scalar.get("status"))
+    return (
+        operation == "refactor"
+        and overall_status == "pending"
+        and release_status == "pending"
+        and scalar_status == "mechanically_valid"
+    )
+
+
+def _original_sql_bound_to_session_source(
+    records: List[SessionTextRecord],
+    *,
+    request_index: int,
+    call_index: int,
+    original_sql: str,
+) -> bool:
+    if not _looks_like_actionable_sql_source(original_sql):
+        return False
+    request = records[request_index]
+    if request.role == "user" and _has_exact_actionable_sql_source(request.text, original_sql):
+        return True
+
+    for index in range(request_index + 1, call_index):
+        call = records[index]
+        if not _looks_like_sql_source_artifact_read(call):
+            continue
+        if _correlated_successful_source_artifact_output(
+            records,
+            index,
+            call_index,
+            original_sql,
+        ) >= 0:
+            return True
+    return False
+
+
+def _looks_like_actionable_sql_source(text: str) -> bool:
+    return bool(
+        re.match(
+            r"^\s*(?:with\b|select\b|insert\b|update\b|delete\b|merge\b|exec(?:ute)?\b|"
+            r"create\s+(?:or\s+alter\s+)?(?:proc(?:edure)?|function|view)\b)",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _looks_like_sql_source_artifact_read(record: SessionTextRecord) -> bool:
+    if record.payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    lowered = record.text.lower()
+    if not re.search(r"\.(?:sql|tsql|txt|srd|sru|srw)\b", lowered):
+        return False
+    return any(
+        marker in lowered
+        for marker in ["get-content", "read_file", "read_text", "open_file", "cat ", "type "]
+    )
+
+
+def _correlated_successful_source_artifact_output(
+    records: List[SessionTextRecord],
+    call_index: int,
+    verifier_call_index: int,
+    original_sql: str,
+) -> int:
+    call = records[call_index]
+    for index in range(call_index + 1, verifier_call_index):
+        record = records[index]
+        if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+            continue
+        if call.call_id and record.call_id != call.call_id:
+            continue
+        if not call.call_id and record.call_id:
+            return -1
+        return (
+            index
+            if _successful_tool_output_text(record.text)
+            and _has_exact_actionable_sql_source(record.text, original_sql)
+            else -1
+        )
+    return -1
+
+
+def _has_exact_actionable_sql_source(text: str, original_sql: str) -> bool:
+    target = str(original_sql or "").strip()
+    if not target:
+        return False
+    return any(candidate.strip() == target for candidate in _extract_actionable_sql_sources(text))
+
+
+def _extract_actionable_sql_sources(text: str) -> List[str]:
+    source = str(text or "")
+    candidates: List[str] = []
+    fenced_pattern = re.compile(
+        r"^[ \t]*```[ \t]*(?:sql|tsql|t-sql)[ \t]*\r?\n(.*?)^[ \t]*```[ \t]*$",
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    inline_pattern = re.compile(
+        r"(?ims)(^\s*(?:with\b|select\b|insert\b|update\b|delete\b|merge\b|exec(?:ute)?\b|"
+        r"create\s+(?:or\s+alter\s+)?(?:proc(?:edure)?|function|view)\b)"
+        r"[\s\S]*?(?:;(?=\s*(?:$|```))|(?=\r?\n\s*(?:format|rewrite|convert|clean|fix|please|"
+        r"make|generate|draft|output|return|show|check|review|do\s+i\s+need|what|why|can\s+you|"
+        r"is\s+this|should\s+i|how)\b)|$))"
+    )
+
+    for match in fenced_pattern.finditer(source):
+        candidate = match.group(1).strip()
+        if candidate:
+            candidates.append(candidate)
+    for match in inline_pattern.finditer(source):
+        candidate = match.group(1).strip()
+        if candidate:
+            candidates.append(candidate)
+
+    unique_candidates: List[str] = []
+    for candidate in candidates:
+        if candidate not in unique_candidates:
+            unique_candidates.append(candidate)
+    return unique_candidates
+
+
+def _sql_verifier_data_layers(text: str) -> List[Dict[str, Any]]:
+    root = _json_object_from_text(text)
+    if not root:
+        return []
+    layers: List[Dict[str, Any]] = []
+
+    def collect(value: Dict[str, Any], depth: int = 0) -> None:
+        if depth > 3:
+            return
+        layers.append(value)
+        for key in ["metadata", "evidence", "verification"]:
+            nested = value.get(key)
+            if isinstance(nested, dict):
+                collect(nested, depth + 1)
+        stdout = value.get("stdout")
+        if isinstance(stdout, str):
+            nested_stdout = _json_object_from_text(stdout)
+            if nested_stdout:
+                collect(nested_stdout, depth + 1)
+
+    collect(root)
+    return layers
+
+
+def _sql_evidence_value(layers: List[Dict[str, Any]], key: str) -> Any:
+    for layer in layers:
+        if key in layer:
+            return layer.get(key)
+    return None
+
+
+def _structured_evidence_status(layers: List[Dict[str, Any]], key: str, flat_key: str) -> str:
+    flat_value = _sql_evidence_value(layers, flat_key)
+    if flat_value not in {None, ""}:
+        return _normalized_evidence_status(flat_value)
+    for layer in layers:
+        value = layer.get(key)
+        if isinstance(value, dict):
+            return _normalized_evidence_status(value.get("status"))
     return ""
 
 
-def _looks_like_sql_style_verifier_blocked(record: SessionTextRecord) -> bool:
-    lowered = record.text.lower()
-    if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
-        return False
-    if not any(marker in lowered for marker in ["sql-formatting-style-harness", "verify_sql_formatting_style", "src.skills.sql_formatting_style"]):
-        return False
-    return _is_immediate_blocked_evidence(lowered)
+def _alias_role_plan_validation_status(layers: List[Dict[str, Any]]) -> str:
+    for layer in layers:
+        value = layer.get("alias_role_plan_validation")
+        if isinstance(value, dict):
+            return _normalized_evidence_status(value.get("status"))
+    return ""
+
+
+def _normalized_evidence_status(value: Any) -> str:
+    if value is True:
+        return "passed"
+    if value is False:
+        return "failed"
+    return str(value or "").strip().lower()
+
+
+def _extract_actionable_sql(record: SessionTextRecord, action_kind: str) -> str | None:
+    if action_kind == "db_write":
+        data = _json_object_from_text(record.text)
+        for key in ["query", "sql", "statement"]:
+            value = data.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        return None
+
+    pattern = re.compile(
+        r"^[ \t]*```[ \t]*(?:sql|tsql|t-sql)[ \t]*\r?\n(.*?)^[ \t]*```[ \t]*$",
+        flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    blocks = [match.group(1) for match in pattern.finditer(record.text)]
+    if len(blocks) != 1:
+        return None
+    sql = blocks[0]
+    if sql.endswith("\r\n"):
+        return sql[:-2]
+    if sql.endswith("\n"):
+        return sql[:-1]
+    return sql
+
+
+def _append_unique_text(items: List[str], value: str) -> None:
+    if value and value not in items:
+        items.append(value)
+
+
+def _sql_style_harness_acceptance(
+    sql_audit: Dict[str, Any],
+    *,
+    required: bool,
+    default: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not required or not sql_audit.get("required"):
+        return default
+    required_outputs = list(ACCEPTANCE_OUTPUT_MARKERS.get("sql-formatting-style-harness", {}).keys())
+    if sql_audit.get("verified_before_output"):
+        return {
+            "status": "passed",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": required_outputs,
+            "missing_outputs": [],
+        }
+    if sql_audit.get("verifier_failed"):
+        return {
+            "status": "blocked",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": [],
+            "missing_outputs": required_outputs,
+        }
+    if sql_audit.get("verifier_pending"):
+        return {
+            "status": "blocked",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": [],
+            "missing_outputs": required_outputs,
+        }
+    if sql_audit.get("verifier_executed"):
+        return {
+            "status": "missing_outputs",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": [],
+            "missing_outputs": required_outputs,
+        }
+    return default
 
 
 def _has_sql_formatting_route_evidence(lowered: str) -> bool:
@@ -3112,6 +4049,8 @@ def _orchestration_decision_issues(path: Path, postmortem: Dict[str, Any]) -> Li
     if not any(selected_orchestration.values()):
         return []
 
+    validated_artifacts = _validated_orchestration_artifacts(path)
+
     issues: List[Dict[str, Any]] = []
     if (
         selected_orchestration["host-agent-orchestration"]
@@ -3147,7 +4086,10 @@ def _orchestration_decision_issues(path: Path, postmortem: Dict[str, Any]) -> Li
                 ),
             }
         )
-    if selected_orchestration["parallel-orchestration-harness"] and not _has_parallel_strategy_rationale(lowered):
+    if (
+        selected_orchestration["parallel-orchestration-harness"]
+        and not validated_artifacts["parallel_strategy"]
+    ):
         issues.append(
             {
                 "skill": "parallel-orchestration-harness",
@@ -3163,7 +4105,10 @@ def _orchestration_decision_issues(path: Path, postmortem: Dict[str, Any]) -> Li
                 ),
             }
         )
-    if selected_orchestration["role-execution-audit-harness"] and not _has_role_execution_audit_rationale(lowered):
+    if (
+        selected_orchestration["role-execution-audit-harness"]
+        and not validated_artifacts["role_execution_audit"]
+    ):
         issues.append(
             {
                 "skill": "role-execution-audit-harness",
@@ -3180,6 +4125,114 @@ def _orchestration_decision_issues(path: Path, postmortem: Dict[str, Any]) -> Li
             }
         )
     return issues
+
+
+def _validated_orchestration_artifacts(path: Path) -> Dict[str, bool]:
+    records = _session_text_records(path)
+    evidence = {"parallel_strategy": False, "role_execution_audit": False}
+    for call_index, call in enumerate(records):
+        if call.payload_type not in {"function_call", "custom_tool_call"} or _is_passive_text(call.text):
+            continue
+        lowered = call.text.lower()
+        if "validate_large_work_orchestration_bundle" in lowered:
+            output = _correlated_structured_tool_output(records, call_index)
+            call_data = _json_object_from_text(call.text)
+            bundle = call_data.get("bundle", call_data) if isinstance(call_data, dict) else {}
+            if _valid_large_work_bundle_artifact(output):
+                decision = str(bundle.get("parallel_strategy_decision") or "").strip().lower()
+                if decision and not decision.startswith("parallel") and _has_no_parallel_rationale(decision):
+                    evidence["parallel_strategy"] = True
+                role_statuses = bundle.get("skill_statuses", {})
+                role_status = (
+                    role_statuses.get("role-execution-audit-harness", {})
+                    if isinstance(role_statuses, dict)
+                    else {}
+                )
+                if _valid_pre_role_decision(role_status):
+                    evidence["role_execution_audit"] = True
+        if any(
+            marker in lowered
+            for marker in ["audit_role_execution", "dispatch_project_workflow", "async_project_workflow"]
+        ):
+            output = _correlated_structured_tool_output(records, call_index)
+            audit = _find_nested_mapping(output, "role_execution_audit") or output
+            if _valid_role_execution_audit_artifact(audit):
+                evidence["role_execution_audit"] = True
+                if _role_audit_proves_parallel_execution(audit):
+                    evidence["parallel_strategy"] = True
+    return evidence
+
+
+def _correlated_structured_tool_output(
+    records: List[SessionTextRecord], call_index: int
+) -> Dict[str, Any]:
+    call = records[call_index]
+    for record in records[call_index + 1 :]:
+        if record.payload_type in {"function_call", "custom_tool_call"}:
+            break
+        if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+            continue
+        if call.call_id and record.call_id != call.call_id:
+            continue
+        return _json_object_from_text(record.text)
+    return {}
+
+
+def _valid_large_work_bundle_artifact(output: Dict[str, Any]) -> bool:
+    return (
+        output.get("valid") is True
+        and not output.get("missing")
+        and "parallel_strategy_decision" in set(output.get("evidence", []) or [])
+    )
+
+
+def _valid_pre_role_decision(status: Any) -> bool:
+    if not isinstance(status, dict):
+        return False
+    return (
+        str(status.get("status") or "")
+        in {"considered_not_needed", "skipped_with_rationale", "blocked"}
+        and bool(str(status.get("evidence_note") or "").strip())
+    )
+
+
+def _find_nested_mapping(value: Any, key: str) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    nested = value.get(key)
+    if isinstance(nested, dict):
+        return nested
+    for candidate in value.values():
+        found = _find_nested_mapping(candidate, key)
+        if found:
+            return found
+    return {}
+
+
+def _valid_role_execution_audit_artifact(audit: Any) -> bool:
+    if not isinstance(audit, dict) or str(audit.get("status") or "") not in {"passed", "failed"}:
+        return False
+    checks = audit.get("checks", [])
+    return bool(audit.get("evidence")) and any(
+        isinstance(check, dict) and check.get("name") == "role-execution-audit"
+        for check in checks
+    )
+
+
+def _role_audit_proves_parallel_execution(audit: Dict[str, Any]) -> bool:
+    if audit.get("status") != "passed":
+        return False
+    for check in audit.get("checks", []) or []:
+        if not isinstance(check, dict) or check.get("name") != "role-execution-audit":
+            continue
+        summary = check.get("summary", {})
+        if not isinstance(summary, dict):
+            continue
+        return (
+            summary.get("execution_model") == "dag-asyncio-role-waves"
+            and int(summary.get("parallel_wave_count") or 0) > 0
+        )
+    return False
 
 
 def _early_domain_discovery_text(lowered: str) -> bool:
@@ -4397,7 +5450,15 @@ def _session_text_records(path: Path) -> List[SessionTextRecord]:
             )
             if passive:
                 text = PASSIVE_REFERENCE_PREFIX + text
-            texts.append(SessionTextRecord(text=text, payload_type=payload_type, role=role))
+            texts.append(
+                SessionTextRecord(
+                    text=text,
+                    payload_type=payload_type,
+                    role=role,
+                    call_id=str(payload.get("call_id", "") or payload.get("tool_call_id", "")),
+                    name=str(payload.get("name", "")),
+                )
+            )
             previous_call_was_passive = payload_type in {"function_call", "custom_tool_call"} and passive
         else:
             previous_call_was_passive = False
@@ -4575,10 +5636,10 @@ def _looks_like_token_optimizer_runtime_output(lowered: str) -> bool:
         marker in lowered
         for marker in [
             "estimated_tokens_saved",
+            "estimated_payload_tokens_saved",
             "token_savings_ratio",
-            "actual_tokens_saved",
-            "actual_token_savings_ratio",
-            "actual_usage",
+            "host_actual_tokens_used",
+            "host_actual_token_evidence",
             "token_usage",
         ]
     ):

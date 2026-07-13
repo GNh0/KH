@@ -1,7 +1,10 @@
+import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from src.orchestration.session_skill_audit import (
     analyze_session_skills,
@@ -49,6 +52,365 @@ class SessionSkillAuditTests(unittest.TestCase):
         lines.extend(json.dumps(event) for event in events)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
+
+    @staticmethod
+    def sql_verifier_result(original_sql, formatted_sql, **overrides):
+        result = {
+            "success": True,
+            "exit_code": 0,
+            "status": "passed",
+            "source": "src.skills.sql_formatting_style.verify_sql_formatting_style",
+            "original_sha256": hashlib.sha256(original_sql.encode("utf-8")).hexdigest(),
+            "formatted_sha256": hashlib.sha256(formatted_sql.encode("utf-8")).hexdigest(),
+            "style_contract_sha256": hashlib.sha256(b"sql-formatting-contract").hexdigest(),
+            "verification_id": "verify-sql",
+            "mechanical_checks": {"status": "passed"},
+            "alias_role_plan_validation": {"status": "not_needed"},
+        }
+        result.update(overrides)
+        return result
+
+    @staticmethod
+    def sql_provider_contract():
+        return (
+            "---\n"
+            "name: sql-formatting\n"
+            "description: Format SQL without changing behavior.\n"
+            "---\n"
+            "# SQL Formatting\n"
+            "Preserve original SQL logic, identifiers, values, comments, and string literals."
+        )
+
+    @staticmethod
+    def sql_front_door_output():
+        return {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "plugin-composition-policy",
+                "request-complexity-router",
+                "skill-catalog",
+            ],
+            "selected_not_executed_skills": ["sql-formatting-style-harness"],
+            "plugin_route": {
+                "route": "single",
+                "controller": {
+                    "provider_id": "sql-formatting",
+                    "capability": "sql_formatting",
+                },
+            },
+        }
+
+    @staticmethod
+    def goal_front_door_output():
+        return {
+            "front_door_status": "ok",
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "request-complexity-router",
+            ],
+            "selected_not_executed_skills": ["goal-state-harness"],
+            "skill_status_summary": {
+                "goal-state-harness": {
+                    "status": "selected",
+                    "evidence_note": "GoalState is required before completion.",
+                }
+            },
+            "execution_gate": {"can_execute": True},
+        }
+
+    def sql_audit_events(
+        self,
+        original_sql,
+        formatted_sql,
+        *,
+        source_sql=None,
+        provider_output=None,
+        verifier_result=None,
+        provider_output_after_verifier_call=False,
+    ):
+        inspect_call = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "shell_command",
+                "call_id": "inspect-sql-provider",
+                "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+            },
+        }
+        inspect_output = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "inspect-sql-provider",
+                "output": provider_output or self.sql_provider_contract(),
+            },
+        }
+        verifier_call = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "verify_sql_formatting_style",
+                "call_id": "verify-sql-provider",
+                "arguments": json.dumps(
+                    {"original_sql": original_sql, "formatted_sql": formatted_sql}
+                ),
+            },
+        }
+        verifier_output = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "verify-sql-provider",
+                "output": json.dumps(
+                    verifier_result
+                    if verifier_result is not None
+                    else self.sql_verifier_result(original_sql, formatted_sql)
+                ),
+            },
+        }
+        ordered_evidence = (
+            [inspect_call, verifier_call, inspect_output, verifier_output]
+            if provider_output_after_verifier_call
+            else [inspect_call, inspect_output, verifier_call, verifier_output]
+        )
+        return [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": f"{source_sql or original_sql}\nformat this SQL",
+                },
+            },
+            *ordered_evidence,
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": f"```sql\n{formatted_sql}\n```",
+                },
+            },
+        ]
+
+    def test_sql_verifier_binds_actual_alias_role_plan_validation_field(self):
+        original_sql = "SELECT ORDER_ID FROM ORDER_HEADER;"
+        formatted_sql = "SELECT ORDER_ID\nFROM ORDER_HEADER;"
+        verifier = self.sql_verifier_result(original_sql, formatted_sql)
+        verifier.pop("alias_role_plan_validation")
+        verifier["alias_role_plan_validation"] = {
+            "status": "not_needed",
+            "reason": "no_alias_changed",
+            "verified_scopes": [],
+            "conflicts": [],
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(self.sql_front_door_output()),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "inspect-actual-alias-field",
+                        "arguments": (
+                            r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "inspect-actual-alias-field",
+                        "output": self.sql_provider_contract(),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-actual-alias-field",
+                        "arguments": json.dumps(
+                            {"original_sql": original_sql, "formatted_sql": formatted_sql}
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-actual-alias-field",
+                        "output": json.dumps(verifier),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertIn(
+            "verified_before_output",
+            audit.usage_summary["sql_formatting_evidence"]["states"],
+        )
+
+    def test_sql_verifier_rejects_legacy_alias_checks_claim(self):
+        original_sql = "SELECT ORDER_ID FROM ORDER_HEADER;"
+        formatted_sql = "SELECT ORDER_ID\nFROM ORDER_HEADER;"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-legacy-alias-field",
+                        "arguments": json.dumps(
+                            {"original_sql": original_sql, "formatted_sql": formatted_sql}
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-legacy-alias-field",
+                        "output": json.dumps(
+                            {
+                                **self.sql_verifier_result(original_sql, formatted_sql),
+                                "alias_role_plan_validation": None,
+                                "alias_checks": {"status": "passed"},
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("alias_role_plan_validation_missing", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_text_only_parallel_and_role_status_claims_are_rejected(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": ["always-on-front-door"],
+            "selected_not_executed_skills": [
+                "parallel-orchestration-harness",
+                "role-execution-audit-harness",
+            ],
+            "skill_status_summary": {
+                "parallel-orchestration-harness": {"status": "skipped_with_rationale"},
+                "role-execution-audit-harness": {"status": "skipped_with_rationale"},
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "parallel_strategy_decision=sequential because shared-state risk; "
+                            "role_execution_audit.status=skipped because no role artifact is useful."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Add File: app.py\n+print('ok')\n*** End Patch",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        statuses = {issue["status"] for issue in audit.issues}
+
+        self.assertIn("missing_parallel_strategy", statuses)
+        self.assertIn("missing_role_execution_audit", statuses)
+
+    def test_legacy_actual_tokens_saved_only_is_not_runtime_evidence(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "runtime_token_optimization": {
+                                    "status": "used",
+                                    "actual_tokens_saved": 2000,
+                                    "token_count_is_estimate": True,
+                                    "billing_tokens_available": False,
+                                }
+                            }
+                        ),
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertNotEqual(rows["token-optimizer"]["status"], "applied")
 
     def test_audit_covers_full_kh_skill_catalog_and_flags_required_omissions(self):
         path = self.write_session(
@@ -734,7 +1096,40 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
 
-    def test_sql_formatting_front_door_route_suppresses_missing_before_sql_output(self):
+    def test_sql_diagnosis_only_does_not_require_formatter_evidence(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Why does SELECT * FROM BA011T WHERE MAINCD = 'DZ010' return duplicates? "
+                            "Explain the cause only."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "The join cardinality can duplicate rows when the lookup key is not unique.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+
+        self.assertFalse(rows["sql-formatting-style-harness"]["required"])
+        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertEqual(audit.usage_summary["sql_formatting_evidence"]["status"], "not_required")
+
+    def test_sql_formatting_front_door_route_is_selection_only(self):
         front_door_output = {
             "front_door_status": "ok",
             "runtime_applied_skills": [
@@ -788,9 +1183,13 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         rows = {row["name"]: row for row in audit.skills}
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
 
-        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
-        self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting", "formatter_application_not_proven"), issues)
+        self.assertIn("provider_selected", evidence["states"])
+        self.assertNotIn("provider_inspected", evidence["states"])
+        self.assertIn("formatter_application_not_proven", evidence["states"])
         self.assertEqual(
             rows["sql-formatting-style-harness"]["acceptance"]["status"],
             "missing_application",
@@ -798,6 +1197,8 @@ class SessionSkillAuditTests(unittest.TestCase):
 
 
     def test_sql_formatting_route_passes_when_style_verifier_runs_before_output(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
         front_door_output = {
             "front_door_status": "ok",
             "runtime_applied_skills": [
@@ -823,7 +1224,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "user",
-                        "content": "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\nformat this SQL",
+                        "content": f"{original_sql}\nformat this SQL",
                     },
                 },
                 {
@@ -836,14 +1237,52 @@ class SessionSkillAuditTests(unittest.TestCase):
                 {
                     "type": "response_item",
                     "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "inspect-sql-skill",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
                         "type": "function_call_output",
+                        "call_id": "inspect-sql-skill",
+                        "output": self.sql_provider_contract(),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-sql-1",
+                        "arguments": json.dumps(
+                            {
+                                "original_sql": original_sql,
+                                "formatted_sql": formatted_sql,
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-sql-1",
                         "output": json.dumps(
                             {
+                                "success": True,
+                                "exit_code": 0,
                                 "skill": "sql-formatting-style-harness",
                                 "status": "passed",
                                 "source": "src.skills.sql_formatting_style.verify_sql_formatting_style",
-                                "mechanical_checks": {"literal_preservation": "passed"},
-                                "style_contract_source": "host-local sql-formatting",
+                                "original_sha256": hashlib.sha256(original_sql.encode("utf-8")).hexdigest(),
+                                "formatted_sha256": hashlib.sha256(formatted_sql.encode("utf-8")).hexdigest(),
+                                "style_contract_sha256": hashlib.sha256(b"sql-formatting-contract").hexdigest(),
+                                "verification_id": "verify-sql-1",
+                                "mechanical_checks": {"status": "passed"},
+                                "alias_role_plan_validation": {"status": "not_needed"},
                                 "token_optimizer_status": "passthrough",
                             }
                         ),
@@ -854,7 +1293,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "assistant",
-                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T A;\n```",
+                        "content": f"```sql\n{formatted_sql}\n```",
                     },
                 },
             ]
@@ -862,9 +1301,16 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
 
         self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
-        self.assertNotIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
+        self.assertNotIn(("sql-formatting", "formatter_application_not_proven"), issues)
+        self.assertNotIn(("sql-formatting-style-harness", "verifier_evidence_unbound"), issues)
+        self.assertIn("provider_selected", evidence["states"])
+        self.assertIn("provider_inspected", evidence["states"])
+        self.assertIn("verifier_executed", evidence["states"])
+        self.assertIn("verified_before_output", evidence["states"])
+        self.assertEqual(evidence["verification_id"], "verify-sql-1")
 
     def test_sql_formatting_style_verifier_call_without_output_does_not_pass(self):
         front_door_output = {
@@ -906,6 +1352,14 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "type": "response_item",
                     "payload": {
                         "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
                         "name": "verify_sql_formatting_style",
                         "arguments": json.dumps({"skill": "sql-formatting-style-harness"}),
                     },
@@ -924,9 +1378,14 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         rows = {row["name"]: row for row in audit.skills}
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
 
-        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
-        self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting-style-harness", "verifier_evidence_unbound"), issues)
+        self.assertNotIn("provider_inspected", evidence["states"])
+        self.assertIn("verifier_executed", evidence["states"])
+        self.assertIn("formatter_application_not_proven", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
         self.assertEqual(
             rows["sql-formatting-style-harness"]["acceptance"]["status"],
             "missing_outputs",
@@ -935,6 +1394,826 @@ class SessionSkillAuditTests(unittest.TestCase):
             "sql_passthrough",
             rows["sql-formatting-style-harness"]["acceptance"]["missing_outputs"],
         )
+
+    def test_sql_formatting_fabricated_verifier_output_without_call_is_unbound(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(self.sql_front_door_output()),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(self.sql_verifier_result(original_sql, formatted_sql)),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting-style-harness", "verifier_evidence_unbound"), issues)
+        self.assertNotIn("provider_inspected", evidence["states"])
+        self.assertNotIn("verifier_executed", evidence["states"])
+        self.assertIn("verifier_evidence_unbound", evidence["states"])
+        self.assertIn("verifier_output_without_call", evidence["binding_errors"])
+
+    def test_sql_formatting_verifier_hash_mismatch_is_unbound(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
+        result = self.sql_verifier_result(
+            original_sql,
+            formatted_sql,
+            formatted_sha256=hashlib.sha256(b"different SQL").hexdigest(),
+        )
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(self.sql_front_door_output()),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-hash",
+                        "arguments": json.dumps({"original_sql": original_sql, "formatted_sql": formatted_sql}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-hash",
+                        "output": json.dumps(result),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting-style-harness", "verifier_evidence_unbound"), issues)
+        self.assertIn("verifier_executed", evidence["states"])
+        self.assertIn("formatted_sha256_mismatch", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_formatting_verifier_wrong_original_hash_is_unbound(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
+        wrong_original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'WRONG'"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "inspect-sql-skill",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "inspect-sql-skill",
+                        "output": self.sql_provider_contract(),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-wrong-original",
+                        "arguments": json.dumps(
+                            {"original_sql": original_sql, "formatted_sql": formatted_sql}
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-wrong-original",
+                        "output": json.dumps(
+                            self.sql_verifier_result(wrong_original_sql, formatted_sql)
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("original_sha256_mismatch", evidence["binding_errors"])
+        self.assertIn("verifier_evidence_unbound", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_formatting_verifier_must_match_formatted_sql_in_call_scope(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
+        wrong_call_sql = "SELECT A.SUBCD FROM BA011T AS A;"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "inspect-sql-skill",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "inspect-sql-skill",
+                        "output": self.sql_provider_contract(),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-wrong-call-scope",
+                        "arguments": json.dumps(
+                            {"original_sql": original_sql, "formatted_sql": wrong_call_sql}
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-wrong-call-scope",
+                        "output": json.dumps(
+                            self.sql_verifier_result(original_sql, formatted_sql)
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("formatted_sha256_call_mismatch", evidence["binding_errors"])
+        self.assertIn("verifier_evidence_unbound", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_formatting_provider_inspection_requires_read_output(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "inspect-without-output",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-after-missing-inspection",
+                        "arguments": json.dumps(
+                            {"original_sql": original_sql, "formatted_sql": formatted_sql}
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-after-missing-inspection",
+                        "output": json.dumps(
+                            self.sql_verifier_result(original_sql, formatted_sql)
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertNotIn("provider_inspected", evidence["states"])
+        self.assertIn("formatter_application_not_proven", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_formatting_provider_inspection_rejects_failed_read_output(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "inspect-failed",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "inspect-failed",
+                        "output": json.dumps(
+                            {
+                                "status": "failed",
+                                "exit_code": 1,
+                                "stderr": "Get-Content: Cannot find path.",
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-after-failed-inspection",
+                        "arguments": json.dumps(
+                            {"original_sql": original_sql, "formatted_sql": formatted_sql}
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-after-failed-inspection",
+                        "output": json.dumps(
+                            self.sql_verifier_result(original_sql, formatted_sql)
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertNotIn("provider_inspected", evidence["states"])
+        self.assertIn("formatter_application_not_proven", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_formatting_provider_output_must_precede_verifier_call(self):
+        original_sql = "SELECT * FROM BA011T;"
+        formatted_sql = "SELECT *\nFROM BA011T;"
+        path = self.write_session(
+            self.sql_audit_events(
+                original_sql,
+                formatted_sql,
+                provider_output_after_verifier_call=True,
+            )
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("provider_inspection_not_before_verifier", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_formatting_every_accepted_verifier_call_requires_prior_provider_inspection(self):
+        original_sql = "SELECT * FROM BA011T;"
+        formatted_sql = "SELECT *\nFROM BA011T;"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-before-inspect",
+                        "arguments": json.dumps(
+                            {"original_sql": original_sql, "formatted_sql": formatted_sql}
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-before-inspect",
+                        "output": json.dumps(
+                            self.sql_verifier_result(
+                                original_sql,
+                                formatted_sql,
+                                verification_id="verify-before-inspect",
+                            )
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "inspect-after-first-verify",
+                        "arguments": (
+                            r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "inspect-after-first-verify",
+                        "output": self.sql_provider_contract(),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-after-inspect",
+                        "arguments": json.dumps(
+                            {"original_sql": original_sql, "formatted_sql": formatted_sql}
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-after-inspect",
+                        "output": json.dumps(
+                            self.sql_verifier_result(
+                                original_sql,
+                                formatted_sql,
+                                verification_id="verify-after-inspect",
+                            )
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("provider_inspection_not_before_verifier", evidence["binding_errors"])
+        self.assertIn("formatter_application_not_proven", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+        self.assertIn(("sql-formatting-style-harness", "verifier_evidence_unbound"), issues)
+
+    def test_sql_formatting_provider_output_rejects_arbitrary_nonempty_text(self):
+        original_sql = "SELECT * FROM BA011T;"
+        formatted_sql = "SELECT *\nFROM BA011T;"
+        path = self.write_session(
+            self.sql_audit_events(
+                original_sql,
+                formatted_sql,
+                provider_output="command completed successfully",
+            )
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertNotIn("provider_inspected", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_formatting_provider_read_requires_valid_skill_contract_content(self):
+        original_sql = "SELECT * FROM BA011T;"
+        formatted_sql = "SELECT *\nFROM BA011T;"
+        for label, provider_output in {
+            "ok_only": "ok",
+            "wrong_name": (
+                "---\n"
+                "name: sql-provider\n"
+                "description: Format SQL without changing behavior.\n"
+                "---\n"
+                "# SQL Formatting\n"
+                "Preserve original SQL logic, identifiers, values, comments, and string literals."
+            ),
+            "missing_contract_markers": (
+                "---\n"
+                "name: sql-formatting\n"
+                "description: Format SQL without changing behavior.\n"
+                "---\n"
+                "# SQL Formatting\n"
+                "This skill formats statements."
+            ),
+        }.items():
+            with self.subTest(label=label):
+                path = self.write_session(
+                    self.sql_audit_events(
+                        original_sql,
+                        formatted_sql,
+                        provider_output=provider_output,
+                    )
+                )
+
+                audit = analyze_session_skills(path)
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertNotIn("provider_inspected", evidence["states"])
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_verifier_original_hash_must_bind_to_user_source_sql(self):
+        source_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010';"
+        caller_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ020';"
+        formatted_sql = "SELECT *\nFROM BA011T\nWHERE MAINCD = 'DZ020';"
+        path = self.write_session(
+            self.sql_audit_events(
+                caller_sql,
+                formatted_sql,
+                source_sql=source_sql,
+            )
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("original_sql_not_bound_to_session_source", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_verifier_original_hash_requires_exact_user_source_sql(self):
+        source_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010';"
+        verifier_original_sql = "SELECT * FROM BA011T"
+        formatted_sql = "SELECT *\nFROM BA011T\nWHERE MAINCD = 'DZ010';"
+        path = self.write_session(
+            self.sql_audit_events(
+                verifier_original_sql,
+                formatted_sql,
+                source_sql=source_sql,
+            )
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("original_sql_not_bound_to_session_source", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_scalar_refactor_mechanically_valid_release_pending_stays_pending(self):
+        original_sql = "SELECT dbo.FN_CODE_NAME(CODE) FROM BA011T;"
+        formatted_sql = "SELECT C.NAME\nFROM BA011T AS A\nLEFT JOIN CODE AS C ON C.CODE = A.CODE;"
+        pending_result = self.sql_verifier_result(
+            original_sql,
+            formatted_sql,
+            success=False,
+            exit_code=1,
+            status="pending",
+            operation="refactor",
+            release_readiness={"status": "pending"},
+            semantic_refactor_evidence={
+                "scalar_function_refactor": {"status": "mechanically_valid"}
+            },
+        )
+        path = self.write_session(
+            self.sql_audit_events(
+                original_sql,
+                formatted_sql,
+                verifier_result=pending_result,
+            )
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertEqual("verifier_pending", evidence["status"])
+        self.assertIn("verifier_pending", evidence["states"])
+        self.assertNotIn("verifier_failed", evidence["states"])
+        self.assertIn(("sql-formatting-style-harness", "verifier_pending"), issues)
+        self.assertNotIn(("sql-formatting-style-harness", "verifier_failed"), issues)
+
+    def test_sql_formatting_verifier_output_must_match_call_id(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-call-a",
+                        "arguments": json.dumps({"original_sql": original_sql, "formatted_sql": formatted_sql}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-call-b",
+                        "output": json.dumps(self.sql_verifier_result(original_sql, formatted_sql)),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(("sql-formatting-style-harness", "verifier_evidence_unbound"), issues)
+        self.assertIn("verifier_executed", evidence["states"])
+        self.assertIn("verifier_output_call_id_mismatch", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_formatting_verifier_without_call_ids_uses_bounded_sequence(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": self.sql_provider_contract(),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "arguments": json.dumps({"original_sql": original_sql, "formatted_sql": formatted_sql}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(self.sql_verifier_result(original_sql, formatted_sql)),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": f"```sql\n{formatted_sql}\n```",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn("verified_before_output", evidence["states"])
+
+    def test_sql_formatting_verifier_cannot_bind_unfenced_final_sql(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": f"{original_sql}\nformat this SQL",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": r"Get-Content C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "arguments": json.dumps({"original_sql": original_sql, "formatted_sql": formatted_sql}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(self.sql_verifier_result(original_sql, formatted_sql)),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": formatted_sql,
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(("sql-formatting-style-harness", "verifier_evidence_unbound"), issues)
+        self.assertIn("final_sql_not_exactly_extractable", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
 
     def test_sql_formatting_route_requires_style_verifier_before_db_write(self):
         front_door_output = {
@@ -1005,9 +2284,12 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
 
-        self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting", "formatter_application_not_proven"), issues)
 
     def test_failed_sql_formatting_style_verifier_before_output_is_flagged(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
         front_door_output = {
             "front_door_status": "ok",
             "runtime_applied_skills": [
@@ -1033,7 +2315,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "user",
-                        "content": "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'\nformat this SQL",
+                        "content": f"{original_sql}\nformat this SQL",
                     },
                 },
                 {
@@ -1054,17 +2336,33 @@ class SessionSkillAuditTests(unittest.TestCase):
                 {
                     "type": "response_item",
                     "payload": {
+                        "type": "function_call",
+                        "name": "verify_sql_formatting_style",
+                        "call_id": "verify-failed",
+                        "arguments": json.dumps({"original_sql": original_sql, "formatted_sql": formatted_sql}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
                         "type": "function_call_output",
+                        "call_id": "verify-failed",
                         "output": json.dumps(
                             {
+                                "success": False,
+                                "exit_code": 1,
                                 "skill": "sql-formatting-style-harness",
                                 "status": "failed",
                                 "source": "src.skills.sql_formatting_style.verify_sql_formatting_style",
+                                "original_sha256": hashlib.sha256(original_sql.encode("utf-8")).hexdigest(),
+                                "formatted_sha256": hashlib.sha256(formatted_sql.encode("utf-8")).hexdigest(),
+                                "style_contract_sha256": hashlib.sha256(b"sql-formatting-contract").hexdigest(),
+                                "verification_id": "verify-failed",
                                 "mechanical_checks": {
                                     "status": "blocked",
                                     "style_issues": [{"code": "join_condition_indentation"}],
                                 },
-                                "style_contract_source": "host-local sql-formatting",
+                                "alias_role_plan_validation": {"status": "not_needed"},
                             }
                         ),
                     },
@@ -1074,7 +2372,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "assistant",
-                        "content": "```sql\nSELECT A.SUBCD\nFROM BA011T A;\n```",
+                        "content": f"```sql\n{formatted_sql}\n```",
                     },
                 },
             ]
@@ -1082,11 +2380,12 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
 
-        self.assertIn(
-            ("sql-formatting-style-harness", "sql_formatting_style_verifier_failed_before_output"),
-            issues,
-        )
+        self.assertIn(("sql-formatting-style-harness", "verifier_failed"), issues)
+        self.assertIn("verifier_executed", evidence["states"])
+        self.assertIn("verifier_failed", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
 
     def test_sql_formatting_provider_snapshot_only_does_not_suppress_missing_before_sql_output(self):
         front_door_output = {
@@ -1150,7 +2449,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
 
-    def test_direct_sql_formatting_uses_host_skill_without_front_door_overclassification(self):
+    def test_direct_sql_formatting_skill_read_is_inspection_only(self):
         path = self.write_session(
             [
                 {
@@ -1213,10 +2512,13 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
+        evidence = audit.usage_summary["sql_formatting_evidence"]
 
         self.assertNotIn(("always-on-front-door", "missing_front_door"), issues)
-        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
-        self.assertIn(("sql-formatting-style-harness", "missing_sql_formatting_style_verifier"), issues)
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting", "formatter_application_not_proven"), issues)
+        self.assertNotIn("provider_inspected", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
 
     def test_front_door_prompt_set_content_is_not_implementation_activity(self):
         path = self.write_session(
@@ -2558,6 +3860,198 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_task_complete_with_latest_active_goal_is_p0_regardless_final_wording(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(self.goal_front_door_output()),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "objective": "Harden the session audit",
+                            "status": "active",
+                            "success_criteria": ["Focused tests pass"],
+                            "evidence_required": ["tests passed"],
+                            "evidence": [],
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "Progress report recorded.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "goal-state-harness"
+                and issue["status"] == "missing_terminal_goal_state"
+                and issue["severity"] == "P0"
+                for issue in audit.issues
+            )
+        )
+
+    def test_complete_goal_with_required_but_missing_evidence_is_not_terminal(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(self.goal_front_door_output()),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "objective": "Harden the session audit",
+                            "status": "complete",
+                            "success_criteria": ["Focused tests pass"],
+                            "evidence_required": ["tests passed"],
+                            "evidence": [],
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "Completed.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertNotEqual(rows["goal-state-harness"]["acceptance"]["status"], "passed")
+        self.assertTrue(
+            any(
+                issue["skill"] == "goal-state-harness"
+                and issue["status"] == "missing_terminal_goal_state"
+                and issue["severity"] == "P0"
+                for issue in audit.issues
+            )
+        )
+
+    def test_validated_project_and_chat_current_goal_files_are_terminal_evidence(self):
+        for scope in ["project", "chat"]:
+            with self.subTest(scope=scope):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call_output",
+                                "output": json.dumps(self.goal_front_door_output()),
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "task_complete",
+                                "last_agent_message": "Completed with ledger evidence.",
+                            },
+                        },
+                    ]
+                )
+                relative = Path(".uaf/state/current_goal.json")
+                if scope == "chat":
+                    relative = Path("chats/session-audit/.uaf/state/current_goal.json")
+                current_goal_path = path.parent / relative
+                current_goal_path.parent.mkdir(parents=True, exist_ok=True)
+                current_goal_path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "objective": "Harden the session audit",
+                            "status": "complete",
+                            "success_criteria": ["Focused tests pass"],
+                            "evidence_required": ["tests passed"],
+                            "evidence": ["tests passed"],
+                            "blocked_reason": "",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+                with mock.patch.dict(os.environ, {"UAF_PROJECT_LOCAL_STATE": "1"}, clear=False):
+                    audit = analyze_session_skills(path)
+                rows = {row["name"]: row for row in audit.skills}
+
+                self.assertEqual(rows["goal-state-harness"]["status"], "applied")
+                self.assertEqual(rows["goal-state-harness"]["acceptance"]["status"], "passed")
+                self.assertFalse(
+                    any(
+                        issue["skill"] == "goal-state-harness"
+                        and issue["status"] == "missing_terminal_goal_state"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_scoped_current_goal_complete_without_required_evidence_is_rejected(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(self.goal_front_door_output()),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "Completed.",
+                    },
+                },
+            ]
+        )
+        current_goal_path = path.parent / ".uaf/state/current_goal.json"
+        current_goal_path.parent.mkdir(parents=True, exist_ok=True)
+        current_goal_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "objective": "Harden the session audit",
+                    "status": "complete",
+                    "success_criteria": ["Focused tests pass"],
+                    "evidence_required": ["tests passed"],
+                    "evidence": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, {"UAF_PROJECT_LOCAL_STATE": "1"}, clear=False):
+            audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "goal-state-harness"
+                and issue["status"] == "missing_terminal_goal_state"
+                and issue["severity"] == "P0"
+                for issue in audit.issues
+            )
+        )
+
     def test_user_stop_guard_failure_is_p0_skill_audit_issue(self):
         path = self.write_session(
             [
@@ -3323,7 +4817,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_main_single_controller_with_parallel_and_role_rationale_satisfies_orchestration_audit(self):
+    def test_main_single_controller_with_validated_parallel_and_role_artifact_satisfies_orchestration_audit(self):
         front_door_output = {
             "front_door_status": "ok",
             "runtime_applied_skills": [
@@ -3363,8 +4857,50 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "content": (
                             "host_runtime=codex-main; nested_subagents_available=true; "
                             "subagent_strategy=single-controller because this is a tiny single file task "
-                            "with a shared-state write set; parallel_strategy_decision=sequential with rationale; "
-                            "role_execution_audit.status=skipped because no independent role artifact is useful."
+                            "with a shared-state write set."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "validate_large_work_orchestration_bundle",
+                        "call_id": "validate-orchestration-bundle",
+                        "arguments": json.dumps(
+                            {
+                                "bundle": {
+                                    "parallel_strategy_decision": (
+                                        "sequential because the shared-state write set is coupled"
+                                    ),
+                                    "skill_statuses": {
+                                        "role-execution-audit-harness": {
+                                            "status": "considered_not_needed",
+                                            "application_mode": "considered",
+                                            "evidence_note": (
+                                                "No independent role artifact is useful for this tiny task."
+                                            ),
+                                        }
+                                    },
+                                }
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "validate-orchestration-bundle",
+                        "output": json.dumps(
+                            {
+                                "valid": True,
+                                "missing": [],
+                                "evidence": [
+                                    "large_work_orchestration_bundle",
+                                    "parallel_strategy_decision",
+                                ],
+                            }
                         ),
                     },
                 },
