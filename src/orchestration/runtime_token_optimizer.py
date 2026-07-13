@@ -1,614 +1,708 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Tuple
+import copy
+import hashlib
+import json
+import math
+import re
+from collections.abc import Iterable, MutableMapping
+from typing import Any, Callable, Dict, List, Tuple
 
 from src.contracts import WorkflowTaskResult
-from src.orchestration.token_optimizer_provider import resolve_token_optimizer_provider
 from src.skills.token_optimizer import (
-    aggregate_token_usage_stats,
-    compare_token_usage,
     estimate_token_count,
-    summarize_agent_transcript,
+    is_contract_sensitive_text,
+    required_command_facts,
     summarize_command_output,
 )
+
+
+_DEFAULT_MARGIN_TOKENS = 16
+_DEFAULT_MARGIN_RATIO = 0.05
+_KNOWN_COMMAND_FAMILIES = {"test", "build"}
+_QUALITY_SENSITIVE_KINDS = {
+    "contract-sensitive",
+    "requirements",
+    "review-finding",
+    "security",
+    "source-of-truth",
+}
+
+
+def build_canonical_model_view(task_results: Iterable[WorkflowTaskResult]) -> List[Dict[str, Any]]:
+    """Return the only task representation that may be serialized for the model."""
+    return [result.to_dict() for result in task_results]
+
+
+def serialize_canonical_model_view(task_results: Iterable[WorkflowTaskResult]) -> str:
+    """Serialize task results with stable ordering and no side-channel report payload."""
+    return json.dumps(
+        build_canonical_model_view(task_results),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def hash_command_output_payload(stdout: str, stderr: str) -> str:
+    """Hash the exact two-channel output contract used by raw refs and RTK receipts."""
+    payload = _serialize_command_output_payload(stdout, stderr).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def optimize_workflow_task_results(
     task_results: List[WorkflowTaskResult],
     metadata: Dict[str, Any] | None = None,
+    *,
+    raw_store: MutableMapping[str, str] | None = None,
+    rtk_adapter: Callable[[Dict[str, Any]], Any] | None = None,
 ) -> Tuple[List[WorkflowTaskResult], Dict[str, Any]]:
-    """Attach quality-preserving token optimization evidence to workflow results.
+    """Return a canonical model view or exact passthrough.
 
-    Raw task metadata is preserved. Optimized display text and token usage
-    statistics are written under each task's ``metadata.token_optimizer``.
+    Compression is enabled only when the caller explicitly selects the canonical
+    model view and provides project/chat/run scope plus either a caller-owned raw
+    result contract or an external raw store. The input list remains the raw,
+    caller-owned recovery object in caller-owned mode.
     """
-    metadata = metadata or {}
-    provider = resolve_token_optimizer_provider(
-        token_optimizer_provider=metadata.get("token_optimizer_provider", "kh"),
-        command=metadata.get("token_optimizer_command", "workflow dispatch"),
-        content_kind=metadata.get("token_optimizer_content_kind", "auto"),
-        rtk_available=bool(metadata.get("rtk_available", False)),
-        strict=bool(metadata.get("token_optimizer_strict", False)),
-    )
-    provider_dict = provider.to_dict()
-    if provider.status == "blocked":
-        all_records: List[Dict[str, Any]] = []
-        optimized_results: List[WorkflowTaskResult] = []
-        for result in task_results:
-            task_records = _considered_payload_records(
-                result,
+    options = dict(metadata or {})
+    raw_results = list(task_results)
+    baseline = serialize_canonical_model_view(raw_results)
+    command_items = list(_iter_command_outputs(raw_results))
+    transcript_count = sum(1 for result in raw_results for _ in _iter_transcripts(result.metadata))
+
+    requested_provider = str(options.get("token_optimizer_provider", "kh") or "kh").strip().lower()
+    strict_rtk = bool(options.get("token_optimizer_strict", False))
+
+    if requested_provider == "rtk" and strict_rtk:
+        strict_candidates = [
+            item
+            for _, _, item in command_items
+            if _command_family(str(item.get("command", ""))) in _KNOWN_COMMAND_FAMILIES
+        ]
+        if not command_items or (strict_candidates and rtk_adapter is None):
+            return raw_results, _no_use_report(
                 status="blocked",
-                reason=provider.rationale,
+                reason_code="rtk_receipt_missing_or_invalid",
+                provider="kh",
+                provider_reason_code="rtk_strict_requires_runtime_adapter",
             )
-            all_records.extend(task_records)
-            optimized_results.append(
-                _with_token_optimizer_metadata(
-                    result,
-                    provider_dict,
-                    task_records,
-                    status="blocked",
-                    blocked_reason=provider.rationale,
-                )
-            )
-        return optimized_results, _report(
-            status="blocked",
-            provider=provider_dict,
-            records=all_records,
-            skipped_count=0,
-            blocked_reason=provider.rationale,
+
+    if not command_items:
+        has_general_content = transcript_count > 0 or any(bool(result.metadata) for result in raw_results)
+        status = "passthrough" if has_general_content else "considered_not_needed"
+        reason_code = "unverified_general_content" if has_general_content else "no_optimizable_payload"
+        return raw_results, _no_use_report(
+            status=status,
+            reason_code=reason_code,
+            provider="kh",
+            provider_reason_code="kh_selected",
         )
-    if provider.command_strategy == "quality-preserving-passthrough":
-        all_records: List[Dict[str, Any]] = []
-        optimized_results: List[WorkflowTaskResult] = []
-        for result in task_results:
-            task_records = _considered_payload_records(
-                result,
-                status="passthrough",
-                reason=provider.rationale,
-            )
-            all_records.extend(task_records)
-            optimized_results.append(
-                _with_token_optimizer_metadata(
-                    result,
-                    provider_dict,
-                    task_records,
-                    status="passthrough",
-                    passthrough_reason=provider.rationale,
-                )
-            )
-        return optimized_results, _report(
+
+    path = _canonical_path(options, raw_store)
+    if path is None:
+        return raw_results, _no_use_report(
             status="passthrough",
-            provider=provider_dict,
-            records=all_records,
-            skipped_count=0,
-            passthrough_reason=provider.rationale,
+            reason_code="canonical_view_unavailable",
+            provider="kh",
+            provider_reason_code="canonical_view_unavailable",
         )
 
-    min_tokens = _int_metadata(metadata, "token_optimizer_min_tokens", 1_000)
-    max_lines = _int_metadata(metadata, "token_optimizer_max_lines", 40)
-    transcript_max_lines = _int_metadata(metadata, "token_optimizer_transcript_max_lines", 160)
-    provider_metadata = {**provider_dict, "token_optimizer_min_tokens": min_tokens}
-    optimized_results: List[WorkflowTaskResult] = []
-    all_records: List[Dict[str, Any]] = []
-    skipped_count = 0
+    content_kind = str(options.get("token_optimizer_content_kind", "auto") or "auto").strip().lower()
+    if content_kind in _QUALITY_SENSITIVE_KINDS:
+        return raw_results, _no_use_report(
+            status="passthrough",
+            reason_code="quality_sensitive_passthrough",
+            provider="kh",
+            provider_reason_code="kh_quality_passthrough",
+        )
 
-    for result in task_results:
-        task_records: List[Dict[str, Any]] = []
-        task_skipped_count = 0
-        for source, command_output in _iter_command_outputs(result.metadata):
-            raw_text = _join_channels(
-                str(command_output.get("stdout", "")),
-                str(command_output.get("stderr", "")),
+    max_lines = _int_option(options, "token_optimizer_max_lines", 40)
+    margin_tokens = _int_option(options, "token_optimizer_net_gain_margin_tokens", _DEFAULT_MARGIN_TOKENS)
+    margin_ratio = _float_option(options, "token_optimizer_net_gain_margin_ratio", _DEFAULT_MARGIN_RATIO)
+
+    current_results = raw_results
+    current_serialized = baseline
+    accepted: List[Dict[str, Any]] = []
+    decisions: List[Tuple[str, str]] = []
+    used_providers: set[str] = set()
+    provider_reason_code = "kh_selected"
+    provider_receipts: List[Dict[str, Any]] = []
+    provider_invocation_receipts: List[Dict[str, Any]] = []
+    provider_claims: List[Dict[str, Any]] = []
+
+    for task_index, source, command_output in command_items:
+        raw_stdout = str(command_output.get("stdout", ""))
+        raw_stderr = str(command_output.get("stderr", ""))
+        raw_text = _join_channels(raw_stdout, raw_stderr)
+        command = str(command_output.get("command", ""))
+        exit_code = _int_value(command_output.get("exit_code", command_output.get("returncode", 0)))
+        command_family = _command_family(command)
+        claim = _claimed_rtk_provider_data(raw_results[task_index], source, command_output)
+        if claim is not None:
+            provider_claims.append(claim)
+
+        if _is_binary_or_high_entropy(raw_text):
+            decisions.append(("passthrough", "binary_or_high_entropy_passthrough"))
+            continue
+        if is_contract_sensitive_text(raw_text):
+            decisions.append(("passthrough", "contract_sensitive_passthrough"))
+            continue
+        if command_family not in _KNOWN_COMMAND_FAMILIES:
+            decisions.append(("passthrough", "unsupported_command_family"))
+            continue
+
+        required_facts, facts_source = _required_facts(command_output, raw_text, command_family, exit_code)
+        if not required_facts:
+            decisions.append(("passthrough", "required_facts_unavailable"))
+            continue
+        if any(fact not in raw_text for fact in required_facts):
+            decisions.append(("passthrough", "required_fact_not_in_raw_output"))
+            continue
+
+        compact_stdout = ""
+        compact_stderr = ""
+        item_provider = "kh"
+        receipt: Dict[str, Any] | None = None
+
+        if requested_provider in {"rtk", "hybrid"} and rtk_adapter is not None:
+            rtk_result, invocation_receipt = _invoke_rtk_adapter(
+                rtk_adapter,
+                path=path,
+                task=raw_results[task_index],
+                source=source,
+                command=command,
+                raw_stdout=raw_stdout,
+                raw_stderr=raw_stderr,
+                exit_code=exit_code,
+                required_facts=required_facts,
             )
-            if estimate_token_count(raw_text) < min_tokens:
-                record = _considered_command_record(
-                    result,
-                    source=source,
-                    command_output=command_output,
-                    raw_text=raw_text,
-                    status="considered_not_needed",
-                    reason=_status_reason(
-                        status="considered_not_needed",
-                        provider=provider_metadata,
-                        records=[],
-                        skipped_count=1,
-                    ),
-                )
-                task_records.append(record)
-                all_records.append(record)
-                skipped_count += 1
-                task_skipped_count += 1
+            provider_invocation_receipts.append(
+                {
+                    "task_id": raw_results[task_index].task_id,
+                    "source": source,
+                    "provider": "rtk",
+                    "correlation_id": invocation_receipt["correlation_id"],
+                    "receipt": invocation_receipt,
+                }
+            )
+            if rtk_result is not None:
+                compact_stdout, compact_stderr = rtk_result
+                receipt = invocation_receipt
+                item_provider = "rtk"
+                provider_reason_code = "rtk_runtime_adapter_invoked"
+            elif strict_rtk and requested_provider == "rtk":
+                decisions.append(("blocked", "rtk_receipt_missing_or_invalid"))
                 continue
+            else:
+                provider_reason_code = "rtk_receipt_missing_fallback_kh"
+        elif requested_provider in {"rtk", "hybrid"}:
+            provider_reason_code = (
+                "rtk_claimed_data_unverified_fallback_kh"
+                if claim is not None
+                else "rtk_receipt_missing_fallback_kh"
+            )
+
+        if item_provider == "kh":
             summary = summarize_command_output(
-                command=str(command_output.get("command", "")),
-                stdout=str(command_output.get("stdout", "")),
-                stderr=str(command_output.get("stderr", "")),
-                exit_code=_int_value(command_output.get("exit_code", command_output.get("returncode", 0))),
+                command=command,
+                stdout=raw_stdout,
+                stderr=raw_stderr,
+                exit_code=exit_code,
                 max_lines=max_lines,
                 execution_time=float(command_output.get("execution_time", 0.0) or 0.0),
+                required_facts=required_facts,
             )
-            record = {
-                "kind": "command-output",
-                "source": source,
-                "task_id": result.task_id,
-                "file_name": result.file_name,
-                "role": result.role,
-                "status": _record_status(summary.metadata),
-                "command": summary.metadata.get("command", ""),
-                "command_family": summary.metadata.get("command_family", "generic"),
-                "exit_code": summary.exit_code,
-                "stdout": summary.stdout,
-                "stderr": summary.stderr,
-                "raw_bytes": summary.metadata.get("raw_bytes", 0),
-                "filtered_bytes": summary.metadata.get("filtered_bytes", 0),
-                "raw_lines": summary.metadata.get("raw_lines", 0),
-                "filtered_lines": summary.metadata.get("filtered_lines", 0),
-                "fallback_reason": summary.metadata.get("fallback_reason", ""),
-                "token_usage": dict(summary.metadata.get("token_usage", {})),
-            }
-            task_records.append(record)
-            all_records.append(record)
-
-        for source, transcript in _iter_transcripts(result.metadata):
-            if estimate_token_count(transcript) < min_tokens:
-                record = _considered_transcript_record(
-                    result,
-                    source=source,
-                    transcript=transcript,
-                    status="considered_not_needed",
-                    reason=_status_reason(
-                        status="considered_not_needed",
-                        provider=provider_metadata,
-                        records=[],
-                        skipped_count=1,
-                    ),
+            if not bool(summary.metadata.get("compression_applied", False)):
+                decisions.append(
+                    (
+                        "passthrough",
+                        str(summary.metadata.get("fallback_reason_code") or "command_filter_passthrough"),
+                    )
                 )
-                task_records.append(record)
-                all_records.append(record)
-                skipped_count += 1
-                task_skipped_count += 1
                 continue
-            summary = summarize_agent_transcript(
-                transcript,
-                max_lines=transcript_max_lines,
-                label=f"{result.role}:{source}",
-            )
-            record = {
-                "kind": "agent-transcript",
+            compact_stdout = summary.stdout
+            compact_stderr = summary.stderr
+
+        compact_text = _join_channels(compact_stdout, compact_stderr)
+        if any(fact not in compact_text for fact in required_facts):
+            decisions.append(("passthrough", "required_fact_preservation_failed"))
+            continue
+
+        raw_ref, raw_payload = _raw_reference(
+            path=path,
+            task=current_results[task_index],
+            source=source,
+            stdout=raw_stdout,
+            stderr=raw_stderr,
+        )
+        compact_output = _compact_command_output(
+            command_output,
+            stdout=compact_stdout,
+            stderr=compact_stderr,
+            raw_ref=raw_ref,
+        )
+        candidate_results = _replace_command_output(
+            current_results,
+            task_index=task_index,
+            source=source,
+            command_output=compact_output,
+        )
+        candidate_serialized = serialize_canonical_model_view(candidate_results)
+        gain = _canonical_gain(
+            before=current_serialized,
+            after=candidate_serialized,
+            margin_tokens=margin_tokens,
+            margin_ratio=margin_ratio,
+        )
+        if not gain["net_gain_passed"]:
+            decisions.append(("considered_not_needed", "canonical_net_gain_below_margin"))
+            continue
+        if not _persist_raw(path, raw_store, raw_ref["uri"], raw_payload):
+            decisions.append(("passthrough", "raw_store_write_failed"))
+            continue
+
+        current_results = candidate_results
+        current_serialized = candidate_serialized
+        used_providers.add(item_provider)
+        decisions.append(("used", "positive_canonical_net_gain"))
+        accepted.append(
+            {
+                "task_id": raw_results[task_index].task_id,
                 "source": source,
-                "task_id": result.task_id,
-                "file_name": result.file_name,
-                "role": result.role,
-                "status": _record_status(summary.metadata),
-                "transcript": summary.stdout,
-                "raw_bytes": summary.metadata.get("raw_bytes", 0),
-                "filtered_bytes": summary.metadata.get("filtered_bytes", 0),
-                "raw_lines": summary.metadata.get("raw_lines", 0),
-                "filtered_lines": summary.metadata.get("filtered_lines", 0),
-                "fallback_reason": summary.metadata.get("fallback_reason", ""),
-                "token_usage": dict(summary.metadata.get("token_usage", {})),
+                "provider": item_provider,
+                "facts_source": facts_source,
+                "required_fact_count": len(required_facts),
+                "raw_ref": raw_ref,
             }
-            task_records.append(record)
-            all_records.append(record)
-
-        if task_records or task_skipped_count:
-            optimized_results.append(
-                _with_token_optimizer_metadata(
-                    result,
-                    provider_metadata,
-                    task_records,
-                    skipped_count=task_skipped_count,
-                )
-            )
-        else:
-            optimized_results.append(
-                _with_token_optimizer_metadata(
-                    result,
-                    provider_metadata,
-                    [],
-                    status="considered_not_needed",
-                )
+        )
+        if receipt is not None:
+            provider_receipts.append(
+                {
+                    "task_id": raw_results[task_index].task_id,
+                    "source": source,
+                    "provider": item_provider,
+                    "correlation_id": receipt["correlation_id"],
+                    "receipt": receipt,
+                }
             )
 
-    return optimized_results, _report(
-        status=_workflow_status(all_records, skipped_count),
-        provider=provider_metadata,
-        records=all_records,
-        skipped_count=skipped_count,
-    )
+    if not accepted:
+        status, reason_code = _no_use_status(decisions)
+        provider = "kh"
+        if status == "blocked" and requested_provider == "rtk":
+            provider_reason_code = "rtk_receipt_missing_or_invalid"
+        return raw_results, _no_use_report(
+            status=status,
+            reason_code=reason_code,
+            provider=provider,
+            provider_reason_code=provider_reason_code,
+        )
 
-
-def _with_token_optimizer_metadata(
-    result: WorkflowTaskResult,
-    provider: Dict[str, Any],
-    records: List[Dict[str, Any]],
-    skipped_count: int = 0,
-    status: str = "",
-    blocked_reason: str = "",
-    passthrough_reason: str = "",
-) -> WorkflowTaskResult:
-    metadata = dict(result.metadata)
-    status = status or _workflow_status(records, skipped_count=skipped_count)
-    reason = _status_reason(
-        status=status,
-        provider=provider,
-        records=records,
-        skipped_count=skipped_count,
-        blocked_reason=blocked_reason,
-        passthrough_reason=passthrough_reason,
+    final_gain = _canonical_gain(
+        before=baseline,
+        after=current_serialized,
+        margin_tokens=0,
+        margin_ratio=0.0,
     )
-    metadata["token_optimizer"] = {
-        "status": status,
-        "token_optimizer_status": status,
-        "token_optimizer_status_reason": reason,
+    if not final_gain["net_gain_passed"]:
+        return raw_results, _no_use_report(
+            status="passthrough",
+            reason_code="final_canonical_net_gain_failed",
+            provider="kh",
+            provider_reason_code="canonical_validation_failed",
+        )
+
+    provider = "hybrid" if len(used_providers) > 1 else next(iter(used_providers))
+    if provider == "hybrid":
+        provider_reason_code = "hybrid_item_providers_verified"
+    report: Dict[str, Any] = {
+        "status": "used",
+        "reason_code": "positive_canonical_net_gain",
         "provider": provider,
-        "token_optimizer_provider": str(provider.get("provider", "kh")),
-        "summary": aggregate_token_usage_stats([record.get("token_usage", {}) for record in records]),
-        "rtk_style_stats": _rtk_style_stats(records),
-        "records": records,
-        "records_count": len(records),
-        "optimized_payload_count": sum(1 for record in records if record.get("status") == "used"),
-        "skipped_small_output_count": skipped_count,
-        "blocked_reason": blocked_reason,
-        "passthrough_reason": passthrough_reason,
-        "evidence": ["runtime_token_optimization", "token_optimizer_decision"],
+        "provider_reason_code": provider_reason_code,
+        "token_optimizer_status_reason": "Token optimizer used: canonical model payload reduced.",
+        "canonical": final_gain,
+        "used_count": len(accepted),
+        "raw_refs": [record["raw_ref"] for record in accepted],
+        "provider_receipts": provider_receipts,
+        "provider_invocation_receipts": provider_invocation_receipts,
+        "provider_claims": provider_claims,
     }
-    if status != "used":
-        metadata["token_optimizer"]["not_used_reason"] = reason
+    if provider == "rtk" and len(provider_receipts) == 1:
+        report["rtk_receipt"] = provider_receipts[0]["receipt"]
+    return current_results, report
+
+
+def _canonical_path(
+    options: Dict[str, Any],
+    raw_store: MutableMapping[str, str] | None,
+) -> Dict[str, str] | None:
+    if options.get("token_optimizer_canonical_view") is not True:
+        return None
+    scope = options.get("token_optimizer_raw_scope")
+    if not isinstance(scope, dict):
+        return None
+    normalized = {key: str(scope.get(key, "")).strip() for key in ("project", "chat", "run")}
+    if not all(normalized.values()):
+        return None
+    owner = "external" if raw_store is not None else str(options.get("token_optimizer_raw_owner", "")).strip()
+    if owner not in {"caller", "external"}:
+        return None
+    return {**normalized, "owner": owner}
+
+
+def _iter_command_outputs(
+    task_results: List[WorkflowTaskResult],
+) -> Iterable[Tuple[int, str, Dict[str, Any]]]:
+    for task_index, result in enumerate(task_results):
+        metadata = result.metadata or {}
+        command_output = metadata.get("command_output")
+        if isinstance(command_output, dict):
+            yield task_index, "command_output", command_output
+        command_outputs = metadata.get("command_outputs")
+        if isinstance(command_outputs, list):
+            for index, item in enumerate(command_outputs):
+                if isinstance(item, dict):
+                    yield task_index, f"command_outputs[{index}]", item
+        if any(key in metadata for key in ("stdout", "stderr")) and metadata.get("command"):
+            yield task_index, "metadata", metadata
+
+
+def _iter_transcripts(metadata: Dict[str, Any]) -> Iterable[str]:
+    for key in ("agent_transcript", "subagent_transcript", "transcript"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            yield value
+    transcripts = metadata.get("subagent_transcripts")
+    if isinstance(transcripts, list):
+        for item in transcripts:
+            if isinstance(item, str) and item.strip():
+                yield item
+            elif isinstance(item, dict):
+                value = str(item.get("transcript", "") or item.get("content", ""))
+                if value.strip():
+                    yield value
+
+
+def _replace_command_output(
+    task_results: List[WorkflowTaskResult],
+    *,
+    task_index: int,
+    source: str,
+    command_output: Dict[str, Any],
+) -> List[WorkflowTaskResult]:
+    results = list(task_results)
+    result = results[task_index]
+    task_metadata = copy.deepcopy(result.metadata)
+    if source == "command_output":
+        task_metadata["command_output"] = command_output
+    elif source == "metadata":
+        task_metadata = command_output
     else:
-        metadata["token_optimizer"]["evidence"].append("token_usage_stats")
-    return WorkflowTaskResult(
+        match = re.fullmatch(r"command_outputs\[(\d+)\]", source)
+        if match is None:
+            raise ValueError(f"unsupported command output source: {source}")
+        task_metadata["command_outputs"][int(match.group(1))] = command_output
+    results[task_index] = WorkflowTaskResult(
         task_id=result.task_id,
         file_name=result.file_name,
         role=result.role,
         status=result.status,
         message=result.message,
-        metadata=metadata,
+        metadata=task_metadata,
     )
+    return results
 
 
-def _report(
-    status: str,
-    provider: Dict[str, Any],
-    records: List[Dict[str, Any]],
-    skipped_count: int,
-    blocked_reason: str = "",
-    passthrough_reason: str = "",
+def _compact_command_output(
+    command_output: Dict[str, Any],
+    *,
+    stdout: str,
+    stderr: str,
+    raw_ref: Dict[str, Any],
 ) -> Dict[str, Any]:
-    public_records = [_public_record(record) for record in records]
-    reason = _status_reason(
-        status=status,
-        provider=provider,
-        records=records,
-        skipped_count=skipped_count,
-        blocked_reason=blocked_reason,
-        passthrough_reason=passthrough_reason,
+    compact = {
+        key: copy.deepcopy(value)
+        for key, value in command_output.items()
+        if key not in {"stdout", "stderr", "required_facts", "rtk_adapter_receipt", "rtk_compact_output"}
+    }
+    compact.update({"stdout": stdout, "stderr": stderr, "raw_ref": raw_ref})
+    return compact
+
+
+def _required_facts(
+    command_output: Dict[str, Any],
+    raw_text: str,
+    command_family: str,
+    exit_code: int,
+) -> Tuple[List[str], str]:
+    supplied = command_output.get("required_facts")
+    if isinstance(supplied, list):
+        facts = list(dict.fromkeys(str(item) for item in supplied if str(item)))
+        return facts, "caller"
+    return required_command_facts(raw_text, command_family, exit_code), "command-family-failure"
+
+
+def _invoke_rtk_adapter(
+    adapter: Callable[[Dict[str, Any]], Any],
+    *,
+    path: Dict[str, str],
+    task: WorkflowTaskResult,
+    source: str,
+    command: str,
+    raw_stdout: str,
+    raw_stderr: str,
+    exit_code: int,
+    required_facts: List[str],
+) -> Tuple[Tuple[str, str] | None, Dict[str, Any]]:
+    input_sha256 = hash_command_output_payload(raw_stdout, raw_stderr)
+    correlation_seed = "\0".join(
+        [path["project"], path["chat"], path["run"], task.task_id, source, input_sha256]
     )
+    correlation_id = f"rtk-{hashlib.sha256(correlation_seed.encode('utf-8')).hexdigest()[:32]}"
+    receipt: Dict[str, Any] = {
+        "adapter": "rtk",
+        "adapter_callable": str(
+            getattr(adapter, "__qualname__", "") or getattr(adapter, "__name__", "") or type(adapter).__name__
+        ),
+        "correlation_id": correlation_id,
+        "invoked": True,
+        "input_sha256": input_sha256,
+        "receipt_origin": "runtime",
+        "provenance_status": "runtime_invoked_adapter",
+        "runtime_invocation_verified": True,
+        "provider_authenticity_verified": False,
+    }
+    request = {
+        "correlation_id": correlation_id,
+        "task_id": task.task_id,
+        "source": source,
+        "command": command,
+        "stdout": raw_stdout,
+        "stderr": raw_stderr,
+        "exit_code": exit_code,
+        "required_facts": list(required_facts),
+    }
+    try:
+        response = adapter(copy.deepcopy(request))
+    except Exception as exc:
+        receipt.update({"status": "failed", "error_type": type(exc).__name__})
+        return None, receipt
+    if not isinstance(response, dict):
+        receipt.update({"status": "rejected", "reason_code": "adapter_response_not_mapping"})
+        return None, receipt
+    compact_stdout = str(response.get("stdout", ""))
+    compact_stderr = str(response.get("stderr", ""))
+    compact_text = _join_channels(compact_stdout, compact_stderr)
+    if any(fact not in compact_text for fact in required_facts):
+        receipt.update({"status": "rejected", "reason_code": "required_fact_preservation_failed"})
+        return None, receipt
+    receipt.update(
+        {
+            "status": "succeeded",
+            "output_sha256": hash_command_output_payload(compact_stdout, compact_stderr),
+            "integrity_hashes_correlated": True,
+            "cryptographic_authenticity_proven": False,
+        }
+    )
+    return (compact_stdout, compact_stderr), receipt
+
+
+def _claimed_rtk_provider_data(
+    task: WorkflowTaskResult,
+    source: str,
+    command_output: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    if "rtk_adapter_receipt" not in command_output and "rtk_compact_output" not in command_output:
+        return None
+    return {
+        "task_id": task.task_id,
+        "source": source,
+        "provider": "rtk",
+        "provenance_status": "claimed_unverified",
+        "runtime_invocation_verified": False,
+        "provider_authenticity_verified": False,
+        "claimed_receipt_present": isinstance(command_output.get("rtk_adapter_receipt"), dict),
+        "claimed_compact_output_present": isinstance(command_output.get("rtk_compact_output"), dict),
+    }
+
+
+def _raw_reference(
+    *,
+    path: Dict[str, str],
+    task: WorkflowTaskResult,
+    source: str,
+    stdout: str,
+    stderr: str,
+) -> Tuple[Dict[str, Any], str]:
+    payload = _serialize_command_output_payload(stdout, stderr)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    scope_digest = hashlib.sha256(
+        f"{path['project']}\0{path['chat']}\0{path['run']}".encode("utf-8")
+    ).hexdigest()[:16]
+    scheme = "caller" if path["owner"] == "caller" else "raw"
+    uri = (
+        f"{scheme}://{scope_digest}/{_safe_ref_segment(task.task_id)}/"
+        f"{_safe_ref_segment(source)}/{digest[:16]}"
+    )
+    return {
+        "uri": uri,
+        "sha256": digest,
+        "bytes": len(payload.encode("utf-8")),
+    }, payload
+
+
+def _persist_raw(
+    path: Dict[str, str],
+    raw_store: MutableMapping[str, str] | None,
+    uri: str,
+    payload: str,
+) -> bool:
+    if path["owner"] == "caller":
+        return True
+    if raw_store is None:
+        return False
+    try:
+        raw_store[uri] = payload
+    except Exception:
+        return False
+    return raw_store.get(uri) == payload
+
+
+def _canonical_gain(
+    *,
+    before: str,
+    after: str,
+    margin_tokens: int,
+    margin_ratio: float,
+) -> Dict[str, Any]:
+    before_bytes = len(before.encode("utf-8"))
+    after_bytes = len(after.encode("utf-8"))
+    before_chars = len(before)
+    after_chars = len(after)
+    before_tokens = estimate_token_count(before)
+    after_tokens = estimate_token_count(after)
+    estimated_saved = before_tokens - after_tokens
+    required_margin = max(
+        max(0, margin_tokens),
+        int(math.ceil(before_tokens * max(0.0, margin_ratio))),
+    )
+    return {
+        "estimated_payload_bytes_before": before_bytes,
+        "estimated_payload_bytes_after": after_bytes,
+        "estimated_payload_bytes_delta": before_bytes - after_bytes,
+        "estimated_payload_characters_before": before_chars,
+        "estimated_payload_characters_after": after_chars,
+        "estimated_payload_characters_delta": before_chars - after_chars,
+        "estimated_payload_tokens_before": before_tokens,
+        "estimated_payload_tokens_after": after_tokens,
+        "estimated_payload_tokens_saved": estimated_saved,
+        "estimated_payload_token_savings_ratio": (
+            round(estimated_saved / before_tokens, 4) if before_tokens else 0.0
+        ),
+        "estimated_payload_token_count_method": "deterministic_local_estimate_chars_div_4",
+        "estimated_payload_token_count_is_estimate": True,
+        "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
+        "required_margin_tokens": required_margin,
+        "net_gain_passed": (
+            after_bytes < before_bytes
+            and after_chars < before_chars
+            and after_tokens < before_tokens
+            and estimated_saved >= required_margin
+        ),
+    }
+
+
+def _no_use_status(decisions: List[Tuple[str, str]]) -> Tuple[str, str]:
+    for preferred in ("blocked", "passthrough", "considered_not_needed"):
+        for status, reason_code in decisions:
+            if status == preferred:
+                return status, reason_code
+    return "considered_not_needed", "no_optimizable_payload"
+
+
+def _no_use_report(
+    *,
+    status: str,
+    reason_code: str,
+    provider: str,
+    provider_reason_code: str,
+) -> Dict[str, Any]:
     report = {
         "status": status,
-        "token_optimizer_status_reason": reason,
+        "reason_code": reason_code,
         "provider": provider,
-        "summary": aggregate_token_usage_stats([record.get("token_usage", {}) for record in records]),
-        "rtk_style_stats": _rtk_style_stats(records),
-        "records": public_records,
-        "records_count": len(public_records),
-        "optimized_payload_count": sum(1 for record in records if record.get("status") == "used"),
-        "skipped_small_output_count": skipped_count,
-        "blocked_reason": blocked_reason,
-        "passthrough_reason": passthrough_reason,
-        "evidence": ["runtime_token_optimization", "token_optimizer_decision"],
+        "token_optimizer_status_reason": f"Token optimizer {status}: {reason_code}.",
     }
-    if status != "used":
-        report["not_used_reason"] = reason
-    if status == "used":
-        report["evidence"].append("token_usage_stats")
+    if provider_reason_code not in {"", "kh_selected", reason_code}:
+        report["provider_reason_code"] = provider_reason_code
     return report
 
 
-def _status_reason(
-    *,
-    status: str,
-    provider: Dict[str, Any],
-    records: List[Dict[str, Any]],
-    skipped_count: int,
-    blocked_reason: str = "",
-    passthrough_reason: str = "",
-) -> str:
-    if status == "used":
-        return "Token optimizer used; optimizer-local before/after telemetry is available."
-    if status == "blocked":
-        reason = blocked_reason or str(provider.get("rationale", ""))
-        return _join_reason("Token optimizer not used because optimization was blocked", reason)
-    if status == "passthrough":
-        reason = passthrough_reason or _first_record_reason(records) or str(provider.get("rationale", ""))
-        return _join_reason("Token optimizer not used because content was passed through unchanged", reason)
-    if skipped_count:
-        threshold = provider.get("min_tokens") or provider.get("token_optimizer_min_tokens")
-        if threshold:
-            return (
-                "Token optimizer not used because all candidate command outputs or transcripts "
-                f"were below the configured threshold ({threshold} tokens)."
-            )
-        return (
-            "Token optimizer not used because all candidate command outputs or transcripts "
-            "were below the configured threshold."
-        )
-    return "Token optimizer not used because no optimizable command output or transcript was found."
-
-
-def _first_record_reason(records: List[Dict[str, Any]]) -> str:
-    for record in records:
-        reason = str(
-            record.get("passthrough_reason")
-            or record.get("blocked_reason")
-            or record.get("not_used_reason")
-            or record.get("fallback_reason")
-            or ""
-        )
-        if reason:
-            return reason
-    return ""
-
-
-def _considered_payload_records(
-    result: WorkflowTaskResult,
-    *,
-    status: str,
-    reason: str,
-) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    for source, command_output in _iter_command_outputs(result.metadata):
-        raw_text = _join_channels(
-            str(command_output.get("stdout", "")),
-            str(command_output.get("stderr", "")),
-        )
-        records.append(
-            _considered_command_record(
-                result,
-                source=source,
-                command_output=command_output,
-                raw_text=raw_text,
-                status=status,
-                reason=reason,
-            )
-        )
-    for source, transcript in _iter_transcripts(result.metadata):
-        records.append(
-            _considered_transcript_record(
-                result,
-                source=source,
-                transcript=transcript,
-                status=status,
-                reason=reason,
-            )
-        )
-    return records
-
-
-def _considered_command_record(
-    result: WorkflowTaskResult,
-    *,
-    source: str,
-    command_output: Dict[str, Any],
-    raw_text: str,
-    status: str,
-    reason: str,
-) -> Dict[str, Any]:
-    command = str(command_output.get("command", ""))
-    record = {
-        "kind": "command-output",
-        "source": source,
-        "task_id": result.task_id,
-        "file_name": result.file_name,
-        "role": result.role,
-        "status": status,
-        "command": command,
-        "command_family": _runtime_command_family(command),
-        "exit_code": _int_value(command_output.get("exit_code", command_output.get("returncode", 0))),
-        "raw_bytes": len(raw_text.encode("utf-8")),
-        "filtered_bytes": len(raw_text.encode("utf-8")),
-        "raw_lines": len(raw_text.splitlines()),
-        "filtered_lines": len(raw_text.splitlines()),
-        "fallback_reason": reason,
-        "not_used_reason": reason,
-        "token_usage": compare_token_usage(
-            raw_text,
-            raw_text,
-            strategy=f"command-output-{status}",
-            label=command or source,
-        ),
-    }
-    if status == "passthrough":
-        record["passthrough_reason"] = reason
-    if status == "blocked":
-        record["blocked_reason"] = reason
-    return record
-
-
-def _considered_transcript_record(
-    result: WorkflowTaskResult,
-    *,
-    source: str,
-    transcript: str,
-    status: str,
-    reason: str,
-) -> Dict[str, Any]:
-    record = {
-        "kind": "agent-transcript",
-        "source": source,
-        "task_id": result.task_id,
-        "file_name": result.file_name,
-        "role": result.role,
-        "status": status,
-        "raw_bytes": len(transcript.encode("utf-8")),
-        "filtered_bytes": len(transcript.encode("utf-8")),
-        "raw_lines": len(transcript.splitlines()),
-        "filtered_lines": len(transcript.splitlines()),
-        "fallback_reason": reason,
-        "not_used_reason": reason,
-        "token_usage": compare_token_usage(
-            transcript,
-            transcript,
-            strategy=f"agent-transcript-{status}",
-            label=f"{result.role}:{source}",
-        ),
-    }
-    if status == "passthrough":
-        record["passthrough_reason"] = reason
-    if status == "blocked":
-        record["blocked_reason"] = reason
-    return record
-
-
-def _runtime_command_family(command: str) -> str:
+def _command_family(command: str) -> str:
     lowered = str(command or "").lower()
-    if any(token in lowered for token in ["pytest", "unittest", "npm test", "cargo test", "go test", "dotnet test", "jest", "vitest"]):
+    if any(
+        token in lowered
+        for token in (
+            "pytest",
+            "unittest",
+            "npm test",
+            "cargo test",
+            "go test",
+            "dotnet test",
+            "mvn test",
+            "gradle test",
+            "jest",
+            "vitest",
+        )
+    ):
         return "test"
-    if any(token in lowered for token in ["msbuild", "dotnet build", "npm run build", "cargo build", "go build", "tsc", "build "]):
+    if any(
+        token in lowered
+        for token in (
+            "msbuild",
+            "dotnet build",
+            "npm run build",
+            "cargo build",
+            "go build",
+            "mvn package",
+            "gradle build",
+            "tsc",
+            "build ",
+        )
+    ):
         return "build"
-    if any(token in lowered for token in ["git status", "git diff", "git show"]):
-        return "git-read"
-    if "python -m" in lowered or "python " in lowered:
-        return "python"
     return "generic"
 
 
-def _join_reason(prefix: str, reason: str) -> str:
-    clean = str(reason or "").strip().rstrip(".")
-    return f"{prefix}: {clean}." if clean else f"{prefix}."
+def _is_binary_or_high_entropy(text: str) -> bool:
+    if not text:
+        return False
+    if "\x00" in text or "\ufffd" in text:
+        return True
+    control_count = sum(1 for char in text if ord(char) < 32 and char not in "\n\r\t")
+    if control_count / max(1, len(text)) >= 0.01:
+        return True
+    compact = "".join(text.split())
+    if len(compact) < 512:
+        return False
+    base64ish = sum(char.isalnum() or char in "+/=_-" for char in compact) / len(compact)
+    return base64ish >= 0.98 and len(set(compact)) >= 48 and " " not in text[:256]
 
 
-def _rtk_style_stats(records: List[Dict[str, Any]]) -> Dict[str, Any]:
-    by_family: Dict[str, Dict[str, Any]] = {}
-    for record in records:
-        if record.get("kind") != "command-output":
-            continue
-        family = str(record.get("command_family") or "generic")
-        token_usage = dict(record.get("token_usage", {}))
-        bucket = by_family.setdefault(
-            family,
-            {
-                "case_count": 0,
-                "without_token_optimizer": 0,
-                "with_token_optimizer": 0,
-                "estimated_tokens_saved": 0,
-                "token_savings_ratio": 0.0,
-                "actual_usage_scope": str(token_usage.get("actual_usage_scope", "actual_optimizer_input_output_payload")),
-                "token_count_method": str(
-                    token_usage.get("token_count_method", "deterministic_local_estimate_chars_div_4")
-                ),
-                "token_count_is_estimate": bool(token_usage.get("token_count_is_estimate", True)),
-                "billing_tokens_available": False,
-                "actual_without_token_optimizer": 0,
-                "actual_with_token_optimizer": 0,
-                "actual_tokens_saved": 0,
-                "actual_token_savings_ratio": 0.0,
-                "actual_without_token_optimizer_bytes": 0,
-                "actual_with_token_optimizer_bytes": 0,
-                "actual_bytes_saved": 0,
-                "actual_byte_savings_ratio": 0.0,
-                "actual_without_token_optimizer_chars": 0,
-                "actual_with_token_optimizer_chars": 0,
-                "actual_chars_saved": 0,
-                "actual_char_savings_ratio": 0.0,
-            },
-        )
-        bucket["case_count"] += 1
-        bucket["without_token_optimizer"] += int(token_usage.get("without_token_optimizer", 0))
-        bucket["with_token_optimizer"] += int(token_usage.get("with_token_optimizer", 0))
-        bucket["estimated_tokens_saved"] += int(token_usage.get("estimated_tokens_saved", 0))
-        bucket["actual_without_token_optimizer"] += int(token_usage.get("actual_without_token_optimizer", 0))
-        bucket["actual_with_token_optimizer"] += int(token_usage.get("actual_with_token_optimizer", 0))
-        bucket["actual_tokens_saved"] += int(token_usage.get("actual_tokens_saved", 0))
-        bucket["actual_without_token_optimizer_bytes"] += int(
-            token_usage.get("actual_without_token_optimizer_bytes", 0)
-        )
-        bucket["actual_with_token_optimizer_bytes"] += int(token_usage.get("actual_with_token_optimizer_bytes", 0))
-        bucket["actual_bytes_saved"] += int(token_usage.get("actual_bytes_saved", 0))
-        bucket["actual_without_token_optimizer_chars"] += int(
-            token_usage.get("actual_without_token_optimizer_chars", 0)
-        )
-        bucket["actual_with_token_optimizer_chars"] += int(token_usage.get("actual_with_token_optimizer_chars", 0))
-        bucket["actual_chars_saved"] += int(token_usage.get("actual_chars_saved", 0))
-    for bucket in by_family.values():
-        raw = bucket["without_token_optimizer"]
-        saved = bucket["estimated_tokens_saved"]
-        bucket["token_savings_ratio"] = round(saved / raw, 4) if raw else 0.0
-        actual_raw = bucket["actual_without_token_optimizer"]
-        actual_saved = bucket["actual_tokens_saved"]
-        bucket["actual_token_savings_ratio"] = round(actual_saved / actual_raw, 4) if actual_raw else 0.0
-        actual_raw_bytes = bucket["actual_without_token_optimizer_bytes"]
-        actual_saved_bytes = bucket["actual_bytes_saved"]
-        bucket["actual_byte_savings_ratio"] = round(actual_saved_bytes / actual_raw_bytes, 4) if actual_raw_bytes else 0.0
-        actual_raw_chars = bucket["actual_without_token_optimizer_chars"]
-        actual_saved_chars = bucket["actual_chars_saved"]
-        bucket["actual_char_savings_ratio"] = round(actual_saved_chars / actual_raw_chars, 4) if actual_raw_chars else 0.0
-    return {
-        "style": "rtk-compatible-command-family-stats",
-        "provider": "kh",
-        "by_command_family": by_family,
-        "note": "KH runtime emits RTK-style family savings without requiring RTK as a dependency.",
-    }
+def _serialize_command_output_payload(stdout: str, stderr: str) -> str:
+    return json.dumps(
+        {"stderr": str(stderr), "stdout": str(stdout)},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
-def _workflow_status(records: List[Dict[str, Any]], skipped_count: int) -> str:
-    if any(record.get("status") == "used" for record in records):
-        return "used"
-    if any(record.get("status") == "blocked" for record in records):
-        return "blocked"
-    if any(record.get("status") == "passthrough" for record in records):
-        return "passthrough"
-    if skipped_count:
-        return "considered_not_needed"
-    return "considered_not_needed"
-
-
-def _record_status(metadata: Dict[str, Any]) -> str:
-    token_usage = dict(metadata.get("token_usage", {}))
-    if int(token_usage.get("actual_tokens_saved", token_usage.get("estimated_tokens_saved", 0))) > 0:
-        return "used"
-    if metadata.get("passthrough_reason") or metadata.get("fallback_reason"):
-        return "passthrough"
-    return "considered_not_needed"
-
-
-def _iter_command_outputs(metadata: Dict[str, Any]) -> Iterable[Tuple[str, Dict[str, Any]]]:
-    metadata = metadata or {}
-    command_output = metadata.get("command_output")
-    if isinstance(command_output, dict):
-        yield "command_output", command_output
-    command_outputs = metadata.get("command_outputs")
-    if isinstance(command_outputs, list):
-        for index, item in enumerate(command_outputs, start=1):
-            if isinstance(item, dict):
-                yield f"command_outputs[{index}]", item
-    if any(key in metadata for key in ["stdout", "stderr"]) and metadata.get("command"):
-        yield "metadata", metadata
-
-
-def _iter_transcripts(metadata: Dict[str, Any]) -> Iterable[Tuple[str, str]]:
-    metadata = metadata or {}
-    for key in ["agent_transcript", "subagent_transcript", "transcript"]:
-        value = metadata.get(key)
-        if isinstance(value, str) and value.strip():
-            yield key, value
-    transcripts = metadata.get("subagent_transcripts")
-    if isinstance(transcripts, list):
-        for index, item in enumerate(transcripts, start=1):
-            if isinstance(item, str) and item.strip():
-                yield f"subagent_transcripts[{index}]", item
-            elif isinstance(item, dict):
-                text = str(item.get("transcript", "") or item.get("content", ""))
-                if text.strip():
-                    yield f"subagent_transcripts[{index}]", text
-
-
-def _public_record(record: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        key: value
-        for key, value in record.items()
-        if key not in {"stdout", "stderr", "transcript"}
-    }
+def _safe_ref_segment(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", str(value or "")).strip("-.")
+    return normalized[:64] or "unknown"
 
 
 def _join_channels(stdout: str, stderr: str) -> str:
@@ -617,8 +711,15 @@ def _join_channels(stdout: str, stderr: str) -> str:
     return stdout or stderr
 
 
-def _int_metadata(metadata: Dict[str, Any], key: str, default: int) -> int:
-    return _int_value(metadata.get(key, default), default=default)
+def _int_option(options: Dict[str, Any], key: str, default: int) -> int:
+    return _int_value(options.get(key, default), default)
+
+
+def _float_option(options: Dict[str, Any], key: str, default: float) -> float:
+    try:
+        return float(options.get(key, default))
+    except (TypeError, ValueError):
+        return default
 
 
 def _int_value(value: Any, default: int = 0) -> int:

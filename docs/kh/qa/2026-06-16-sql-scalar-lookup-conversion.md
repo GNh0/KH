@@ -2,102 +2,98 @@
 
 ## Scope
 
-This note records the SQL formatting rule update for scalar lookup functions.
-The concrete regression was a worker preserving `DBO.F_BA011T_FIND_SUBNM(...)`
-even though the host-local `sql-formatting` contract defines it as a verified
-`BA011T` lookup.
+This note defines the generic evidence boundary for converting a scalar lookup
+function to a join. It is not a default instruction to rewrite a particular
+function, table, schema, or application query.
 
-No real project SQL, real table data, or PBL fragments are included here.
+Formatting-only work must retain scalar functions. A conversion is a separate
+`operation="refactor"` request and remains blocked unless the structured
+evidence and parsed SQL boundary both pass.
 
-## Decision
+## Evidence-Bound Conditions
 
-- Unknown scalar functions stay unchanged unless the function body, DB/MCP
-  metadata, project source, or a verified style contract proves an equivalent
-  lookup join.
-- `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is treated as a verified
-  `BA011T` lookup contract when the host-local `sql-formatting` skill is
-  available.
-- Verified `BA011T` scalar lookups should be converted to `LEFT OUTER JOIN
-  BA011T` unless a concrete safety exception is recorded.
-- PB host variables such as `:ls_frdt` are source contract text and must be
-  preserved, not uppercased.
+A conversion candidate must provide all of the following:
 
-## MCP Check
+- an authoritative function definition reference and content hash;
+- classification as a pure deterministic lookup, with no calculation,
+  aggregation, dynamic SQL, security filtering, or side effects;
+- the exact lookup source identity, including every supplied database and
+  schema qualifier;
+- complete parameter-to-column mappings, fixed filters, and return column;
+- reviewed null behavior, zero-or-one cardinality, and unmatched-row behavior;
+- a `LEFT OUTER JOIN` that preserves the outer row when the lookup misses;
+- original and formatted SQL hashes correlated to any external comparison
+  artifact.
 
-The `mssql_C_KONE110` query tool was available, but the active database
-connection was not open in this session:
+Missing or conflicting evidence blocks the conversion. Free text such as
+"this looks like a lookup" is not evidence.
+
+## Neutral Example
+
+Original expression:
+
+```sql
+SELECT DBO.F_LOOKUP_DESCRIPTION(A.STATUS_CODE) AS STATUS_NAME
+FROM DBO.ORDER_HEADER A;
+```
+
+The evidence may declare:
 
 ```text
-Query failed: No active database connection. Use connect_database first.
+function.name = DBO.F_LOOKUP_DESCRIPTION
+analysis.classification = pure_deterministic_lookup
+analysis.source_table = DBO.CODE_LOOKUP
+analysis.key_mappings = @STATUS_CODE -> B.CODE = A.STATUS_CODE
+analysis.filters = B.DOMAIN_CODE = 'ORDER_STATUS'; B.ACTIVE_YN = 'Y'
+analysis.return_expression = DESCRIPTION
+analysis.null_behavior = returns_null_when_no_match
+analysis.cardinality = zero_or_one
+analysis.unmatched_row_behavior = preserve_outer_row_with_null
 ```
 
-That means general scalar functions cannot be converted from DB evidence in
-this session. The BA011T conversion remains allowed because the host-local
-style contract carries the verified lookup mapping.
-
-## Regression Fixes
-
-- Strengthened the host-local `sql-formatting` rule so verified lookup
-  scalar-function-to-join conversion is an explicit exception to generic
-  formatting-only restrictions.
-- Updated KH `sql-formatting-style-harness` docs to distinguish verified
-  lookup conversion from unknown scalar functions.
-- Added a negative test for retained `DBO.F_BA011T_FIND_SUBNM`.
-- Fixed verifier false positives for:
-  - lowercase PB host variables
-  - inline `JOIN ... ON ... AND ...` conditions
-  - spacing-only changes around comparison operators inside contract lines
-  - spacing-only changes inside commented SQL predicates
-
-## Subagent Check
-
-A fresh worker was instructed to read the updated host-local `sql-formatting`
-skill and format an anonymized SQL sample. The worker converted:
+With the authoritative function definition and correlation artifacts present,
+the bounded SQL shape is:
 
 ```sql
-DBO.F_BA011T_FIND_SUBNM('CD001', A.STATUS_CD, 'Y')
+SELECT B.DESCRIPTION AS STATUS_NAME
+FROM DBO.ORDER_HEADER A
+        LEFT OUTER JOIN DBO.CODE_LOOKUP B
+                     ON B.CODE = A.STATUS_CODE
+                     AND B.DOMAIN_CODE = 'ORDER_STATUS'
+                     AND B.ACTIVE_YN = 'Y';
 ```
 
-to:
+Schema qualification is evidence. If the evidence declares
+`DBO.CODE_LOOKUP`, an unqualified `CODE_LOOKUP` source does not prove the same
+identity and the harness must block the refactor.
 
-```sql
-LEFT OUTER JOIN BA011T C
-             ON C.MAINCD = 'CD001'
-             AND A.STATUS_CD = C.SUBCD
-             AND C.USEYN = 'Y'
-```
+## Fail-Closed Limits
 
-and projected:
+The parsed boundary permits only one scalar-call replacement and one matching
+`LEFT OUTER JOIN` in the same SQL scope. It blocks conversions that introduce
+unrelated literal, predicate, arithmetic, statement-count, query-count, join,
+or source changes. Ambiguous, computed, aggregate, multi-row, stateful,
+permission-sensitive, or unavailable function definitions remain unchanged.
 
-```sql
-ISNULL(C.SUBNM, '') AS STATUS_NM
-```
+## Trust Boundary
 
-## Verification
+The Python harness can verify evidence shape, hashes, exact parsed source
+identity, and the bounded SQL rewrite. It does not authenticate database
+execution and does not prove semantic or performance equivalence.
 
-Commands run from the KH repository:
+Caller-supplied external comparison metadata is provenance-correlated only.
+Unless a separately trusted system authenticates the execution and artifact,
+the comparison is claimed and unverified. No cryptographic assurance is
+inferred from caller-supplied identifiers or hashes.
+
+## Regression Verification
+
+Run from the KH repository:
 
 ```powershell
-python -B -m unittest tests.test_sql_formatting_style_harness tests.test_plugin_packaging tests.test_plugin_composition_policy tests.test_kh_front_door
-python -B -m src.skills.uaf_skill_catalog --check
-python -B skills\sql_formatting_style_harness\scripts\smoke_check.py
-python -B skills\sql_formatting_style_harness\scripts\demo.py --output-dir "$env:TEMP\kh-sql-formatting-demo-2.9.77"
+python -m unittest tests.test_sql_formatting_style_harness -q
 ```
 
-Results:
-
-- `71` unittest cases passed.
-- Skill catalog check passed: `41` valid, `0` invalid.
-- SQL formatting harness smoke check passed.
-- SQL formatting harness demo passed with success and blocked HarnessResult
-  artifacts.
-- The anonymized scalar-to-join sample passed verifier with
-  `mechanical_checks.status=passed`, no preservation issues, and no style
-  issues.
-
-## Remaining Boundary
-
-The harness still does not prove DB semantic equivalence. For schema-dependent
-or performance-critical conversions, use DB-backed evidence such as function
-body review, execution-plan comparison, result-set comparison, or
-`STATISTICS IO/TIME`.
+The hardening target remains `91` passing tests. A green result proves the
+deterministic harness gates covered by those tests; it does not prove live
+database behavior.

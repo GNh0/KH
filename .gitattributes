@@ -1,3 +1,8 @@
+* text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
 tests/ export-ignore
 docs/ export-ignore
 test_cli_project/ export-ignore

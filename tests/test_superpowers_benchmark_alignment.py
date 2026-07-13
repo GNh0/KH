@@ -2,12 +2,27 @@ import json
 import unittest
 from pathlib import Path
 
+from src.orchestration.kh_front_door import build_kh_front_door
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def read_text(relative_path: str) -> str:
     return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def routed_skills(request: str) -> set[str]:
+    summary = build_kh_front_door(
+        request,
+        project=REPO_ROOT,
+        host="codex",
+    ).to_summary_dict()
+    return set(
+        summary["runtime_applied_skills"]
+        + summary["immediate_next_skills"]
+        + summary["selected_not_executed_skills"]
+    )
 
 
 class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
@@ -76,8 +91,9 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
         parallel = read_text("skills/parallel_orchestration_harness/SKILL.md")
         router = read_text("skills/request_complexity_router/SKILL.md")
-        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+        selected = routed_skills(
+            "Implement a multi-file feature with tests, worktree isolation, parallel workers, review, and verification."
+        )
 
         self.assertIn(
             "Default to an isolated workspace before implementation in a Git-backed project.",
@@ -99,16 +115,20 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
             "Workspace strategy is a cross-cutting output for implementation routes.",
             router,
         )
-        self.assertIn("Before implementation in a Git-backed project", prompts)
-        self.assertIn("Report `workspace_strategy`", prompts)
+        self.assertIn("development-lifecycle-harness", selected)
+        self.assertIn("worktree-isolation-harness", selected)
+        self.assertIn("parallel-orchestration-harness", selected)
 
     def test_plan_work_review_compound_is_visible_to_plugin_users(self):
         readme = read_text("README.md")
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
         compound = read_text("skills/compound_engineering_harness/SKILL.md")
         distiller = read_text("skills/workflow_skill_distiller/SKILL.md")
-        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+        brainstorming = read_text("skills/brainstorming_harness/SKILL.md")
+        vague_request_route = routed_skills("Build a new operations dashboard in this folder.")
+        large_work_route = routed_skills(
+            "Implement a multi-file feature with tests, use a worktree, parallel workers, review, verify before completion, and finish the branch."
+        )
 
         for stage in ["Plan", "Work", "Review", "Compound"]:
             self.assertIn(stage, readme)
@@ -117,26 +137,21 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         self.assertIn("explicit Compound step", compound)
         self.assertIn("downstream distillation step", distiller)
         self.assertIn("compound-engineering-harness", distiller)
-        self.assertIn("KH brainstorming-harness", prompts)
-        self.assertIn("KH workflow-skill-distiller", prompts)
-        self.assertIn("Visible brainstorming output gate", prompts)
-        self.assertIn("Objective/operator", prompts)
-        self.assertIn("Brainstorming approval question discipline", prompts)
-        self.assertIn("not to approve immediate implementation", prompts)
-        self.assertIn("direction question, not an execution question", prompts)
-        self.assertIn("Superpowers/Compound brainstorming gate", prompts)
-        self.assertIn("Option choice is not implementation approval", prompts)
-        self.assertIn("Option choice is not implementation-scope approval", prompts)
-        self.assertIn("I will set the implementation scope as follows", prompts)
-        self.assertIn("Brainstorming handoff transition", prompts)
-        self.assertIn("3-4 focused user decisions", prompts)
-        self.assertIn("strategy/context -> brainstorm requirements -> plan -> work -> review -> compound learning", prompts)
-        self.assertIn("Success criteria/constraints/non-goals", prompts)
-        self.assertIn("Required records/data/artifact shape", prompts)
-        self.assertIn("Approved brainstorm continuation gate", prompts)
-        self.assertIn("Brainstorming recommendation discipline", prompts)
-        self.assertIn("Exact target path rule", prompts)
-        self.assertIn("relative staging followed by `Copy-Item`", prompts)
+        for procedure in [
+            "Objective/operator",
+            "Success criteria/constraints/non-goals",
+            "Required records/data/artifact shape",
+            "direction question, not an execution question",
+            "I will set the implementation scope as follows",
+            "3-4 focused user decisions",
+            "BrainstormSession",
+            "brainstorm_handoff",
+        ]:
+            self.assertIn(procedure, brainstorming)
+
+        self.assertIn("brainstorming-harness", vague_request_route)
+        self.assertIn("compound-engineering-harness", large_work_route)
+        self.assertIn("workflow-skill-distiller", large_work_route)
 
     def test_compound_harness_combines_external_role_stack_and_memory(self):
         skill = read_text("skills/compound_engineering_harness/SKILL.md")
@@ -178,10 +193,13 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
         subagent = read_text("skills/subagent_review_pipeline/SKILL.md")
         packets = read_text("skills/subagent_review_pipeline/references/standard-task-packets.md")
+        usability = read_text("skills/workflow_usability_harness/SKILL.md")
         plugin = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+        selected = routed_skills(
+            "Implement a large multi-file project with task packets, subagent review, progress state, and verification."
+        )
 
-        for text in [audit, lifecycle, subagent, prompts]:
+        for text in [audit, lifecycle, subagent, usability]:
             self.assertIn(".kh/development/<run-id>/state/progress.json", text)
 
         for expected in [
@@ -196,15 +214,18 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
 
         self.assertIn("development progress state", plugin["description"])
         self.assertIn("Development Progress", plugin["interface"]["capabilities"])
+        self.assertIn("workflow-usability-harness", selected)
+        self.assertIn("subagent-review-pipeline", selected)
 
     def test_subagent_dispatch_and_token_optimizer_are_decision_gated(self):
         subagent = read_text("skills/subagent_review_pipeline/SKILL.md")
         packets = read_text("skills/subagent_review_pipeline/references/standard-task-packets.md")
         token = read_text("skills/token_optimizer/SKILL.md")
         readme = read_text("README.md")
-        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
-        combined = "\n".join([subagent, packets, token, readme, prompts])
+        selected = routed_skills(
+            "Use subagents for a multi-file implementation and review, with explicit token optimization decisions."
+        )
+        combined = "\n".join([subagent, packets, token, readme])
 
         for expected in [
             "subagent_strategy",
@@ -212,18 +233,22 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
             "Dispatch subagents only when",
             "This is a decision gate, not automatic compression",
             "not automatic compression",
-            "short, exact, or contract-sensitive reviewer output",
+            "short or exact reviewer output",
             "considered_not_needed",
             "passthrough",
         ]:
             self.assertIn(expected, combined)
 
+        self.assertIn("subagent-review-pipeline", selected)
+        self.assertIn("token-optimizer", selected)
+
     def test_exact_target_and_memory_guards_are_visible_to_hosts(self):
         guard = read_text("skills/guard_policy_harness/SKILL.md")
         memory = read_text("skills/memory_state_harness/SKILL.md")
-        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
-        combined = "\n".join([guard, memory, prompts])
+        selected = routed_skills(
+            "Create generated project files at C:\\target and keep all memory scoped to this project and chat."
+        )
+        combined = "\n".join([guard, memory])
 
         for expected in [
             "Exact Target Path Rule",
@@ -231,22 +256,22 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
             "Relative staging followed by copy-back is a guard failure.",
             "The restriction also applies after a brainstorming approval message.",
             "Do not read host global Codex memory after a user approves a brainstorm option",
-            "Exact target path rule",
-            "Do not create a same-name relative folder",
+            "generated user-facing files must be created or updated at that exact resolved path",
+            "Do not create a relative same-name project folder",
         ]:
             self.assertIn(expected, combined)
+
+        self.assertIn("memory-state-harness", selected)
+        self.assertIn("skill-catalog", selected)
 
     def test_runtime_prompts_use_stack_neutral_generated_file_language(self):
         guard = read_text("skills/guard_policy_harness/SKILL.md")
         front_door_example = read_text("skills/always_on_front_door/examples/minimal-workflow.md")
         agent_loop = read_text("src/orchestration/agent_loop.py")
-        plugin = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
-        runtime_text = "\n".join([guard, front_door_example, agent_loop, prompts])
+        runtime_text = "\n".join([guard, front_door_example, agent_loop])
 
         for expected in [
-            "project files, documents, images, drawings, data exports, or any stack-specific generated artifact",
-            "workspace-root project files, stack-specific generated files",
+            "workspace-root project files, stack-specific generated files, documents, images, drawings, or generated data files",
             "the chosen stack and artifact type",
             "approved project-appropriate deliverables",
         ]:
@@ -267,8 +292,10 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         compound = read_text("skills/compound_engineering_harness/SKILL.md")
         audit = read_text("docs/skillbook/audits/2026-05-30-skill-transition-policy.md")
         plugin = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
-        combined = "\n".join([readme, lifecycle, router, compound, audit, prompts])
+        selected = routed_skills(
+            "Implement a multi-file feature with tests, use a worktree, parallel workers, review, verify before completion, and finish the branch."
+        )
+        combined = "\n".join([readme, lifecycle, router, compound, audit])
 
         for expected in [
             "skill_transition_handoff",
@@ -282,6 +309,8 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
             self.assertIn(expected, combined)
 
         self.assertIn("Skill Transitions", plugin["interface"]["capabilities"])
+        self.assertIn("compound-engineering-harness", selected)
+        self.assertIn("workflow-skill-distiller", selected)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,20 @@
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from src.orchestration.kh_front_door import _source_identity_for_root, build_kh_front_door
+from src.orchestration.goal_evidence import sha256_text
+from src.orchestration.goal_runtime import GoalRuntime
+from src.orchestration.kh_front_door import (
+    _source_identity_for_root,
+    _token_optimizer_gate_summary,
+    build_kh_front_door,
+)
 from src.skills.token_optimizer import estimate_token_count
 
 
@@ -44,6 +52,60 @@ class KhFrontDoorTests(unittest.TestCase):
             payload["skill_statuses"]["request-complexity-router"]["application_mode"],
             "runtime",
         )
+
+    def test_front_door_blocks_invalid_selected_skill_instead_of_trusting_directory_existence(self):
+        catalog = {
+            "total_skills_found": 6,
+            "execution_levels": {},
+            "validation": {
+                "success": False,
+                "issues": [
+                    {
+                        "skill_name": "always-on-front-door",
+                        "code": "missing_required_outputs",
+                        "severity": "error",
+                    }
+                ],
+                "results": [
+                    {"name": "always-on-front-door", "valid": False},
+                    {"name": "automatic-intake-harness", "valid": True},
+                    {"name": "plugin-composition-policy", "valid": True},
+                    {"name": "request-complexity-router", "valid": True},
+                    {"name": "skill-catalog", "valid": True},
+                    {"name": "token-optimizer", "valid": True},
+                ],
+            },
+            "skills": [],
+        }
+
+        with patch("src.orchestration.kh_front_door.collect_packaged_skills", return_value=catalog):
+            payload = build_kh_front_door(
+                "Audit the current front-door runtime.",
+                project=Path.cwd(),
+                host="codex",
+            ).to_dict()
+
+        self.assertEqual(payload["front_door_status"], "blocked")
+        self.assertFalse(payload["catalog_summary"]["valid"])
+        self.assertEqual(
+            payload["skill_statuses"]["always-on-front-door"]["blocked_reason"],
+            "invalid_packaged_skill",
+        )
+
+    def test_host_skill_path_health_rejects_malformed_existing_skill_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            malformed = Path(tmp) / "malformed-skill"
+            malformed.mkdir()
+            payload = build_kh_front_door(
+                "Audit the current front-door runtime.",
+                project=Path.cwd(),
+                host="codex",
+                host_skill_paths=[str(malformed)],
+            ).to_dict()
+
+        self.assertEqual(payload["host_skill_path_checks"][0]["status"], "invalid_skill")
+        self.assertFalse(payload["host_skill_path_checks"][0]["exists"] is False)
+        self.assertIn("SKILL.md", payload["host_skill_path_checks"][0]["reason"])
 
     def test_front_door_discovers_explicit_host_local_sql_formatting_skill(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -141,7 +203,10 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["plugin_route"]["controller"]["capability"], "sql_formatting")
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", payload["plugin_route"]["reasons"])
         self.assertIn("sql-formatting-style-harness", payload["recommended_skills"])
-        self.assertEqual(payload["immediate_next_skills"], ["sql-formatting-style-harness"])
+        self.assertEqual(
+            payload["immediate_next_skills"],
+            ["sql-formatting", "sql-formatting-style-harness"],
+        )
         self.assertNotIn("sql-formatting-style-harness", summary["selected_not_executed_skills"])
         self.assertTrue(
             any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
@@ -179,7 +244,10 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["plugin_route"]["controller"]["capability"], "sql_formatting")
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", payload["plugin_route"]["reasons"])
         self.assertIn("sql-formatting-style-harness", payload["recommended_skills"])
-        self.assertEqual(payload["immediate_next_skills"], ["sql-formatting-style-harness"])
+        self.assertEqual(
+            payload["immediate_next_skills"],
+            ["sql-formatting", "sql-formatting-style-harness"],
+        )
         self.assertTrue(payload["execution_gate"]["can_execute"])
         self.assertNotEqual(
             payload["execution_gate"]["status"],
@@ -215,7 +283,10 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(summary["classification"]["recommended_execution"], "skill_read")
         self.assertEqual(summary["plugin_route"]["controller"], "sql-formatting")
         self.assertEqual(payload["plugin_route"]["controller"]["capability"], "sql_formatting")
-        self.assertEqual(payload["immediate_next_skills"], ["sql-formatting-style-harness"])
+        self.assertEqual(
+            payload["immediate_next_skills"],
+            ["sql-formatting", "sql-formatting-style-harness"],
+        )
         self.assertNotEqual(
             payload["execution_gate"]["status"],
             "blocked_until_large_work_preflight",
@@ -316,6 +387,201 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("localized_scope_lock", payload["execution_gate"]["required_before_execution"])
         self.assertIn("unrequested_refactor", payload["execution_gate"]["blocked_actions"])
         self.assertEqual(payload["execution_authorization"]["status"], "allowed")
+
+    def test_front_door_emits_pending_kh_goal_activation_for_persistent_work(self):
+        result = build_kh_front_door(
+            "Do not stop at analysis; implement the Goal runtime and continue until focused tests pass.",
+            project=Path.cwd(),
+            host="codex",
+        )
+        payload = result.to_dict()
+
+        self.assertTrue(payload["goal_activation"]["required"])
+        self.assertEqual(payload["goal_activation"]["status"], "pending")
+        self.assertEqual(payload["goal_activation"]["goal_backend"], "kh_ledger")
+        self.assertEqual(payload["goal_activation"]["recommended_backend"], "kh_ledger")
+        self.assertIn(
+            "python -m src.orchestration.goal_runtime start",
+            payload["goal_activation"]["next_action"],
+        )
+        self.assertNotIn("user_stop_or_pause_request", payload["classification"]["reasons"])
+
+    def test_front_door_requires_runtime_boundary_and_keeps_host_claim_unverified(self):
+        prompt = "Implement and verify this runtime change."
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            with patch.dict(os.environ, {"UAF_RUNTIME_ROOT": str(root / "runtime")}, clear=False):
+                runtime = GoalRuntime(str(project), thread_id="thread-a", task_id="task-a")
+                runtime_result = runtime.start(
+                    objective=prompt,
+                    success_criteria=["runtime change is implemented and verified"],
+                    evidence_required=["verification passed"],
+                )
+                payload = build_kh_front_door(
+                    prompt,
+                    project=project,
+                    host="codex",
+                    request_context={
+                        "thread_id": "thread-a",
+                        "task_id": "task-a",
+                        "goal_runtime_receipt": runtime_result["runtime_receipt"],
+                        "goal_runtime_producer_boundary": runtime.receipt_producer,
+                    },
+                ).to_dict()
+
+                self.assertEqual(payload["goal_activation"]["status"], "executed")
+                self.assertEqual(payload["goal_activation"]["goal_backend"], "kh_ledger")
+                self.assertEqual(payload["skill_statuses"]["goal-state-harness"]["status"], "applied")
+                self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+                forged_path = build_kh_front_door(
+                    prompt,
+                    project=project,
+                    host="codex",
+                    request_context={
+                        "thread_id": "thread-a",
+                        "task_id": "task-a",
+                        "goal_ledger": {
+                            "current_goal_path": str(root / "does-not-exist.json"),
+                            "status": "active",
+                        },
+                    },
+                ).to_dict()
+                self.assertEqual(forged_path["goal_activation"]["status"], "pending")
+                self.assertNotEqual(
+                    forged_path["skill_statuses"]["goal-state-harness"]["status"],
+                    "applied",
+                )
+
+        host_receipt = {
+            "schema_version": 1,
+            "receipt_type": "host_goal_tool",
+            "host": "codex",
+            "tool_name": "create_goal",
+            "tool_call_id": "call-123",
+            "result_id": "result-123",
+            "result_status": "success",
+            "goal_id": "goal-123",
+            "thread_id": "thread-a",
+            "task_id": "task-a",
+            "objective_hash": sha256_text(prompt),
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "output_hash": sha256_text("result-123:success"),
+        }
+        host_result = build_kh_front_door(
+            prompt,
+            project=Path.cwd(),
+            host="codex",
+            request_context={
+                "goal_backend_preference": "host_goal",
+                "host_goal_available": True,
+                "host_goal_authorized": True,
+                "thread_id": "thread-a",
+                "task_id": "task-a",
+                "host_goal_receipt": host_receipt,
+            },
+        ).to_dict()
+        self.assertEqual(host_result["goal_activation"]["goal_backend"], "host_goal")
+        self.assertEqual(host_result["goal_activation"]["status"], "pending")
+        self.assertEqual(
+            host_result["goal_activation"]["channels"]["host_goal"]["validation"]["errors"],
+            ["external_host_execution_unverified"],
+        )
+        self.assertNotEqual(
+            host_result["skill_statuses"]["goal-state-harness"]["status"],
+            "applied",
+        )
+
+    def test_front_door_preserves_structured_goal_objective_and_criteria(self):
+        prompt = "Implement the runtime receipt redesign and verify it."
+        goal_spec = {
+            "objective": "Implement the runtime receipt redesign without touching SQL work.",
+            "success_criteria": [
+                "forged receipts are rejected",
+                "focused and broader tests pass",
+            ],
+            "evidence_required": ["receipt tests passed", "broader tests passed"],
+        }
+        payload = build_kh_front_door(
+            prompt,
+            project=Path.cwd(),
+            host="codex",
+            request_context={
+                "request_intent": {
+                    "persistence_requested": True,
+                    "conversation_pause_requested": False,
+                    "execution_authorization": True,
+                },
+                "goal_spec": goal_spec,
+            },
+        ).to_dict()
+
+        self.assertEqual(payload["goal_activation"]["goal_spec"], goal_spec)
+        self.assertNotIn("Complete the routed request", json.dumps(payload, ensure_ascii=False))
+        self.assertEqual(payload["classification"]["intent"]["source"], "structured")
+
+    def test_front_door_diagnostic_stop_words_do_not_create_stop_checkpoint(self):
+        for prompt in [
+            "Investigate why the service stops and fix the stop button bug.",
+            "서비스를 멈추지 말고 stop button 버그를 수정해.",
+            "끝날 때까지 계속. 멈추지 마.",
+            "audit stop/pause/resume/complete handling for an active goal",
+            'Audit the quoted phrase "pause this run" for active-goal handling.',
+        ]:
+            with self.subTest(prompt=prompt):
+                payload = build_kh_front_door(
+                    prompt,
+                    project=Path.cwd(),
+                    host="codex",
+                ).to_dict()
+                self.assertNotEqual(
+                    payload["execution_gate"]["status"],
+                    "blocked_until_user_stop_checkpoint",
+                )
+
+    def test_front_door_honors_structured_execution_denial_without_calling_it_user_stop(self):
+        payload = build_kh_front_door(
+            "Implement the runtime patch.",
+            project=Path.cwd(),
+            host="codex",
+            request_context={
+                "request_intent": {
+                    "persistence_requested": False,
+                    "conversation_pause_requested": False,
+                    "execution_authorization": False,
+                }
+            },
+        ).to_dict()
+
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_execution_authorization",
+        )
+        self.assertNotIn("user_stop_or_pause_request", payload["classification"]["reasons"])
+        self.assertFalse(payload["execution_authorization"]["can_start_task_work"])
+
+    def test_light_readonly_and_localized_requests_do_not_require_goal_activation(self):
+        cases = [
+            ("KH UAF status?", None),
+            (
+                "Read-only audit this runtime code and report issues. Do not edit files.",
+                {"domain": "software"},
+            ),
+            ("standalone_resource.html one line, add the .leave-list selector", None),
+        ]
+
+        for prompt, context in cases:
+            with self.subTest(prompt=prompt):
+                payload = build_kh_front_door(
+                    prompt,
+                    project=Path.cwd(),
+                    host="codex",
+                    request_context=context,
+                ).to_dict()
+                self.assertFalse(payload["goal_activation"]["required"])
+                self.assertEqual(payload["goal_activation"]["status"], "not_required")
 
     def test_front_door_korean_direction_only_screen_request_blocks_for_brainstorming(self):
         result = build_kh_front_door(
@@ -617,10 +883,10 @@ class KhFrontDoorTests(unittest.TestCase):
             "no command output",
             payload["large_work_orchestration_bundle"]["token_optimizer_status_reason"],
         )
-        self.assertEqual(payload["token_optimizer_decision"]["without_token_optimizer"], 15)
-        self.assertEqual(payload["token_optimizer_decision"]["with_token_optimizer"], 15)
-        self.assertEqual(payload["token_optimizer_decision"]["estimated_tokens_saved"], 0)
-        self.assertEqual(payload["token_optimizer_decision"]["token_savings_ratio"], 0.0)
+        self.assertEqual(payload["token_optimizer_decision"]["estimated_payload_tokens_before"], 15)
+        self.assertEqual(payload["token_optimizer_decision"]["estimated_payload_tokens_after"], 15)
+        self.assertEqual(payload["token_optimizer_decision"]["estimated_payload_tokens_saved"], 0)
+        self.assertEqual(payload["token_optimizer_decision"]["estimated_payload_token_savings_ratio"], 0.0)
         self.assertIn("not_used_reason", payload["token_optimizer_decision"])
         self.assertEqual(payload["token_optimizer_decision"]["token_optimizer_gate_status"], "checked")
         self.assertFalse(payload["token_optimizer_decision"]["optimization_applied"])
@@ -876,6 +1142,31 @@ class KhFrontDoorTests(unittest.TestCase):
                     completed.stdout,
                 )
 
+    def test_compact_summary_references_verbose_goal_evidence_within_budget(self):
+        prompt = (
+            "Implement a durable Goal lifecycle with typed command, test, artifact, review, and tool "
+            "receipts; preserve the exact user objective; reject forged host receipts, missing paths, "
+            "cross-thread state, terminal mutation, and single-string blocker claims; then run focused "
+            "and broader verification."
+        )
+        payload = build_kh_front_door(
+            prompt,
+            project=Path.cwd(),
+            host="codex",
+            request_context={
+                "request_intent": {
+                    "persistence_requested": True,
+                    "conversation_pause_requested": False,
+                    "execution_authorization": True,
+                }
+            },
+        ).to_compact_summary_dict()
+        rendered = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+        self.assertLessEqual(estimate_token_count(rendered), 225, rendered)
+        self.assertNotIn("evidence_envelopes", rendered)
+        self.assertNotIn(prompt, rendered)
+
     def test_cli_micro_summary_stays_within_machine_only_token_budget(self):
         cases = [
             ("2+2?", 60),
@@ -955,6 +1246,92 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertIn("brainstorming-harness", payload["immediate_next_skills"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertIn("brainstorming_handoff", payload["required_next_action_codes"])
+
+    def test_cli_context_file_accepts_windows_utf8_bom_and_resumes_active_heavy_goal(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        active_objective = "Finish the front-door runtime audit and focused regressions."
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_file = Path(tmp) / "prompt.txt"
+            context_file = Path(tmp) / "context.json"
+            prompt_file.write_text("재부팅완료", encoding="utf-8")
+            context_payload = json.dumps(
+                {
+                    "domain": "software",
+                    "request_intent": {"user_resume_requested": True},
+                    "requires_resume": True,
+                    "active_objective": active_objective,
+                },
+                ensure_ascii=False,
+            ).encode("utf-8")
+            context_file.write_bytes(b"\xef\xbb\xbf" + context_payload)
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "src.orchestration.kh_front_door",
+                    "--prompt-file",
+                    str(prompt_file),
+                    "--context-file",
+                    str(context_file),
+                    "--project",
+                    tmp,
+                    "--host",
+                    "codex",
+                ],
+                cwd=repo_root,
+                text=True,
+                encoding="utf-8",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["classification"]["complexity"], "heavy")
+        self.assertIn("structured_active_goal_resume", payload["classification"]["reasons"])
+        self.assertEqual(payload["goal_activation"]["goal_spec"]["objective"], active_objective)
+
+    def test_front_door_token_estimates_use_truthful_names_and_legacy_actual_input_is_untrusted(self):
+        decision = build_kh_front_door(
+            "Implement and verify this parser fix.",
+            project=Path.cwd(),
+            host="codex",
+        ).to_dict()["token_optimizer_decision"]
+
+        for legacy_name in [
+            "actual_usage_scope",
+            "actual_without_token_optimizer",
+            "actual_with_token_optimizer",
+            "actual_tokens_saved",
+            "actual_token_savings_ratio",
+            "actual_usage",
+        ]:
+            self.assertNotIn(legacy_name, decision)
+        self.assertEqual(
+            decision["estimated_payload_token_count_method"],
+            "deterministic_local_estimate_chars_div_4",
+        )
+        self.assertTrue(decision["estimated_payload_token_count_is_estimate"])
+        self.assertIn("estimated_payload_tokens_before", decision)
+        self.assertIn("estimated_payload_tokens_after", decision)
+        self.assertIn("optimizer_local_estimated_payload", decision)
+        self.assertFalse(decision["host_actual_token_evidence"]["trusted"])
+
+        legacy_summary = _token_optimizer_gate_summary(
+            {
+                "token_optimizer_status": "considered_not_needed",
+                "actual_usage_scope": "front_door_prompt_passthrough_payload",
+                "actual_without_token_optimizer": 12,
+                "actual_with_token_optimizer": 12,
+                "actual_tokens_saved": 0,
+                "actual_token_savings_ratio": 0.0,
+            }
+        )
+        self.assertEqual(legacy_summary["estimated_payload_tokens_before"], 12)
+        self.assertTrue(legacy_summary["legacy_input"]["present"])
+        self.assertFalse(legacy_summary["legacy_input"]["trusted"])
+        self.assertFalse(legacy_summary["host_actual_token_evidence"]["trusted"])
 
     def test_skill_local_front_door_wrapper_runs_outside_repo_root(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -1333,6 +1710,51 @@ class KhFrontDoorTests(unittest.TestCase):
             "blocked_until_large_work_preflight",
         )
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+
+    def test_readonly_git_audit_wording_does_not_trigger_large_preflight(self):
+        cases = [
+            "Audit the current branch. Do not commit or push; report findings only.",
+            "Review the current branch and tell me only the safe sequence for commit and push.",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                payload = build_kh_front_door(
+                    prompt,
+                    project=Path.cwd(),
+                    host="codex",
+                ).to_dict()
+
+                self.assertEqual(payload["classification"]["complexity"], "medium")
+                self.assertIn(
+                    "readonly_source_audit_request",
+                    payload["classification"]["reasons"],
+                )
+                self.assertEqual(
+                    payload["execution_gate"]["status"],
+                    "execution_allowed_readonly_analysis",
+                )
+                self.assertTrue(payload["execution_gate"]["can_execute"])
+                self.assertEqual(payload["immediate_next_skills"], [])
+
+    def test_direct_commit_push_wording_triggers_large_preflight(self):
+        payload = build_kh_front_door(
+            "Commit these changes and push the current branch.",
+            project=Path.cwd(),
+            host="codex",
+        ).to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "heavy")
+        self.assertIn(
+            "repository_mutation_command",
+            payload["classification"]["reasons"],
+        )
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertIn("goal-state-harness", payload["immediate_next_skills"])
 
     def test_korean_kh_readonly_audit_with_no_edit_does_not_trigger_large_preflight(self):
         result = build_kh_front_door(

@@ -17,10 +17,18 @@ Use this exact shape for Korean, Japanese, Chinese, or any non-ASCII prompt:
 
 ```powershell
 $promptPath = Join-Path $env:TEMP "kh-front-door-prompt.txt"
-Set-Content -LiteralPath $promptPath -Value @'
+$contextPath = Join-Path $env:TEMP "kh-front-door-context.json"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$prompt = @'
 <exact user request>
-'@ -Encoding UTF8
-python "<this skill folder>\scripts\front_door.py" --prompt-file $promptPath --project "<cwd or target project>" --host codex --summary --strict-execution-gate
+'@
+$contextJson = @{
+    request_intent = @{ user_resume_requested = $false }
+    requires_resume = $false
+} | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText($promptPath, $prompt, $utf8NoBom)
+[System.IO.File]::WriteAllText($contextPath, $contextJson, $utf8NoBom)
+python "<this skill folder>\scripts\front_door.py" --prompt-file $promptPath --context-file $contextPath --project "<cwd or target project>" --host codex --summary --strict-execution-gate
 ```
 
 For short ASCII-only prompts, `--prompt "<user request>"` is accepted. If running from the KH repository root, `python -m src.orchestration.kh_front_door ...` is also valid. Keep `--strict-execution-gate` on normal host runs so a blocked execution gate returns a non-zero code instead of looking like successful task authorization.

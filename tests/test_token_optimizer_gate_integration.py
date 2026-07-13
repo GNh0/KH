@@ -11,16 +11,14 @@ def read_text(path: str) -> str:
 
 
 class TokenOptimizerGateIntegrationTests(unittest.TestCase):
-    def test_plugin_prompt_requires_token_optimizer_status_for_large_workflows(self):
+    def test_plugin_manifest_exposes_token_optimizer_capability(self):
         manifest = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompt = "\n".join(manifest["interface"]["defaultPrompt"])
+        root_manifest = json.loads(read_text("plugin.json"))
+        root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
 
-        self.assertIn("token_optimizer_status", prompt)
-        self.assertIn("token_optimizer_status_reason", prompt)
-        self.assertIn("not_used_reason", prompt)
-        self.assertIn("context budget", prompt)
-        self.assertIn("large or long-running", prompt)
-        self.assertIn("estimated_context_tokens", prompt)
+        self.assertIn("Runtime Token Optimization", manifest["interface"]["capabilities"])
+        self.assertIn("runtime-token-optimizer", root_skill_names)
+        self.assertIn("token-optimizer-provider", root_skill_names)
 
     def test_token_optimizer_is_context_budget_gate_not_only_log_filter(self):
         content = read_text("skills/token_optimizer/SKILL.md")
@@ -29,22 +27,31 @@ class TokenOptimizerGateIntegrationTests(unittest.TestCase):
         self.assertIn("large or long-running development workflows", content)
         self.assertIn("token_optimizer_status", content)
         self.assertIn("token_optimizer_status_reason", content)
-        self.assertIn("not_used_reason", content)
+        self.assertIn("reason_code", content)
         self.assertIn("estimated_context_tokens", content)
         self.assertIn("must never reduce answer quality", content)
         self.assertIn("passthrough", content)
 
-    def test_token_optimizer_docs_separate_payload_telemetry_from_billing_tokens(self):
+    def test_token_optimizer_docs_define_canonical_payload_and_honest_telemetry(self):
         content = read_text("skills/token_optimizer/SKILL.md")
         reference = read_text("skills/token_optimizer/references/usage.md")
         combined = f"{content}\n{reference}"
 
-        self.assertIn("actual_usage_scope", combined)
-        self.assertIn("actual_tokens_saved", combined)
-        self.assertIn("token_optimizer_status_reason", combined)
-        self.assertIn("not_used_reason", combined)
+        self.assertIn("serialize_canonical_model_view", combined)
+        self.assertIn("project/chat/run", combined)
+        self.assertIn("caller-owned raw", combined)
+        self.assertIn("estimated_payload_bytes_delta", combined)
         self.assertIn("billing_tokens_available", combined)
-        self.assertIn("provider billing tokens", combined)
+        self.assertIn("billing_counterfactual_available", combined)
+        self.assertIn("observed totals only", combined)
+        self.assertIn("runtime-invoked adapter callable", combined)
+        self.assertIn("Do not emit optimizer-local `actual_*` fields", combined)
+        self.assertIn("claimed_unverified", combined)
+        self.assertIn("provider_receipts", combined)
+        self.assertIn("estimated_payload_tokens_before", combined)
+        self.assertIn("estimated_payload_tokens_after", combined)
+        self.assertIn("estimated_payload_tokens_saved", combined)
+        self.assertIn("estimated_payload_token_savings_ratio", combined)
 
     def test_development_lifecycle_wires_token_gate_into_heavy_work(self):
         content = read_text("skills/development_lifecycle_harness/SKILL.md")
@@ -77,8 +84,7 @@ class TokenOptimizerGateIntegrationTests(unittest.TestCase):
         token = read_text("skills/token_optimizer/SKILL.md")
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
         subagent = read_text("skills/subagent_review_pipeline/SKILL.md")
-        prompt = "\n".join(json.loads(read_text(".codex-plugin/plugin.json"))["interface"]["defaultPrompt"])
-        combined = f"{token}\n{lifecycle}\n{subagent}\n{prompt}"
+        combined = f"{token}\n{lifecycle}\n{subagent}"
 
         for required in [
             "task_status",
@@ -92,7 +98,6 @@ class TokenOptimizerGateIntegrationTests(unittest.TestCase):
             "sandbox retry",
         ]:
             self.assertIn(required, combined)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -261,7 +261,6 @@ SPECIALIST_FALLBACKS = {
     "knowledge_docs": "docs_kh_markdown",
     "image_generation": "text_or_svg_artifact",
     "host_automation": "manual_follow_up_note",
-    "sql_formatting": "manual_sql_style_rules",
 }
 
 COMMON_PROVIDER_WORDS = {
@@ -403,6 +402,7 @@ class PluginCompositionDecision:
     ask_user: bool = False
     classification: Dict[str, Any] = field(default_factory=dict)
     available_providers_snapshot: List[Dict[str, Any]] = field(default_factory=list)
+    provider_evidence: List[Dict[str, Any]] = field(default_factory=list)
     reasons: List[str] = field(default_factory=list)
     confidence: float = 0.75
 
@@ -418,6 +418,7 @@ class PluginCompositionDecision:
             "ask_user": self.ask_user,
             "classification": dict(self.classification),
             "available_providers_snapshot": [dict(item) for item in self.available_providers_snapshot],
+            "provider_evidence": [dict(item) for item in self.provider_evidence],
             "reasons": list(self.reasons),
             "confidence": self.confidence,
         }
@@ -431,18 +432,40 @@ def compose_plugin_route(
     """Choose a direct, single-provider, hybrid, or clarification route by capability."""
     context = context or {}
     provider_list = [_normalize_provider(provider) for provider in providers or []]
-    available = [provider for provider in provider_list if provider.status == "available"]
+    available = [provider for provider in provider_list if _provider_is_compatible(provider)]
     classification = classify_request(text, context)
     lowered = str(text or "").lower()
     reasons: List[str] = []
 
+    def decide(**kwargs: Any) -> PluginCompositionDecision:
+        return _decision(provider_evidence=provider_list, **kwargs)
+
     sql_meta_review = _has_sql_meta_review_context(lowered)
     explicit_provider = None if sql_meta_review else _explicit_provider_request(lowered, provider_list)
     if explicit_provider:
-        if explicit_provider.status != "available":
+        if not _provider_is_compatible(explicit_provider):
+            compatibility = str(
+                explicit_provider.metadata.get("compatibility") or explicit_provider.status
+            )
+            provider_reason = f"provider_status:{explicit_provider.status}"
+            if "compatibility" in explicit_provider.metadata:
+                provider_reason += f";compatibility:{compatibility}"
             unavailable = {
-                f"provider:{explicit_provider.provider_id}": f"provider_status:{explicit_provider.status}"
+                f"provider:{explicit_provider.provider_id}": provider_reason
             }
+            if "sql_formatting" in explicit_provider.capabilities:
+                unavailable.update(_unavailable_specialists(lowered, available, provider_list))
+                reasons.append(f"explicit_provider_unavailable:{explicit_provider.provider_id}")
+                return decide(
+                    route="blocked",
+                    controller=_none_role(),
+                    providers=available,
+                    classification=classification,
+                    reasons=reasons,
+                    unavailable_capabilities=unavailable,
+                    explicit_user_request=True,
+                    confidence=min(classification.confidence, 0.55),
+                )
             fallback_provider = _best_controller_provider(classification, available)
             if fallback_provider and classification.complexity not in {"light", "ambiguous"}:
                 controller = _controller_role(fallback_provider, "fallback_after_explicit_provider_unavailable")
@@ -454,7 +477,7 @@ def compose_plugin_route(
                         *_controller_reasons(fallback_provider),
                     ]
                 )
-                return _decision(
+                return decide(
                     route="hybrid" if assistants else "single",
                     controller=controller,
                     assistants=assistants,
@@ -467,7 +490,7 @@ def compose_plugin_route(
                     confidence=min(classification.confidence, 0.68),
                 )
             reasons.append(f"explicit_provider_unavailable:{explicit_provider.provider_id}")
-            return _decision(
+            return decide(
                 route="clarify",
                 controller=_none_role(),
                 providers=available,
@@ -481,7 +504,7 @@ def compose_plugin_route(
         controller = _controller_role(explicit_provider, "explicit_user_request")
         assistants = _assistant_roles(lowered, available, {explicit_provider.provider_id})
         reasons.append(f"explicit_user_request:{explicit_provider.provider_id}")
-        return _decision(
+        return decide(
             route="hybrid" if assistants else "single",
             controller=controller,
             assistants=assistants,
@@ -499,14 +522,14 @@ def compose_plugin_route(
     ):
         reasons.append(f"specialist_trigger:{specialist_controller.provider_id}:{specialist_controller.capability}")
         assistants = _assistant_roles(lowered, available, {specialist_controller.provider_id})
-        return _decision(
+        return decide(
             route="hybrid" if assistants else "single",
             controller=specialist_controller,
             assistants=assistants,
             providers=available,
             classification=classification,
             reasons=reasons,
-            unavailable_capabilities=_unavailable_specialists(lowered, available),
+            unavailable_capabilities=_unavailable_specialists(lowered, available, provider_list),
         )
 
     project_provider = _project_context_provider(context, available)
@@ -514,17 +537,18 @@ def compose_plugin_route(
         controller = _controller_role(project_provider, f"project_context:{project_provider.provider_id}")
         assistants = _assistant_roles(lowered, available, {project_provider.provider_id})
         reasons.append(f"project_context:{project_provider.provider_id}")
-        return _decision(
+        return decide(
             route="hybrid" if assistants else "single",
             controller=controller,
             assistants=assistants,
             providers=available,
             classification=classification,
             reasons=reasons,
+            unavailable_capabilities=_unavailable_specialists(lowered, available, provider_list),
         )
 
     if classification.complexity == "ambiguous":
-        return _decision(
+        return decide(
             route="clarify",
             controller=_none_role(),
             providers=available,
@@ -534,19 +558,30 @@ def compose_plugin_route(
         )
 
     if classification.complexity == "light":
-        return _decision(
-            route="direct",
+        unavailable = _unavailable_specialists(lowered, available, provider_list)
+        return decide(
+            route="blocked" if "sql_formatting" in unavailable else "direct",
             controller=_none_role(),
             providers=available,
             classification=classification,
-            reasons=["classification:light"],
+            reasons=(
+                ["specialist_provider_unavailable:sql_formatting"]
+                if "sql_formatting" in unavailable
+                else ["classification:light"]
+            ),
+            unavailable_capabilities=unavailable,
         )
 
     controller_provider = _best_controller_provider(classification, available)
     if controller_provider is None:
         missing = {"workflow_control": "host_default_or_direct_execution"} if classification.complexity in {"heavy", "high_risk"} else {}
-        return _decision(
-            route="direct" if classification.complexity == "medium" else "clarify",
+        missing.update(_unavailable_specialists(lowered, available, provider_list))
+        return decide(
+            route=(
+                "blocked"
+                if "sql_formatting" in missing
+                else ("direct" if classification.complexity == "medium" else "clarify")
+            ),
             controller=_none_role(),
             providers=available,
             classification=classification,
@@ -557,9 +592,9 @@ def compose_plugin_route(
         )
 
     assistants = _assistant_roles(lowered, available, {controller_provider.provider_id})
-    unavailable = _unavailable_specialists(lowered, available)
+    unavailable = _unavailable_specialists(lowered, available, provider_list)
     reasons.extend(_controller_reasons(controller_provider))
-    return _decision(
+    return decide(
         route="hybrid" if assistants else "single",
         controller=_controller_role(controller_provider, "best_capability_match"),
         assistants=assistants,
@@ -581,6 +616,7 @@ def _decision(
     explicit_user_request: bool = False,
     ask_user: bool = False,
     confidence: float | None = None,
+    provider_evidence: List[CapabilityProvider] | None = None,
 ) -> PluginCompositionDecision:
     assistants = assistants or []
     recorded_reasons = list(reasons)
@@ -604,6 +640,11 @@ def _decision(
         ask_user=ask_user,
         classification=classification.to_dict(),
         available_providers_snapshot=[provider.to_dict() for provider in providers],
+        provider_evidence=_provider_evidence(
+            provider_evidence or providers,
+            controller,
+            assistants,
+        ),
         reasons=_dedupe(recorded_reasons),
         confidence=classification.confidence if confidence is None else confidence,
     )
@@ -638,13 +679,68 @@ def _normalize_capability(value: str) -> str:
     return CAPABILITY_ALIASES.get(normalized, normalized)
 
 
+def _provider_is_compatible(provider: CapabilityProvider) -> bool:
+    if provider.status != "available":
+        return False
+    compatibility = str(provider.metadata.get("compatibility") or "compatible").strip().lower()
+    return compatibility in {"compatible", "supported", "verified"}
+
+
+def _provider_evidence(
+    providers: List[CapabilityProvider],
+    controller: ProviderRole,
+    assistants: List[ProviderRole],
+) -> List[Dict[str, Any]]:
+    selected_roles = [controller, *assistants]
+    selected_keys = {
+        (
+            role.provider_id,
+            str(role.metadata.get("source") or "unspecified"),
+        )
+        for role in selected_roles
+        if role.provider_id and role.provider_id != "none"
+    }
+    evidence: List[Dict[str, Any]] = []
+    for provider in providers:
+        source = str(provider.metadata.get("source") or "unspecified")
+        availability = str(
+            provider.metadata.get("availability")
+            or ("available" if provider.status == "available" else provider.status)
+        )
+        compatibility = str(
+            provider.metadata.get("compatibility")
+            or ("compatible" if provider.status == "available" else "unknown")
+        )
+        evidence.append(
+            {
+                "provider_id": provider.provider_id,
+                "source": source,
+                "status": provider.status,
+                "availability": availability,
+                "available": provider.status == "available",
+                "compatibility": compatibility,
+                "compatible": _provider_is_compatible(provider),
+                "compatibility_issues": list(
+                    provider.metadata.get("compatibility_issues", []) or []
+                ),
+                "selected": (provider.provider_id, source) in selected_keys,
+            }
+        )
+    return evidence
+
+
 def _explicit_provider_request(text: str, providers: List[CapabilityProvider]) -> CapabilityProvider | None:
+    matches: List[CapabilityProvider] = []
     for provider in providers:
         names = {provider.provider_id, provider.display_name.lower(), *provider.aliases}
         for name in names:
             if _explicit_provider_name_match(text, name):
-                return provider
-    return None
+                matches.append(provider)
+                break
+    compatible = [provider for provider in matches if _provider_is_compatible(provider)]
+    if compatible:
+        return sorted(compatible, key=lambda item: (_provider_precedence(item), item.provider_id))[0]
+    return matches[0] if matches else None
 
 
 def _explicit_provider_name_match(text: str, name: str) -> bool:
@@ -779,6 +875,7 @@ def _assistant_roles(
                 capability=capability,
                 scope=_scope_for_capability(capability),
                 reason=f"triggered:{capability}",
+                metadata=dict(provider.metadata),
             )
         )
     return roles
@@ -800,6 +897,7 @@ def _single_specialist_controller(
         capability=role.capability,
         scope=role.scope,
         reason="specialist_trigger",
+        metadata=dict(role.metadata),
     )
 
 
@@ -870,14 +968,36 @@ def _allow_single_specialist_controller(text: str, role: ProviderRole, complexit
 def _unavailable_specialists(
     text: str,
     providers: List[CapabilityProvider],
+    all_providers: List[CapabilityProvider] | None = None,
 ) -> Dict[str, str]:
     unavailable: Dict[str, str] = {}
+    all_providers = all_providers or providers
     for capability, triggers in SPECIALIST_TRIGGERS.items():
         if not _contains_specialist_trigger(text, capability, triggers):
             continue
         if _best_provider_for_capability(capability, providers, set()) is None:
-            unavailable[capability] = SPECIALIST_FALLBACKS.get(capability, "manual_fallback")
+            if capability == "sql_formatting":
+                unavailable[capability] = _unavailable_provider_reason(capability, all_providers)
+            else:
+                unavailable[capability] = SPECIALIST_FALLBACKS.get(capability, "manual_fallback")
     return unavailable
+
+
+def _unavailable_provider_reason(
+    capability: str,
+    providers: List[CapabilityProvider],
+) -> str:
+    candidates = [provider for provider in providers if capability in provider.capabilities]
+    if not candidates:
+        return "no_compatible_provider"
+    statuses = sorted(
+        {
+            f"{provider.provider_id}:{provider.status}"
+            for provider in candidates
+            if provider.status != "available"
+        }
+    )
+    return "provider_status:" + ",".join(statuses) if statuses else "no_compatible_provider"
 
 
 def _best_provider_for_capability(
@@ -885,12 +1005,31 @@ def _best_provider_for_capability(
     providers: List[CapabilityProvider],
     excluded_provider_ids: Set[str],
 ) -> CapabilityProvider | None:
-    for provider in sorted(providers, key=lambda item: item.provider_id):
+    for provider in sorted(
+        providers,
+        key=lambda item: (
+            _provider_precedence(item) if capability == "sql_formatting" else 100,
+            item.provider_id,
+        ),
+    ):
         if provider.provider_id in excluded_provider_ids:
             continue
         if capability in provider.capabilities:
             return provider
     return None
+
+
+def _provider_precedence(provider: CapabilityProvider) -> int:
+    value = provider.metadata.get("provider_precedence")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        source = str(provider.metadata.get("source") or "")
+        if source == "host-local-skill":
+            return 10
+        if source == "packaged-kh-skill":
+            return 20
+        return 50
 
 
 def _controller_role(provider: CapabilityProvider, reason: str) -> ProviderRole:
@@ -903,6 +1042,7 @@ def _controller_role(provider: CapabilityProvider, reason: str) -> ProviderRole:
         capability=capability,
         scope=scope,
         reason=reason,
+        metadata=dict(provider.metadata),
     )
 
 

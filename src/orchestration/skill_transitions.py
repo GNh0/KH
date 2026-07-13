@@ -84,8 +84,8 @@ def build_skill_transition_handoff(
     _require_parallel_skill_for_parallel_decision(bundle, statuses, issues, required_next_skills)
     _require_role_audit_after_subagent_or_role_claim(statuses, issues, required_next_skills)
     _require_verification_before_completion(bundle, statuses, phase, issues, required_next_skills)
-    _require_compound_closure(bundle, statuses, phase, issues, required_next_skills)
-    _require_compound_followup_consistency(bundle, statuses, issues, required_next_skills)
+    if not issues:
+        _require_compound_transition(bundle, statuses, phase, issues, required_next_skills)
 
     required_next_skills = _dedupe(required_next_skills)
     evidence = [
@@ -336,20 +336,52 @@ def _value_is_passed(value: Any) -> bool:
     return normalized in {"pass", "passed", "success", "successful", "ok", "green", "0"}
 
 
-def _require_compound_closure(
+def _require_compound_transition(
     bundle: LargeWorkOrchestrationBundle,
     statuses: Dict[str, SkillApplicationStatus],
     phase: str,
     issues: List[SkillTransitionIssue],
     required_next_skills: List[str],
 ) -> None:
-    compound_status = statuses.get("compound-engineering-harness")
+    if phase not in {"post_review", "final"}:
+        return
+
+    _require_compound_closure(bundle, issues, required_next_skills)
+    if issues:
+        return
+
+    _require_compound_followup_consistency(bundle, statuses, issues, required_next_skills)
+    if issues:
+        return
+
+    _require_compound_application(statuses, issues, required_next_skills)
+
+
+def _require_compound_closure(
+    bundle: LargeWorkOrchestrationBundle,
+    issues: List[SkillTransitionIssue],
+    required_next_skills: List[str],
+) -> None:
     compound_handoff = dict(bundle.compound_handoff or {})
     handoff_status = str(compound_handoff.get("status", "")).strip()
     no_learning = str(compound_handoff.get("no_reusable_learning_rationale", "")).strip()
 
-    if phase not in {"post_review", "final"}:
-        return
+    if handoff_status not in TERMINAL_COMPOUND_STATUSES and not no_learning:
+        issues.append(SkillTransitionIssue(
+            rule="compound_handoff_must_close",
+            source_skill="compound-engineering-harness",
+            required_skill="workflow-skill-distiller",
+            reason="compound_handoff is still pending and lacks an explicit no_reusable_learning_rationale",
+        ))
+        required_next_skills.append("compound-engineering-harness")
+
+
+def _require_compound_application(
+    statuses: Dict[str, SkillApplicationStatus],
+    issues: List[SkillTransitionIssue],
+    required_next_skills: List[str],
+) -> None:
+    compound_status = statuses.get("compound-engineering-harness")
     if compound_status is None or compound_status.status == "considered_not_needed":
         issues.append(SkillTransitionIssue(
             rule="post_review_requires_compound_decision",
@@ -359,26 +391,21 @@ def _require_compound_closure(
         ))
         required_next_skills.append("compound-engineering-harness")
         return
-    if compound_status.status != "applied":
-        issues.append(SkillTransitionIssue(
-            rule="compound_harness_must_be_applied_before_completion",
-            source_skill="compound-engineering-harness",
-            required_skill="compound-engineering-harness",
-            reason=(
-                "compound-engineering-harness must be applied before post-review or final completion; "
-                f"current status is {compound_status.status!r}"
-            ),
-        ))
-        required_next_skills.append("compound-engineering-harness")
+
+    # A terminal handoff is concrete Compound output and resolves the bundle's default pending status.
+    if compound_status.status in {"applied", "pending_immediate_execution"}:
         return
-    if handoff_status not in TERMINAL_COMPOUND_STATUSES and not no_learning:
-        issues.append(SkillTransitionIssue(
-            rule="compound_handoff_must_close",
-            source_skill="compound-engineering-harness",
-            required_skill="workflow-skill-distiller",
-            reason="compound_handoff is still pending and lacks an explicit no_reusable_learning_rationale",
-        ))
-        required_next_skills.append("compound-engineering-harness")
+
+    issues.append(SkillTransitionIssue(
+        rule="compound_harness_must_be_applied_before_completion",
+        source_skill="compound-engineering-harness",
+        required_skill="compound-engineering-harness",
+        reason=(
+            "compound-engineering-harness must be applied before post-review or final completion; "
+            f"current status is {compound_status.status!r}"
+        ),
+    ))
+    required_next_skills.append("compound-engineering-harness")
 
 
 def _require_compound_followup_consistency(

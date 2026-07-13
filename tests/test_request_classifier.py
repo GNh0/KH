@@ -3,7 +3,7 @@ import subprocess
 import sys
 import unittest
 
-from src.orchestration.request_classifier import classify_request
+from src.orchestration.request_classifier import classify_request, resolve_request_intent
 
 
 class RequestClassifierTests(unittest.TestCase):
@@ -91,6 +91,39 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("readonly_source_audit_request", result.reasons)
         self.assertNotIn("goal-state-harness", result.required_harnesses)
         self.assertNotEqual(result.recommended_execution, "role_dag")
+
+    def test_readonly_git_audit_negations_and_safe_sequence_stay_medium(self):
+        cases = [
+            "Audit the current branch. Do not commit or push; report findings only.",
+            "Review the current branch and tell me only the safe sequence for commit and push.",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+
+                self.assertEqual(result.complexity, "medium")
+                self.assertEqual(result.domain, "software")
+                self.assertEqual(result.recommended_execution, "skill_read")
+                self.assertIn("readonly_source_audit_request", result.reasons)
+                self.assertNotIn("repository_mutation_command", result.reasons)
+
+    def test_direct_git_mutation_commands_route_heavy(self):
+        cases = [
+            "Commit these changes.",
+            "Push the current branch.",
+            "Commit these changes and push the current branch.",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+
+                self.assertEqual(result.complexity, "heavy")
+                self.assertEqual(result.domain, "software")
+                self.assertEqual(result.recommended_execution, "role_dag")
+                self.assertIn("repository_mutation_command", result.reasons)
+                self.assertIn("goal-state-harness", result.required_harnesses)
 
     def test_full_skill_lifecycle_audit_does_not_fall_to_direct_answer(self):
         cases = [
@@ -214,6 +247,152 @@ class RequestClassifierTests(unittest.TestCase):
                 self.assertIn("goal-state-harness", result.required_harnesses)
                 self.assertIn("user_stop_or_pause_request", result.reasons)
                 self.assertIn("interruption_checkpoint", result.evidence_required)
+
+    def test_persistent_completion_phrases_are_heavy_and_not_user_stop_requests(self):
+        cases = [
+            "Continue until the runtime is verified.",
+            "Keep iterating until proven with focused tests.",
+            "Finish only when every required check passes.",
+            "Do not stop at analysis; implement and verify the fix.",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt, context={"domain": "software"})
+                self.assertEqual(result.complexity, "heavy")
+                self.assertEqual(result.recommended_execution, "role_dag")
+                self.assertIn("persistent_completion_request", result.reasons)
+                self.assertNotIn("user_stop_or_pause_request", result.reasons)
+
+    def test_structured_intent_is_tri_state_and_overrides_advisory_language(self):
+        intent = resolve_request_intent(
+            "Investigate the stop button bug and do not stop service handling.",
+            {
+                "request_intent": {
+                    "persistence_requested": True,
+                    "conversation_pause_requested": False,
+                    "execution_authorization": True,
+                    "user_resume_requested": False,
+                }
+            },
+        )
+        self.assertEqual(
+            intent,
+            {
+                "persistence_requested": True,
+                "conversation_pause_requested": False,
+                "execution_authorization": True,
+                "user_resume_requested": False,
+                "source": "structured",
+            },
+        )
+
+    def test_structured_active_goal_resume_precedes_short_message_light_routing(self):
+        result = classify_request(
+            "재부팅완료",
+            context={
+                "domain": "software",
+                "request_intent": {"user_resume_requested": True},
+                "requires_resume": True,
+                "active_objective": "Finish the front-door runtime audit and focused regressions.",
+            },
+        )
+
+        self.assertEqual(result.complexity, "heavy")
+        self.assertEqual(result.recommended_execution, "role_dag")
+        self.assertIn("structured_active_goal_resume", result.reasons)
+        self.assertIn("resume_handoff", result.evidence_required)
+        self.assertIs(result.intent["user_resume_requested"], True)
+
+    def test_diagnostic_and_quoted_lifecycle_phrases_are_not_pause_commands(self):
+        cases = [
+            "audit stop/pause/resume/complete handling for an active goal",
+            'Audit the quoted phrase "pause this run" for active-goal handling.',
+            "Verify that 'stop this task' stays diagnostic in the intent parser.",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt, context={"domain": "software"})
+                self.assertNotIn("user_stop_or_pause_request", result.reasons)
+                self.assertIsNone(result.intent["conversation_pause_requested"])
+                self.assertIsNone(result.intent["execution_authorization"])
+
+    def test_explicit_task_stop_wins_over_stopped_service_or_process_context(self):
+        cases = [
+            "Stop this task; the service has already stopped.",
+            "Pause this conversation even though the background process stopped.",
+        ]
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt, context={"domain": "software"})
+                self.assertIn("user_stop_or_pause_request", result.reasons)
+                self.assertIs(result.intent["conversation_pause_requested"], True)
+                self.assertIs(result.intent["execution_authorization"], False)
+
+    def test_quoted_task_stop_with_stopped_service_context_remains_diagnostic(self):
+        result = classify_request(
+            'Verify that "stop this task" remains diagnostic when the service has stopped.',
+            context={"domain": "software"},
+        )
+
+        self.assertNotIn("user_stop_or_pause_request", result.reasons)
+        self.assertIsNone(result.intent["conversation_pause_requested"])
+        self.assertIsNone(result.intent["execution_authorization"])
+
+    def test_language_intent_separates_conversation_control_from_external_diagnostics(self):
+        cases = [
+            ("Do not stop the service during deployment.", None, None, None),
+            ("Fix the stop button bug in the toolbar.", None, None, None),
+            ("Why does the Windows service stop unexpectedly?", None, None, None),
+            ("Do not continue until approval.", False, True, False),
+            ("Pause this run and wait for me.", False, True, False),
+            ("끝날 때까지 계속", True, False, None),
+            ("멈추지 마", True, False, None),
+            ("Continue until every focused test passes.", True, False, None),
+        ]
+
+        for prompt, persistence, pause, authorization in cases:
+            with self.subTest(prompt=prompt):
+                intent = resolve_request_intent(prompt)
+                self.assertIs(intent["persistence_requested"], persistence)
+                self.assertIs(intent["conversation_pause_requested"], pause)
+                self.assertIs(intent["execution_authorization"], authorization)
+
+                classified = classify_request(prompt)
+                if pause is True:
+                    self.assertIn("user_stop_or_pause_request", classified.reasons)
+                else:
+                    self.assertNotIn("user_stop_or_pause_request", classified.reasons)
+                if persistence is True:
+                    self.assertIn("persistent_completion_request", classified.reasons)
+
+    def test_adversarial_phrases_inside_test_requirements_do_not_become_user_control(self):
+        prompt = (
+            "Implement tri-state intent parsing and add adversarial tests for these examples: "
+            "do not stop service; stop button bug; do not continue until approval; "
+            "끝날 때까지 계속; 멈추지 마. Run focused tests after the patch."
+        )
+        result = classify_request(prompt, context={"domain": "software"})
+        self.assertNotIn("user_stop_or_pause_request", result.reasons)
+        self.assertIsNone(result.intent["conversation_pause_requested"])
+        self.assertIsNone(result.intent["persistence_requested"])
+
+    def test_ambiguous_control_question_stays_unknown_instead_of_forcing_stop(self):
+        result = classify_request("Should this background process stop here?")
+        self.assertNotIn("user_stop_or_pause_request", result.reasons)
+        self.assertIsNone(result.intent["conversation_pause_requested"])
+        self.assertIsNone(result.intent["execution_authorization"])
+
+        for prompt in ["Continue?", "Stop?", "계속?", "멈춰?"]:
+            with self.subTest(prompt=prompt):
+                ambiguous = classify_request(prompt)
+                self.assertEqual(ambiguous.complexity, "ambiguous")
+                self.assertEqual(ambiguous.recommended_execution, "clarify")
+                self.assertIn("ambiguous_conversation_control", ambiguous.reasons)
+                self.assertNotIn("user_stop_or_pause_request", ambiguous.reasons)
+                self.assertNotIn("persistent_completion_request", ambiguous.reasons)
 
     def test_korean_direction_only_screen_request_routes_to_brainstorming(self):
         result = classify_request(

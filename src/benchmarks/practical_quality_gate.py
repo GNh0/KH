@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -10,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from src.benchmarks.kh_bench_verified import run_kh_bench_verified
 from src.orchestration.plugin_install_audit import audit_kh_plugin_install
+from src.skills.uaf_skill_catalog import collect_packaged_skills
 from src.skills.uaf_skill_quality import audit_skill_packaging_quality
 
 
@@ -62,6 +64,8 @@ def build_practical_quality_report(
     cache_smoke = dict(installed_cache_front_door_report or {})
     install_ok = bool(install_audit) and install_audit.get("status") == "ok"
     cache_smoke_ok = _installed_cache_front_door_smoke_ok(cache_smoke, install_audit)
+    release_identity = dict(cache_smoke.get("release_identity", {}) or {})
+    release_identity_ok = _release_identity_ok(release_identity)
 
     checks = [
         {
@@ -100,6 +104,13 @@ def build_practical_quality_report(
             "required": True,
             "passed": cache_smoke_ok,
             "message": _installed_cache_front_door_smoke_message(cache_smoke, install_audit),
+        },
+        {
+            "name": "release content identity",
+            "role": "runtime_install_gate",
+            "required": True,
+            "passed": release_identity_ok,
+            "message": _release_identity_message(release_identity),
         },
         {
             "name": "KH-Bench Verified pass rate",
@@ -210,7 +221,143 @@ def _installed_cache_front_door_smoke(audit_report: Dict[str, Any]) -> Dict[str,
         "skill_source": payload.get("skill_source", {}),
         "front_door_status": payload.get("front_door_status", ""),
         "classification": payload.get("classification", {}),
+        "release_identity": _build_release_identity_report(
+            Path(str(audit_report.get("repository_root", ""))),
+            root,
+        ),
     }
+
+
+def _build_release_identity_report(source_root: Path, cache_root: Path) -> Dict[str, Any]:
+    source_root = source_root.resolve()
+    cache_root = cache_root.resolve()
+    if not source_root.is_dir() or not cache_root.is_dir():
+        return {
+            "status": "missing_release_root",
+            "content_hashes_match": False,
+            "catalogs_valid": False,
+            "catalog_names_match": False,
+            "authenticity_status": "unverified",
+            "identity_scope": "local_release_content_only",
+            "source_root": str(source_root),
+            "cache_root": str(cache_root),
+        }
+
+    source_catalog = collect_packaged_skills(str(source_root / "skills"))
+    cache_catalog = collect_packaged_skills(str(cache_root / "skills"))
+    source_names = {str(item.get("name", "")) for item in source_catalog.get("skills", [])}
+    cache_names = {str(item.get("name", "")) for item in cache_catalog.get("skills", [])}
+    source_hash, source_count = _release_content_hash(source_root)
+    cache_hash, cache_count = _release_content_hash(cache_root)
+    catalogs_valid = bool(source_catalog.get("validation", {}).get("success")) and bool(
+        cache_catalog.get("validation", {}).get("success")
+    )
+    names_match = source_names == cache_names
+    hashes_match = bool(source_hash) and source_hash == cache_hash
+    status = "ok" if hashes_match and catalogs_valid and names_match else "content_mismatch"
+    return {
+        "status": status,
+        "content_hashes_match": hashes_match,
+        "catalogs_valid": catalogs_valid,
+        "catalog_names_match": names_match,
+        "source_content_sha256": source_hash,
+        "cache_content_sha256": cache_hash,
+        "source_file_count": source_count,
+        "cache_file_count": cache_count,
+        "source_catalog_valid": bool(source_catalog.get("validation", {}).get("success")),
+        "cache_catalog_valid": bool(cache_catalog.get("validation", {}).get("success")),
+        "source_skill_count": len(source_names),
+        "cache_skill_count": len(cache_names),
+        "authenticity_status": "unverified",
+        "identity_scope": "local_release_content_only",
+    }
+
+
+def _release_content_hash(root: Path) -> tuple[str, int]:
+    manifest_paths = [Path("plugin.json"), Path(".codex-plugin") / "plugin.json"]
+    relative_paths = [*manifest_paths]
+    relative_paths.extend(_manifest_executable_paths(root, manifest_paths))
+    for folder in [root / "src", root / "skills"]:
+        if folder.is_dir():
+            relative_paths.extend(
+                path.relative_to(root)
+                for path in folder.rglob("*")
+                if path.is_file()
+                and "__pycache__" not in path.parts
+                and path.suffix.lower() not in {".pyc", ".pyo"}
+            )
+    digest = hashlib.sha256()
+    count = 0
+    for relative_path in sorted(set(relative_paths), key=lambda item: item.as_posix()):
+        path = root / relative_path
+        if not path.is_file():
+            continue
+        digest.update(relative_path.as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+        count += 1
+    return (digest.hexdigest() if count else "", count)
+
+
+def _manifest_executable_paths(root: Path, manifest_paths: List[Path]) -> List[Path]:
+    targets: set[Path] = set()
+    for relative_manifest_path in manifest_paths:
+        manifest_path = root / relative_manifest_path
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        for declared_target in _declared_executable_targets(manifest):
+            target_path = (root / declared_target.replace("\\", "/")).resolve()
+            try:
+                relative_target = target_path.relative_to(root.resolve())
+            except ValueError:
+                continue
+            if target_path.is_file():
+                targets.add(relative_target)
+    return sorted(targets, key=lambda item: item.as_posix())
+
+
+def _declared_executable_targets(value: Any) -> List[str]:
+    targets: List[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"entrypoint", "executable"} and isinstance(child, str) and child.strip():
+                targets.append(child.strip())
+            else:
+                targets.extend(_declared_executable_targets(child))
+    elif isinstance(value, list):
+        for child in value:
+            targets.extend(_declared_executable_targets(child))
+    return targets
+
+
+def _release_identity_ok(identity: Dict[str, Any]) -> bool:
+    return (
+        identity.get("status") == "ok"
+        and identity.get("content_hashes_match") is True
+        and identity.get("catalogs_valid") is True
+        and identity.get("catalog_names_match") is True
+    )
+
+
+def _release_identity_message(identity: Dict[str, Any]) -> str:
+    if _release_identity_ok(identity):
+        return (
+            "local source and installed cache content hashes match and both skill catalogs "
+            "are valid; authenticity=unverified"
+        )
+    return (
+        "release identity failed: "
+        f"status={identity.get('status', '<missing>')}; "
+        f"content_hashes_match={identity.get('content_hashes_match', False)}; "
+        f"catalogs_valid={identity.get('catalogs_valid', False)}; "
+        f"catalog_names_match={identity.get('catalog_names_match', False)}; "
+        f"authenticity={identity.get('authenticity_status', 'unverified')}"
+    )
 
 
 def _installed_cache_front_door_smoke_ok(cache_smoke: Dict[str, Any], install_audit: Dict[str, Any]) -> bool:

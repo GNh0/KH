@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
 
+from src.orchestration.request_classifier import resolve_request_intent
+
 
 SENSITIVE_PATTERNS = (
     (
@@ -44,6 +46,42 @@ COMPLETION_PATTERN = re.compile(
     r"\b(done|complete|completed|finished|verified|pushed|shipped)\b|완료|끝났|마무리|푸시|검증",
     re.IGNORECASE,
 )
+COMPLETION_PATTERN = re.compile(
+    r"\b(?:done|complete|completed|finished|verified|pushed|shipped|"
+    r"release[- ]ready|ready\s+for\s+release|fully\s+delivered|delivered\s+in\s+full)\b|"
+    r"완료|끝냈|마무리(?:했|됐|되었)|검증(?:했|됐|되었)|"
+    r"(?:출시|배포)\s*준비\s*완료|완전히\s*(?:전달|제공)(?:했|됐|되었|되었습니다)?",
+    re.IGNORECASE,
+)
+COMPLETION_NEGATION_PATTERNS = (
+    re.compile(
+        r"\b(?:not|never|isn't|is\s+not|wasn't|was\s+not|aren't|are\s+not)\s+"
+        r"(?:fully\s+)?(?:done|complete|completed|finished|verified|pushed|shipped|"
+        r"release[- ]ready|ready\s+for\s+release|delivered)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:has|have|had)\s+not\s+been\s+"
+        r"(?:completed|finished|verified|pushed|shipped|delivered)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:cannot|can't|could\s+not|couldn't|failed\s+to|unable\s+to)\s+"
+        r"(?:be\s+)?(?:complete|completed|finish|finished|verify|push|ship|deliver)\w*\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:incomplete|unfinished|not\s+ready\s+for\s+release)\b", re.IGNORECASE),
+    re.compile(
+        r"(?:완료|마무리|검증|전달|제공)(?:가|는|이)?\s*"
+        r"(?:되지\s*않|되지\s*못|하지\s*않|하지\s*못|안\s*되|불가|실패)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:출시|배포)\s*준비(?:가|는|이)?\s*(?:되지\s*않|되지\s*못|안\s*되|미완료|불가)",
+        re.IGNORECASE,
+    ),
+)
+
 PARTIAL_MILESTONE_PATTERN = re.compile(
     r"\b(scaffold|skeleton|starter|initial|first slice|vertical slice|mvp slice)\b|스캐폴드|골격|초안|초기|첫|1차",
     re.IGNORECASE,
@@ -88,14 +126,6 @@ VERIFICATION_COMMAND_PATTERNS = (
     re.compile(r"\bgit\s+diff\s+--check\b", re.IGNORECASE),
 )
 
-USER_STOP_PATTERN = re.compile(
-    r"\b(?:stop|pause|cancel|abort|halt)\b|멈추|멈춰|스탑|중단|그만|정지",
-    re.IGNORECASE,
-)
-USER_RESUME_PATTERN = re.compile(
-    r"\b(?:resume|continue|proceed|go on)\b|계속|이어|재개|진행해|다시\s*시작",
-    re.IGNORECASE,
-)
 GOAL_CONTEXT_PATTERN = re.compile(r"<goal_context>|Continue working toward the active thread goal", re.IGNORECASE)
 STOP_ACK_PATTERN = re.compile(r"멈|스탑|중단|stop|pause|cancel|halt", re.IGNORECASE)
 ASSISTANT_SELF_STOP_PATTERN = re.compile(
@@ -1038,10 +1068,14 @@ def _build_completion_guard(
 ) -> Dict[str, Any]:
     latest_status = str(goal_state.get("latest_status", ""))
     final_claims_completion = any(_claims_completion(message) for message in final_messages)
-    blocked = latest_status == "active" and task_complete_count > 0 and final_claims_completion
+    active_task_complete = latest_status == "active" and task_complete_count > 0
+    non_complete_claim = bool(latest_status != "complete" and final_claims_completion)
+    blocked = active_task_complete or non_complete_claim
     reasons: List[str] = []
-    if blocked:
+    if active_task_complete:
         reasons.append("task_complete_emitted_while_goal_active")
+    if non_complete_claim:
+        reasons.append("completion_claim_emitted_while_goal_not_complete")
     return {
         "status": "blocked" if blocked else "passed",
         "latest_goal_status": latest_status,
@@ -1345,7 +1379,12 @@ def _short(text: str, max_length: int) -> str:
 
 
 def _claims_completion(text: str) -> bool:
-    return bool(COMPLETION_PATTERN.search(text or ""))
+    normalized = re.sub(r"\s+", " ", text or "").strip()
+    if not COMPLETION_PATTERN.search(normalized):
+        return False
+    for pattern in COMPLETION_NEGATION_PATTERNS:
+        normalized = pattern.sub(" ", normalized)
+    return bool(COMPLETION_PATTERN.search(normalized))
 
 
 def _claims_assistant_self_stop(text: str) -> bool:
@@ -1360,10 +1399,7 @@ def _is_user_stop_request(text: str) -> bool:
     normalized = (text or "").strip()
     if not normalized or GOAL_CONTEXT_PATTERN.search(normalized):
         return False
-    lowered = normalized.lower()
-    if "stop loss" in lowered or "stop-loss" in lowered:
-        return False
-    return bool(USER_STOP_PATTERN.search(normalized))
+    return resolve_request_intent(normalized)["conversation_pause_requested"] is True
 
 
 def _is_user_archive_request(text: str) -> bool:
@@ -1373,7 +1409,21 @@ def _is_user_archive_request(text: str) -> bool:
 
 def _is_user_resume_request(text: str) -> bool:
     normalized = (text or "").strip()
-    return bool(normalized and USER_RESUME_PATTERN.search(normalized))
+    if not normalized:
+        return False
+    intent = resolve_request_intent(normalized)
+    if intent["conversation_pause_requested"] is True:
+        return False
+    if intent["persistence_requested"] is True:
+        return True
+    return bool(
+        re.match(
+            r"^(?:please\s+)?(?:resume|continue|proceed|go on|restart)\b|"
+            r"^(?:계속|이어서|재개|진행해|다시\s*시작)",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
 
 
 def _is_work_continuation_message(text: str) -> bool:

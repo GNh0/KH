@@ -64,6 +64,7 @@ class KhPluginInstallAudit:
     installed_caches: List[InstalledPluginCache]
     latest_installed_version: str
     expected_source_version: str
+    release_identity: Dict[str, Any]
     findings: List[str]
     recommended_actions: List[str]
     notes: List[str] = field(default_factory=list)
@@ -79,6 +80,7 @@ class KhPluginInstallAudit:
             "installed_caches": [cache.to_dict() for cache in self.installed_caches],
             "latest_installed_version": self.latest_installed_version,
             "expected_source_version": self.expected_source_version,
+            "release_identity": dict(self.release_identity),
             "findings": list(self.findings),
             "recommended_actions": list(self.recommended_actions),
             "notes": list(self.notes),
@@ -93,6 +95,7 @@ class KhPluginInstallAudit:
             "marketplace_descriptor_ref": self.marketplace_config.ref,
             "expected_source_version": self.expected_source_version,
             "latest_installed_version": self.latest_installed_version,
+            "release_identity": dict(self.release_identity),
             "installed_cache_versions": [cache.version_dir for cache in self.installed_caches],
             "config_parse_status": self.marketplace_config.parse_status,
             "config_encoding_warnings": list(self.marketplace_config.encoding_warnings),
@@ -118,6 +121,12 @@ def audit_kh_plugin_install(
 
     latest_installed = caches[0].plugin_version or caches[0].codex_plugin_version if caches else ""
     expected_source = source_versions.get("codex_plugin") or source_versions.get("root_plugin", "")
+    cache_release_root = (
+        Path(caches[0].root)
+        if caches
+        else codex_root / "plugins" / "cache" / marketplace_name / plugin_name / "<missing>"
+    )
+    release_identity = _canonical_release_identity(repo_root, cache_release_root)
     findings: List[str] = []
     actions: List[str] = []
     notes: List[str] = []
@@ -156,7 +165,25 @@ def audit_kh_plugin_install(
         )
         actions.append("Upgrade KH UAF in Codex and open a fresh session before judging blind automatic intake.")
     elif expected_source and latest_installed:
-        notes.append(f"Installed KH UAF cache version matches or exceeds source version: {latest_installed}.")
+        notes.append(
+            f"Installed KH UAF cache version is not behind source version: {latest_installed}; "
+            "release content identity is evaluated separately."
+        )
+
+    if caches and release_identity.get("status") != "ok":
+        source_skill_count = int(release_identity.get("source_skill_count") or 0)
+        cache_skill_count = int(release_identity.get("cache_skill_count") or 0)
+        findings.append(
+            "Installed KH UAF cache release identity differs from source: "
+            f"source skills {source_skill_count}, cache skills {cache_skill_count}; "
+            f"catalog names match={release_identity.get('catalog_names_match') is True}; "
+            f"content hashes match={release_identity.get('content_hashes_match') is True}."
+        )
+        actions.append(
+            "Upgrade KH UAF and open a fresh session; matching version labels do not prove matching release content."
+        )
+    elif caches:
+        notes.append("Installed KH UAF cache catalog names and release content hash match source.")
 
     if caches:
         actions.append("Verify the active session skill list points at the latest installed cache path, not only the filesystem cache.")
@@ -175,6 +202,8 @@ def audit_kh_plugin_install(
         ]
     ):
         status = "attention_required"
+    if caches and release_identity.get("status") != "ok":
+        status = "attention_required"
 
     return KhPluginInstallAudit(
         status=status,
@@ -186,6 +215,7 @@ def audit_kh_plugin_install(
         installed_caches=caches,
         latest_installed_version=latest_installed,
         expected_source_version=expected_source,
+        release_identity=release_identity,
         findings=findings,
         recommended_actions=actions,
         notes=notes,
@@ -194,6 +224,13 @@ def audit_kh_plugin_install(
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _canonical_release_identity(source_root: Path, cache_root: Path) -> Dict[str, Any]:
+    # Keep install audit and the practical release gate on one release identity contract.
+    from src.benchmarks.practical_quality_gate import _build_release_identity_report
+
+    return _build_release_identity_report(source_root, cache_root)
 
 
 def _read_marketplace_config(path: Path, marketplace_name: str) -> MarketplaceConfig:

@@ -186,6 +186,20 @@ class AdapterContractTests(unittest.TestCase):
         self.assertEqual(AdapterRequest.from_dict(request.to_dict()), request)
         self.assertEqual(AdapterResult.from_dict(result.to_dict()), result)
         self.assertEqual(result.to_legacy_messages(), ["[Accepted] queued (ID: workflow_demo)"])
+        self.assertFalse(result.is_terminal)
+        self.assertEqual(result.execution_state, "claimed_unverified")
+
+    def test_adapter_result_pending_is_an_explicit_nonterminal_outcome(self):
+        result = AdapterResult(
+            status="pending",
+            message="host execution is still running",
+            workflow_id="workflow_demo",
+            metadata={"resume": True},
+        )
+
+        self.assertEqual(AdapterResult.from_dict(result.to_dict()), result)
+        self.assertFalse(result.is_terminal)
+        self.assertEqual(result.execution_state, "claimed_unverified")
 
 
 class WorkflowDispatchContractTests(unittest.TestCase):

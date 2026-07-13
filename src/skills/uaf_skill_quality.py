@@ -1058,29 +1058,48 @@ def _validate_token_demo_semantics(
     payload = dict(success_case.get("payload", {}) or {})
     metadata = dict(payload.get("metadata", {}) or {})
     usage = dict(metadata.get("token_usage", {}) or {})
-    if usage.get("estimated_tokens_saved", 0) <= 0:
+    required_fields = [
+        "estimated_payload_tokens_before",
+        "estimated_payload_tokens_after",
+        "estimated_payload_tokens_saved",
+        "estimated_payload_token_savings_ratio",
+        "billing_tokens_available",
+        "billing_counterfactual_available",
+    ]
+    missing_fields = [field for field in required_fields if field not in usage]
+    if missing_fields:
+        errors.append(f"token demo missing canonical fields: {', '.join(missing_fields)}")
+    if usage.get("estimated_payload_tokens_saved", 0) <= 0:
         errors.append("token demo did not save estimated tokens")
-    if usage.get("token_savings_ratio", 0) <= 0:
-        errors.append("token demo token_savings_ratio missing")
+    if usage.get("estimated_payload_token_savings_ratio", 0) <= 0:
+        errors.append("token demo estimated_payload_token_savings_ratio missing")
+    before = usage.get("estimated_payload_tokens_before")
+    after = usage.get("estimated_payload_tokens_after")
+    saved = usage.get("estimated_payload_tokens_saved")
+    if all(isinstance(value, int) and not isinstance(value, bool) for value in [before, after, saved]):
+        if before - after != saved or saved <= 0:
+            errors.append("token demo canonical token delta is inconsistent")
     if usage.get("preserved_required_facts") is not True and payload.get("preserved_required_facts") is not True:
         errors.append("token demo did not preserve required facts")
     accounting = dict(payload.get("runtime_token_accounting", {}) or {})
     if usage.get("host_actual_tokens_available") is True:
         errors.append("token demo must not claim host_actual_tokens_available")
-    if usage.get("billing_tokens_available") is True:
+    if usage.get("billing_tokens_available") is not False:
         errors.append("token demo must not claim billing_tokens_available")
-    if usage.get("actual_host_usage_available") is True:
-        errors.append("token demo must not claim actual_host_usage_available")
+    if usage.get("billing_counterfactual_available") is not False:
+        errors.append("token demo must not claim billing_counterfactual_available")
     if _positive_int(usage.get("host_actual_tokens_used")):
         errors.append("token demo must not claim host_actual_tokens_used")
-    if str(usage.get("host_actual_token_source", "")).strip() not in {"", "not_available"}:
+    if str(usage.get("host_actual_token_source", "")).strip() not in {"", "not_available", "unavailable"}:
         errors.append("token demo must not claim host_actual_token_source")
-    if accounting.get("actual_host_usage_available") is not False:
+    if accounting.get("billing_tokens_available") is not False:
         errors.append("token demo must not claim host billable token counters")
+    if accounting.get("billing_counterfactual_available") is not False:
+        errors.append("token demo must not claim billing counterfactual counters")
     if accounting.get("must_not_report_as_billable_usage") is not True:
         errors.append("token demo must mark local counts as non-billable telemetry")
-    if not accounting.get("actual_host_usage_reason"):
-        errors.append("token demo missing actual_host_usage_reason")
+    if not accounting.get("billing_tokens_unavailable_reason"):
+        errors.append("token demo missing billing_tokens_unavailable_reason")
 
 
 def _validate_profile_semantics(

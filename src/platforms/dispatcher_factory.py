@@ -75,13 +75,14 @@ class LocalDispatcher:
             request.platform_mode,
             metadata,
         )
-        status = "success" if workflow_result.success else "failed"
-        message = (
-            "workflow completed"
-            if workflow_result.success
-            else "workflow completed with failures"
-        )
         evaluated_goal = workflow_result.metadata.get("goal", metadata.get("goal", {}))
+        native_status = "success" if workflow_result.success else "failed"
+        status = _adapter_status(native_status, workflow_result.success, evaluated_goal)
+        message = {
+            "success": "workflow completed",
+            "pending": "workflow completed; goal remains active",
+            "blocked": "workflow completed with a blocked goal",
+        }.get(status, "workflow completed with failures")
         goal_ledger = workflow_result.metadata.get("goal_ledger", {})
         resume_handoff = workflow_result.metadata.get("resume_handoff", {})
         workflow_usability = workflow_result.metadata.get("workflow_usability", {})
@@ -277,6 +278,8 @@ def _adapter_status(native_status: str, task_success: bool, goal: dict) -> str:
         return "failed"
     if goal and goal.get("status") == "blocked":
         return "blocked"
+    if goal and goal.get("status") != "complete":
+        return "pending"
     return "success" if task_success else "failed"
 
 

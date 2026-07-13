@@ -72,7 +72,7 @@ from src.skills.credential_safety import (
     classify_credential_command,
     validate_credential_safety_plan,
 )
-from src.skills.token_optimizer import optimize_context_content
+from src.skills.token_optimizer import compare_token_usage, optimize_context_content
 from src.skills.sql_formatting_style import verify_sql_formatting_style
 from src.skills.pb_to_csharp_migration import (
     MigrationInputState,
@@ -814,6 +814,23 @@ def _command_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dic
     success_payload = optimized.to_dict()
     success_payload["preserved_required_facts"] = preserved
     token_usage = dict(success_payload.get("metadata", {}).get("token_usage", {}) or {})
+    if skill_name in {"token-optimizer", "command-output-harness"}:
+        full_token_usage = compare_token_usage(
+            log,
+            optimized.stdout,
+            strategy="command-output",
+            label="pytest tests/test_invoice.py",
+        )
+        canonical_fields = [
+            "estimated_payload_tokens_before",
+            "estimated_payload_tokens_after",
+            "estimated_payload_tokens_saved",
+            "estimated_payload_token_savings_ratio",
+            "billing_tokens_available",
+            "billing_counterfactual_available",
+        ]
+        token_usage = {field: full_token_usage[field] for field in canonical_fields}
+        token_usage.update(full_token_usage)
     token_usage["preserved_required_facts"] = preserved
     token_usage["required_fact_count"] = len(required_facts)
     token_usage["preserved_required_fact_count"] = sum(1 for item in required_facts if item in optimized.stdout)
@@ -821,12 +838,15 @@ def _command_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dic
     success_payload["policy_verdict"] = policy["verdict"]
     success_payload["write_boundary"] = boundary
     success_payload["runtime_token_accounting"] = {
-        "actual_host_usage_available": False,
-        "actual_host_usage_reason": "local Python demos cannot read Codex/host billable token usage counters",
-        "measured_scope": "optimizer input/output payload",
-        "fallback_count_method": success_payload.get("metadata", {})
+        "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
+        "billing_tokens_unavailable_reason": (
+            "local Python demos cannot read Codex/host billable token usage counters"
+        ),
+        "estimated_payload_scope": "optimizer_local_estimated_payload",
+        "estimated_payload_token_count_method": success_payload.get("metadata", {})
         .get("token_usage", {})
-        .get("payload_token_count_method", "deterministic_local_estimate_chars_div_4"),
+        .get("estimated_payload_token_count_method", "deterministic_local_estimate_chars_div_4"),
         "must_not_report_as_billable_usage": True,
     }
     contracts = [

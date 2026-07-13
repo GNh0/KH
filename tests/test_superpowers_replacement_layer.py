@@ -2,6 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
+from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.plugin_composition import compose_plugin_route
 from src.orchestration.request_classifier import classify_request
 from src.orchestration.role_commands import resolve_role_command
@@ -95,16 +96,37 @@ class SuperpowersReplacementLayerTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
         root_manifest = json.loads((root / "plugin.json").read_text(encoding="utf-8"))
-        prompts = "\n".join(manifest["interface"]["defaultPrompt"])
         capabilities = set(manifest["interface"]["capabilities"])
+        root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
 
         self.assertEqual(manifest["version"], root_manifest["version"])
         self.assertRegex(manifest["version"], r"^\d+\.\d+\.\d+$")
         self.assertIn("Superpowers Replacement Layer", capabilities)
-        self.assertIn("KH-native replacements for Superpowers-style", prompts)
-        self.assertIn("verification-before-completion-harness", prompts)
-        self.assertIn("branch-finishing-harness", prompts)
-
+        summary = build_kh_front_door(
+            "Implement a multi-file feature with tests, worktree isolation, debugging, review, verification, and branch finishing.",
+            project=root,
+            host="codex",
+        ).to_summary_dict()
+        routed_skills = set(
+            summary["runtime_applied_skills"]
+            + summary["immediate_next_skills"]
+            + summary["selected_not_executed_skills"]
+        )
+        procedure_markers = {
+            "verification-before-completion-harness": "fresh verification evidence",
+            "systematic-debugging-harness": "verify root cause",
+            "branch-finishing-harness": "Do not commit unrelated user changes",
+            "worktree-isolation-harness": ".worktrees/<task>",
+            "plan-execution-harness": "RED/GREEN evidence",
+        }
+        for skill in SUPERPOWERS_REPLACEMENT_SKILLS:
+            with self.subTest(skill=skill):
+                self.assertIn(skill, root_skill_names)
+                self.assertIn(skill, routed_skills)
+                skill_doc = (
+                    root / "skills" / skill.replace("-", "_") / "SKILL.md"
+                ).read_text(encoding="utf-8")
+                self.assertIn(procedure_markers[skill], skill_doc)
 
 if __name__ == "__main__":
     unittest.main()

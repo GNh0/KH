@@ -1,6 +1,13 @@
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List
 
+from src.orchestration.goal_runtime import (
+    validate_goal_runtime_receipt,
+    validate_host_goal_receipt,
+)
+from src.orchestration.goal_evidence import RuntimeProducerBoundary
+from src.orchestration.quality_harnesses import audit_role_execution
+
 
 BUNDLE_STATUS_VALUES = {
     "applied",
@@ -21,6 +28,14 @@ TOKEN_OPTIMIZER_STATUS_VALUES = {
     "considered_not_needed",
     "passthrough",
     "blocked",
+}
+GOAL_EXECUTION_EVIDENCE_KEYS = {
+    "goal_runtime",
+    "goal_ledger",
+    "host_goal",
+    "host_goal_evidence",
+    "thread_goal_updated",
+    "current_goal.json",
 }
 BUNDLE_MEMBER_SKILLS = [
     "request-complexity-router",
@@ -154,8 +169,17 @@ def build_large_work_orchestration_bundle(
     )
 
 
-def validate_large_work_orchestration_bundle(bundle: LargeWorkOrchestrationBundle) -> Dict[str, Any]:
+def validate_large_work_orchestration_bundle(
+    bundle: LargeWorkOrchestrationBundle,
+    *,
+    goal_runtime_producer_boundary: RuntimeProducerBoundary | None = None,
+) -> Dict[str, Any]:
     missing: List[str] = []
+    runtime_boundary = (
+        goal_runtime_producer_boundary
+        if isinstance(goal_runtime_producer_boundary, RuntimeProducerBoundary)
+        else None
+    )
     if not bundle.objective.strip():
         missing.append("objective")
     if not bundle.workspace_strategy.strip():
@@ -183,6 +207,56 @@ def validate_large_work_orchestration_bundle(bundle: LargeWorkOrchestrationBundl
             missing.append(f"{skill_name}.evidence_note")
         if status.status == "blocked" and not status.blocked_reason.strip():
             missing.append(f"{skill_name}.blocked_reason")
+        if (
+            skill_name == "goal-state-harness"
+            and status.status == "applied"
+            and not GOAL_EXECUTION_EVIDENCE_KEYS.intersection(status.evidence_keys)
+        ):
+            missing.append("goal-state-harness.execution_evidence")
+        if skill_name == "goal-state-harness" and status.status == "applied":
+            receipt_metadata = dict(status.metadata or {})
+            activation = receipt_metadata.get("goal_activation", {})
+            activation = dict(activation) if isinstance(activation, dict) else {}
+            activation_receipts = activation.get("runtime_receipts", {})
+            activation_receipts = (
+                dict(activation_receipts) if isinstance(activation_receipts, dict) else {}
+            )
+            project = str(bundle.metadata.get("project") or "")
+            thread_id = str(bundle.metadata.get("thread_id") or "")
+            task_id = str(bundle.metadata.get("task_id") or "")
+            runtime_validation = validate_goal_runtime_receipt(
+                receipt_metadata.get("goal_runtime_receipt")
+                or activation_receipts.get("kh_goal_ledger"),
+                project=project or ".",
+                thread_id=thread_id,
+                task_id=task_id,
+                objective=bundle.objective,
+                producer_boundary=runtime_boundary,
+            )
+            host_validation = validate_host_goal_receipt(
+                receipt_metadata.get("host_goal_receipt")
+                or activation_receipts.get("host_goal"),
+                thread_id=thread_id,
+                task_id=task_id,
+                objective=bundle.objective,
+            )
+            if not runtime_validation["valid"] and not host_validation["valid"]:
+                missing.append("goal-state-harness.validated_runtime_receipt")
+        if (
+            skill_name in {"parallel-orchestration-harness", "role-execution-audit-harness"}
+            and (status.status == "applied" or status.application_mode == "runtime")
+        ):
+            artifact_validation = _validate_role_execution_artifacts(status, bundle)
+            if (
+                skill_name == "parallel-orchestration-harness"
+                and not artifact_validation["valid_parallel_wave"]
+            ):
+                missing.append("parallel-orchestration-harness.validated_wave_artifacts")
+            if (
+                skill_name == "role-execution-audit-harness"
+                and not artifact_validation["valid_role_artifacts"]
+            ):
+                missing.append("role-execution-audit-harness.validated_role_artifacts")
     for skill_name in set(bundle.skill_statuses) - set(BUNDLE_MEMBER_SKILLS):
         missing.append(f"{skill_name}.known_bundle_member")
     evidence = []
@@ -204,6 +278,49 @@ def validate_large_work_orchestration_bundle(bundle: LargeWorkOrchestrationBundl
     }
 
 
+def _validate_role_execution_artifacts(
+    status: SkillApplicationStatus,
+    bundle: LargeWorkOrchestrationBundle,
+) -> Dict[str, bool]:
+    metadata = dict(status.metadata or {})
+    role_orchestration = metadata.get("role_orchestration") or bundle.metadata.get(
+        "role_orchestration"
+    )
+    if not isinstance(role_orchestration, dict):
+        return {"valid_parallel_wave": False, "valid_role_artifacts": False}
+    required_roles = metadata.get("required_roles")
+    audit = audit_role_execution(
+        role_orchestration,
+        required_roles=list(required_roles) if isinstance(required_roles, list) else None,
+    )
+    waves = list(role_orchestration.get("waves", []) or [])
+    for stage in role_orchestration.get("stages", []) or []:
+        if isinstance(stage, dict):
+            waves.extend(stage.get("waves", []) or [])
+    parallel_waves = [
+        wave
+        for wave in waves
+        if isinstance(wave, dict)
+        and wave.get("parallel") is True
+        and wave.get("runtime_overlap") is True
+        and wave.get("results")
+    ]
+    valid_parallel_wave = any(
+        all(
+            isinstance(result, dict)
+            and result.get("status") == "success"
+            and isinstance(result.get("metadata"), dict)
+            and result["metadata"].get("role_artifacts")
+            for result in wave.get("results", [])
+        )
+        for wave in parallel_waves
+    )
+    return {
+        "valid_parallel_wave": valid_parallel_wave,
+        "valid_role_artifacts": audit.get("status") == "passed",
+    }
+
+
 def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
     return {
         "request-complexity-router": SkillApplicationStatus(
@@ -213,39 +330,39 @@ def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
             evidence_keys=["classification"],
         ),
         "host-agent-orchestration": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Resolved host runtime, tool boundaries, and whether subagents can be used.",
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending host runtime, tool-boundary, and subagent-strategy evidence.",
             evidence_keys=["host_runtime_decision"],
         ),
         "domain-orchestration-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Classified the work domain and selected domain-appropriate planning, roles, gates, and deliverables.",
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending domain work-design and execution evidence.",
             evidence_keys=["domain_profile", "work_design"],
         ),
         "goal-state-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Created or refreshed objective, success criteria, and missing evidence state.",
-            evidence_keys=["goal_state"],
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending KH Goal runtime, GoalLedger, or authorized host Goal evidence.",
+            evidence_keys=["goal_runtime", "goal_ledger", "host_goal_evidence"],
         ),
         "development-lifecycle-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Applied plan, work, review, verification, and integration loop.",
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending plan, work, review, verification, and integration evidence.",
             evidence_keys=["task_status", "review_status"],
         ),
         "worktree-isolation-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Selected workspace strategy before implementation or recorded the in-place exception.",
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending workspace strategy or an explicit in-place exception.",
             evidence_keys=["workspace_strategy"],
         ),
         "plan-execution-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Tracked task-plan execution through progress state, task status, and next-task handoff.",
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending progress state, task status, and next-task handoff evidence.",
             evidence_keys=["progress.json", "task_status", "next_task"],
         ),
         "systematic-debugging-harness": SkillApplicationStatus(
@@ -291,21 +408,21 @@ def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
             evidence_keys=["role_execution_audit"],
         ),
         "quality-gates-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Requires failing-first, systematic debugging, or quality gate evidence before completion for large work.",
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending failing-first or quality-gate execution evidence.",
             evidence_keys=["quality_gate_status", "red_green_status"],
         ),
         "review-gate-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Requires structured review findings, no-findings evidence, or a blocked review rationale.",
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending structured review findings or no-findings evidence.",
             evidence_keys=["review_status", "review_findings"],
         ),
         "qa-gate-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Requires QA, regression, browser/app, or manual verification evidence before release claims.",
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending QA, regression, browser/app, or manual verification evidence.",
             evidence_keys=["qa_status", "regression_evidence"],
         ),
         "artifact-render-qa-harness": SkillApplicationStatus(
@@ -339,9 +456,9 @@ def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
             evidence_keys=["branch_finish_status", "commit_sha"],
         ),
         "compound-engineering-harness": SkillApplicationStatus(
-            status="applied",
-            application_mode="procedural",
-            evidence_note="Will produce learning capture, memory candidate, regression, or no-learning rationale after review.",
+            status="pending_immediate_execution",
+            application_mode="immediate_gate",
+            evidence_note="Pending learning capture, regression, or no-learning rationale after review.",
             evidence_keys=["compound_handoff"],
         ),
         "workflow-skill-distiller": SkillApplicationStatus(

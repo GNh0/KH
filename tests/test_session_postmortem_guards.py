@@ -71,6 +71,194 @@ class SessionPostmortemGuardTests(unittest.TestCase):
         )
         self.assertIn("Completion guard: blocked", render_session_postmortem(postmortem))
 
+    def test_active_goal_blocks_task_complete_even_without_completion_wording(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"status": "active", "objective": "Finish the requested runtime."},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "Checkpoint recorded; see the next action in the handoff.",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertFalse(postmortem.completion_guard["final_claims_completion"])
+        self.assertEqual(postmortem.completion_guard["status"], "blocked")
+        self.assertIn(
+            "task_complete_emitted_while_goal_active",
+            postmortem.completion_guard["reasons"],
+        )
+
+    def test_blocked_goal_rejects_final_completion_claim(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "status": "blocked",
+                            "objective": "Finish the requested runtime.",
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "The requested runtime is complete and verified.",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertTrue(postmortem.completion_guard["final_claims_completion"])
+        self.assertEqual(postmortem.completion_guard["status"], "blocked")
+        self.assertIn(
+            "completion_claim_emitted_while_goal_not_complete",
+            postmortem.completion_guard["reasons"],
+        )
+
+    def test_unknown_non_complete_goal_rejects_final_completion_claim(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "status": "paused",
+                            "objective": "Finish the requested runtime.",
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "Implementation finished.",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertTrue(postmortem.completion_guard["final_claims_completion"])
+        self.assertEqual(postmortem.completion_guard["status"], "blocked")
+        self.assertIn(
+            "completion_claim_emitted_while_goal_not_complete",
+            postmortem.completion_guard["reasons"],
+        )
+
+    def test_missing_goal_status_rejects_final_completion_claim(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "The requested runtime is complete and verified.",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertTrue(postmortem.completion_guard["final_claims_completion"])
+        self.assertEqual(postmortem.completion_guard["status"], "blocked")
+        self.assertIn(
+            "completion_claim_emitted_while_goal_not_complete",
+            postmortem.completion_guard["reasons"],
+        )
+
+    def test_blocked_goal_allows_truthful_non_completion_final(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "status": "blocked",
+                            "objective": "Finish the requested runtime.",
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "Work is blocked because required evidence is unavailable.",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertFalse(postmortem.completion_guard["final_claims_completion"])
+        self.assertEqual(postmortem.completion_guard["status"], "passed")
+
+    def test_completion_claim_normalization_handles_equivalents_and_negation(self):
+        cases = [
+            ("The runtime is release-ready.", True),
+            ("The requested work is fully delivered.", True),
+            ("Not completed because the database evidence is unavailable.", False),
+            ("The runtime is not release-ready because verification failed.", False),
+            ("요청 작업은 완전히 전달되었습니다.", True),
+            ("DB 증거가 없어 완료되지 않았습니다.", False),
+            ("검증 실패로 배포 준비가 되지 않았습니다.", False),
+        ]
+        for message, claims_completion in cases:
+            with self.subTest(message=message):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "thread_goal_updated",
+                                "goal": {
+                                    "status": "blocked",
+                                    "objective": "Finish the requested runtime.",
+                                },
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "task_complete",
+                                "last_agent_message": message,
+                            },
+                        },
+                    ]
+                )
+
+                postmortem = analyze_codex_session_jsonl(path)
+
+                self.assertEqual(
+                    postmortem.completion_guard["final_claims_completion"],
+                    claims_completion,
+                )
+                self.assertEqual(
+                    postmortem.completion_guard["status"],
+                    "blocked" if claims_completion else "passed",
+                )
+
     def test_verification_claim_guard_blocks_unreported_browser_failure(self):
         path = self.write_session(
             [
@@ -229,6 +417,57 @@ class SessionPostmortemGuardTests(unittest.TestCase):
 
         self.assertEqual(postmortem.user_stop_guard["status"], "passed")
         self.assertEqual(postmortem.user_stop_guard["latest_goal_status_after_stop"], "blocked")
+
+    def test_stop_guard_ignores_service_button_and_persistence_diagnostics(self):
+        for text in [
+            "Do not stop the service while investigating the stop button bug.",
+            "Why does the background process stop here?",
+            "끝날 때까지 계속.",
+            "멈추지 마.",
+        ]:
+            with self.subTest(text=text):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "session_meta",
+                            "payload": {"id": "session-diagnostic", "cwd": "D:/repo"},
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": text}],
+                            },
+                        },
+                    ]
+                )
+                postmortem = analyze_codex_session_jsonl(str(path))
+                self.assertEqual(postmortem.user_stop_guard["stop_request_count"], 0)
+                self.assertEqual(postmortem.user_stop_guard["status"], "passed")
+
+    def test_stop_guard_treats_direct_approval_pause_as_conversation_control(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "session_meta",
+                    "payload": {"id": "session-pause", "cwd": "D:/repo"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": "Do not continue until approval."}
+                        ],
+                    },
+                },
+            ]
+        )
+        postmortem = analyze_codex_session_jsonl(str(path))
+
+        self.assertEqual(postmortem.user_stop_guard["stop_request_count"], 1)
         self.assertEqual(postmortem.user_stop_guard["continued_tool_calls"], [])
 
     def test_assistant_stop_guard_blocks_active_goal_left_open(self):

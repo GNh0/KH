@@ -823,9 +823,10 @@ _TASKS: List[Dict[str, Any]] = [
                 "field": "stdout",
                 "values": ["test_total_rounding", "test_invoice.py line 87", "AssertionError", "119999 == 120000", "exit code: 1"],
             },
-            {"name": "token savings above 80 percent", "type": "json_file_field_at_least", "path": "reports/token_summary.json", "field": "metadata.token_savings_ratio", "minimum": 0.8},
-            {"name": "actual payload token telemetry recorded", "type": "json_file_field_at_least", "path": "reports/token_summary.json", "field": "metadata.token_usage.actual_tokens_saved", "minimum": 1},
+            {"name": "token savings above 80 percent", "type": "json_file_field_at_least", "path": "reports/token_summary.json", "field": "metadata.token_usage.estimated_payload_token_savings_ratio", "minimum": 0.8},
+            {"name": "estimated payload token telemetry recorded", "type": "json_file_field_at_least", "path": "reports/token_summary.json", "field": "metadata.token_usage.estimated_payload_tokens_saved", "minimum": 1},
             {"name": "billing token boundary recorded", "type": "json_file_field_equals", "path": "reports/token_summary.json", "field": "metadata.token_usage.billing_tokens_available", "value": False},
+            {"name": "billing counterfactual boundary recorded", "type": "json_file_field_equals", "path": "reports/token_summary.json", "field": "metadata.token_usage.billing_counterfactual_available", "value": False},
         ],
         "pass_to_pass": [
             {"name": "exit code preserved", "type": "json_file_field_equals", "path": "reports/token_summary.json", "field": "exit_code", "value": 1},

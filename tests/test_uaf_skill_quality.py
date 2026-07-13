@@ -3,6 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 
+from src.skills.uaf_skill_catalog import collect_packaged_skills
 from src.skills.uaf_skill_quality import audit_skill_packaging_quality
 
 
@@ -10,7 +11,8 @@ class UafSkillQualityTests(unittest.TestCase):
     def test_repository_skills_have_science_style_support_files(self):
         report = audit_skill_packaging_quality(run_smoke_scripts=True)
 
-        self.assertEqual(report["total_skills"], 43)
+        catalog = collect_packaged_skills()
+        self.assertEqual(report["total_skills"], catalog["total_skills_found"])
         self.assertTrue(report["success"], report)
         self.assertTrue(report["smoke_scripts_executed"])
         self.assertTrue(
@@ -96,6 +98,24 @@ class UafSkillQualityTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0)
         self.assertIn("usage:", completed.stdout.lower())
         self.assertNotIn('"skills": [', completed.stdout)
+
+    def test_sql_formatting_provider_docs_declare_runtime_contract(self):
+        catalog = collect_packaged_skills()
+        usage = Path("skills/sql_formatting/references/usage.md").read_text(encoding="utf-8")
+        example = Path("skills/sql_formatting/examples/minimal-workflow.md").read_text(encoding="utf-8")
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        self.assertIn("Execution level: `procedure-policy`", usage)
+        self.assertIn("Implementation targets:", usage)
+        self.assertIn("execution_level=procedure-policy", example)
+        self.assertIn("implementation_targets=", example)
+        self.assertIn("verification=", example)
+        self.assertIn(
+            f"- {catalog['total_skills_found']} packaged skills/harnesses",
+            readme,
+        )
+        self.assertIn("`sql-formatting` provider", readme)
+        self.assertIn("`sql-formatting-style-harness` verifier", readme)
 
 
 if __name__ == "__main__":

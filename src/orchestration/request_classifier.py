@@ -1,7 +1,7 @@
 import argparse
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Dict, List
 
 
@@ -169,6 +169,16 @@ USER_STOP_OR_PAUSE_TERMS = {
     "\uacc4\uc18d\ud558\uc9c0\ub9c8",
     "\ub0b4\uc77c \ub2e4\uc2dc",
     "\ub0b4\uc77c \uc774\uc5b4\uc11c",
+}
+PERSISTENT_COMPLETION_TERMS = {
+    "continue until",
+    "keep iterating until",
+    "finish only when",
+    "do not stop at analysis",
+    "don't stop at analysis",
+    "do not stop until",
+    "don't stop until",
+    "keep going until",
 }
 
 MEMORY_STATE_REQUEST_TERMS = {
@@ -681,7 +691,10 @@ READONLY_SOURCE_AUDIT_BOUNDARY_TERMS = {
     "without modifying",
     "without changing",
     "report only",
+    "report findings only",
     "analysis only",
+    "safe sequence",
+    "safe order",
     "\ucf54\ub4dc\ub294 \uc218\uc815\ud558\uc9c0",
     "\ucf54\ub4dc\ub97c \uc218\uc815\ud558\uc9c0",
     "\ucf54\ub4dc \uc218\uc815 \uc5c6\uc774",
@@ -749,6 +762,17 @@ READONLY_SOURCE_AUDIT_MUTATION_TERMS = {
     "\ud328\uce58\ud574\uc918",
     "\uad6c\ud604\ud574\uc918",
     "\ud14c\uc2a4\ud2b8 \ucd94\uac00",
+}
+REPOSITORY_MUTATION_TERMS = {"commit", "push"}
+REPOSITORY_MUTATION_NEGATION_PATTERNS = (
+    re.compile(r"\b(?:do not|don't|dont|never)\s+commit(?:\s*(?:,|/|or|and)\s*push)?\b"),
+    re.compile(r"\b(?:do not|don't|dont|never)\s+push\b"),
+)
+REPOSITORY_MUTATION_ADVISORY_TERMS = {
+    "safe sequence",
+    "safe order",
+    "sequence for commit",
+    "order for commit",
 }
 SOURCE_MUTATION_COMMAND_TERMS = {
     "modify it",
@@ -2301,12 +2325,19 @@ class RequestClassification:
     evidence_required: List[str] = field(default_factory=list)
     reasons: List[str] = field(default_factory=list)
     confidence: float = 0.75
+    intent: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
 
 
 def classify_request(text: str, context: dict | None = None) -> RequestClassification:
+    context = context or {}
+    result = _classify_request(text, context)
+    return replace(result, intent=resolve_request_intent(text, context))
+
+
+def _classify_request(text: str, context: dict | None = None) -> RequestClassification:
     """Classify a user request before choosing how much UAF machinery to run."""
     context = context or {}
     normalized = _normalize(text)
@@ -2329,7 +2360,26 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
         evidence_required.append("credential_safety_status")
         reasons.append("credential_or_secret_boundary")
 
-    if _is_user_stop_or_pause_request(normalized):
+    request_intent = resolve_request_intent(text, context)
+    if _is_structured_active_goal_resume(context, request_intent):
+        return _heavy_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "structured_active_goal_resume"],
+        )
+    if _is_ambiguous_conversation_control(normalized):
+        return _classification(
+            complexity="ambiguous",
+            domain=domain,
+            recommended_execution="clarify",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=evidence_required,
+            reasons=[*reasons, "ambiguous_conversation_control"],
+            confidence=0.5,
+        )
+    if request_intent["conversation_pause_requested"] is True:
         return _classification(
             complexity="medium",
             domain=domain,
@@ -2375,6 +2425,14 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
 
     if _is_high_risk(normalized, domain, context):
         return _high_risk_classification(domain, cross_cutting, evidence_required, reasons)
+
+    if _is_repository_mutation_command(normalized):
+        return _heavy_classification(
+            "software",
+            cross_cutting,
+            evidence_required,
+            [*reasons, "repository_mutation_command"],
+        )
 
     pb_migration_requested = _is_pb_to_csharp_migration_request(normalized)
     if _is_readonly_source_audit_request(normalized, domain):
@@ -2599,6 +2657,14 @@ def classify_request(text: str, context: dict | None = None) -> RequestClassific
             evidence_required=_dedupe([*evidence_required, "source_summary"]),
             reasons=[*reasons, "readonly_source_condition_question"],
             confidence=0.78,
+        )
+
+    if request_intent["persistence_requested"] is True:
+        return _heavy_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "persistent_completion_request"],
         )
 
     if _is_ambiguous_visual_query_order_request(normalized, context):
@@ -4243,15 +4309,281 @@ def _is_readonly_source_audit_request(normalized: str, domain: str) -> bool:
     )
     if not has_source_context:
         return False
-    return not _contains_any(normalized, READONLY_SOURCE_AUDIT_MUTATION_TERMS)
+    return not _has_unnegated_readonly_audit_mutation(normalized)
+
+
+def _is_repository_mutation_command(normalized: str) -> bool:
+    candidate = _without_negated_or_advisory_repository_mutations(normalized)
+    if not _contains_any(candidate, REPOSITORY_MUTATION_TERMS):
+        return False
+    return bool(
+        re.search(r"^(?:please\s+)?(?:commit|push)\b", candidate)
+        or re.search(
+            r"\b(?:commit|push)\s+(?:these|this|the|current|my|all)\b",
+            candidate,
+        )
+    )
+
+
+def _has_unnegated_readonly_audit_mutation(normalized: str) -> bool:
+    candidate = _without_negated_or_advisory_repository_mutations(normalized)
+    return _contains_any(candidate, READONLY_SOURCE_AUDIT_MUTATION_TERMS)
+
+
+def _without_negated_or_advisory_repository_mutations(normalized: str) -> str:
+    candidate = normalized
+    for pattern in REPOSITORY_MUTATION_NEGATION_PATTERNS:
+        candidate = pattern.sub(" ", candidate)
+    if _contains_any(normalized, REPOSITORY_MUTATION_ADVISORY_TERMS) and _contains_any(
+        normalized,
+        READONLY_SOURCE_AUDIT_TERMS | {"tell me", "what", "which", "only"},
+    ):
+        candidate = re.sub(r"\b(?:commit|push)\b", " ", candidate)
+    return candidate
+
+
+def resolve_request_intent(text: str, context: dict | None = None) -> Dict[str, object]:
+    """Resolve structured tri-state intent, using raw language only as advisory input."""
+    context = context or {}
+    structured = context.get("request_intent")
+    if isinstance(structured, dict):
+        return {
+            "persistence_requested": _tri_state(structured.get("persistence_requested")),
+            "conversation_pause_requested": _tri_state(
+                structured.get("conversation_pause_requested")
+            ),
+            "execution_authorization": _tri_state(
+                structured.get("execution_authorization")
+            ),
+            "user_resume_requested": _tri_state(
+                structured.get("user_resume_requested", context.get("user_resume_requested"))
+            ),
+            "source": "structured",
+        }
+
+    normalized = _normalize(text)
+    unknown = {
+        "persistence_requested": None,
+        "conversation_pause_requested": None,
+        "execution_authorization": None,
+        "user_resume_requested": _tri_state(context.get("user_resume_requested")),
+        "source": "advisory_language",
+    }
+    if not normalized or _is_language_example_context(normalized):
+        return unknown
+
+    if _is_ambiguous_conversation_control(normalized):
+        return unknown
+
+    if _is_conversation_control_diagnostic(normalized):
+        return unknown
+
+    if _has_explicit_conversation_pause_intent(normalized):
+        return {
+            "persistence_requested": False,
+            "conversation_pause_requested": True,
+            "execution_authorization": False,
+            "user_resume_requested": None,
+            "source": "advisory_language",
+        }
+
+    if _is_external_stop_diagnostic(normalized) or _is_ambiguous_stop_question(normalized):
+        return unknown
+
+    if _has_conversation_pause_intent(normalized):
+        return {
+            "persistence_requested": False,
+            "conversation_pause_requested": True,
+            "execution_authorization": False,
+            "user_resume_requested": None,
+            "source": "advisory_language",
+        }
+    if _has_task_persistence_intent(normalized):
+        return {
+            "persistence_requested": True,
+            "conversation_pause_requested": False,
+            "execution_authorization": None,
+            "user_resume_requested": None,
+            "source": "advisory_language",
+        }
+    return unknown
 
 
 def _is_user_stop_or_pause_request(normalized: str) -> bool:
-    if not _contains_any(normalized, USER_STOP_OR_PAUSE_TERMS):
+    return resolve_request_intent(normalized)["conversation_pause_requested"] is True
+
+
+def _is_persistent_completion_request(normalized: str) -> bool:
+    return resolve_request_intent(normalized)["persistence_requested"] is True
+
+
+def _has_task_persistence_intent(normalized: str) -> bool:
+    return _contains_any(
+        normalized,
+        PERSISTENT_COMPLETION_TERMS
+        | {
+            "keep working until",
+            "finish the task before stopping",
+            "끝날 때까지 계속",
+            "완료할 때까지 계속",
+            "멈추지 마",
+            "멈추지마",
+        },
+    )
+
+
+def _has_conversation_pause_intent(normalized: str) -> bool:
+    if _has_explicit_conversation_pause_intent(normalized):
+        return True
+    if _has_task_persistence_intent(normalized):
         return False
-    if _contains_any(normalized, {"can i stop", "stop taking", "stop loss", "stop word"}):
+    has_control_object = _contains_any(
+        normalized,
+        {
+            "this run",
+            "this task",
+            "this work",
+            "current work",
+            "goal",
+            "conversation",
+            "작업",
+            "하던 일",
+            "대화",
+        },
+    )
+    has_stop_action = _contains_any(
+        normalized,
+        {"stop", "pause", "cancel", "abort", "halt", "멈추", "중지", "그만"},
+    )
+    if has_control_object and has_stop_action:
+        return True
+    stripped = normalized.strip(" .!?")
+    return stripped in {"stop", "pause", "halt", "멈춰", "중지", "그만"}
+
+
+def _has_explicit_conversation_pause_intent(normalized: str) -> bool:
+    return _contains_any(
+        normalized,
+        {
+            "do not continue until approval",
+            "don't continue until approval",
+            "wait for approval before continuing",
+            "pause this run",
+            "pause this task",
+            "pause this conversation",
+            "stop this run",
+            "stop this task",
+            "stop this conversation",
+            "do not continue this work",
+            "don't continue this work",
+            "continue tomorrow",
+            "resume tomorrow",
+            "잠깐 멈춰",
+            "작업을 멈춰",
+            "작업 중지",
+            "계속하지 마",
+            "계속하지마",
+            "승인 전까지 계속하지 마",
+        },
+    )
+
+
+def _is_external_stop_diagnostic(normalized: str) -> bool:
+    if not _contains_any(normalized, {"stop", "stops", "stopped", "멈추", "중지"}):
         return False
-    return True
+    return _contains_any(
+        normalized,
+        {
+            "service",
+            "server",
+            "process",
+            "background process",
+            "button",
+            "toolbar",
+            "stop button",
+            "windows service",
+            "서비스",
+            "프로세스",
+            "버튼",
+        },
+    )
+
+
+def _is_conversation_control_diagnostic(normalized: str) -> bool:
+    diagnostic_terms = {
+        "audit",
+        "verify",
+        "test",
+        "review",
+        "inspect",
+        "parser",
+        "classification",
+        "handling",
+        "quoted phrase",
+    }
+    if not _contains_any(normalized, diagnostic_terms):
+        return False
+    quoted_control = re.search(
+        r"([\"'`])[^\"'`]*(?:stop|pause|cancel|abort|halt|멈추|중지|그만)[^\"'`]*\1",
+        normalized,
+    )
+    lifecycle_terms = {"stop", "pause", "resume", "complete", "goal"}
+    lifecycle_count = sum(1 for term in lifecycle_terms if _contains_term(normalized, term))
+    return bool(quoted_control) or lifecycle_count >= 3
+
+
+def _is_ambiguous_stop_question(normalized: str) -> bool:
+    return "?" in normalized and _contains_any(
+        normalized,
+        {"should", "why", "can", "does", "is it okay", "해야 해", "왜"},
+    )
+
+
+def _is_ambiguous_conversation_control(normalized: str) -> bool:
+    return normalized.strip() in {
+        "continue?",
+        "proceed?",
+        "stop?",
+        "pause?",
+        "계속?",
+        "진행해?",
+        "멈춰?",
+        "중지?",
+    }
+
+
+def _is_language_example_context(normalized: str) -> bool:
+    has_examples = _contains_any(
+        normalized,
+        {
+            "adversarial test",
+            "adversarial case",
+            "test cases",
+            "examples:",
+            "phrases:",
+            "these examples",
+            "다음 문구",
+            "테스트 케이스",
+        },
+    )
+    has_language_subject = _contains_any(
+        normalized,
+        {"intent", "heuristic", "phrase", "parser", "classification", "분류", "문구"},
+    )
+    return has_examples and has_language_subject
+
+
+def _tri_state(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "yes", "1", "requested", "authorized", "allow", "allowed"}:
+        return True
+    if normalized in {"false", "no", "0", "not_requested", "denied", "deny", "blocked"}:
+        return False
+    return None
 
 
 def _is_source_condition_mutation_command(normalized: str) -> bool:
@@ -4940,6 +5272,35 @@ def _requires_resume_context(context: dict) -> bool:
         or context.get("long_running")
         or context.get("needs_handoff")
     )
+
+
+def _is_structured_active_goal_resume(
+    context: dict,
+    request_intent: Dict[str, object] | None = None,
+) -> bool:
+    request_intent = request_intent or resolve_request_intent("", context)
+    if request_intent.get("user_resume_requested") is not True:
+        return False
+    if request_intent.get("conversation_pause_requested") is True:
+        return False
+    if not context.get("requires_resume"):
+        return False
+    return bool(_active_goal_objective(context))
+
+
+def _active_goal_objective(context: dict) -> str:
+    direct = str(context.get("active_objective") or "").strip()
+    if direct:
+        return direct
+    for key in ("active_goal", "goal"):
+        goal = context.get(key)
+        if not isinstance(goal, dict):
+            continue
+        status = str(goal.get("status") or "active").strip().lower()
+        objective = str(goal.get("objective") or "").strip()
+        if status == "active" and objective:
+            return objective
+    return ""
 
 
 def _contains_any(text: str, terms: set[str]) -> bool:

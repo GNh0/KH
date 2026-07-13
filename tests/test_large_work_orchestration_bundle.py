@@ -48,19 +48,15 @@ def read_text(relative_path: str) -> str:
 
 
 class LargeWorkOrchestrationBundleTests(unittest.TestCase):
-    def test_plugin_prompt_requires_large_work_bundle_statuses(self):
+    def test_plugin_manifest_exposes_large_work_capability(self):
         plugin = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompt = "\n".join(plugin["interface"]["defaultPrompt"])
+        root_manifest = json.loads(read_text("plugin.json"))
+        root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
 
-        self.assertIn("large_work_orchestration_bundle", prompt)
-        self.assertIn("skill_statuses", prompt)
-        self.assertIn("application_mode", prompt)
-        for mode in ["runtime", "procedural", "considered", "blocked"]:
-            self.assertIn(mode, prompt)
-        for status in BUNDLE_STATUS_VALUES:
-            self.assertIn(status, prompt)
+        self.assertIn("Large Work Bundle", plugin["interface"]["capabilities"])
         for skill in BUNDLE_SKILLS:
-            self.assertIn(skill, prompt)
+            with self.subTest(skill=skill):
+                self.assertIn(skill, root_skill_names)
 
     def test_lifecycle_requires_bundle_decision_for_large_project_work(self):
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")

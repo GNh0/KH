@@ -1,108 +1,101 @@
 ---
 name: sql-formatting-style-harness
-description: Use when formatting, cleaning, standardizing, refactoring, or generating SQL/T-SQL may use the host-local sql-formatting skill and KH must verify the output against that style contract without replacing the host-local formatter.
+description: Use when SQL/T-SQL formatting or a separately requested scalar-function refactor needs deterministic preservation, style, alias-plan, and evidence gates.
 ---
 
 # SQL Formatting Style Harness
 
 ## KH Entry Contract
 
-- Start through `always-on-front-door` for work-bearing KH requests before this harness is selected. When a direct SQL formatting request triggers the host-local `sql-formatting` skill first, this harness may run as the verification companion without taking over formatting.
-- If `kh_active_directive=active` was set by an earlier user instruction, keep KH-routed setup active for this work-bearing request.
-- Use the host-local `sql-formatting` skill as the primary formatting standard when it exists.
-- Do not replace, suppress, or reinterpret the host-local skill. This harness verifies outputs from that skill or from an agent that claims to follow it.
-- Treat SQL, T-SQL, stored procedures, comments, localized literals, and business rule text as contract-sensitive passthrough content. Do not token-compress it.
-- Treat unknown scalar functions as contract-sensitive text unless DB/MCP metadata, project source, or the host-local style contract proves an equivalent lookup join. `DBO.F_BA011T_FIND_SUBNM(MAINCD, SUBCD, USEYN)` is a verified BA011T lookup contract when the host-local `sql-formatting` skill is available.
-- Report this skill as applied only when `src.skills.sql_formatting_style.verify_sql_formatting_style` or the module CLI produced a `HarnessResult`-shaped result.
-- A `selected_not_executed_skills` entry, a skill-file read, or a style-standard mention is not execution evidence.
+- Start non-trivial work through `always-on-front-door` unless the current turn was classified as light/direct.
+- Use this harness only after routing selects SQL formatting or a separately requested scalar-function refactor.
+- Provider selection, catalog listing, and `SKILL.md` reads are inspection only.
+- Report this harness as applied only when an actual `verify_sql_formatting_style(...)` call is correlated to its structured `HarnessResult` and the exact final SQL hash.
+- Require `alias_role_plan_validation`; legacy `alias_checks`, flat `alias_status`, and assistant prose cannot satisfy verifier binding.
 
-## Direct SQL Companion Rule
+## Purpose
 
-When this skill triggers alongside `sql-formatting`, use this order:
-
-1. Read and apply the host-local `sql-formatting` skill.
-2. Keep the user's original SQL unchanged in memory for comparison.
-3. Format the SQL according to the host-local style.
-4. Run `python -m src.skills.sql_formatting_style --original <path> --formatted <path>` or call `verify_sql_formatting_style(...)`.
-5. Emit final SQL only after the verifier passes, or state that KH verification is blocked and why.
-
-If a host cannot create temporary comparison files, record `sql_formatting_style_harness=blocked` with the reason. Do not claim KH verification ran.
-
-## Support files
-
-- Read `references/usage.md` before applying this harness to real SQL or stored procedure work.
-- Use `examples/minimal-workflow.md` as the compact success/blocked workflow.
-- Run `python scripts/smoke_check.py` to verify the packaged skill folder and implementation targets.
-- Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success and blocked demo.
-- Run `python scripts/powerbuilder_sql_probe.py --source-root <exported-pb-source> --output-dir <tmp>` for bounded PowerBuilder SQL fragment discovery.
+Use this harness after selecting the host-local `sql-formatting` contract or the packaged fallback. The reviewer/LLM decides business roles and evaluates source authority. Python produces deterministic evidence only: it lexes SQL, checks integrity, compares the complete token stream, validates a declared alias plan, and validates structured refactor evidence. It does not infer roles or database equivalence.
 
 ## Workflow
 
-1. Apply or delegate formatting to the host-local `sql-formatting` skill first.
-2. Preserve the original SQL text exactly for comparison.
-3. Run the verifier with original and formatted SQL.
-4. Block completion when mechanical preservation checks fail.
-5. Block or request DB-backed evidence when semantic equivalence matters beyond regex checks.
-6. When a CTE or `#` temporary table is intentionally introduced, pass a concrete `cte_temp_table_reason` to the verifier and keep that reason in evidence.
-7. Include the verifier result, style contract source path/hash, and token optimizer passthrough status in handoff evidence.
+1. Preserve the exact original. Pass `bytes` or `Path` for strict UTF-8 decoding and a raw hash; plain `str` is reported as `encoding_unverified`.
+2. Select one style contract and record its path and SHA-256. Prefer the host-local skill when present; otherwise use `references/style-contract.md` as a standalone fallback.
+3. Declare `operation="formatting"` or `operation="refactor"`.
+4. For formatting, preserve every token except whitespace, safe case normalization, and substitutions from a complete verified alias plan. Every scalar function remains present.
+5. Before changing aliases, create a complete per-scope role plan from concrete source/reviewer evidence.
+6. For a scalar-function-to-join request, inspect the actual function definition through DB/MCP/project source when available. Supply `scalar_function_refactor`; never infer behavior from a function or table name.
+7. Run `verify_sql_formatting_style(...)` or the module CLI against the exact pair. Skill selection or file reads are not verifier evidence.
 
-## Mechanical checks
+## Independent Gates
 
-- Preserve string literals, localized literals, comment shape/count, key predicates, JOIN conditions, calculations, and `ELSE` count.
-- Permit alias-only identifier/casing updates inside still-commented SQL conditions, but block removed, uncommented, or business-text-changing comments.
-- Check uppercase identifiers outside literals/comments.
-- Check stored procedure parameter leading-comma layout.
-- Check SELECT leading-comma columns.
-- Check JOIN indentation shape.
-- Check parenthesized CASE expressions.
-- Check BA011T scalar-to-join conversion shape when the verified scalar lookup appears in the original SQL.
-- Check wide `INSERT INTO ... SELECT` mappings so they keep the user's grouped horizontal stored-procedure layout instead of one-column-per-line output. Long `CASE`, `ROW_NUMBER`, `ISNULL`, arithmetic, or concatenation expressions may wrap onto continuation lines for that mapping.
-- Check that formatted/recommended SQL does not introduce CTEs or `#` temporary tables when the original did not already use them. These patterns are exceptions, not the default recommendation style.
-- Check that `IF EXISTS` guard blocks do not put nested subqueries under `WHERE` by default, such as `WHERE X IN (SELECT ...)`, `WHERE EXISTS (SELECT ...)`, or scalar `(SELECT ...)` predicates. Prefer direct joins, derived tables, or existing stored-procedure style unless explicit source evidence proves the subquery form.
+| Metadata field | Key states | Meaning |
+| --- | --- | --- |
+| `input_integrity.status` | `valid`, `source_invalid` | Lexer and encoding preflight for the original. |
+| `formatting_preservation.status` | `verified`, `changed`, `not_evaluated` | Complete ordered token-stream comparison. |
+| `style_lint.status` | `passed`, `blocked` | Presentation-only contract checks. |
+| `alias_role_plan_validation.status` | `not_needed`, `required`, `verified`, `conflict` | Complete per-scope alias evidence. |
+| `semantic_refactor_evidence.scalar_function_refactor.status` | `not_requested`, `blocked`, `not_proven`, `mechanically_valid` | Separate scalar refactor state; mechanically valid is not release ready. |
+| `semantic_checks.status` | `not_proven` | Deterministic checks and correlated provenance do not prove database equivalence. |
+| `release_readiness.status` | `ready`, `pending`, `blocked` | Top-level completion gate. Refactors remain pending until semantic execution is proven and authenticated. |
 
-## PowerBuilder validation path
+## Alias Plan
 
-- For GWERP or other PowerBuilder sources, use the user-provided or host-configured PBL export tool path, such as `C:\PblScripter\Export-PBL.ps1` in the local default environment, only to export readable source into a separate output directory.
-- Do not write to `C:\GWERP` or the source PBL tree.
-- Extract SQL-looking fragments containing `SELECT`, `UPDATE`, `DELETE`, or `INSERT` from exported `.srw`, `.sru`, `.srd`, `.txt`, or `.sql` files.
-- Keep extracted fragments as passthrough text, format them through host-local `sql-formatting`, then run this verifier on each original/formatted pair.
-- If the sweep is too large for the current pass, record `build_powerbuilder_sql_validation_plan` output and report the sweep as follow-up.
+- No alias change: state is `not_needed`.
+- Alias change without a complete plan: block.
+- Main role: `A`, then `A1`, `A2`, and so on.
+- Singleton non-main roles: sequential `B`, `C`, `D`, and so on.
+- Multi-member non-main roles: number from the first member, for example `B1`, `B2`.
+- Every changed scope must be present. Every declaration and changed reference must be covered. Cross-scope members, skipped role letters, missing aliases, and vague/empty basis references block.
 
-## Semantic boundary
+## Scalar Refactor Boundary
 
-The harness does not claim to prove DB semantics. Execution-plan changes, result-set equivalence, trigger side effects, transaction behavior, collation behavior, and statistics must be proven with database-backed checks when they matter.
+Formatting always retains scalar calls. A separate conversion may proceed only when structured evidence identifies an authoritative function definition, proves a pure deterministic lookup, records exact source table/keys/filters/return/null behavior, proves zero-or-one cardinality and unmatched-row behavior, and explains why the join is preferable. Calculation, aggregation, security filtering, dynamic behavior, ambiguity, or unavailable source blocks conversion.
+
+Complete structured evidence remains `not_proven`. A DB/result-comparison artifact correlated to both original and formatted SHA-256 values records `external_correlation=provenance_correlated`; Python validates completeness and correlation only and does not upgrade semantic status. Caller-supplied or otherwise unauthenticated evidence may reach `status=mechanically_valid` with `release_readiness.status=pending`, but it must return `success=false` and a non-zero exit code. Only a runtime execution receipt independently validated outside caller-supplied metadata may set both semantic proof and execution authentication needed for release readiness.
+
+## Progressive Disclosure
+
+- Read `references/usage.md` for API/evidence shapes.
+- Read `references/style-contract.md` when using the packaged fallback.
+- Use `examples/minimal-workflow.md` for acceptance scenarios.
+- Run `python scripts/smoke_check.py` for package wiring.
+- Run `python scripts/demo.py --output-dir <tmp>` for executable contract cases.
+- Use `scripts/powerbuilder_sql_probe.py` only for a bounded approved export; never write into the source tree.
+
+## Completion Rules
+
+- Block on source/output corruption, formatting token changes, style errors, or incomplete alias plans. Keep mechanically valid but unproven refactors pending closed.
+- Formatting verification may complete with `semantic_checks.status=not_proven` because no refactor release claim is made.
+- Refactor verification may complete only when `semantic_checks.status=proven` and `execution_authentication=authenticated`; correlation alone never completes it.
+- Do not use a refactor reason to waive unrelated token changes.
+- Do not claim semantic equivalence from deterministic Python checks.
+- Do not claim this harness ran until a `HarnessResult` was produced.
 
 ## Required outputs
 
-- `HarnessResult.success`, `exit_code`, `stdout`, `stderr`, and `metadata`.
-- `metadata.style_contract_source` with host-local path/hash when available or packaged fallback reference otherwise.
-- `metadata.mechanical_checks.status`.
-- Preservation issue list for string literals, localized literals, comment shape/count/text, predicates, JOIN conditions, calculations, and `ELSE` additions.
-- Style issue list for uppercase identifiers, stored procedure parameter layout, SELECT leading commas, wide INSERT grouped layout, JOIN indentation, CASE parentheses, verified scalar lookup conversion decisions, and BA011T conversion shape.
-- `metadata.semantic_checks.status=not_proven` unless separate DB-backed evidence is attached outside this regex verifier.
-- `metadata.token_optimizer_status=passthrough`.
-- `metadata.cte_temp_table_reason` when CTE or `#` temporary table usage is intentionally introduced as an exception.
-- PowerBuilder validation plan or fragment-level verifier results when the source is a PBL/PB export.
+- Correlated verifier call/output evidence, using call IDs when available.
+- `success`, `status`, `exit_code`, and a non-empty `verification_id`.
+- `release_readiness.status=ready|pending|blocked`; pending refactors must have `success=false` and non-zero `exit_code`.
+- Valid `original_sha256`, `formatted_sha256`, and `style_contract_sha256` values.
+- `mechanical_checks.status=passed` for an accepted formatting result.
+- Structured `alias_role_plan_validation.status=not_needed|verified`; `required` and `conflict` block acceptance.
+- Exact final SQL whose UTF-8 SHA-256 equals `formatted_sha256`.
+- `token_optimizer_status=passthrough` with the quality-preserving reason.
 
 ## Common mistakes
 
-- Do not claim the host-local `sql-formatting` skill was used without verifier evidence when the request requires proof.
-- Do not use this KH harness as a formatter or as a replacement for the host-local style skill.
-- Do not token-compress SQL, stored procedures, localized literals, comments, or other contract-sensitive text.
-- Do not treat regex preservation checks as proof of DB semantic equivalence.
-- Do not trigger the harness for mention-only risk examples that are not actionable SQL formatting requests.
-- Do not require scalar-to-join conversion for unknown scalar functions when the function body or lookup contract cannot be checked. Preserve those functions and require the formatter to state why conversion was skipped.
-- Do not split same-role table families into unrelated one-letter aliases. For example, related `SA100T/SA110T/SA200T/SA210T` joins may be `B1/B2/B3/B4`, and same-role `BA011T` code lookups may be `E1/E2`; the exact base letter follows the surrounding outer-query role order. This is reviewer/style guidance unless source evidence makes the role family explicit enough for a separate task-specific check.
-- Do not introduce CTEs or `#` temporary tables as a default "cleaner" rewrite. Prefer direct joins, derived tables, aggregate subqueries, and existing stored-procedure style unless there is an explicit request or a concrete technical reason.
-- Do not write `IF EXISTS` guards with `WHERE` subqueries by default. A simple `WHERE A.KEY = @KEY` predicate is fine, but nested `WHERE ... IN (SELECT ...)`, `WHERE EXISTS (SELECT ...)`, or `WHERE COL = (SELECT ...)` must be blocked unless source evidence requires it.
-- Do not write exports, fragments, or verifier output into `C:\GWERP`.
+- Do not substitute `alias_checks`, `alias_status`, marker text, or a copied JSON sample for `alias_role_plan_validation`.
+- Do not accept verifier output without a preceding correlated verifier call.
+- Do not bind a hash to unfenced, multiple, or otherwise non-extractable final SQL.
+- Do not infer alias roles from table names, repeated source names, or remembered project policy.
+- Do not remove scalar functions during formatting or claim database equivalence from lexer checks.
+- Do not treat caller-created comparison metadata, matching hashes, or `external_correlation=provenance_correlated` as an authenticated runtime execution receipt.
+- Do not introduce project-specific lookup tables or scalar functions as universal examples or policy.
 
 ## UAF implementation targets
 
 - `src.skills.sql_formatting_style.verify_sql_formatting_style`
 - `src.skills.sql_formatting_style.resolve_style_contract_source`
-- `src.skills.sql_formatting_style.extract_powerbuilder_sql_fragments`
-- `src.skills.sql_formatting_style.build_powerbuilder_sql_validation_plan`
 - `src.contracts.HarnessResult`
-- `tests.test_sql_formatting_style_harness`
 - `skills/sql_formatting_style_harness/SKILL.md`

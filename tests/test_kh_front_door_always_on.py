@@ -62,7 +62,7 @@ class AlwaysOnFrontDoorTests(unittest.TestCase):
             ],
         )
         self.assertEqual(summary["skill_status_summary"]["token-optimizer"]["status"], "applied")
-        self.assertIn("without_token_optimizer", summary["token_optimizer_decision"])
+        self.assertIn("estimated_payload_tokens_before", summary["token_optimizer_decision"])
         self.assertIn("verification-before-completion-harness", summary["selected_not_executed_skills"])
 
     def test_new_korean_web_product_request_blocks_until_brainstorming(self):
@@ -280,6 +280,16 @@ class AlwaysOnFrontDoorTests(unittest.TestCase):
         self.assertTrue(automatic_intake.exists())
         self.assertIn("src.orchestration.kh_front_door.build_kh_front_door", always_on.read_text(encoding="utf-8"))
         self.assertIn("tests.test_kh_front_door_always_on", always_on.read_text(encoding="utf-8"))
+
+    def test_windows_powershell_51_template_writes_bom_safe_prompt_and_context_json(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        skill_text = (repo_root / "skills/always_on_front_door/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("UTF8Encoding($false)", skill_text)
+        self.assertIn("ConvertTo-Json -Depth 10", skill_text)
+        self.assertIn("--context-file $contextPath", skill_text)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,12 @@ from pathlib import Path
 
 from src.contracts import AdapterRequest, AdapterResult, WorkflowTaskResult
 from src.platforms.antigravity_native import AntigravityNativeDispatchResult
-from src.platforms.dispatcher_factory import AntigravityDispatcher, DispatcherFactory, LocalDispatcher
+from src.platforms.dispatcher_factory import (
+    AntigravityDispatcher,
+    DispatcherFactory,
+    LocalDispatcher,
+    _adapter_status,
+)
 
 
 class StaticAntigravityNativeAdapter:
@@ -39,6 +44,20 @@ class DispatcherFactoryTests(unittest.TestCase):
     def test_default_dispatchers_are_registered(self):
         self.assertIsInstance(DispatcherFactory.get_dispatcher("local"), LocalDispatcher)
         self.assertIsInstance(DispatcherFactory.get_dispatcher("antigravity"), AntigravityDispatcher)
+
+    def test_active_goal_cannot_be_reported_as_dispatch_success(self):
+        self.assertEqual(
+            _adapter_status("success", True, {"status": "active"}),
+            "pending",
+        )
+
+    def test_adapter_result_pending_is_validated_as_nonterminal(self):
+        pending = AdapterResult(status="pending", message="host dispatch has not returned")
+
+        self.assertFalse(pending.is_terminal)
+        self.assertEqual(pending.execution_state, "claimed_unverified")
+        with self.assertRaisesRegex(ValueError, "unsupported adapter result status"):
+            AdapterResult(status="unknown", message="ambiguous")
 
 
 class AntigravityDispatcherTests(unittest.TestCase):

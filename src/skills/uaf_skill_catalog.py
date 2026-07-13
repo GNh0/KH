@@ -63,6 +63,7 @@ SKILL_EXECUTION_LEVELS = {
     "request-complexity-router": "python-module",
     "scenario-evaluation-harness": "python-module",
     "skill-catalog": "python-module",
+    "sql-formatting": "procedure-policy",
     "sql-formatting-style-harness": "python-module",
     "snapshot-state-harness": "python-module",
     "subagent-review-pipeline": "hybrid-harness",
@@ -73,6 +74,14 @@ SKILL_EXECUTION_LEVELS = {
     "worktree-isolation-harness": "hybrid-harness",
     "workflow-skill-distiller": "python-module",
     "workflow-usability-harness": "hybrid-harness",
+}
+
+PACKAGED_DEMO_SKILL_PROFILES = {
+    "sql-formatting": (
+        "host LLM SQL formatting provider",
+        "logic-changing formatted candidate",
+        "sql-formatting-provider-probe",
+    ),
 }
 
 
@@ -163,6 +172,7 @@ def _scan_skill_folders(skills_dir: str = PACKAGED_SKILLS_DIR, include_path: boo
 
 def collect_packaged_skills(skills_dir: str = PACKAGED_SKILLS_DIR) -> Dict[str, Any]:
     """Return packaged UAF skills and harnesses from skills/<name>/SKILL.md folders."""
+    register_packaged_demo_profiles()
     skills = _scan_skill_folders(skills_dir)
     validation = validate_skill_folders(skills_dir)
     execution_levels: Dict[str, int] = {}
@@ -183,6 +193,14 @@ def collect_packaged_skills(skills_dir: str = PACKAGED_SKILLS_DIR) -> Dict[str, 
         "validation": validation.to_dict(),
         "skills": skills,
     }
+
+
+def register_packaged_demo_profiles() -> None:
+    """Register owned standalone demos without changing the shared scenario router."""
+    from src.skills.demo_scenarios import DEMO_SKILL_PROFILES
+
+    for skill_name, profile in PACKAGED_DEMO_SKILL_PROFILES.items():
+        DEMO_SKILL_PROFILES.setdefault(skill_name, profile)
 
 
 def _execution_note(execution_level: str) -> str:

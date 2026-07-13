@@ -125,13 +125,27 @@ class InteractiveSideEvaluatorTests(unittest.TestCase):
         for category in ["catalog", "evidence", "assistant_policy"]:
             self.assertIn(category, report["summary"]["signal_categories"])
         token_usage = report["summary"]["token_usage"]
-        self.assertGreater(token_usage["without_token_optimizer"], token_usage["with_token_optimizer"])
-        self.assertGreater(token_usage["estimated_tokens_saved"], 0)
-        self.assertGreater(token_usage["actual_tokens_saved"], 0)
-        self.assertEqual(token_usage["actual_usage_scope"], "actual_optimizer_input_output_payload")
-        self.assertEqual(token_usage["token_count_method"], "deterministic_local_estimate_chars_div_4")
-        self.assertTrue(token_usage["token_count_is_estimate"])
+        self.assertGreater(
+            token_usage["estimated_payload_tokens_before"],
+            token_usage["estimated_payload_tokens_after"],
+        )
+        self.assertGreater(token_usage["estimated_payload_tokens_saved"], 0)
+        self.assertGreater(token_usage["estimated_payload_token_savings_ratio"], 0)
+        self.assertEqual(
+            token_usage["estimated_payload_token_count_method"],
+            "deterministic_local_estimate_chars_div_4",
+        )
+        self.assertTrue(token_usage["estimated_payload_token_count_is_estimate"])
         self.assertFalse(token_usage["billing_tokens_available"])
+        self.assertFalse(token_usage["billing_counterfactual_available"])
+        for legacy_key in [
+            "without_token_optimizer",
+            "with_token_optimizer",
+            "estimated_tokens_saved",
+            "actual_tokens_saved",
+            "actual_usage_scope",
+        ]:
+            self.assertNotIn(legacy_key, token_usage)
         self.assertIn("command-output", token_usage["by_strategy"])
 
     def test_skill_side_evaluator_rejects_conversation_without_kh_trace(self):
@@ -164,8 +178,10 @@ class InteractiveSideEvaluatorTests(unittest.TestCase):
         self.assertGreaterEqual(summary["max_turns_per_conversation"], 10)
         self.assertGreaterEqual(summary["multi_skill_turn_count"], 3)
         self.assertGreaterEqual(summary["token_usage"]["case_count"], 5)
-        self.assertGreater(summary["token_usage"]["estimated_tokens_saved"], 1000)
-        self.assertGreater(summary["token_usage"]["actual_tokens_saved"], 1000)
+        self.assertGreater(summary["token_usage"]["estimated_payload_tokens_saved"], 1000)
+        self.assertGreater(summary["token_usage"]["estimated_payload_token_savings_ratio"], 0)
+        self.assertFalse(summary["token_usage"]["billing_tokens_available"])
+        self.assertFalse(summary["token_usage"]["billing_counterfactual_available"])
         for route in ["skill_call", "workflow_harness", "procedure_policy"]:
             self.assertIn(route, summary["route_counts"])
 
@@ -180,8 +196,9 @@ class InteractiveSideEvaluatorTests(unittest.TestCase):
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["unexpected_failures"], [])
         self.assertEqual(payload["summary"]["skill_count"], payload["summary"]["catalog_skill_count"])
-        self.assertGreater(payload["summary"]["token_usage"]["estimated_tokens_saved"], 0)
-        self.assertGreater(payload["summary"]["token_usage"]["actual_tokens_saved"], 0)
+        self.assertGreater(payload["summary"]["token_usage"]["estimated_payload_tokens_saved"], 0)
+        self.assertFalse(payload["summary"]["token_usage"]["billing_tokens_available"])
+        self.assertFalse(payload["summary"]["token_usage"]["billing_counterfactual_available"])
 
     def test_module_cli_outputs_stress_skill_side_summary_json(self):
         completed = subprocess.run(

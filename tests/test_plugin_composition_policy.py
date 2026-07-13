@@ -2,6 +2,7 @@ import unittest
 import json
 from pathlib import Path
 
+from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.plugin_composition import compose_plugin_route
 
 
@@ -134,6 +135,65 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertEqual(decision.controller.provider_id, "kh")
         self.assertEqual(decision.route, "single")
         self.assertEqual(decision.unavailable_capabilities["browser_qa"], "manual_qa_evidence")
+
+    def test_kh_project_context_preserves_unavailable_sql_provider_evidence(self):
+        decision = compose_plugin_route(
+            "Implement the approved project change and format SQL output.",
+            providers=[
+                {
+                    "provider_id": "kh",
+                    "capabilities": ["workflow_control", "memory_goal_resume", "tdd_review"],
+                }
+            ],
+            context={"project_markers": [".kh"]},
+        )
+
+        self.assertEqual(decision.controller.provider_id, "kh")
+        self.assertEqual(
+            decision.unavailable_capabilities["sql_formatting"],
+            "no_compatible_provider",
+        )
+        self.assertNotIn("manual_sql_style_rules", decision.unavailable_capabilities.values())
+
+    def test_divergent_host_local_sql_provider_falls_back_to_packaged_provider(self):
+        decision = compose_plugin_route(
+            "Format this T-SQL query and preserve logic.",
+            providers=[
+                {
+                    "provider_id": "sql-formatting",
+                    "capabilities": ["sql_formatting"],
+                    "status": "available",
+                    "metadata": {
+                        "source": "host-local-skill",
+                        "availability": "available",
+                        "compatibility": "divergent",
+                        "compatibility_issues": ["behavior_change_allowed"],
+                        "provider_precedence": 10,
+                    },
+                },
+                {
+                    "provider_id": "sql-formatting",
+                    "capabilities": ["sql_formatting"],
+                    "status": "available",
+                    "metadata": {
+                        "source": "packaged-kh-skill",
+                        "availability": "available",
+                        "compatibility": "compatible",
+                        "provider_precedence": 20,
+                    },
+                },
+            ],
+        )
+
+        self.assertEqual(decision.controller.provider_id, "sql-formatting")
+        self.assertEqual(decision.controller.metadata["source"], "packaged-kh-skill")
+        evidence = {item["source"]: item for item in decision.provider_evidence}
+        self.assertTrue(evidence["host-local-skill"]["available"])
+        self.assertFalse(evidence["host-local-skill"]["compatible"])
+        self.assertFalse(evidence["host-local-skill"]["selected"])
+        self.assertTrue(evidence["packaged-kh-skill"]["available"])
+        self.assertTrue(evidence["packaged-kh-skill"]["compatible"])
+        self.assertTrue(evidence["packaged-kh-skill"]["selected"])
 
     def test_short_specialist_terms_do_not_match_inside_ordinary_words(self):
         decision = compose_plugin_route(
@@ -420,7 +480,6 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
         root_manifest = json.loads((root / "plugin.json").read_text(encoding="utf-8"))
-        prompts = "\n".join(manifest["interface"]["defaultPrompt"])
         root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
 
         self.assertEqual(manifest["version"], root_manifest["version"])
@@ -428,13 +487,27 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertIn("Plugin Composition", manifest["interface"]["capabilities"])
         self.assertIn("plugin-composition-policy", root_skill_names)
         self.assertIn("plugin-composition", root_skill_names)
-        self.assertIn("front-door auto routing", prompts)
-        self.assertIn("Users should not need to name every KH skill or harness", prompts)
-        self.assertIn("kh_active_directive=active", prompts)
-        self.assertIn("do not require the user to repeat skill names", prompts)
-        self.assertIn("Before applying any plugin-specific MUST/ALWAYS rule", prompts)
-        self.assertIn("controller plus assistant composition", prompts)
 
+        policy = (root / "skills" / "plugin_composition_policy" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        usage = (
+            root / "skills" / "plugin_composition_policy" / "references" / "usage.md"
+        ).read_text(encoding="utf-8")
+        summary = build_kh_front_door(
+            "Implement this feature with KH workflow control and the best available specialist provider.",
+            project=root,
+            host="codex",
+        ).to_summary_dict()
+
+        self.assertIn("plugin-composition-policy", summary["runtime_applied_skills"])
+        for procedure in [
+            "before plugin-specific MUST/ALWAYS rules",
+            "explicit user request, single-specialist trigger",
+            "controller plus assistant providers",
+            "ignored self-forcing providers",
+        ]:
+            self.assertIn(procedure, policy + "\n" + usage)
 
 if __name__ == "__main__":
     unittest.main()

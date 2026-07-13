@@ -26,7 +26,9 @@ Use this as an early decision gate for every non-trivial KH turn, not only as a 
 - `passthrough`: content was large but contract-sensitive, source-of-truth, or unsafe to summarize without reducing answer quality.
 - `blocked`: optimization was required but could not preserve required facts or would reduce answer quality.
 
-When a host exposes more than one context optimization path, record `token_optimizer_provider` as `kh`, `rtk`, or `hybrid`. KH is the built-in Python provider. RTK-style command optimization is optional. Hybrid may use RTK for high-noise command output when available and fall back to KH otherwise. `passthrough` is a decision/status for source-of-truth content when compression would lower quality; it is not a provider.
+When a host exposes more than one context optimization path, record `token_optimizer_provider` as `kh`, `rtk`, or `hybrid`. KH is the built-in Python provider. RTK may be reported only when the runtime invokes an RTK adapter callable itself and emits an internal per-item receipt correlated to the exact input and output hashes. Caller-supplied receipts are `claimed_unverified`; hashes prove correlation, not provider authenticity. Availability alone is not usage. KH filtering remains `provider=kh`. `passthrough` is a decision/status for source-of-truth content when compression would lower quality; it is not a provider.
+
+The only model-facing workflow payload is `serialize_canonical_model_view(...)`. `optimize_workflow_task_results(...)` may return a compact replacement only when the caller explicitly enables that canonical view and supplies project/chat/run scope plus caller-owned raw results or an external raw store. The compact view replaces raw output and carries a stable raw reference/hash. It never appends compact records beside raw metadata. Without that path, return the original tasks unchanged.
 
 ## Retrieval preflight
 
@@ -62,16 +64,16 @@ If any of those facts would be lost, do not compress that item; use `passthrough
 ## Instructions
 1. At the start of every non-trivial KH-routed turn, record the token optimizer decision gate before broad reads, subagent dispatch, long command output, or implementation. If nothing is compressible yet, use `considered_not_needed`; if exact content must be preserved, use `passthrough`; if safe preservation cannot be proven, use `blocked`.
 2. For mixed content, call `src.skills.token_optimizer.optimize_context_content`; it classifies logs, Python code, and contract-sensitive text before deciding whether compression is safe.
-3. For long agent transcripts or subagent transcripts, call `src.skills.token_optimizer.summarize_agent_transcript` so lifecycle quality evidence is preserved while chatter is removed. Do not assume every subagent transcript should be compressed; short, exact, or contract-sensitive reviewer output may be `considered_not_needed` or `passthrough`.
+3. Agent/subagent transcripts and general prose are passthrough unless a separate caller contract supplies and verifies every required fact. `summarize_agent_transcript` remains an explicit utility, not an automatic runtime compression path.
 4. If you run a command and it produces an extremely long error log (hundreds of lines) that clutters your context, you can run the python script directly to truncate it:
    `python -c "from src.skills.token_optimizer import truncate_logs; print(truncate_logs('''<PASTE_LOG_HERE>'''))"`
 5. Alternatively, if you need to pass a large python file to another agent (or summarize it), minify it first by stripping comments and docstrings via AST:
    `python -c "from src.skills.token_optimizer import minify_code; print(minify_code(open('file.py').read()))"`
-6. If command output needs a reusable UAF evidence record, call `src.skills.token_optimizer.summarize_command_output` so the exit code, command family, raw size, filtered size, and token savings metadata are preserved in `HarnessResult`.
-7. For real workflow task results, call `src.orchestration.runtime_token_optimizer.optimize_workflow_task_results` or let `workflow-usability-harness` call it automatically. This attaches optimized command/subagent records under `metadata.token_optimizer` without deleting raw task metadata.
-8. For before/after reporting, call `src.skills.token_optimizer.compare_token_usage` for one item or `aggregate_token_usage_stats` for a workflow-level summary. Report legacy compatibility fields (`without_token_optimizer`, `with_token_optimizer`, `estimated_tokens_saved`, `token_savings_ratio`) plus RTK-style payload estimates (`estimated_payload_without_optimizer`, `estimated_payload_with_optimizer`, `estimated_payload_tokens_saved`, `estimated_payload_token_savings_ratio`, `where_saved`) and host evidence (`host_actual_tokens_available`, `host_actual_tokens_used`, `host_actual_token_source`, `host_actual_token_evidence`). Keep legacy optimizer-local `actual_*` fields for backward compatibility, but do not describe them as provider billing tokens; they are payload-derived estimates unless the host evidence says otherwise.
+6. Call `summarize_command_output` only for supported command families with caller-supplied required facts or concrete family-derived failure facts. Validate every fact in the candidate. Missing facts, NUL/binary/high-entropy output, generic prose, success output without required facts, or a nonshrinking candidate return exact passthrough.
+7. For workflow task results, call `optimize_workflow_task_results(...)` with `token_optimizer_canonical_view=true`, `token_optimizer_raw_scope={project,chat,run}`, and either `token_optimizer_raw_owner=caller` or an external `raw_store`. Serialize only the returned tasks with `serialize_canonical_model_view(...)`; keep the original input or raw store outside model context.
+8. For before/after reporting, call `compare_token_usage` or `aggregate_token_usage_stats`. Optimizer-local chars/4 fields use only `estimated_payload_*` names. Exact model-tokenizer counts are labeled exact when a real tokenizer callback is supplied. Host `token_count` and GoalState `tokensUsed` values are observed totals only when a runtime-invoked adapter callable supplies them. Caller strings named `trusted_host_token_event_jsonl` remain `claimed_unverified`. Keep `billing_tokens_available=false` and `billing_counterfactual_available=false`. Do not emit optimizer-local `actual_*` fields.
 9. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
-10. Final workflow status must include `token_optimizer_status` and `token_optimizer_status_reason`. If status is not `used`, also include `not_used_reason` explaining whether the content was too small, passed through for quality, blocked by provider/policy, or had no optimizable command output/transcript.
+10. Final workflow state must include `token_optimizer_status` and one concise `token_optimizer_status_reason`/`reason_code`. Do not duplicate the same no-op reason across task metadata and report fields.
 11. For broad retrieval, call `build_retrieval_budget_plan` before executing the command. Block or revise the retrieval when fields, selectors, limits, or output paths are missing.
 12. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 
@@ -93,11 +95,11 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - `token_optimizer_provider`: `kh`, `rtk`, or `hybrid` when provider policy is relevant. Use `token_optimizer_status=passthrough` for quality-preserving no-compression decisions.
 - Compact log or code text that preserves errors, file paths, test names, and exit status context.
 - Token-savings estimate or before/after size when used inside a harness result.
-- Token usage before/after statistics when the skill is used as workflow evidence, including RTK-style estimated payload telemetry, host actual token evidence when available from `goal.tokensUsed` or session `token_count`, and a clear `billing_tokens_available` flag.
+- Canonical whole-payload byte, character, and estimated-token counts when status is `used`, with `billing_tokens_available=false` and `billing_counterfactual_available=false`.
 - Retrieval budget plan when a command/API/search/DB operation could emit large output.
-- Runtime workflow evidence under `metadata.token_optimizer` for command outputs and agent transcripts when the workflow has `WorkflowTaskResult` objects.
-- `token_optimizer_status_reason` for every workflow-level token decision, and `not_used_reason` whenever status is `considered_not_needed`, `passthrough`, or `blocked`.
-- RTK-style `by_command_family` savings statistics when command output is optimized through KH runtime.
+- Stable raw references/hashes in compact command outputs, with raw recovery in caller-owned results or the scoped external raw store.
+- One concise `token_optimizer_status_reason` and `reason_code` for every workflow-level token decision.
+- `provider_receipts`, with one runtime-generated, hash-correlated invocation receipt per optimized RTK item, including hybrid runs, before any `provider=rtk` claim.
 - Fallback note when truncation or minification cannot safely preserve actionable context.
 - Passthrough note when content is contract-sensitive and should not be compressed.
 - Preserved development evidence summary when optimizing a lifecycle run: `task_status`, `review_status`, `commit_sha`, `next_task`, exit code, sandbox retry, file references, and reviewer severity.
@@ -109,6 +111,8 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - Do not use token optimization as a substitute for reading the relevant source.
 - Do not summarize command output in a way that hides a non-zero exit code.
 - Do not optimize SQL, stored procedures, contract text, license headers, security comments, or exact source-of-truth prose unless the user explicitly accepts loss.
+- Do not serialize both raw and compact task views, and do not append no-op optimizer metadata to every task.
+- Do not report RTK from `rtk_available=true` or caller-supplied receipt dictionaries; require a runtime-invoked adapter callable and internal receipt.
 
 ## UAF implementation targets
 

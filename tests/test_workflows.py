@@ -5,9 +5,11 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from src.orchestration.roles import build_default_role_metadata
 from src.contracts import MemoryRecord
+from src.orchestration.goal_evidence import sha256_text
 from src.orchestration.memory_state import MemoryScopeResolver
 from src.orchestration.memory_store import MemoryStore
 from src.tasks.browser_qa import BrowserQACheckResult
@@ -37,6 +39,72 @@ class FakeLLMRouter:
 
 
 class WorkflowDispatchTests(unittest.TestCase):
+    def test_strict_goal_accepts_normal_workflow_producer_envelopes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            scope = {
+                "project_id": "workflow-project",
+                "thread_id": "thread-a",
+                "task_id": "task-a",
+                "goal_id": "goal-a",
+                "lineage_id": "lineage-a",
+                "objective_hash": sha256_text("run strict workflow"),
+            }
+            metadata = build_default_role_metadata()
+            metadata["thread_id"] = "thread-a"
+            metadata["goal"] = {
+                "objective": "run strict workflow",
+                "status": "active",
+                "success_criteria": ["workflow implementation completes"],
+                "evidence_required": [
+                    "design_doc",
+                    "target_files",
+                    "workflow dispatch completed",
+                    "task runner completed",
+                ],
+                "evidence": [],
+                "metadata": {
+                    "goal_required": True,
+                    "evidence_policy": "typed_observed_v1",
+                    "scope": scope,
+                    "criterion_evidence_map": {
+                        "workflow implementation completes": [
+                            "design_doc",
+                            "target_files",
+                            "workflow dispatch completed",
+                            "task runner completed",
+                        ],
+                    },
+                    "evidence_envelopes": [],
+                },
+            }
+
+            with patch.dict(
+                os.environ,
+                {"UAF_RUNTIME_ROOT": str(Path(tmp) / "runtime")},
+                clear=False,
+            ):
+                result = dispatch_project_workflow(
+                    project_dir=str(project_dir),
+                    file_list=["main.py"],
+                    design_doc="# design",
+                    platform_mode="local",
+                    metadata=metadata,
+                )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["goal"]["status"], "complete")
+        envelopes = result.metadata["goal"]["metadata"]["evidence_envelopes"]
+        self.assertTrue(envelopes)
+        self.assertTrue(all(item.get("producer_claim") for item in envelopes))
+        self.assertTrue(
+            all(item.get("authority") == "same_process_runtime_claim" for item in envelopes)
+        )
+        self.assertTrue(
+            all(item.get("external_authenticity") == "unverified" for item in envelopes)
+        )
+
     def test_safe_worker_count_never_returns_zero_for_queued_files(self):
         original_workers = os.environ.get("AG_MAX_WORKERS")
         os.environ["AG_MAX_WORKERS"] = "0"
@@ -419,7 +487,11 @@ class WorkflowDispatchTests(unittest.TestCase):
             "BrowserQAAdapterNotConfigured",
         )
         self.assertEqual(result.metadata["goal"]["status"], "blocked")
-        self.assertEqual(result.metadata["goal"]["metadata"]["missing_evidence"], ["browser qa passed"])
+        self.assertEqual(result.metadata["goal"]["metadata"]["missing_evidence"], [])
+        self.assertIn(
+            "browser qa passed",
+            result.metadata["goal"]["metadata"]["failed_evidence"],
+        )
         self.assertEqual(statuses["qa-verifier"], "blocked")
         self.assertEqual(statuses["release-manager"], "blocked")
 
@@ -453,7 +525,11 @@ class WorkflowDispatchTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.metadata["command_check_results"][0]["status"], "failed")
         self.assertEqual(result.metadata["goal"]["status"], "blocked")
-        self.assertEqual(result.metadata["goal"]["metadata"]["missing_evidence"], ["unit tests passed"])
+        self.assertEqual(result.metadata["goal"]["metadata"]["missing_evidence"], [])
+        self.assertIn(
+            "unit tests passed",
+            result.metadata["goal"]["metadata"]["failed_evidence"],
+        )
         self.assertEqual(statuses["qa-verifier"], "blocked")
         self.assertEqual(statuses["release-manager"], "blocked")
 

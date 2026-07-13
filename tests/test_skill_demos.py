@@ -1,8 +1,12 @@
+import contextlib
+import importlib.util
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from src.skills.demo_scenarios import DEMO_SKILL_PROFILES, _scenario_for
@@ -91,6 +95,107 @@ class SkillDemoTests(unittest.TestCase):
                     payload = json.loads(completed.stdout)
                     self._assert_demo_payload(skill["name"], payload, output_root / "skill-cwd" / skill["name"])
 
+    def test_goal_demo_declares_runtime_artifacts_and_executes_evidence_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "goal-state-harness"
+            demo_path = REPO_ROOT / "skills" / "goal_state_harness" / "scripts" / "demo.py"
+            completed = subprocess.run(
+                [sys.executable, str(demo_path), "--output-dir", str(output_dir)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                encoding="utf-8",
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self._assert_demo_payload("goal-state-harness", payload, output_dir)
+            runtime_demo = payload["runtime_demo"]
+            for case in ["success", "blocked"]:
+                evidence = runtime_demo[case]["command_evidence"]
+                self.assertTrue(evidence["executed"])
+                self.assertTrue(evidence["command"])
+                self.assertRegex(evidence["output_hash"], r"^sha256:[0-9a-f]{64}$")
+
+            declared_paths = {Path(item["path"]).resolve() for item in payload["artifacts"]}
+            generated_paths = {path.resolve() for path in output_dir.rglob("*") if path.is_file()}
+            self.assertEqual(generated_paths, declared_paths)
+
+    def test_sql_provider_demo_runs_source_candidate_verifier_pipeline_truthfully(self):
+        collect_packaged_skills()
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "sql-formatting"
+            demo_path = REPO_ROOT / "skills" / "sql_formatting" / "scripts" / "demo.py"
+            completed = subprocess.run(
+                [sys.executable, str(demo_path), "--output-dir", str(output_dir)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                encoding="utf-8",
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self._assert_demo_payload("sql-formatting", payload, output_dir)
+
+            pipeline = payload["provider_pipeline"]
+            self.assertEqual(pipeline["generation"]["execution_actor"], "host-llm")
+            self.assertFalse(pipeline["generation"]["host_llm_executed"])
+            self.assertFalse(pipeline["generation"]["headless_python_formatter"])
+            self.assertEqual(
+                pipeline["generation"]["candidate_provenance"],
+                "bundled-static-demo-fixture",
+            )
+            self.assertEqual(
+                pipeline["verification"]["actor"],
+                "src.skills.sql_formatting_style.verify_sql_formatting_style",
+            )
+            self.assertTrue(pipeline["verification"]["success"])
+
+    def test_sql_style_demo_separates_formatting_success_from_refactor_readiness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "sql-formatting-style-harness"
+            demo_path = (
+                REPO_ROOT
+                / "skills"
+                / "sql_formatting_style_harness"
+                / "scripts"
+                / "demo.py"
+            )
+            completed = subprocess.run(
+                [sys.executable, str(demo_path), "--output-dir", str(output_dir)],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                encoding="utf-8",
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            formatting = json.loads(
+                (output_dir / "formatting_success.json").read_text(encoding="utf-8")
+            )
+            pending = json.loads(
+                (
+                    output_dir
+                    / "refactor_provenance_correlated_not_proven.json"
+                ).read_text(encoding="utf-8")
+            )
+
+            self.assertTrue(formatting["success"])
+            self.assertEqual(formatting["exit_code"], 0)
+            self.assertEqual(formatting["metadata"]["release_readiness"]["status"], "ready")
+            self.assertFalse(pending["success"])
+            self.assertEqual(pending["exit_code"], 1)
+            self.assertEqual(json.loads(pending["stdout"])["status"], "pending")
+            self.assertEqual(pending["metadata"]["mechanical_checks"]["status"], "passed")
+            self.assertEqual(pending["metadata"]["semantic_checks"]["status"], "not_proven")
+            self.assertEqual(pending["metadata"]["release_readiness"]["status"], "pending")
+            refactor = pending["metadata"]["semantic_refactor_evidence"][
+                "scalar_function_refactor"
+            ]
+            self.assertEqual(refactor["status"], "mechanically_valid")
+            self.assertEqual(refactor["execution_authentication"], "not_authenticated")
+
     def _assert_demo_payload(self, skill_name, payload, output_dir):
         self.assertEqual(payload["schema_version"], "1.0")
         self.assertEqual(payload["skill"], skill_name)
@@ -121,13 +226,19 @@ class SkillDemoTests(unittest.TestCase):
             token_usage = success_payload["metadata"]["token_usage"]
             self.assertEqual(token_usage["strategy"], "command-output")
             self.assertEqual(token_usage["where_saved"]["strategy"], "command-output")
-            self.assertGreater(token_usage["without_token_optimizer"], token_usage["with_token_optimizer"])
-            self.assertGreater(token_usage["estimated_tokens_saved"], 0)
-            self.assertGreater(token_usage["token_savings_ratio"], 0.5)
+            self.assertGreater(
+                token_usage["estimated_payload_tokens_before"],
+                token_usage["estimated_payload_tokens_after"],
+            )
+            self.assertGreater(token_usage["estimated_payload_tokens_saved"], 0)
+            self.assertGreater(token_usage["estimated_payload_token_savings_ratio"], 0.5)
+            self.assertFalse(token_usage["billing_tokens_available"])
+            self.assertFalse(token_usage["billing_counterfactual_available"])
             accounting = success_payload["runtime_token_accounting"]
-            self.assertFalse(accounting["actual_host_usage_available"])
-            self.assertTrue(accounting["actual_host_usage_reason"])
-            self.assertEqual(accounting["measured_scope"], "optimizer input/output payload")
+            self.assertFalse(accounting["billing_tokens_available"])
+            self.assertFalse(accounting["billing_counterfactual_available"])
+            self.assertTrue(accounting["billing_tokens_unavailable_reason"])
+            self.assertEqual(accounting["estimated_payload_scope"], "optimizer_local_estimated_payload")
             self.assertTrue(accounting["must_not_report_as_billable_usage"])
             self.assertTrue(success_payload["preserved_required_facts"])
             for fact in [
@@ -357,6 +468,37 @@ class SkillDemoTests(unittest.TestCase):
             errors = _validate_demo_payload("token-optimizer", payload, output_dir)
 
             self.assertTrue(any("host_actual" in error or "billing" in error for error in errors), errors)
+
+    def test_token_and_command_demos_fail_nonzero_when_required_contract_fields_are_missing(self):
+        malformed = {
+            "success_case": {
+                "payload": {
+                    "metadata": {
+                        "token_usage": {
+                            "estimated_payload_tokens_before": 10,
+                        }
+                    }
+                }
+            }
+        }
+        for skill_dir_name in ["token_optimizer", "command_output_harness"]:
+            with self.subTest(skill=skill_dir_name), tempfile.TemporaryDirectory() as tmp:
+                demo_path = REPO_ROOT / "skills" / skill_dir_name / "scripts" / "demo.py"
+                spec = importlib.util.spec_from_file_location(f"demo_{skill_dir_name}", demo_path)
+                self.assertIsNotNone(spec)
+                self.assertIsNotNone(spec.loader)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                stderr = io.StringIO()
+                stdout = io.StringIO()
+                with mock.patch("src.skills.demo_scenarios.run_skill_demo", return_value=malformed):
+                    with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                        exit_code = module.main(module.SKILL_NAME, ["--output-dir", tmp])
+
+                self.assertNotEqual(exit_code, 0)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIn("estimated_payload_tokens_after", stderr.getvalue())
+                self.assertIn("demo_specificity", stderr.getvalue())
 
 
 if __name__ == "__main__":

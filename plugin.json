@@ -1,9 +1,13 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.129",
+  "version": "2.9.130",
   "description": "Pure Python UAF skillbook and orchestration runtime for Antigravity, Codex, Claude Code, and local workflows. It provides an auditable front-door intake contract for non-trivial requests before memory lookup, source exploration, subagents, or other work; packaged skills with usage references; Superpowers-style workflow patterns; Compound learning capture; RTK-style token gate telemetry; scoped OpenClaw/Hermes-style memory; role orchestration; plugin composition; runtime state; and packaging checks. KH can require and audit the intake path, but host and subagent compliance depends on the active installed plugin/session.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
+  "artifact_layout": {
+    "run_content": ".kh/<skill>/<run-id>/content/",
+    "run_state": ".kh/<skill>/<run-id>/state/"
+  },
   "skills": [
     {
       "name": "orchestrate",
@@ -14,6 +18,11 @@
       "name": "contracts",
       "description": "Shared dataclass contracts for Codex, Antigravity, Claude Code, local adapters, domain profiles, work designs, and artifact manifests.",
       "module": "src.contracts"
+    },
+    {
+      "name": "adapter-contract-harness",
+      "description": "Normalize Codex, Antigravity-style, Claude Code, local worker, and other runtime dispatch through portable AdapterRequest and AdapterResult contracts.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read adapter-contract-harness"
     },
     {
       "name": "domain-profiles",
@@ -61,9 +70,19 @@
       "usage": "python -m src.skills.uaf_skill_catalog --read compound-engineering-harness"
     },
     {
+      "name": "workflow-skill-distiller",
+      "description": "Turn a repeated workflow or completed interaction into a reusable packaged UAF skill only after Compound capture proves a repeatable trigger and verification path.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read workflow-skill-distiller"
+    },
+    {
       "name": "role-orchestrator",
       "description": "Execute orchestration roles as dependency-ready asyncio DAG waves and record role WorkflowTaskResult metadata.",
       "module": "src.orchestration.role_orchestrator"
+    },
+    {
+      "name": "parallel-orchestration-harness",
+      "description": "Run bounded role or task fan-out with explicit isolation, dependency-ready waves, complete fan-in, and preserved blocked or partial results.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read parallel-orchestration-harness"
     },
     {
       "name": "artifact-manifest-store",
@@ -114,6 +133,11 @@
       "name": "progress-compound-bridge",
       "description": "Convert `.kh/development/<run-id>/state/progress.json` into CompoundCapture, Compound handoff, memory candidates, skill candidates, scenario candidates, and docs/kh handoff markdown.",
       "module": "src.orchestration.progress_compound_bridge"
+    },
+    {
+      "name": "token-optimizer",
+      "description": "Apply the required non-trivial-turn token decision gate with quality-first used, considered_not_needed, passthrough, or blocked evidence and before/after telemetry.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read token-optimizer"
     },
     {
       "name": "token-optimizer-provider",
@@ -311,6 +335,11 @@
       "usage": "python -m src.skills.uaf_skill_catalog --read domain-orchestration-harness"
     },
     {
+      "name": "architect-pipeline",
+      "description": "Create a domain-neutral design blueprint, work design, artifact manifest, deliverable routing, and quality evidence before substantial execution.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read architect-pipeline"
+    },
+    {
       "name": "subagent-review-pipeline",
       "description": "UAF-native implementer, spec-reviewer, and code-quality-reviewer pipeline for independent subagent tasks.",
       "usage": "python -m src.skills.uaf_skill_catalog --read subagent-review-pipeline"
@@ -319,6 +348,16 @@
       "name": "quality-gates-harness",
       "description": "UAF-native TDD, systematic debugging, review, and evidence-before-completion gate definitions.",
       "usage": "python -m src.skills.uaf_skill_catalog --read quality-gates-harness"
+    },
+    {
+      "name": "harness-evaluator",
+      "description": "Evaluate Python syntax, imports, runtime behavior, and tests with isolated subprocess execution, timeouts, and structured HarnessResult evidence.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read harness-evaluator"
+    },
+    {
+      "name": "sql-formatting",
+      "description": "Dependency-free packaged SQL/T-SQL formatting provider executed by the host LLM, with host-local precedence and separate verifier routing.",
+      "usage": "python -m src.skills.uaf_skill_catalog --read sql-formatting"
     },
     {
       "name": "sql-formatting-style-harness",

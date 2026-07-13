@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -509,10 +509,38 @@ class AdapterRequest:
 
 @dataclass(frozen=True)
 class AdapterResult:
+    """Portable adapter result with backward-compatible status semantics.
+
+    ``accepted`` remains the legacy queue-acknowledgement outcome. ``pending``
+    is the explicit nonterminal outcome for newer adapters. Neither status is
+    proof that host execution completed.
+    """
+
+    VALID_STATUSES: ClassVar[frozenset[str]] = frozenset(
+        {"accepted", "pending", "success", "failed", "blocked"}
+    )
+    NONTERMINAL_STATUSES: ClassVar[frozenset[str]] = frozenset(
+        {"accepted", "pending"}
+    )
+
     status: str
     message: str
     workflow_id: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.status not in self.VALID_STATUSES:
+            raise ValueError(f"unsupported adapter result status: {self.status}")
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status not in self.NONTERMINAL_STATUSES
+
+    @property
+    def execution_state(self) -> str:
+        if self.status in self.NONTERMINAL_STATUSES:
+            return "claimed_unverified"
+        return "executed" if self.status == "success" else self.status
 
     def to_dict(self) -> Dict[str, Any]:
         return {

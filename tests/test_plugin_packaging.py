@@ -1,6 +1,9 @@
 import json
+import tempfile
 import unittest
 from pathlib import Path
+
+from src.skills.uaf_skill_catalog import collect_packaged_skills
 
 
 def _u(value: str) -> str:
@@ -19,7 +22,72 @@ def _manifest(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _skill_frontmatter(path: Path) -> dict[str, str]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if len(lines) < 4 or lines[0] != "---":
+        return {}
+    try:
+        frontmatter_end = lines.index("---", 1)
+    except ValueError:
+        return {}
+
+    frontmatter = {}
+    for line in lines[1:frontmatter_end]:
+        key, separator, value = line.partition(":")
+        if separator:
+            frontmatter[key.strip()] = value.strip()
+    return frontmatter
+
+
+def _packaged_skill_frontmatter(root: Path = Path(".")) -> dict[str, Path]:
+    packaged = {}
+    for path in sorted((root / "skills").glob("*/SKILL.md")):
+        metadata = _skill_frontmatter(path)
+        name = metadata.get("name", "")
+        if name:
+            packaged[name] = path
+    return packaged
+
+
+def _static_runtime_exposure_gaps(root: Path = Path(".")) -> set[str]:
+    packaged_names = set(_packaged_skill_frontmatter(root))
+    explicit_runtime_names = {
+        skill["name"] for skill in _manifest(root / "plugin.json")["skills"]
+    }
+    return packaged_names - explicit_runtime_names
+
+
 class PluginPackagingTests(unittest.TestCase):
+    def test_packaged_catalog_is_valid_and_sql_examples_are_generic(self):
+        catalog = collect_packaged_skills()
+        sql_skill_root = Path("skills") / "sql_formatting_style_harness"
+        sql_docs = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sql_skill_root.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".md", ".py"}
+        )
+
+        self.assertTrue(catalog["validation"]["success"], catalog["validation"]["issues"])
+        self.assertEqual(catalog["total_skills_found"], 44)
+        self.assertNotIn("BA011T", sql_docs)
+        self.assertNotIn("F_BA011T", sql_docs)
+
+    def test_sql_provider_and_artifact_layout_are_exposed_without_version_bump(self):
+        root_manifest = _manifest(Path("plugin.json"))
+        codex_manifest = _manifest(Path(".codex-plugin") / "plugin.json")
+        catalog_names = {skill["name"] for skill in collect_packaged_skills()["skills"]}
+        root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
+
+        self.assertIn("sql-formatting", catalog_names)
+        self.assertIn("sql-formatting", root_skill_names)
+        self.assertEqual(root_manifest["version"], "2.9.130")
+        self.assertEqual(codex_manifest["version"], "2.9.130")
+        for manifest in [root_manifest, codex_manifest]:
+            with self.subTest(manifest=manifest["description"]):
+                layout = manifest["artifact_layout"]
+                self.assertEqual(layout["run_content"], ".kh/<skill>/<run-id>/content/")
+                self.assertEqual(layout["run_state"], ".kh/<skill>/<run-id>/state/")
+
     def test_codex_plugin_manifest_exposes_repo_skills(self):
         manifest_path = Path(".codex-plugin") / "plugin.json"
 
@@ -31,7 +99,15 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertEqual(manifest["version"], root_manifest["version"])
         self.assertGreaterEqual(_version_tuple(manifest["version"]), (2, 9, 10))
         self.assertEqual(manifest["skills"], "./skills/")
-        self.assertTrue(Path("skills").is_dir())
+        codex_skill_root = Path(manifest["skills"])
+        self.assertTrue(codex_skill_root.is_dir())
+        self.assertEqual(
+            set(_packaged_skill_frontmatter()),
+            {
+                _skill_frontmatter(path).get("name")
+                for path in codex_skill_root.glob("*/SKILL.md")
+            },
+        )
         self.assertNotIn("apps", manifest)
         self.assertNotIn("mcpServers", manifest)
 
@@ -41,14 +117,71 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertIn("KH-Bench Verified", " ".join(interface["capabilities"]))
         self.assertIn("https://github.com/GNh0/KH", manifest["repository"])
 
-    def test_release_manifest_versions_match(self):
+    def test_release_manifest_identities_and_versions_match(self):
         root_manifest = _manifest(Path("plugin.json"))
         codex_manifest = _manifest(Path(".codex-plugin") / "plugin.json")
         agent_manifest = _manifest(Path(".agents") / "plugins" / "kh-uaf" / "plugin.json")
 
-        self.assertEqual(root_manifest["version"], codex_manifest["version"])
-        self.assertEqual(root_manifest["version"], agent_manifest["version"])
+        manifests = (root_manifest, codex_manifest, agent_manifest)
+        for manifest in manifests:
+            with self.subTest(manifest=manifest["description"]):
+                self.assertEqual(manifest["name"], root_manifest["name"])
+                self.assertTrue(manifest["description"].strip())
+                self.assertEqual(manifest["version"], root_manifest["version"])
+
         self.assertGreaterEqual(_version_tuple(root_manifest["version"]), (2, 9, 10))
+
+    def test_default_prompt_is_a_compact_bootstrap_contract(self):
+        manifest = _manifest(Path(".codex-plugin") / "plugin.json")
+        segments = manifest["interface"]["defaultPrompt"]
+
+        self.assertIsInstance(segments, list)
+        self.assertTrue(all(isinstance(segment, str) and segment.strip() for segment in segments))
+        self.assertLessEqual(len(segments), 10)
+
+        prompt = "\n".join(segments)
+        character_count = len(prompt)
+        estimated_tokens = (character_count + 3) // 4
+
+        required_markers = [
+            "kh-uaf:always-on-front-door",
+            "first and alone",
+            "execution_gate",
+            "execution_authorization",
+            "immediate_next_skills",
+            "best available specialist provider",
+            "GoalState",
+            "current project, chat/task, and subagent lineage",
+            "explicit authorization",
+            "token_optimizer_status",
+            "selected_not_executed_skills",
+            "runtime_applied_skills",
+            "verification-before-completion-harness",
+            "user's current language",
+            "selected skill docs",
+        ]
+        for marker in required_markers:
+            with self.subTest(required_marker=marker):
+                self.assertIn(marker, prompt)
+
+        detailed_procedure_markers = [
+            "BrainstormSession",
+            "Visible brainstorming output gate",
+            "large_work_orchestration_bundle",
+            "pb-to-csharp-migration-harness",
+            "sql-formatting-style-harness",
+            "windows-dev-server-runner",
+            "workflow_usability_auto",
+            ".kh/development/<run-id>/state/progress.json",
+            "For user-facing deliverables",
+        ]
+        for marker in detailed_procedure_markers:
+            with self.subTest(detailed_procedure_marker=marker):
+                self.assertNotIn(marker, prompt)
+
+        self.assertLessEqual(character_count, 1_800)
+        self.assertLessEqual(estimated_tokens, 450)
+        self.assertEqual(len(segments), len(set(segments)))
 
     def test_repo_marketplace_exposes_git_backed_plugin(self):
         marketplace_path = Path(".agents") / "plugins" / "marketplace.json"
@@ -95,6 +228,7 @@ class PluginPackagingTests(unittest.TestCase):
 
         manifest = _manifest(manifest_path)
         self.assertEqual(manifest["name"], "kh-uaf")
+        self.assertNotIn("skills", manifest)
 
         content = skill_path.read_text(encoding="utf-8")
         self.assertIn("name: kh-uaf", content)
@@ -178,19 +312,57 @@ class PluginPackagingTests(unittest.TestCase):
         for fragment in mojibake_fragments:
             self.assertNotIn(fragment, content)
 
-    def test_all_packaged_skills_share_kh_entry_contract(self):
-        skill_files = sorted(Path("skills").glob("*/SKILL.md"))
+    def test_packaged_skill_frontmatter_matches_catalog_and_static_root_runtime_manifest(self):
+        packaged = _packaged_skill_frontmatter()
+        catalog_names = {
+            skill["name"] for skill in collect_packaged_skills()["skills"]
+        }
 
-        self.assertGreaterEqual(len(skill_files), 40)
-        for path in skill_files:
+        self.assertGreaterEqual(len(packaged), 40)
+        self.assertEqual(set(packaged), catalog_names)
+        self.assertFalse(
+            _static_runtime_exposure_gaps(),
+            "Root plugin.json uses a static explicit skill schema; add every packaged "
+            "frontmatter name before release.",
+        )
+        for name, path in packaged.items():
             with self.subTest(path=str(path)):
-                content = path.read_text(encoding="utf-8")
-                self.assertIn("## KH Entry Contract", content)
-                self.assertIn("always-on-front-door", content)
-                self.assertIn("kh_active_directive=active", content)
-                self.assertIn("selected_not_executed_skills", content)
-                self.assertIn("is not execution evidence", content)
+                frontmatter = _skill_frontmatter(path)
+                self.assertEqual(frontmatter.get("name"), name)
+                self.assertTrue(frontmatter.get("description"))
 
+    def test_new_skill_is_path_discovered_but_fails_static_runtime_release_exposure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill_root = root / "skills" / "new_release_harness"
+            skill_root.mkdir(parents=True)
+            (root / "plugin.json").write_text(
+                json.dumps(_manifest(Path("plugin.json"))),
+                encoding="utf-8",
+            )
+            (skill_root / "SKILL.md").write_text(
+                "---\n"
+                "name: new-release-harness\n"
+                "description: Use when testing release exposure.\n"
+                "---\n\n"
+                "# New Release Harness\n",
+                encoding="utf-8",
+            )
+
+            codex_path_discovery = set(_packaged_skill_frontmatter(root))
+            catalog_names = {
+                skill["name"]
+                for skill in collect_packaged_skills(str(root / "skills"))["skills"]
+            }
+
+            self.assertIn("new-release-harness", codex_path_discovery)
+            self.assertIn("new-release-harness", catalog_names)
+            self.assertEqual(
+                _static_runtime_exposure_gaps(root),
+                {"new-release-harness"},
+                "Path/catalog discovery must not be mistaken for automatic registration "
+                "in the root host's static explicit skill schema.",
+            )
 
 if __name__ == "__main__":
     unittest.main()

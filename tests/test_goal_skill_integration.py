@@ -11,13 +11,13 @@ def read_text(relative_path: str) -> str:
 
 
 class GoalSkillIntegrationTests(unittest.TestCase):
-    def test_plugin_prompt_connects_goal_state_to_heavy_work(self):
+    def test_plugin_manifest_exposes_goal_state_capability(self):
         plugin = json.loads(read_text(".codex-plugin/plugin.json"))
-        prompts = "\n".join(plugin["interface"]["defaultPrompt"])
+        root_manifest = json.loads(read_text("plugin.json"))
+        root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
 
-        self.assertIn("For heavy, multi-step, or evidence-gated work", prompts)
-        self.assertIn("create or update KH GoalState before execution", prompts)
-        self.assertIn("Keep the goal ledger updated", prompts)
+        self.assertIn("Goal State", plugin["interface"]["capabilities"])
+        self.assertIn("goal-state-harness", root_skill_names)
 
     def test_lifecycle_and_router_activate_goal_state_for_implementation(self):
         lifecycle = read_text("skills/development_lifecycle_harness/SKILL.md")
@@ -29,6 +29,15 @@ class GoalSkillIntegrationTests(unittest.TestCase):
         self.assertIn("Heavy implementation routes should include `goal-state-harness`", router)
         self.assertIn("request-complexity-router", goal)
         self.assertIn("development-lifecycle-harness", goal)
+
+    def test_goal_skill_documents_runtime_claim_and_cross_process_revalidation_boundary(self):
+        skill = read_text("skills/goal_state_harness/SKILL.md")
+        usage = read_text("skills/goal_state_harness/references/usage.md")
+
+        for content in (skill, usage):
+            self.assertIn("same-process runtime claim", content)
+            self.assertIn("cross-process", content)
+            self.assertIn("external authenticity remains unverified", content)
 
 
 if __name__ == "__main__":

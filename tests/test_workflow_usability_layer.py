@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from src.contracts import MemoryRecord, WorkflowTaskResult
+from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.development_progress import (
     DevelopmentRunProgress,
     DevelopmentTaskProgress,
@@ -430,7 +431,6 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         codex_manifest = json.loads((root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
         root_manifest = json.loads((root / "plugin.json").read_text(encoding="utf-8"))
-        prompt = "\n".join(codex_manifest["interface"]["defaultPrompt"])
         root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
 
         for capability in [
@@ -478,24 +478,39 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
         ]:
             self.assertIn(expected, root_skill_names)
 
-        self.assertIn("token_optimizer_provider", prompt)
-        self.assertIn("workflow_usability_auto", prompt)
-        self.assertIn("session_postmortem", prompt)
-        self.assertIn("session_skill_audit", prompt)
-        self.assertIn("scope_completion_delta", prompt)
-        self.assertIn("user_stop_guard", prompt)
-        self.assertIn("host goal tool allows blocking", prompt)
-        self.assertIn("host policy disallows using blocked as pause/cancel state", prompt)
-        self.assertIn("fresh non-goal_context user message", prompt)
-        self.assertIn("interruption.json", prompt)
-        self.assertIn("resume-checkpoint", prompt)
-        self.assertIn("memory_candidates", prompt)
-        self.assertIn("skill inspection", prompt)
-        self.assertIn("windows-dev-server-runner", prompt)
-        self.assertIn("host_panel.<host>.json", prompt)
-        self.assertIn("/kh:work", prompt)
-        self.assertIn("progress.json", prompt)
-        self.assertIn(".kh", prompt)
+        skill = (
+            root / "skills" / "workflow_usability_harness" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        usage = (
+            root
+            / "skills"
+            / "workflow_usability_harness"
+            / "references"
+            / "usage.md"
+        ).read_text(encoding="utf-8")
+        summary = build_kh_front_door(
+            "Implement a large multi-file workflow with progress, session audit, token decisions, and resume support.",
+            project=root,
+            host="codex",
+        ).to_summary_dict()
+
+        self.assertIn("workflow-usability-harness", summary["immediate_next_skills"])
+        for procedure in [
+            "workflow_usability_auto",
+            "session_postmortem",
+            "session_skill_audit",
+            "scope_completion_delta",
+            "user_stop_guard",
+            "fresh non-`goal_context` user resume request",
+            "interruption.json",
+            "resume-checkpoint",
+            "memory_candidates",
+            "skill inspection",
+            "host_panel.<host>.json",
+            "/kh:work",
+            "progress.json",
+        ]:
+            self.assertIn(procedure, skill + "\n" + usage)
 
     def test_runtime_usability_hooks_generate_visible_workflow_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -503,8 +518,18 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
                 "workflow_usability_auto": True,
                 "token_optimizer_provider": "kh",
                 "token_optimizer_status": "considered_not_needed",
+                "token_optimizer_status_reason": (
+                    "Token optimizer used because the canonical model payload was reduced."
+                ),
                 "token_optimizer_min_tokens": 1,
                 "token_optimizer_max_lines": 8,
+                "token_optimizer_canonical_view": True,
+                "token_optimizer_raw_owner": "caller",
+                "token_optimizer_raw_scope": {
+                    "project": "workflow-usability-test",
+                    "chat": "thread-1",
+                    "run": "workflow-demo",
+                },
                 "memory_root": str(Path(tmp) / ".memory"),
                 "workspace_strategy": "project-local-worktree",
                 "host_panel_host": "antigravity",
@@ -571,17 +596,28 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertIn("host_progress_panel", result.evidence)
             self.assertEqual(result.token_optimizer_provider["provider"], "kh")
             self.assertEqual(result.token_optimization["status"], "used")
-            self.assertIn("Token optimizer used", result.token_optimization["token_optimizer_status_reason"])
-            self.assertGreater(result.token_optimization["summary"]["actual_tokens_saved"], 0)
             self.assertEqual(
-                result.token_optimization["summary"]["actual_usage_scope"],
-                "actual_optimizer_input_output_payload",
+                result.token_optimization["reason_code"],
+                "positive_canonical_net_gain",
             )
-            self.assertTrue(result.token_optimization["summary"]["token_count_is_estimate"])
-            self.assertFalse(result.token_optimization["summary"]["billing_tokens_available"])
+            self.assertGreater(
+                result.token_optimization["canonical"]["estimated_payload_tokens_saved"],
+                0,
+            )
+            self.assertEqual(
+                result.token_optimization["canonical"]["estimated_payload_token_count_method"],
+                "deterministic_local_estimate_chars_div_4",
+            )
+            self.assertTrue(
+                result.token_optimization["canonical"]["estimated_payload_token_count_is_estimate"]
+            )
+            self.assertFalse(result.token_optimization["canonical"]["billing_tokens_available"])
+            self.assertFalse(
+                result.token_optimization["canonical"]["billing_counterfactual_available"]
+            )
             self.assertEqual(result.memory_state["status"], "candidates_recorded")
             self.assertEqual(result.memory_state["recorded_count"], 1)
-            self.assertIn("runtime_token_optimization", result.evidence)
+            self.assertEqual(result.token_optimization["status"], "used")
             self.assertIn("memory_candidates_recorded", result.evidence)
             self.assertTrue(Path(result.memory_state["store"]["candidates_path"]).exists())
             self.assertTrue(Path(result.compound["paths"]["compound_handoff"]).exists())
@@ -593,10 +629,12 @@ class WorkflowUsabilityLayerTests(unittest.TestCase):
             self.assertIn("Token optimizer used", progress.token_optimizer_status_reason)
             self.assertIn("Token reason:", result.progress_panel)
             self.assertIn("token_optimizer_status_reason", result.host_progress_panel["summary"])
-            task_optimizer = progress.tasks[0].metadata["workflow_task_result"]["metadata"]["token_optimizer"]
-            self.assertEqual(task_optimizer["status"], "used")
-            self.assertGreater(task_optimizer["summary"]["actual_tokens_saved"], 0)
-            self.assertIn("ERROR: runtime failed", task_optimizer["records"][0]["stdout"])
+            task_command_output = progress.tasks[0].metadata["workflow_task_result"][
+                "metadata"
+            ]["command_output"]
+            self.assertIn("raw_ref", task_command_output)
+            self.assertEqual(task_command_output["raw_ref"]["uri"].split(":", 1)[0], "caller")
+            self.assertIn("ERROR: runtime failed", task_command_output["stdout"])
             self.assertIn("development_progress_valid", result.evidence)
 
     def test_runtime_completes_with_followup_when_only_compound_followup_skills_are_missing(self):

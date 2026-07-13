@@ -32,11 +32,15 @@ Do not use this skill only because it is available. Use it when the current task
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before performing non-trivial work with `command-output-harness`.
 3. For broad commands, call `build_retrieval_budget_plan` before execution and require selectors, fields, limits, or output-file handling.
-4. Call `summarize_command_output` when command output must be compacted into a `HarnessResult`; it uses command-family filtering and appends required facts if preservation checks detect missing failure evidence.
+4. Call `summarize_command_output` only for a known command family with caller-supplied required facts or concrete family-derived failure facts. It validates every fact and returns exact passthrough if any fact is missing.
 5. Treat `truncate_logs` as fallback, not the preferred path for pytest/build/linter/runtime output.
-6. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
-7. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
-8. Report the difference between capability available in the repository and behavior actually executed in the current run.
+6. For model delivery, replace raw output in the canonical model view and include only a stable raw reference/hash. Keep the original raw output in caller-owned results or a project/chat/run-scoped external store.
+7. Treat NUL/binary/high-entropy output, generic prose, source text, and success output without explicit required facts as passthrough.
+8. Preserve intermediate decisions in structured evidence rather than relying on terminal logs alone.
+9. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
+10. Report the difference between capability available in the repository and behavior actually executed in the current run.
+11. Treat chars/4 counts as `estimated_payload_*` only, with `billing_tokens_available=false` and `billing_counterfactual_available=false`. Accept host-observed totals only from a runtime-invoked host adapter; caller JSONL is `claimed_unverified`.
+12. Preserve one internal invocation entry in `provider_receipts` for every accepted RTK item, including RTK items inside a hybrid run. A runtime-invoked adapter callable is required; caller receipt dictionaries are claims only.
 
 ## Evidence to produce
 

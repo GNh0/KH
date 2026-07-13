@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 from src.orchestration.plugin_composition import CapabilityProvider, compose_plugin_route
+from src.orchestration.goal_runtime import build_goal_activation
 from src.orchestration.request_classifier import classify_request
 from src.orchestration.skill_application import (
     BUNDLE_MEMBER_SKILLS,
@@ -15,7 +16,12 @@ from src.orchestration.skill_application import (
     build_large_work_orchestration_bundle,
     validate_large_work_orchestration_bundle,
 )
+from src.skills.token_optimizer import compare_token_usage
 from src.skills.uaf_skill_catalog import collect_packaged_skills
+from src.skills.sql_formatting_provider import (
+    inspect_host_sql_formatting_provider,
+    packaged_sql_formatting_provider,
+)
 
 
 FRONT_DOOR_SKILLS = [
@@ -70,6 +76,7 @@ class KhFrontDoorResult:
     execution_gate: Dict[str, Any]
     execution_authorization: Dict[str, Any]
     required_next_actions: List[str]
+    goal_activation: Dict[str, Any]
     catalog_summary: Dict[str, Any] = field(default_factory=dict)
     large_work_orchestration_bundle: Dict[str, Any] | None = None
     large_work_bundle_validation: Dict[str, Any] | None = None
@@ -94,6 +101,7 @@ class KhFrontDoorResult:
             "execution_gate": dict(self.execution_gate),
             "execution_authorization": dict(self.execution_authorization),
             "required_next_actions": list(self.required_next_actions),
+            "goal_activation": dict(self.goal_activation),
             "catalog_summary": dict(self.catalog_summary),
             "large_work_orchestration_bundle": self.large_work_orchestration_bundle,
             "large_work_bundle_validation": self.large_work_bundle_validation,
@@ -145,6 +153,7 @@ class KhFrontDoorResult:
             "immediate_next_skills": list(self.immediate_next_skills),
             "execution_gate": dict(self.execution_gate),
             "execution_authorization": dict(self.execution_authorization),
+            "goal_activation": dict(self.goal_activation),
             "runtime_applied_skills": runtime_applied_skills,
             "selected_not_executed_skills": selected_not_executed_skills,
             "token_optimizer_decision": dict(self.token_optimizer_decision),
@@ -190,8 +199,15 @@ class KhFrontDoorResult:
             "execution_gate": _compact_execution_gate(self.execution_gate),
             "token_optimizer": token_summary,
             "skill_source": _compact_skill_source(self.skill_source),
-            "immediate_next_skills": list(self.immediate_next_skills),
         }
+        if self.goal_activation.get("required") or self.goal_activation.get("status") not in {
+            "not_required",
+            "",
+            None,
+        }:
+            payload["goal_activation"] = _compact_goal_activation(self.goal_activation)
+        if self.immediate_next_skills:
+            payload["immediate_next_skills"] = list(self.immediate_next_skills)
         domain = self.classification.get("domain")
         if domain and domain != "general":
             payload["classification"]["domain"] = domain
@@ -230,6 +246,7 @@ class KhFrontDoorResult:
             },
             "r": route,
             "g": _micro_execution_gate(self.execution_gate),
+            "ga": _micro_goal_activation(self.goal_activation),
             "t": _micro_token_optimizer_decision(self.token_optimizer_decision),
         }
         domain = self.classification.get("domain")
@@ -276,12 +293,30 @@ def build_kh_front_door(
     catalog_summary: Dict[str, Any] = {}
     if skill_source.exists:
         catalog = collect_packaged_skills(skill_source.skills_dir)
+        validation = dict(catalog.get("validation", {}) or {})
+        validation_results = validation.get("results", []) or []
+        skill_integrity = {
+            str(item.get("name") or ""): {
+                "valid": bool(item.get("valid")),
+                "issues": list(item.get("issues", []) or []),
+            }
+            for item in validation_results
+            if item.get("name")
+        }
         catalog_summary = {
             "total_skills_found": catalog.get("total_skills_found", 0),
-            "valid": catalog.get("validation", {}).get("success", False),
-            "invalid_count": len(catalog.get("validation", {}).get("issues", [])),
+            "valid": validation.get("success", False),
+            "invalid_count": len(validation.get("issues", [])),
+            "invalid_skills": sorted(
+                name for name, health in skill_integrity.items() if not health["valid"]
+            ),
+            "skill_integrity": skill_integrity,
             "execution_levels": catalog.get("execution_levels", {}),
         }
+        if not catalog_summary["valid"]:
+            warnings.append(
+                "Packaged KH catalog validation reported invalid skill contracts; selected invalid skills are blocked."
+            )
         skill_source = SkillSource(
             source_type=skill_source.source_type,
             root=skill_source.root,
@@ -303,15 +338,36 @@ def build_kh_front_door(
             "kh_front_door": True,
         },
     )
+    context = _normalize_active_resume_goal_context(context)
     classification = classify_request(prompt, context).to_dict()
-    provider_snapshot = list(providers) if providers is not None else _default_providers(host)
+    goal_activation = build_goal_activation(
+        classification,
+        str(project_path),
+        context,
+        objective=prompt,
+    )
+    provider_snapshot = (
+        list(providers)
+        if providers is not None
+        else _default_providers(host, skill_source.skills_dir)
+    )
     plugin_route = compose_plugin_route(prompt, providers=provider_snapshot, context=context).to_dict()
     recommended_skills = _recommended_skills(classification, plugin_route)
-    skill_statuses = _front_door_skill_statuses(recommended_skills, classification, skill_source)
+    skill_statuses = _front_door_skill_statuses(
+        recommended_skills,
+        classification,
+        skill_source,
+        goal_activation,
+        catalog_summary,
+    )
     token_optimizer_decision = _front_door_token_optimizer_decision(prompt, classification)
     skill_statuses = _apply_front_door_token_optimizer_gate(skill_statuses, token_optimizer_decision)
     execution_gate = _execution_gate(classification, plugin_route, recommended_skills)
     immediate_next_skills = _immediate_next_skills(classification, plugin_route, recommended_skills, execution_gate)
+    if goal_activation.get("status") == "executed":
+        immediate_next_skills = [
+            skill for skill in immediate_next_skills if skill != "goal-state-harness"
+        ]
     skill_statuses = _mark_immediate_next_skill_statuses(skill_statuses, immediate_next_skills)
     required_next_actions = _required_next_actions(
         classification,
@@ -329,7 +385,13 @@ def build_kh_front_door(
     large_work_bundle = None
     large_work_validation = None
     if classification.get("complexity") in {"heavy", "high_risk"}:
-        bundle = _build_front_door_bundle(prompt, classification, skill_statuses)
+        bundle = _build_front_door_bundle(
+            prompt,
+            classification,
+            skill_statuses,
+            project=str(project_path),
+            context=context,
+        )
         large_work_bundle = bundle.to_dict()
         large_work_validation = validate_large_work_orchestration_bundle(bundle)
 
@@ -338,7 +400,7 @@ def build_kh_front_door(
             f"Resolved KH skills from {skill_source.source_type} at {skill_source.root} despite stale host skill path."
         )
 
-    status = _front_door_status(skill_source)
+    status = _front_door_status(skill_source, skill_statuses)
     return KhFrontDoorResult(
         front_door_status=status,
         prompt=prompt,
@@ -355,6 +417,7 @@ def build_kh_front_door(
         execution_gate=execution_gate,
         execution_authorization=execution_authorization,
         required_next_actions=required_next_actions,
+        goal_activation=goal_activation,
         catalog_summary=catalog_summary,
         large_work_orchestration_bundle=large_work_bundle,
         large_work_bundle_validation=large_work_validation,
@@ -468,6 +531,22 @@ def _check_host_skill_path(value: str) -> HostSkillPathCheck:
     path = Path(value).expanduser()
     exists = path.exists()
     if exists:
+        skill_file = path if path.is_file() else path / "SKILL.md"
+        if not skill_file.is_file():
+            return HostSkillPathCheck(
+                path=str(path),
+                exists=True,
+                status="invalid_skill",
+                reason="The host supplied path exists but does not contain a SKILL.md contract.",
+            )
+        manifest = _read_host_skill_manifest(skill_file)
+        if not manifest.get("name") or not manifest.get("description"):
+            return HostSkillPathCheck(
+                path=str(path),
+                exists=True,
+                status="invalid_skill",
+                reason="The host supplied SKILL.md is missing valid name/description frontmatter.",
+            )
         return HostSkillPathCheck(path=str(path), exists=True, status="ok")
     lowered = str(path).lower()
     if "kh-uaf-marketplace" in lowered and "kh-uaf" in lowered and "skills" in lowered:
@@ -494,11 +573,21 @@ def _warnings_from_path_checks(checks: Sequence[HostSkillPathCheck]) -> List[str
             )
         elif check.status == "missing":
             warnings.append(f"Host supplied missing skill path: {check.path}")
+        elif check.status == "invalid_skill":
+            warnings.append(f"Host supplied invalid skill path: {check.path}. {check.reason}")
     return warnings
 
 
-def _front_door_status(skill_source: SkillSource) -> str:
+def _front_door_status(
+    skill_source: SkillSource,
+    skill_statuses: Dict[str, Dict[str, Any]] | None = None,
+) -> str:
     if not skill_source.exists:
+        return "blocked"
+    if any(
+        status.get("blocked_reason") == "invalid_packaged_skill"
+        for status in (skill_statuses or {}).values()
+    ):
         return "blocked"
     return "ok"
 
@@ -524,7 +613,36 @@ def _merge_front_door_context(
     return merged
 
 
-def _default_providers(host: str) -> List[Dict[str, Any]]:
+def _normalize_active_resume_goal_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(context)
+    request_intent = normalized.get("request_intent", {})
+    request_intent = dict(request_intent) if isinstance(request_intent, dict) else {}
+    resume_requested = request_intent.get(
+        "user_resume_requested", normalized.get("user_resume_requested")
+    )
+    if resume_requested is not True or not normalized.get("requires_resume"):
+        return normalized
+    objective = str(normalized.get("active_objective") or "").strip()
+    if not objective:
+        for key in ("active_goal", "goal"):
+            goal = normalized.get(key)
+            if isinstance(goal, dict) and str(goal.get("status") or "active").lower() == "active":
+                objective = str(goal.get("objective") or "").strip()
+                if objective:
+                    break
+    if not objective:
+        return normalized
+    goal_spec = normalized.get("goal_spec", {})
+    goal_spec = dict(goal_spec) if isinstance(goal_spec, dict) else {}
+    goal_spec.setdefault("objective", objective)
+    normalized["goal_spec"] = goal_spec
+    return normalized
+
+
+def _default_providers(
+    host: str,
+    packaged_skills_dir: str | os.PathLike[str] | None = None,
+) -> List[Dict[str, Any]]:
     providers = [
         {
             "provider_id": "kh",
@@ -545,6 +663,9 @@ def _default_providers(host: str) -> List[Dict[str, Any]]:
         }
     ]
     providers.extend(_host_local_skill_providers(host))
+    providers.append(
+        packaged_sql_formatting_provider(packaged_skills_dir, host=host)
+    )
     return providers
 
 
@@ -567,6 +688,7 @@ def _host_local_skill_providers(host: str) -> List[Dict[str, Any]]:
         capabilities = _host_skill_capabilities(skill_name, description)
         if not capabilities:
             continue
+        inspection = inspect_host_sql_formatting_provider(skill_file)
         display_name = skill_name or skill_dir.name
         aliases = _host_skill_aliases(skill_name, display_name, capabilities)
         providers.append(
@@ -575,10 +697,15 @@ def _host_local_skill_providers(host: str) -> List[Dict[str, Any]]:
                 "display_name": display_name,
                 "aliases": aliases,
                 "capabilities": capabilities,
+                "status": inspection.status,
                 "metadata": {
                     "host": host,
                     "source": "host-local-skill",
                     "path": str(skill_file),
+                    "availability": inspection.availability,
+                    "compatibility": inspection.compatibility,
+                    "compatibility_issues": list(inspection.issues),
+                    "provider_precedence": 10,
                 },
             }
         )
@@ -656,6 +783,11 @@ def _recommended_skills(classification: Dict[str, Any], plugin_route: Dict[str, 
         )
     ):
         skills.append("workflow-usability-harness")
+    if _uses_packaged_sql_formatting_provider(plugin_route):
+        skills.append("sql-formatting")
+    selected_sql_provider = _selected_sql_formatting_provider_skill(plugin_route)
+    if selected_sql_provider:
+        skills.append(selected_sql_provider)
     if _needs_sql_formatting_style_harness(classification, plugin_route):
         skills.append("sql-formatting-style-harness")
     if classification.get("complexity") in {"heavy", "high_risk"}:
@@ -679,6 +811,31 @@ def _recommended_skills(classification: Dict[str, Any], plugin_route: Dict[str, 
     return _dedupe(skills)
 
 
+def _uses_packaged_sql_formatting_provider(plugin_route: Dict[str, Any]) -> bool:
+    selected_roles = [plugin_route.get("controller", {}) or {}]
+    selected_roles.extend(plugin_route.get("assistants", []) or [])
+    return any(
+        role.get("capability") == "sql_formatting"
+        and (role.get("metadata", {}) or {}).get("source") == "packaged-kh-skill"
+        for role in selected_roles
+        if isinstance(role, dict)
+    )
+
+
+def _selected_sql_formatting_provider_skill(plugin_route: Dict[str, Any]) -> str:
+    selected_roles = [plugin_route.get("controller", {}) or {}]
+    selected_roles.extend(plugin_route.get("assistants", []) or [])
+    for role in selected_roles:
+        if not isinstance(role, dict) or role.get("capability") != "sql_formatting":
+            continue
+        metadata = role.get("metadata", {}) or {}
+        compatibility = str(metadata.get("compatibility") or "compatible").lower()
+        if compatibility not in {"compatible", "supported", "verified"}:
+            continue
+        return str(role.get("provider_id") or "")
+    return ""
+
+
 def _needs_sql_formatting_style_harness(classification: Dict[str, Any], plugin_route: Dict[str, Any]) -> bool:
     if "sql_formatting_style_check" in set(classification.get("evidence_required", []) or []):
         return True
@@ -697,10 +854,24 @@ def _front_door_skill_statuses(
     recommended_skills: Sequence[str],
     classification: Dict[str, Any],
     skill_source: SkillSource,
+    goal_activation: Dict[str, Any] | None = None,
+    catalog_summary: Dict[str, Any] | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     statuses: Dict[str, Dict[str, Any]] = {}
+    goal_activation = dict(goal_activation or {})
+    skill_integrity = dict((catalog_summary or {}).get("skill_integrity", {}) or {})
     for skill in recommended_skills:
-        if skill == "always-on-front-door":
+        health = skill_integrity.get(skill)
+        if isinstance(health, dict) and health.get("valid") is False:
+            statuses[skill] = _status(
+                "blocked",
+                "blocked",
+                "Packaged skill integrity validation failed; directory existence is not execution evidence.",
+                ["catalog_summary", "skill_integrity"],
+                blocked_reason="invalid_packaged_skill",
+            )
+            statuses[skill]["metadata"] = {"skill_integrity": dict(health)}
+        elif skill == "always-on-front-door":
             statuses[skill] = _status(
                 "applied",
                 "runtime",
@@ -736,6 +907,14 @@ def _front_door_skill_statuses(
                 ["skill_source", "catalog_summary"],
                 blocked_reason="" if skill_source.exists else "missing_packaged_skills",
             )
+        elif skill == "goal-state-harness" and goal_activation.get("status") == "executed":
+            statuses[skill] = _status(
+                "applied",
+                "runtime",
+                "Goal activation is backed by KH GoalLedger or authorized host Goal execution evidence.",
+                ["goal_runtime", *goal_activation.get("execution_evidence", [])],
+            )
+            statuses[skill]["metadata"] = {"goal_activation": goal_activation}
         elif skill == "token-optimizer":
             if (
                 "token-optimizer" in classification.get("cross_cutting", [])
@@ -822,6 +1001,9 @@ def _immediate_next_skills(
         ]
         return [skill for skill in ordered if skill in recommended]
 
+    if status == "blocked_until_sql_formatting_provider":
+        return credential_first
+
     if status == "blocked_until_brainstorming_handoff":
         return _dedupe([*credential_first, *(["brainstorming-harness"] if "brainstorming-harness" in recommended else [])])
 
@@ -854,7 +1036,17 @@ def _immediate_next_skills(
         return [skill for skill in ordered if skill in recommended][:4]
 
     if _needs_sql_formatting_style_harness(classification, plugin_route):
-        return _dedupe([*credential_first, *(["sql-formatting-style-harness"] if "sql-formatting-style-harness" in recommended else [])])
+        selected_provider = _selected_sql_formatting_provider_skill(plugin_route)
+        ordered = [
+            *credential_first,
+            *([selected_provider] if selected_provider else []),
+            *(
+                ["sql-formatting-style-harness"]
+                if "sql-formatting-style-harness" in recommended
+                else []
+            ),
+        ]
+        return _dedupe(ordered)
 
     if controller_id and controller_id not in {"kh", "none"}:
         return credential_first
@@ -905,7 +1097,11 @@ def _build_front_door_bundle(
     prompt: str,
     classification: Dict[str, Any],
     front_door_statuses: Dict[str, Dict[str, Any]],
+    *,
+    project: str = "",
+    context: Dict[str, Any] | None = None,
 ):
+    context = context or {}
     overrides: Dict[str, Dict[str, Any]] = {}
     for skill in BUNDLE_MEMBER_SKILLS:
         if skill in front_door_statuses:
@@ -930,6 +1126,9 @@ def _build_front_door_bundle(
         parallel_strategy_decision="front-door-only; prove independent write sets before parallel execution",
         metadata={
             "front_door": True,
+            "project": project,
+            "thread_id": str(context.get("thread_id") or context.get("chat_id") or ""),
+            "task_id": str(context.get("task_id") or ""),
             "classification": {
                 "complexity": classification.get("complexity"),
                 "domain": classification.get("domain"),
@@ -1055,10 +1254,10 @@ def _apply_front_door_token_optimizer_gate(
 
 
 def _token_optimizer_actual_summary(status: str, usage: Dict[str, Any], reason: str) -> str:
-    without_optimizer = int(usage.get("without_token_optimizer") or 0)
-    with_optimizer = int(usage.get("with_token_optimizer") or 0)
-    saved = int(usage.get("estimated_tokens_saved") or 0)
-    ratio = float(usage.get("token_savings_ratio") or 0.0)
+    without_optimizer = int(usage.get("estimated_payload_tokens_before") or 0)
+    with_optimizer = int(usage.get("estimated_payload_tokens_after") or 0)
+    saved = int(usage.get("estimated_payload_tokens_saved") or 0)
+    ratio = float(usage.get("estimated_payload_token_savings_ratio") or 0.0)
     if status == "used":
         return (
             f"Token Optimizer used; before={without_optimizer}, after={with_optimizer}, "
@@ -1072,18 +1271,77 @@ def _token_optimizer_actual_summary(status: str, usage: Dict[str, Any], reason: 
 
 def _token_optimizer_gate_summary(decision: Dict[str, Any]) -> Dict[str, Any]:
     status = str(decision.get("token_optimizer_status") or "unknown")
+    legacy_keys = {
+        "actual_usage_scope",
+        "actual_without_token_optimizer",
+        "actual_with_token_optimizer",
+        "actual_tokens_saved",
+        "actual_token_savings_ratio",
+        "actual_usage",
+    }
+    legacy_present = any(key in decision for key in legacy_keys)
+    host_actual_token_evidence = decision.get("host_actual_token_evidence")
+    if not isinstance(host_actual_token_evidence, dict) or not (
+        host_actual_token_evidence.get("trusted") is True
+        and host_actual_token_evidence.get("trusted_channel")
+        == "trusted_host_token_event_jsonl"
+    ):
+        host_actual_token_evidence = compare_token_usage(
+            "",
+            "",
+            strategy="passthrough",
+            label="front-door-legacy-input",
+        )["host_actual_token_evidence"]
     return {
         "gate_status": str(decision.get("token_optimizer_gate_status") or "checked"),
         "provider": str(decision.get("token_optimizer_provider") or decision.get("provider") or ""),
-        "actual_optimization_status": str(decision.get("actual_optimization_status") or status),
+        "optimization_status": str(decision.get("actual_optimization_status") or status),
         "optimization_applied": bool(decision.get("optimization_applied")),
         "reason": str(decision.get("token_optimizer_status_reason") or decision.get("not_used_reason") or ""),
-        "without_token_optimizer": int(decision.get("without_token_optimizer") or 0),
-        "with_token_optimizer": int(decision.get("with_token_optimizer") or 0),
-        "estimated_tokens_saved": int(decision.get("estimated_tokens_saved") or 0),
-        "token_savings_ratio": float(decision.get("token_savings_ratio") or 0.0),
-        "actual_usage_scope": str(decision.get("actual_usage_scope") or ""),
+        "estimated_payload_tokens_before": int(
+            decision.get("estimated_payload_tokens_before")
+            or decision.get("actual_without_token_optimizer")
+            or decision.get("without_token_optimizer")
+            or 0
+        ),
+        "estimated_payload_tokens_after": int(
+            decision.get("estimated_payload_tokens_after")
+            or decision.get("actual_with_token_optimizer")
+            or decision.get("with_token_optimizer")
+            or 0
+        ),
+        "estimated_payload_tokens_saved": int(
+            decision.get("estimated_payload_tokens_saved")
+            or decision.get("estimated_tokens_saved")
+            or decision.get("actual_tokens_saved")
+            or 0
+        ),
+        "estimated_payload_token_savings_ratio": float(
+            decision.get("estimated_payload_token_savings_ratio")
+            or decision.get("estimated_token_savings_ratio")
+            or decision.get("actual_token_savings_ratio")
+            or decision.get("token_savings_ratio")
+            or 0.0
+        ),
+        "estimated_payload_token_count_method": str(
+            decision.get("estimated_payload_token_count_method")
+            or decision.get("estimated_token_count_method")
+            or decision.get("token_count_method")
+            or "deterministic_local_estimate_chars_div_4"
+        ),
+        "estimated_payload_token_count_is_estimate": True,
+        "host_actual_tokens_available": bool(
+            host_actual_token_evidence.get("host_actual_tokens_available", False)
+        ),
+        "host_actual_tokens_used": int(
+            host_actual_token_evidence.get("host_actual_tokens_used", 0)
+        ),
+        "host_actual_token_source": str(
+            host_actual_token_evidence.get("host_actual_token_source", "unavailable")
+        ),
+        "host_actual_token_evidence": host_actual_token_evidence,
         "summary": str(decision.get("actual_optimization_summary") or ""),
+        "legacy_input": {"present": legacy_present, "trusted": False},
     }
 
 
@@ -1133,6 +1391,20 @@ def _compact_execution_gate(execution_gate: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _compact_goal_activation(activation: Dict[str, Any]) -> Dict[str, Any]:
+    channel = {
+        "kh_ledger": "kh",
+        "host_goal": "host",
+        "hybrid": "hybrid",
+        "unavailable": "none",
+    }.get(str(activation.get("goal_backend") or ""), "none")
+    return {
+        "required": bool(activation.get("required")),
+        "status": activation.get("status"),
+        "channel": channel,
+    }
+
+
 def _compact_execution_authorization(authorization: Dict[str, Any]) -> Dict[str, Any]:
     pending = list(authorization.get("pending_immediate_next_skills", []) or [])
     must_stop = bool(authorization.get("must_stop_before_execution"))
@@ -1171,6 +1443,29 @@ def _micro_execution_gate(execution_gate: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _micro_goal_activation(activation: Dict[str, Any]) -> Dict[str, Any]:
+    backend_codes = {
+        "kh_ledger": "k",
+        "host_goal": "h",
+        "hybrid": "y",
+        "unavailable": "u",
+    }
+    status_codes = {
+        "pending": "p",
+        "executed": "e",
+        "not_required": "n",
+        "unavailable": "u",
+    }
+    payload = {
+        "r": bool(activation.get("required")),
+        "s": status_codes.get(str(activation.get("status") or ""), "u"),
+        "b": backend_codes.get(str(activation.get("goal_backend") or ""), "u"),
+    }
+    if activation.get("required") and activation.get("status") == "pending":
+        payload["n"] = "goal_runtime_start"
+    return payload
+
+
 def _micro_execution_authorization(authorization: Dict[str, Any]) -> Dict[str, Any]:
     must_stop = bool(authorization.get("must_stop_before_execution"))
     pending = bool(authorization.get("pending_immediate_next_skills"))
@@ -1191,8 +1486,10 @@ def _micro_token_optimizer_decision(decision: Dict[str, Any]) -> Dict[str, Any]:
         "why": _compact_token_reason_code(decision),
     }
     if used:
-        payload["saved"] = int(decision.get("estimated_tokens_saved") or 0)
-        payload["ratio"] = float(decision.get("token_savings_ratio") or 0.0)
+        payload["saved"] = int(decision.get("estimated_payload_tokens_saved") or 0)
+        payload["ratio"] = float(
+            decision.get("estimated_payload_token_savings_ratio") or 0.0
+        )
     return payload
 
 
@@ -1317,8 +1614,10 @@ def _compact_token_optimizer_decision(decision: Dict[str, Any]) -> Dict[str, Any
         payload.update(
             {
                 "provider": decision.get("provider") or decision.get("token_optimizer_provider"),
-                "saved": int(decision.get("estimated_tokens_saved") or 0),
-                "ratio": float(decision.get("token_savings_ratio") or 0.0),
+                "saved": int(decision.get("estimated_payload_tokens_saved") or 0),
+                "ratio": float(
+                    decision.get("estimated_payload_token_savings_ratio") or 0.0
+                ),
                 "billing_tokens_available": bool(decision.get("billing_tokens_available")),
             }
         )
@@ -1395,8 +1694,12 @@ def _compact_token_optimizer_gate_summary(decision: Dict[str, Any]) -> Dict[str,
         "status": status,
         "optimization_applied": bool(decision.get("optimization_applied")),
         "summary": summary,
-        "estimated_tokens_saved": int(decision.get("estimated_tokens_saved") or 0),
-        "token_savings_ratio": float(decision.get("token_savings_ratio") or 0.0),
+        "estimated_payload_tokens_saved": int(
+            decision.get("estimated_payload_tokens_saved") or 0
+        ),
+        "estimated_payload_token_savings_ratio": float(
+            decision.get("estimated_payload_token_savings_ratio") or 0.0
+        ),
     }
 
 
@@ -1536,48 +1839,12 @@ def _local_token_estimate(text: str) -> int:
 
 
 def _front_door_token_usage(prompt: str) -> Dict[str, Any]:
-    without_optimizer = _local_token_estimate(prompt)
-    with_optimizer = without_optimizer
-    raw_bytes = len(prompt.encode("utf-8"))
-    raw_chars = len(prompt)
-    usage = {
-        "without_token_optimizer": without_optimizer,
-        "with_token_optimizer": with_optimizer,
-        "estimated_tokens_saved": 0,
-        "token_savings_ratio": 0.0,
-        "actual_usage_scope": "front_door_prompt_passthrough_payload",
-        "token_count_method": "deterministic_local_estimate_chars_div_4",
-        "token_count_is_estimate": True,
-        "billing_tokens_available": False,
-        "actual_without_token_optimizer": without_optimizer,
-        "actual_with_token_optimizer": with_optimizer,
-        "actual_tokens_saved": 0,
-        "actual_token_savings_ratio": 0.0,
-        "actual_without_token_optimizer_bytes": raw_bytes,
-        "actual_with_token_optimizer_bytes": raw_bytes,
-        "actual_bytes_saved": 0,
-        "actual_byte_savings_ratio": 0.0,
-        "actual_without_token_optimizer_chars": raw_chars,
-        "actual_with_token_optimizer_chars": raw_chars,
-        "actual_chars_saved": 0,
-        "actual_char_savings_ratio": 0.0,
-    }
-    usage["actual_usage"] = {
-        "scope": usage["actual_usage_scope"],
-        "without_token_optimizer": without_optimizer,
-        "with_token_optimizer": with_optimizer,
-        "tokens_saved": 0,
-        "token_savings_ratio": 0.0,
-        "without_token_optimizer_bytes": raw_bytes,
-        "with_token_optimizer_bytes": raw_bytes,
-        "bytes_saved": 0,
-        "byte_savings_ratio": 0.0,
-        "without_token_optimizer_chars": raw_chars,
-        "with_token_optimizer_chars": raw_chars,
-        "chars_saved": 0,
-        "char_savings_ratio": 0.0,
-    }
-    return usage
+    return compare_token_usage(
+        prompt,
+        prompt,
+        strategy="passthrough",
+        label="front-door-prompt",
+    )
 
 
 def _required_next_actions(
@@ -1594,7 +1861,7 @@ def _required_next_actions(
     ]
     if immediate_next_skills:
         immediate = ", ".join(f"`{skill}`" for skill in immediate_next_skills)
-        if list(immediate_next_skills) == ["sql-formatting-style-harness"]:
+        if immediate_next_skills[-1] == "sql-formatting-style-harness":
             actions.insert(
                 0,
                 "NEXT SKILL EXECUTION: apply the selected SQL formatting provider first, then run `sql-formatting-style-harness` verifier or record a blocked reason before SQL output, DB writes, or final claims.",
@@ -1623,7 +1890,7 @@ def _required_next_actions(
     if sql_role_ids:
         formatted_roles = ", ".join(f"`{role_id}`" for role_id in _dedupe(sql_role_ids))
         actions.append(
-            f"SQL PRE-OUTPUT GATE: before emitting, rewriting, or correcting any SQL/T-SQL, apply selected provider {formatted_roles}; read the host-local sql-formatting SKILL.md, preserve literals/comments/localized business text, and record sql-formatting-style-harness verifier evidence or an explicit blocked reason."
+            f"SQL PRE-OUTPUT GATE: before emitting, rewriting, or correcting any SQL/T-SQL, apply selected provider {formatted_roles}; read the selected provider SKILL.md from its recorded provenance, preserve literals/comments/localized business text, and record sql-formatting-style-harness verifier evidence or an explicit blocked reason."
         )
     if controller_id and controller_id not in {"kh", "none"}:
         actions.append(
@@ -1704,6 +1971,31 @@ def _execution_gate(
     recommended_skills: Sequence[str],
 ) -> Dict[str, Any]:
     reasons = set(classification.get("reasons", []) or [])
+    intent = classification.get("intent", {})
+    if (
+        isinstance(intent, dict)
+        and intent.get("execution_authorization") is False
+        and intent.get("conversation_pause_requested") is not True
+    ):
+        return {
+            "status": "blocked_until_execution_authorization",
+            "can_execute": False,
+            "reason": (
+                "Structured request intent denies execution; task work remains pending until a fresh "
+                "structured authorization is recorded."
+            ),
+            "required_before_execution": ["structured_execution_authorization"],
+            "allowed_setup_actions": ["request_execution_authorization"],
+            "blocked_actions": [
+                "source_exploration",
+                "implementation",
+                "file_writes",
+                "db_writes",
+                "verification",
+                "subagent_dispatch",
+                "completion_claim",
+            ],
+        }
     if reasons & {"readonly_source_audit_request", "readonly_source_condition_question"}:
         return {
             "status": "execution_allowed_readonly_analysis",
@@ -1820,6 +2112,31 @@ def _execution_gate(
                 "implementation",
                 "verification",
                 "subagent_dispatch",
+                "completion_claim",
+            ],
+        }
+    unavailable = dict(plugin_route.get("unavailable_capabilities", {}) or {})
+    if "sql_formatting" in unavailable:
+        return {
+            "status": "blocked_until_sql_formatting_provider",
+            "can_execute": False,
+            "reason": (
+                "SQL formatting was requested, but neither a compatible host-local provider nor the "
+                "packaged KH provider is available. The verifier cannot generate a candidate."
+            ),
+            "required_before_execution": [
+                "compatible_host_local_or_packaged_sql_formatting_provider",
+                "provider_selection_evidence",
+            ],
+            "allowed_setup_actions": [
+                "inspect_sql_formatting_provider_status",
+                "repair_or_install_sql_formatting_provider",
+            ],
+            "blocked_actions": [
+                "claim_selected_sql_formatting_provider",
+                "format_sql",
+                "emit_sql_candidate",
+                "run_verifier_without_candidate",
                 "completion_claim",
             ],
         }
@@ -2075,7 +2392,7 @@ def _resolve_context_arg(context_json: str, context_file: str) -> Dict[str, Any]
     if context_json and context_file:
         raise SystemExit("provide only one of --context-json or --context-file")
     if context_file:
-        return json.loads(Path(context_file).read_text(encoding="utf-8"))
+        return json.loads(Path(context_file).read_text(encoding="utf-8-sig"))
     if context_json:
         return json.loads(context_json)
     return None

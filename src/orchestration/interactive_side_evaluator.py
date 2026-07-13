@@ -516,6 +516,16 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         _skill_turn(
             "routing-evaluation",
             5,
+            "Format this SQL in the established house style without changing its behavior.",
+            "Use the packaged sql-formatting provider to preserve SQL behavior, comments, literals, and identifiers while applying the requested formatting style.",
+            "sql-formatting",
+            ["formatted_sql", "preserved_behavior"],
+            "skill_call",
+            ["sql", "preserv"],
+        ),
+        _skill_turn(
+            "routing-evaluation",
+            6,
             "Before returning formatted SQL, verify it still matches the host-local sql-formatting style contract.",
             "Use the SQL formatting style harness after host-local sql-formatting has produced SQL. Record mechanical_checks for literal preservation, comments, and aliases, and attach style_contract_source before final SQL output.",
             "sql-formatting-style-harness",
@@ -525,7 +535,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            6,
+            7,
             "Migrate this PowerBuilder DataWindow screen into a target C# project without assuming local PblScripter or live DB access.",
             "Use PowerBuilder PB-to-C# migration harness: classify the migration mode, keep PB/C#/SQL source text as passthrough, map DataWindow columns to target C# grid names and captions, resolve target-project/custom controls before DevExpress fallback, and record blocked evidence when local PB or DB artifacts are absent.",
             "pb-to-csharp-migration-harness",
@@ -535,7 +545,7 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         ),
         _skill_turn(
             "routing-evaluation",
-            7,
+            8,
             "Run many SIDE-style human scenarios and check routing, evidence, gates, and resume.",
             "Use scenario evaluation with SIDE transcripts, classification checks, evidence expectations, gate decisions, and resume handoff coverage.",
             "scenario-evaluation-harness",
@@ -960,17 +970,22 @@ def evaluate_skill_side_turn(
             {
                 "category": "token_usage",
                 "skill": turn.expected_skill,
-                "without_token_optimizer": token_usage.get("without_token_optimizer", 0),
-                "with_token_optimizer": token_usage.get("with_token_optimizer", 0),
-                "estimated_tokens_saved": token_usage.get("estimated_tokens_saved", 0),
-                "actual_usage_scope": token_usage.get("actual_usage_scope", ""),
-                "token_count_method": token_usage.get("token_count_method", ""),
-                "token_count_is_estimate": token_usage.get("token_count_is_estimate", True),
+                "estimated_payload_tokens_before": token_usage.get("estimated_payload_tokens_before", 0),
+                "estimated_payload_tokens_after": token_usage.get("estimated_payload_tokens_after", 0),
+                "estimated_payload_tokens_saved": token_usage.get("estimated_payload_tokens_saved", 0),
+                "estimated_payload_token_savings_ratio": token_usage.get(
+                    "estimated_payload_token_savings_ratio", 0.0
+                ),
+                "estimated_payload_token_count_method": token_usage.get(
+                    "estimated_payload_token_count_method", ""
+                ),
+                "estimated_payload_token_count_is_estimate": token_usage.get(
+                    "estimated_payload_token_count_is_estimate", True
+                ),
                 "billing_tokens_available": token_usage.get("billing_tokens_available", False),
-                "actual_tokens_saved": token_usage.get("actual_tokens_saved", 0),
-                "actual_token_savings_ratio": token_usage.get("actual_token_savings_ratio", 0.0),
-                "actual_bytes_saved": token_usage.get("actual_bytes_saved", 0),
-                "actual_byte_savings_ratio": token_usage.get("actual_byte_savings_ratio", 0.0),
+                "billing_counterfactual_available": token_usage.get(
+                    "billing_counterfactual_available", False
+                ),
             }
         )
 

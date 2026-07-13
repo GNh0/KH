@@ -1,20 +1,19 @@
 import argparse
 import ast
+import hashlib
 import json
 import re
 import sys
-from typing import Any, Dict, List, Tuple
+import uuid
+from typing import Any, Callable, Dict, List, Tuple
 
 from src.contracts import HarnessResult
 from src.skills.base import agent_skill
 
 
-TOKEN_USAGE_SCOPE = "actual_optimizer_input_output_payload"
+OPTIMIZER_LOCAL_ESTIMATE_SCOPE = "optimizer_local_estimated_payload"
+HOST_OBSERVED_USAGE_SCOPE = "host_observed_total_only"
 TOKEN_COUNT_METHOD = "deterministic_local_estimate_chars_div_4"
-TOKEN_COUNT_NOTE = (
-    "Counts are derived from the actual optimizer input/output text with KH's local token estimator; "
-    "provider billing token usage is not exposed to this harness."
-)
 RETRIEVAL_BUDGET_DEFAULTS = {
     "max_stdout_lines": 80,
     "default_limit": 50,
@@ -105,7 +104,6 @@ def optimize_context_content(
                 "passthrough_reason": "contract-sensitive content must preserve original text",
                 "raw_bytes": len(content.encode("utf-8")),
                 "filtered_bytes": len(content.encode("utf-8")),
-                "token_savings_ratio": 0.0,
                 "token_usage": compare_token_usage(
                     content,
                     content,
@@ -115,23 +113,21 @@ def optimize_context_content(
             },
         )
     if detected_kind == "python-code":
-        minified = minify_code(content)
         return HarnessResult(
             success=exit_code == 0,
-            stdout=minified,
+            stdout=content,
             stderr="",
             exit_code=exit_code,
             metadata={
-                "strategy": "minify-code" if minified != content else "passthrough",
+                "strategy": "passthrough",
                 "content_kind": detected_kind,
-                "passthrough_reason": "contract-sensitive Python comments detected" if minified == content else "",
+                "passthrough_reason": "source text requires an explicit caller contract",
                 "raw_bytes": len(content.encode("utf-8")),
-                "filtered_bytes": len(minified.encode("utf-8")),
-                "token_savings_ratio": _savings_ratio(len(content.encode("utf-8")), len(minified.encode("utf-8"))),
+                "filtered_bytes": len(content.encode("utf-8")),
                 "token_usage": compare_token_usage(
                     content,
-                    minified,
-                    strategy="minify-code" if minified != content else "passthrough",
+                    content,
+                    strategy="passthrough",
                     label="python-code",
                 ),
             },
@@ -158,7 +154,7 @@ def optimize_context_content(
             max_lines=max_lines,
         )
         metadata = dict(result.metadata)
-        metadata["strategy"] = "command-output"
+        metadata["strategy"] = "command-output" if metadata.get("compression_applied") else "passthrough"
         metadata["content_kind"] = detected_kind
         return HarnessResult(
             success=result.success,
@@ -179,7 +175,6 @@ def optimize_context_content(
             "passthrough_reason": "content kind is not safe to compress automatically",
             "raw_bytes": len(content.encode("utf-8")),
             "filtered_bytes": len(content.encode("utf-8")),
-            "token_savings_ratio": 0.0,
             "token_usage": compare_token_usage(
                 content,
                 content,
@@ -242,31 +237,125 @@ def summarize_command_output(
     exit_code: int = 0,
     max_lines: int = 30,
     execution_time: float = 0.0,
+    required_facts: List[str] | None = None,
 ) -> HarnessResult:
     command_family = _command_family(command)
-    filtered_stdout, stdout_fallback = _safe_filter_channel(stdout, max_lines, exit_code, command_family)
-    filtered_stderr, stderr_fallback = _safe_filter_channel(stderr, max_lines, exit_code, command_family)
+    raw_text = _join_channels(stdout, stderr)
+    raw_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+    supplied_facts = required_facts is not None
+    facts = list(
+        dict.fromkeys(
+            str(fact)
+            for fact in (
+                required_facts
+                if required_facts is not None
+                else required_command_facts(raw_text, command_family, exit_code)
+            )
+            if str(fact)
+        )
+    )
+
+    fallback_reason_code = ""
+    missing_raw_facts: List[str] = []
+    if _is_binary_or_high_entropy_output(raw_text):
+        fallback_reason_code = "binary_or_high_entropy_passthrough"
+    elif command_family not in {"test", "build"}:
+        fallback_reason_code = "unsupported_command_family"
+    elif not facts:
+        fallback_reason_code = "required_facts_unavailable"
+    elif any(fact not in raw_text for fact in facts):
+        fallback_reason_code = "required_fact_not_in_raw_output"
+        missing_raw_facts = [fact for fact in facts if fact not in raw_text]
+
+    if fallback_reason_code:
+        return _command_passthrough_result(
+            command=command,
+            command_family=command_family,
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=exit_code,
+            execution_time=execution_time,
+            facts=facts,
+            facts_source="caller" if supplied_facts else "command-family-failure",
+            raw_hash=raw_hash,
+            reason_code=fallback_reason_code,
+            missing_facts=missing_raw_facts,
+        )
+
+    filtered_stdout = _filter_verified_command_channel(
+        stdout,
+        facts=facts,
+        max_lines=max_lines,
+        command_family=command_family,
+        exit_code=exit_code,
+    )
+    filtered_stderr = _filter_verified_command_channel(
+        stderr,
+        facts=facts,
+        max_lines=max_lines,
+        command_family=command_family,
+        exit_code=exit_code,
+    )
     raw_bytes = len(stdout.encode("utf-8")) + len(stderr.encode("utf-8"))
     filtered_bytes = len(filtered_stdout.encode("utf-8")) + len(filtered_stderr.encode("utf-8"))
-    fallback_reason = stdout_fallback or stderr_fallback
+    filtered_text = _join_channels(filtered_stdout, filtered_stderr)
+    missing_required_facts = [fact for fact in facts if fact not in filtered_text]
+
+    if missing_required_facts:
+        return _command_passthrough_result(
+            command=command,
+            command_family=command_family,
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=exit_code,
+            execution_time=execution_time,
+            facts=facts,
+            facts_source="caller" if supplied_facts else "command-family-failure",
+            raw_hash=raw_hash,
+            reason_code="required_fact_preservation_failed",
+            missing_facts=missing_required_facts,
+        )
+    if filtered_bytes >= raw_bytes:
+        return _command_passthrough_result(
+            command=command,
+            command_family=command_family,
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=exit_code,
+            execution_time=execution_time,
+            facts=facts,
+            facts_source="caller" if supplied_facts else "command-family-failure",
+            raw_hash=raw_hash,
+            reason_code="filtered_output_not_smaller",
+        )
 
     metadata: Dict[str, Any] = {
         "command": command,
         "command_family": command_family,
+        "strategy": "command-family-filter",
+        "compression_applied": True,
         "raw_bytes": raw_bytes,
         "filtered_bytes": filtered_bytes,
         "raw_lines": len(stdout.splitlines()) + len(stderr.splitlines()),
         "filtered_lines": len(filtered_stdout.splitlines()) + len(filtered_stderr.splitlines()),
-        "token_savings_ratio": _savings_ratio(raw_bytes, filtered_bytes),
-        "fallback_reason": fallback_reason,
-        "output_filter": "command_family" if command_family != "generic" else "truncate_logs",
+        "fallback_reason": "",
+        "fallback_reason_code": "",
+        "output_filter": "command_family",
+        "required_fact_count": len(facts),
+        "required_facts_source": "caller" if supplied_facts else "command-family-failure",
+        "required_facts_preserved": True,
+        "missing_required_facts": [],
+        "raw_output_sha256": raw_hash,
     }
-    metadata["token_usage"] = compare_token_usage(
-        _join_channels(stdout, stderr),
-        _join_channels(filtered_stdout, filtered_stderr),
-        strategy="command-output" if command_family != "generic" else "truncate_logs",
-        label=command or command_family,
-    )
+    metadata = {
+        "token_usage": compare_token_usage(
+            raw_text,
+            filtered_text,
+            strategy="command-output",
+            label=command or command_family,
+        ),
+        **metadata,
+    }
 
     return HarnessResult(
         success=exit_code == 0,
@@ -278,6 +367,76 @@ def summarize_command_output(
     )
 
 
+def _command_passthrough_result(
+    *,
+    command: str,
+    command_family: str,
+    stdout: str,
+    stderr: str,
+    exit_code: int,
+    execution_time: float,
+    facts: List[str],
+    facts_source: str,
+    raw_hash: str,
+    reason_code: str,
+    missing_facts: List[str] | None = None,
+) -> HarnessResult:
+    raw_text = _join_channels(stdout, stderr)
+    raw_bytes = len(stdout.encode("utf-8")) + len(stderr.encode("utf-8"))
+    missing = list(missing_facts or [])
+    return HarnessResult(
+        success=exit_code == 0,
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
+        execution_time=execution_time,
+        metadata={
+            "command": command,
+            "command_family": command_family,
+            "strategy": "passthrough",
+            "compression_applied": False,
+            "raw_bytes": raw_bytes,
+            "filtered_bytes": raw_bytes,
+            "raw_lines": len(stdout.splitlines()) + len(stderr.splitlines()),
+            "filtered_lines": len(stdout.splitlines()) + len(stderr.splitlines()),
+            "fallback_reason": reason_code.replace("_", " "),
+            "fallback_reason_code": reason_code,
+            "output_filter": "passthrough",
+            "required_fact_count": len(facts),
+            "required_facts_source": facts_source,
+            "required_facts_preserved": not missing,
+            "missing_required_facts": missing,
+            "raw_output_sha256": raw_hash,
+            "token_usage": compare_token_usage(
+                raw_text,
+                raw_text,
+                strategy="passthrough",
+                label=command or command_family,
+            ),
+        },
+    )
+
+
+def _filter_verified_command_channel(
+    text: str,
+    *,
+    facts: List[str],
+    max_lines: int,
+    command_family: str,
+    exit_code: int,
+) -> str:
+    if not text:
+        return ""
+    if len(text.splitlines()) > max_lines and not any(fact in text for fact in facts):
+        return ""
+    return filter_command_output(
+        text,
+        max_lines=max_lines,
+        command_family=command_family,
+        exit_code=exit_code,
+    )
+
+
 @agent_skill(
     name="summarize_agent_transcript",
     description="Compress long agent workflow transcripts while preserving task, review, verification, and commit evidence.",
@@ -286,11 +445,14 @@ def summarize_agent_transcript(
     transcript: str,
     max_lines: int = 160,
     label: str = "agent-transcript",
+    required_facts: List[str] | None = None,
 ) -> HarnessResult:
-    """Summarize agent transcripts without dropping lifecycle evidence."""
+    """Summarize only when the caller supplies facts that can be verified exactly."""
     lines = transcript.splitlines()
     raw_bytes = len(transcript.encode("utf-8"))
-    if len(lines) <= max_lines:
+    facts = list(dict.fromkeys(str(fact) for fact in (required_facts or []) if str(fact)))
+    if not facts or len(lines) <= max_lines or any(fact not in transcript for fact in facts):
+        missing = [fact for fact in facts if fact not in transcript]
         metadata = {
             "strategy": "passthrough",
             "content_kind": "agent-transcript",
@@ -298,7 +460,14 @@ def summarize_agent_transcript(
             "filtered_bytes": raw_bytes,
             "raw_lines": len(lines),
             "filtered_lines": len(lines),
-            "token_savings_ratio": 0.0,
+            "fallback_reason_code": (
+                "required_fact_not_in_raw_output"
+                if missing
+                else ("required_facts_unavailable" if not facts else "transcript_not_large_enough")
+            ),
+            "required_fact_count": len(facts),
+            "required_facts_preserved": not missing,
+            "missing_required_facts": missing,
             "token_usage": compare_token_usage(
                 transcript,
                 transcript,
@@ -315,12 +484,58 @@ def summarize_agent_transcript(
     sections = [f"... [agent-transcript optimized: {omitted} lines omitted] ..."]
     sections.extend(lines[index] for index in selected)
     optimized = "\n".join(sections)
-    missing = _missing_agent_transcript_facts(lines, optimized)
-    fallback_reason = ""
-    if missing:
-        optimized = _append_missing_facts(optimized, missing)
-        fallback_reason = "required lifecycle facts were appended after preservation check"
+    remaining_missing = [fact for fact in facts if fact not in optimized]
+    if remaining_missing:
+        return HarnessResult(
+            success=True,
+            stdout=transcript,
+            stderr="",
+            exit_code=0,
+            metadata={
+                "strategy": "passthrough",
+                "content_kind": "agent-transcript",
+                "raw_bytes": raw_bytes,
+                "filtered_bytes": raw_bytes,
+                "raw_lines": len(lines),
+                "filtered_lines": len(lines),
+                "fallback_reason_code": "required_fact_preservation_failed",
+                "required_fact_count": len(facts),
+                "required_facts_preserved": False,
+                "missing_required_facts": remaining_missing,
+                "token_usage": compare_token_usage(
+                    transcript,
+                    transcript,
+                    strategy="passthrough",
+                    label=label,
+                ),
+            },
+        )
     filtered_bytes = len(optimized.encode("utf-8"))
+    if filtered_bytes >= raw_bytes:
+        return HarnessResult(
+            success=True,
+            stdout=transcript,
+            stderr="",
+            exit_code=0,
+            metadata={
+                "strategy": "passthrough",
+                "content_kind": "agent-transcript",
+                "raw_bytes": raw_bytes,
+                "filtered_bytes": raw_bytes,
+                "raw_lines": len(lines),
+                "filtered_lines": len(lines),
+                "fallback_reason_code": "filtered_output_not_smaller",
+                "required_fact_count": len(facts),
+                "required_facts_preserved": True,
+                "missing_required_facts": [],
+                "token_usage": compare_token_usage(
+                    transcript,
+                    transcript,
+                    strategy="passthrough",
+                    label=label,
+                ),
+            },
+        )
     metadata = {
         "strategy": "agent-transcript",
         "content_kind": "agent-transcript",
@@ -329,9 +544,11 @@ def summarize_agent_transcript(
         "raw_lines": len(lines),
         "filtered_lines": len(optimized.splitlines()),
         "omitted_lines": omitted,
-        "token_savings_ratio": _savings_ratio(raw_bytes, filtered_bytes),
-        "fallback_reason": fallback_reason,
-        "preserved_fact_count": len(required),
+        "fallback_reason": "",
+        "fallback_reason_code": "",
+        "preserved_fact_count": len(facts),
+        "required_facts_preserved": True,
+        "missing_required_facts": [],
         "token_usage": compare_token_usage(
             transcript,
             optimized,
@@ -346,13 +563,18 @@ def summarize_agent_transcript(
     name="summarize_session_jsonl",
     description="Compress Codex session JSONL while preserving audit-relevant events and dropping huge prompt/encrypted payloads.",
 )
-def summarize_session_jsonl(session_jsonl: str, max_lines: int = 80) -> HarnessResult:
+def summarize_session_jsonl(
+    session_jsonl: str,
+    max_lines: int = 80,
+    *,
+    trusted_host_token_event_jsonl: str = "",
+    host_token_event_adapter: Callable[[], Any] | None = None,
+) -> HarnessResult:
     raw_lines = session_jsonl.splitlines()
     if not raw_lines:
         return HarnessResult(success=True, stdout="", stderr="", exit_code=0, metadata={})
 
     compact_records: list[tuple[int, int, str]] = []
-    host_actual_token_evidence = extract_host_actual_token_evidence(session_jsonl)
     for index, line in enumerate(raw_lines):
         compact = _compact_session_jsonl_event(line, index + 1)
         if compact is not None:
@@ -395,6 +617,15 @@ def summarize_session_jsonl(session_jsonl: str, max_lines: int = 80) -> HarnessR
     optimized = "\n".join(output_lines)
     raw_bytes = len(session_jsonl.encode("utf-8", errors="replace"))
     filtered_bytes = len(optimized.encode("utf-8", errors="replace"))
+    token_usage = compare_token_usage(
+        session_jsonl,
+        optimized,
+        strategy="session-jsonl",
+        label="codex-session-jsonl",
+        trusted_host_token_event_jsonl=trusted_host_token_event_jsonl,
+        host_token_event_adapter=host_token_event_adapter,
+    )
+    host_actual_token_evidence = token_usage["host_actual_token_evidence"]
     metadata = {
         "strategy": "session-jsonl",
         "raw_bytes": raw_bytes,
@@ -402,17 +633,11 @@ def summarize_session_jsonl(session_jsonl: str, max_lines: int = 80) -> HarnessR
         "raw_lines": len(raw_lines),
         "filtered_lines": len(output_lines),
         "omitted_lines": max(0, len(raw_lines) - len(output_lines)),
-        "token_savings_ratio": _savings_ratio(raw_bytes, filtered_bytes),
         "host_actual_token_evidence": host_actual_token_evidence,
         "host_actual_tokens_available": host_actual_token_evidence["host_actual_tokens_available"],
         "host_actual_tokens_used": host_actual_token_evidence["host_actual_tokens_used"],
         "host_actual_token_source": host_actual_token_evidence["host_actual_token_source"],
-        "token_usage": compare_token_usage(
-            session_jsonl,
-            optimized,
-            strategy="session-jsonl",
-            label="codex-session-jsonl",
-        ),
+        "token_usage": token_usage,
     }
     return HarnessResult(success=True, stdout=optimized, stderr="", exit_code=0, metadata=metadata)
 
@@ -500,64 +725,123 @@ def validate_retrieval_budget_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
 
 @agent_skill(
     name="compare_token_usage",
-    description="Report before/after token use for actual optimizer input and output text.",
+    description="Report estimated payload deltas and separate host-observed token totals.",
 )
 def compare_token_usage(
     raw_text: str,
     optimized_text: str,
     strategy: str = "unknown",
     label: str = "",
+    token_counter: Callable[[str], int] | None = None,
+    tokenizer_name: str = "",
+    *,
+    trusted_host_token_event_jsonl: str = "",
+    host_token_event_adapter: Callable[[], Any] | None = None,
 ) -> Dict[str, Any]:
     without_optimizer = estimate_token_count(raw_text)
     with_optimizer = estimate_token_count(optimized_text)
     saved = max(0, without_optimizer - with_optimizer)
-    host_actual_token_evidence = extract_host_actual_token_evidence(raw_text)
-    return {
+    host_actual_token_evidence = extract_host_actual_token_evidence(
+        trusted_host_token_event_jsonl=trusted_host_token_event_jsonl,
+        host_token_event_adapter=host_token_event_adapter,
+    )
+    raw_bytes = len(raw_text.encode("utf-8"))
+    optimized_bytes = len(optimized_text.encode("utf-8"))
+    raw_chars = len(raw_text)
+    optimized_chars = len(optimized_text)
+    optimizer_local_estimated_payload = {
+        "scope": OPTIMIZER_LOCAL_ESTIMATE_SCOPE,
+        "token_count_method": TOKEN_COUNT_METHOD,
+        "token_count_is_estimate": True,
+        "tokens_before": without_optimizer,
+        "tokens_after": with_optimizer,
+        "token_delta": saved,
+        "bytes_before": raw_bytes,
+        "bytes_after": optimized_bytes,
+        "bytes_delta": max(0, raw_bytes - optimized_bytes),
+        "characters_before": raw_chars,
+        "characters_after": optimized_chars,
+        "characters_delta": max(0, raw_chars - optimized_chars),
+        "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
+    }
+    host_observed_usage = _host_observed_usage(host_actual_token_evidence)
+    result = {
         "label": label,
         "strategy": strategy,
         "where_saved": _where_saved_payload(strategy=strategy, label=label),
-        "without_token_optimizer": without_optimizer,
-        "with_token_optimizer": with_optimizer,
-        "estimated_tokens_saved": saved,
-        "token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
-        "estimated_payload_without_optimizer": without_optimizer,
-        "estimated_payload_with_optimizer": with_optimizer,
+        "estimated_payload_tokens_before": without_optimizer,
+        "estimated_payload_tokens_after": with_optimizer,
         "estimated_payload_tokens_saved": saved,
         "estimated_payload_token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
-        "payload_token_count_method": TOKEN_COUNT_METHOD,
-        "payload_token_count_is_estimate": True,
+        "estimated_payload_bytes_before": raw_bytes,
+        "estimated_payload_bytes_after": optimized_bytes,
+        "estimated_payload_bytes_delta": max(0, raw_bytes - optimized_bytes),
+        "estimated_payload_characters_before": raw_chars,
+        "estimated_payload_characters_after": optimized_chars,
+        "estimated_payload_characters_delta": max(0, raw_chars - optimized_chars),
+        "estimated_payload_token_count_method": TOKEN_COUNT_METHOD,
+        "estimated_payload_token_count_is_estimate": True,
+        "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
         "host_actual_tokens_available": host_actual_token_evidence["host_actual_tokens_available"],
         "host_actual_tokens_used": host_actual_token_evidence["host_actual_tokens_used"],
         "host_actual_token_source": host_actual_token_evidence["host_actual_token_source"],
         "host_actual_token_evidence": host_actual_token_evidence,
-        **_actual_usage_metrics(
-            raw_text=raw_text,
-            optimized_text=optimized_text,
-            without_optimizer=without_optimizer,
-            with_optimizer=with_optimizer,
-        ),
+        "optimizer_local_estimated_payload": optimizer_local_estimated_payload,
+        "host_observed_usage": host_observed_usage,
     }
+    if token_counter is not None:
+        exact_before = max(0, int(token_counter(raw_text)))
+        exact_after = max(0, int(token_counter(optimized_text)))
+        result.update(
+            {
+                "exact_payload_tokens_before": exact_before,
+                "exact_payload_tokens_after": exact_after,
+                "exact_payload_token_delta": max(0, exact_before - exact_after),
+                "exact_payload_tokenizer": tokenizer_name or "caller-supplied",
+                "exact_payload_token_count_is_estimate": False,
+            }
+        )
+    return result
 
 
 @agent_skill(
     name="aggregate_token_usage_stats",
     description="Aggregate token optimizer before/after records into workflow-level savings statistics.",
 )
-def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]:
+def aggregate_token_usage_stats(
+    records: list[Dict[str, Any]],
+    *,
+    host_token_event_adapter: Callable[[], Any] | None = None,
+) -> Dict[str, Any]:
     normalized = [_token_usage_record(record) for record in records if record]
-    without_optimizer = sum(record["without_token_optimizer"] for record in normalized)
-    with_optimizer = sum(record["with_token_optimizer"] for record in normalized)
+    without_optimizer = sum(record["estimated_payload_tokens_before"] for record in normalized)
+    with_optimizer = sum(record["estimated_payload_tokens_after"] for record in normalized)
     saved = max(0, without_optimizer - with_optimizer)
-    actual_without_optimizer = sum(record["actual_without_token_optimizer"] for record in normalized)
-    actual_with_optimizer = sum(record["actual_with_token_optimizer"] for record in normalized)
-    actual_saved = max(0, actual_without_optimizer - actual_with_optimizer)
-    actual_without_bytes = sum(record["actual_without_token_optimizer_bytes"] for record in normalized)
-    actual_with_bytes = sum(record["actual_with_token_optimizer_bytes"] for record in normalized)
-    actual_without_chars = sum(record["actual_without_token_optimizer_chars"] for record in normalized)
-    actual_with_chars = sum(record["actual_with_token_optimizer_chars"] for record in normalized)
-    host_actual_token_evidence = _aggregate_host_actual_token_evidence(
-        [record["host_actual_token_evidence"] for record in normalized]
+    estimated_bytes_before = sum(record["estimated_payload_bytes_before"] for record in normalized)
+    estimated_bytes_after = sum(record["estimated_payload_bytes_after"] for record in normalized)
+    estimated_chars_before = sum(record["estimated_payload_characters_before"] for record in normalized)
+    estimated_chars_after = sum(record["estimated_payload_characters_after"] for record in normalized)
+    host_actual_token_evidence = extract_host_actual_token_evidence(
+        host_token_event_adapter=host_token_event_adapter
     )
+    optimizer_local_estimated_payload = {
+        "scope": OPTIMIZER_LOCAL_ESTIMATE_SCOPE,
+        "token_count_method": TOKEN_COUNT_METHOD,
+        "token_count_is_estimate": True,
+        "tokens_before": without_optimizer,
+        "tokens_after": with_optimizer,
+        "token_delta": saved,
+        "bytes_before": estimated_bytes_before,
+        "bytes_after": estimated_bytes_after,
+        "bytes_delta": max(0, estimated_bytes_before - estimated_bytes_after),
+        "characters_before": estimated_chars_before,
+        "characters_after": estimated_chars_after,
+        "characters_delta": max(0, estimated_chars_before - estimated_chars_after),
+        "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
+    }
     by_strategy: Dict[str, Dict[str, Any]] = {}
     for record in normalized:
         strategy = record["strategy"] or "unknown"
@@ -565,115 +849,62 @@ def aggregate_token_usage_stats(records: list[Dict[str, Any]]) -> Dict[str, Any]
             strategy,
             {
                 "case_count": 0,
-                "without_token_optimizer": 0,
-                "with_token_optimizer": 0,
-                "estimated_tokens_saved": 0,
-                "token_savings_ratio": 0.0,
-                "actual_usage_scope": TOKEN_USAGE_SCOPE,
-                "token_count_method": TOKEN_COUNT_METHOD,
-                "token_count_is_estimate": True,
-                "billing_tokens_available": False,
-                "actual_without_token_optimizer": 0,
-                "actual_with_token_optimizer": 0,
-                "actual_tokens_saved": 0,
-                "actual_token_savings_ratio": 0.0,
-                "actual_without_token_optimizer_bytes": 0,
-                "actual_with_token_optimizer_bytes": 0,
-                "actual_bytes_saved": 0,
-                "actual_byte_savings_ratio": 0.0,
-                "actual_without_token_optimizer_chars": 0,
-                "actual_with_token_optimizer_chars": 0,
-                "actual_chars_saved": 0,
-                "actual_char_savings_ratio": 0.0,
-                "estimated_payload_without_optimizer": 0,
-                "estimated_payload_with_optimizer": 0,
+                "estimated_payload_tokens_before": 0,
+                "estimated_payload_tokens_after": 0,
                 "estimated_payload_tokens_saved": 0,
                 "estimated_payload_token_savings_ratio": 0.0,
+                "estimated_payload_bytes_before": 0,
+                "estimated_payload_bytes_after": 0,
+                "estimated_payload_bytes_delta": 0,
+                "estimated_payload_characters_before": 0,
+                "estimated_payload_characters_after": 0,
+                "estimated_payload_characters_delta": 0,
+                "billing_tokens_available": False,
+                "billing_counterfactual_available": False,
                 "host_actual_tokens_available": False,
                 "host_actual_tokens_used": 0,
             },
         )
         bucket["case_count"] += 1
-        bucket["without_token_optimizer"] += record["without_token_optimizer"]
-        bucket["with_token_optimizer"] += record["with_token_optimizer"]
-        bucket["estimated_tokens_saved"] += record["estimated_tokens_saved"]
-        bucket["actual_without_token_optimizer"] += record["actual_without_token_optimizer"]
-        bucket["actual_with_token_optimizer"] += record["actual_with_token_optimizer"]
-        bucket["actual_tokens_saved"] += record["actual_tokens_saved"]
-        bucket["actual_without_token_optimizer_bytes"] += record["actual_without_token_optimizer_bytes"]
-        bucket["actual_with_token_optimizer_bytes"] += record["actual_with_token_optimizer_bytes"]
-        bucket["actual_bytes_saved"] += record["actual_bytes_saved"]
-        bucket["actual_without_token_optimizer_chars"] += record["actual_without_token_optimizer_chars"]
-        bucket["actual_with_token_optimizer_chars"] += record["actual_with_token_optimizer_chars"]
-        bucket["actual_chars_saved"] += record["actual_chars_saved"]
-        bucket["estimated_payload_without_optimizer"] += record["estimated_payload_without_optimizer"]
-        bucket["estimated_payload_with_optimizer"] += record["estimated_payload_with_optimizer"]
+        bucket["estimated_payload_tokens_before"] += record["estimated_payload_tokens_before"]
+        bucket["estimated_payload_tokens_after"] += record["estimated_payload_tokens_after"]
         bucket["estimated_payload_tokens_saved"] += record["estimated_payload_tokens_saved"]
+        bucket["estimated_payload_bytes_before"] += record["estimated_payload_bytes_before"]
+        bucket["estimated_payload_bytes_after"] += record["estimated_payload_bytes_after"]
+        bucket["estimated_payload_bytes_delta"] += record["estimated_payload_bytes_delta"]
+        bucket["estimated_payload_characters_before"] += record["estimated_payload_characters_before"]
+        bucket["estimated_payload_characters_after"] += record["estimated_payload_characters_after"]
+        bucket["estimated_payload_characters_delta"] += record["estimated_payload_characters_delta"]
         if record["host_actual_tokens_available"]:
             bucket["host_actual_tokens_available"] = True
             bucket["host_actual_tokens_used"] = max(bucket["host_actual_tokens_used"], record["host_actual_tokens_used"])
     for bucket in by_strategy.values():
-        bucket["token_savings_ratio"] = _savings_ratio(
-            bucket["without_token_optimizer"],
-            bucket["with_token_optimizer"],
-        )
         bucket["estimated_payload_token_savings_ratio"] = _savings_ratio(
-            bucket["estimated_payload_without_optimizer"],
-            bucket["estimated_payload_with_optimizer"],
-        )
-        bucket["actual_token_savings_ratio"] = _savings_ratio(
-            bucket["actual_without_token_optimizer"],
-            bucket["actual_with_token_optimizer"],
-        )
-        bucket["actual_byte_savings_ratio"] = _savings_ratio(
-            bucket["actual_without_token_optimizer_bytes"],
-            bucket["actual_with_token_optimizer_bytes"],
-        )
-        bucket["actual_char_savings_ratio"] = _savings_ratio(
-            bucket["actual_without_token_optimizer_chars"],
-            bucket["actual_with_token_optimizer_chars"],
+            bucket["estimated_payload_tokens_before"],
+            bucket["estimated_payload_tokens_after"],
         )
     return {
         "case_count": len(normalized),
-        "without_token_optimizer": without_optimizer,
-        "with_token_optimizer": with_optimizer,
-        "estimated_tokens_saved": saved,
-        "token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
-        "estimated_payload_without_optimizer": without_optimizer,
-        "estimated_payload_with_optimizer": with_optimizer,
+        "estimated_payload_tokens_before": without_optimizer,
+        "estimated_payload_tokens_after": with_optimizer,
         "estimated_payload_tokens_saved": saved,
         "estimated_payload_token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
-        "payload_token_count_method": TOKEN_COUNT_METHOD,
-        "payload_token_count_is_estimate": True,
-        "actual_usage_scope": TOKEN_USAGE_SCOPE,
-        "token_count_method": TOKEN_COUNT_METHOD,
-        "token_count_note": TOKEN_COUNT_NOTE,
-        "token_count_is_estimate": True,
+        "estimated_payload_bytes_before": estimated_bytes_before,
+        "estimated_payload_bytes_after": estimated_bytes_after,
+        "estimated_payload_bytes_delta": max(0, estimated_bytes_before - estimated_bytes_after),
+        "estimated_payload_characters_before": estimated_chars_before,
+        "estimated_payload_characters_after": estimated_chars_after,
+        "estimated_payload_characters_delta": max(0, estimated_chars_before - estimated_chars_after),
+        "estimated_payload_token_count_method": TOKEN_COUNT_METHOD,
+        "estimated_payload_token_count_is_estimate": True,
         "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
         "host_actual_tokens_available": host_actual_token_evidence["host_actual_tokens_available"],
         "host_actual_tokens_used": host_actual_token_evidence["host_actual_tokens_used"],
         "host_actual_token_source": host_actual_token_evidence["host_actual_token_source"],
         "host_actual_token_evidence": host_actual_token_evidence,
-        "actual_without_token_optimizer": actual_without_optimizer,
-        "actual_with_token_optimizer": actual_with_optimizer,
-        "actual_tokens_saved": actual_saved,
-        "actual_token_savings_ratio": _savings_ratio(actual_without_optimizer, actual_with_optimizer),
-        "actual_without_token_optimizer_bytes": actual_without_bytes,
-        "actual_with_token_optimizer_bytes": actual_with_bytes,
-        "actual_bytes_saved": max(0, actual_without_bytes - actual_with_bytes),
-        "actual_byte_savings_ratio": _savings_ratio(actual_without_bytes, actual_with_bytes),
-        "actual_without_token_optimizer_chars": actual_without_chars,
-        "actual_with_token_optimizer_chars": actual_with_chars,
-        "actual_chars_saved": max(0, actual_without_chars - actual_with_chars),
-        "actual_char_savings_ratio": _savings_ratio(actual_without_chars, actual_with_chars),
-        "actual_usage": _aggregate_actual_usage(
-            actual_without_optimizer=actual_without_optimizer,
-            actual_with_optimizer=actual_with_optimizer,
-            actual_without_bytes=actual_without_bytes,
-            actual_with_bytes=actual_with_bytes,
-            actual_without_chars=actual_without_chars,
-            actual_with_chars=actual_with_chars,
-        ),
+        "optimizer_local_estimated_payload": optimizer_local_estimated_payload,
+        "host_observed_usage": _host_observed_usage(host_actual_token_evidence),
         "by_strategy": by_strategy,
     }
 
@@ -690,10 +921,57 @@ def estimate_token_count(text: str) -> int:
 
 @agent_skill(
     name="extract_host_actual_token_evidence",
-    description="Extract host-visible actual token evidence such as Codex token_count events and GoalState tokensUsed.",
+    description="Extract observed host token totals only through a runtime-invoked adapter boundary.",
 )
-def extract_host_actual_token_evidence(text: str) -> Dict[str, Any]:
-    """Extract host-visible token evidence without claiming counterfactual billing savings."""
+def extract_host_actual_token_evidence(
+    *,
+    trusted_host_token_event_jsonl: str = "",
+    host_token_event_adapter: Callable[[], Any] | None = None,
+) -> Dict[str, Any]:
+    """Separate caller claims from evidence obtained through a runtime invocation."""
+    if host_token_event_adapter is None:
+        if trusted_host_token_event_jsonl:
+            return _unavailable_host_actual_token_evidence(
+                "caller-supplied trusted_host_token_event_jsonl is claimed/unverified",
+                provenance_status="claimed_unverified",
+                claimed_event_count=sum(
+                    1 for line in trusted_host_token_event_jsonl.splitlines() if line.strip()
+                ),
+            )
+        return _unavailable_host_actual_token_evidence("host token event adapter was not supplied")
+
+    correlation_id = f"host-token-{uuid.uuid4().hex}"
+    adapter_name = _callable_name(host_token_event_adapter)
+    try:
+        host_event_jsonl = _coerce_host_token_event_jsonl(host_token_event_adapter())
+    except Exception as exc:
+        receipt = {
+            "adapter": adapter_name,
+            "correlation_id": correlation_id,
+            "invoked": True,
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "receipt_origin": "runtime",
+            "runtime_invocation_verified": True,
+            "provider_authenticity_verified": False,
+        }
+        return _unavailable_host_actual_token_evidence(
+            f"host token event adapter failed: {type(exc).__name__}",
+            provenance_status="runtime_invoked_adapter",
+            invocation_receipt=receipt,
+        )
+
+    receipt = {
+        "adapter": adapter_name,
+        "correlation_id": correlation_id,
+        "invoked": True,
+        "status": "succeeded",
+        "output_sha256": hashlib.sha256(host_event_jsonl.encode("utf-8")).hexdigest(),
+        "receipt_origin": "runtime",
+        "runtime_invocation_verified": True,
+        "provider_authenticity_verified": False,
+    }
+
     token_count_events: list[Dict[str, Any]] = []
     goal_token_events: list[Dict[str, Any]] = []
     max_total_tokens = 0
@@ -702,7 +980,7 @@ def extract_host_actual_token_evidence(text: str) -> Dict[str, Any]:
     latest_goal_tokens_used = 0
     model_context_window = 0
 
-    for line_number, line in enumerate((text or "").splitlines(), start=1):
+    for line_number, line in enumerate(host_event_jsonl.splitlines(), start=1):
         if not line.strip():
             continue
         try:
@@ -771,6 +1049,12 @@ def extract_host_actual_token_evidence(text: str) -> Dict[str, Any]:
     host_actual_tokens_available = host_actual_tokens_used > 0
     evidence_events = [*goal_token_events[-3:], *token_count_events[-3:]]
     return {
+        "scope": HOST_OBSERVED_USAGE_SCOPE,
+        "trusted": False,
+        "provenance_status": "runtime_invoked_adapter",
+        "runtime_invocation_verified": True,
+        "provider_authenticity_verified": False,
+        "invocation_receipt": receipt,
         "host_actual_tokens_available": host_actual_tokens_available,
         "host_actual_tokens_used": host_actual_tokens_used,
         "host_actual_token_source": host_actual_token_source,
@@ -785,12 +1069,65 @@ def extract_host_actual_token_evidence(text: str) -> Dict[str, Any]:
         "evidence_events": evidence_events,
         "missing_reason": ""
         if host_actual_tokens_available
-        else "no Codex token_count or GoalState tokensUsed events found in optimizer input",
+        else "no Codex token_count or GoalState tokensUsed events found in trusted host evidence",
         "interpretation": (
             "Host actual tokens describe observed session or goal usage. Payload savings remain estimated unless "
             "the host exposes billing telemetry for both raw and optimized counterfactual calls."
         ),
+        "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
     }
+
+
+def _unavailable_host_actual_token_evidence(
+    reason: str,
+    *,
+    provenance_status: str = "unavailable",
+    invocation_receipt: Dict[str, Any] | None = None,
+    claimed_event_count: int = 0,
+) -> Dict[str, Any]:
+    return {
+        "scope": HOST_OBSERVED_USAGE_SCOPE,
+        "trusted": False,
+        "provenance_status": provenance_status,
+        "runtime_invocation_verified": bool(
+            invocation_receipt and invocation_receipt.get("runtime_invocation_verified") is True
+        ),
+        "provider_authenticity_verified": False,
+        "invocation_receipt": invocation_receipt or {},
+        "claimed_event_count": max(0, int(claimed_event_count)),
+        "host_actual_tokens_available": False,
+        "host_actual_tokens_used": 0,
+        "host_actual_token_source": "unavailable",
+        "latest_goal_tokens_used": 0,
+        "latest_session_total_tokens": 0,
+        "max_session_total_tokens": 0,
+        "max_last_input_tokens": 0,
+        "model_context_window": 0,
+        "token_count_event_count": 0,
+        "goal_token_event_count": 0,
+        "evidence_event_count": 0,
+        "evidence_events": [],
+        "missing_reason": reason,
+        "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
+    }
+
+
+def _coerce_host_token_event_jsonl(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if isinstance(value, (list, tuple)):
+        return "\n".join(json.dumps(item, ensure_ascii=False, sort_keys=True) for item in value)
+    raise TypeError("host token event adapter must return JSONL text, bytes, a dict, or a list of dicts")
+
+
+def _callable_name(adapter: Callable[..., Any]) -> str:
+    return str(getattr(adapter, "__qualname__", "") or getattr(adapter, "__name__", "") or type(adapter).__name__)
 
 
 def _where_saved_payload(strategy: str, label: str) -> Dict[str, Any]:
@@ -809,138 +1146,25 @@ def _int_value(value: Any) -> int:
 
 
 def _aggregate_host_actual_token_evidence(evidence_records: list[Dict[str, Any]]) -> Dict[str, Any]:
-    available = [record for record in evidence_records if record.get("host_actual_tokens_available")]
-    if not available:
-        return {
-            "host_actual_tokens_available": False,
-            "host_actual_tokens_used": 0,
-            "host_actual_token_source": "unavailable",
-            "latest_goal_tokens_used": 0,
-            "latest_session_total_tokens": 0,
-            "max_session_total_tokens": 0,
-            "max_last_input_tokens": 0,
-            "model_context_window": 0,
-            "token_count_event_count": 0,
-            "goal_token_event_count": 0,
-            "evidence_event_count": 0,
-            "evidence_events": [],
-            "missing_reason": "no host token evidence in aggregated optimizer records",
-        }
-    latest = available[-1]
-    return {
-        "host_actual_tokens_available": True,
-        "host_actual_tokens_used": _int_value(latest.get("host_actual_tokens_used", 0)),
-        "host_actual_token_source": str(latest.get("host_actual_token_source", "")),
-        "latest_goal_tokens_used": max(_int_value(record.get("latest_goal_tokens_used", 0)) for record in available),
-        "latest_session_total_tokens": max(
-            _int_value(record.get("latest_session_total_tokens", 0)) for record in available
-        ),
-        "max_session_total_tokens": max(_int_value(record.get("max_session_total_tokens", 0)) for record in available),
-        "max_last_input_tokens": max(_int_value(record.get("max_last_input_tokens", 0)) for record in available),
-        "model_context_window": max(_int_value(record.get("model_context_window", 0)) for record in available),
-        "token_count_event_count": sum(_int_value(record.get("token_count_event_count", 0)) for record in available),
-        "goal_token_event_count": sum(_int_value(record.get("goal_token_event_count", 0)) for record in available),
-        "evidence_event_count": sum(_int_value(record.get("evidence_event_count", 0)) for record in available),
-        "evidence_events": [event for record in available for event in record.get("evidence_events", [])][-6:],
-        "missing_reason": "",
-    }
-
-
-def _actual_usage_metrics(
-    raw_text: str,
-    optimized_text: str,
-    without_optimizer: int,
-    with_optimizer: int,
-) -> Dict[str, Any]:
-    raw_bytes = len(raw_text.encode("utf-8", errors="replace"))
-    optimized_bytes = len(optimized_text.encode("utf-8", errors="replace"))
-    raw_chars = len(raw_text)
-    optimized_chars = len(optimized_text)
-    token_saved = max(0, without_optimizer - with_optimizer)
-    bytes_saved = max(0, raw_bytes - optimized_bytes)
-    chars_saved = max(0, raw_chars - optimized_chars)
-    return {
-        "actual_usage_scope": TOKEN_USAGE_SCOPE,
-        "token_count_method": TOKEN_COUNT_METHOD,
-        "token_count_note": TOKEN_COUNT_NOTE,
-        "token_count_is_estimate": True,
-        "billing_tokens_available": False,
-        "actual_without_token_optimizer": without_optimizer,
-        "actual_with_token_optimizer": with_optimizer,
-        "actual_tokens_saved": token_saved,
-        "actual_token_savings_ratio": _savings_ratio(without_optimizer, with_optimizer),
-        "actual_without_token_optimizer_bytes": raw_bytes,
-        "actual_with_token_optimizer_bytes": optimized_bytes,
-        "actual_bytes_saved": bytes_saved,
-        "actual_byte_savings_ratio": _savings_ratio(raw_bytes, optimized_bytes),
-        "actual_without_token_optimizer_chars": raw_chars,
-        "actual_with_token_optimizer_chars": optimized_chars,
-        "actual_chars_saved": chars_saved,
-        "actual_char_savings_ratio": _savings_ratio(raw_chars, optimized_chars),
-        "actual_usage": _actual_usage_payload(
-            without_optimizer=without_optimizer,
-            with_optimizer=with_optimizer,
-            raw_bytes=raw_bytes,
-            optimized_bytes=optimized_bytes,
-            raw_chars=raw_chars,
-            optimized_chars=optimized_chars,
-        ),
-    }
-
-
-def _actual_usage_payload(
-    without_optimizer: int,
-    with_optimizer: int,
-    raw_bytes: int,
-    optimized_bytes: int,
-    raw_chars: int,
-    optimized_chars: int,
-) -> Dict[str, Any]:
-    return {
-        "scope": TOKEN_USAGE_SCOPE,
-        "token_count_method": TOKEN_COUNT_METHOD,
-        "token_count_note": TOKEN_COUNT_NOTE,
-        "token_count_is_estimate": True,
-        "billing_tokens_available": False,
-        "without_optimizer": {
-            "tokens": without_optimizer,
-            "bytes": raw_bytes,
-            "characters": raw_chars,
-        },
-        "with_optimizer": {
-            "tokens": with_optimizer,
-            "bytes": optimized_bytes,
-            "characters": optimized_chars,
-        },
-        "saved": {
-            "tokens": max(0, without_optimizer - with_optimizer),
-            "bytes": max(0, raw_bytes - optimized_bytes),
-            "characters": max(0, raw_chars - optimized_chars),
-        },
-        "savings_ratio": {
-            "tokens": _savings_ratio(without_optimizer, with_optimizer),
-            "bytes": _savings_ratio(raw_bytes, optimized_bytes),
-            "characters": _savings_ratio(raw_chars, optimized_chars),
-        },
-    }
-
-
-def _aggregate_actual_usage(
-    actual_without_optimizer: int,
-    actual_with_optimizer: int,
-    actual_without_bytes: int,
-    actual_with_bytes: int,
-    actual_without_chars: int,
-    actual_with_chars: int,
-) -> Dict[str, Any]:
-    return _actual_usage_payload(
-        without_optimizer=actual_without_optimizer,
-        with_optimizer=actual_with_optimizer,
-        raw_bytes=actual_without_bytes,
-        optimized_bytes=actual_with_bytes,
-        raw_chars=actual_without_chars,
-        optimized_chars=actual_with_chars,
+    return _unavailable_host_actual_token_evidence(
+        "nested token usage records cannot prove a live host adapter invocation at the aggregate boundary",
+        provenance_status="claimed_unverified" if evidence_records else "unavailable",
+        claimed_event_count=len(evidence_records),
     )
+
+
+def _host_observed_usage(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "scope": HOST_OBSERVED_USAGE_SCOPE,
+        "available": bool(evidence.get("host_actual_tokens_available", False)),
+        "observed_total_tokens": _int_value(evidence.get("host_actual_tokens_used", 0)),
+        "source": str(evidence.get("host_actual_token_source", "unavailable")),
+        "provenance_status": str(evidence.get("provenance_status", "unavailable")),
+        "runtime_invocation_verified": bool(evidence.get("runtime_invocation_verified", False)),
+        "provider_authenticity_verified": False,
+        "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
+    }
 
 
 def _important_line_indices(lines: list[str], excluded: set[int]) -> list[int]:
@@ -952,19 +1176,6 @@ def _important_line_indices(lines: list[str], excluded: set[int]) -> list[int]:
         if priority > 0:
             weighted.append((-priority, index))
     return [index for _, index in sorted(weighted)]
-
-
-def _safe_filter_channel(text: str, max_lines: int, exit_code: int, command_family: str) -> Tuple[str, str]:
-    if not text:
-        return "", ""
-    filtered = filter_command_output(text, max_lines=max_lines, command_family=command_family, exit_code=exit_code)
-    if exit_code != 0 and not filtered.strip():
-        return text, "filtered output was empty for failing command"
-    missing = _missing_required_facts(text, filtered, command_family, exit_code)
-    if missing:
-        filtered = _append_missing_facts(filtered, missing)
-        return filtered, "required facts were appended after preservation check"
-    return filtered, ""
 
 
 @agent_skill(
@@ -981,11 +1192,11 @@ def filter_command_output(
     if len(lines) <= max_lines:
         return text
     if command_family == "generic":
-        return truncate_logs(text, max_lines=max_lines)
+        return text
 
     important = _family_important_line_indices(lines, command_family)
     if not important:
-        return truncate_logs(text, max_lines=max_lines)
+        return text
 
     budget = max(1, max_lines - 2)
     selected = sorted(important[:budget])
@@ -1097,84 +1308,19 @@ def _join_channels(stdout: str, stderr: str) -> str:
 
 def _token_usage_record(record: Dict[str, Any]) -> Dict[str, Any]:
     token_usage = record.get("token_usage") if isinstance(record.get("token_usage"), dict) else record
-    without_optimizer = int(token_usage.get("without_token_optimizer", 0))
-    with_optimizer = int(token_usage.get("with_token_optimizer", 0))
+    without_optimizer = int(token_usage.get("estimated_payload_tokens_before", 0))
+    with_optimizer = int(token_usage.get("estimated_payload_tokens_after", 0))
     saved = max(0, without_optimizer - with_optimizer)
-    host_actual_token_evidence = (
-        token_usage.get("host_actual_token_evidence")
-        if isinstance(token_usage.get("host_actual_token_evidence"), dict)
-        else {}
+    nested_evidence = token_usage.get("host_actual_token_evidence")
+    host_actual_token_evidence = _unavailable_host_actual_token_evidence(
+        "nested token usage evidence is claimed/unverified at the aggregate boundary",
+        provenance_status="claimed_unverified" if isinstance(nested_evidence, dict) else "unavailable",
+        claimed_event_count=1 if isinstance(nested_evidence, dict) else 0,
     )
-    if not host_actual_token_evidence:
-        host_actual_token_evidence = {
-            "host_actual_tokens_available": bool(token_usage.get("host_actual_tokens_available", False)),
-            "host_actual_tokens_used": int(token_usage.get("host_actual_tokens_used", 0)),
-            "host_actual_token_source": str(token_usage.get("host_actual_token_source", "unavailable")),
-            "latest_goal_tokens_used": int(token_usage.get("host_actual_tokens_used", 0))
-            if str(token_usage.get("host_actual_token_source", "")) == "goal.tokensUsed"
-            else 0,
-            "latest_session_total_tokens": int(token_usage.get("host_actual_tokens_used", 0))
-            if str(token_usage.get("host_actual_token_source", "")) == "session_jsonl.token_count"
-            else 0,
-            "max_session_total_tokens": 0,
-            "max_last_input_tokens": 0,
-            "model_context_window": 0,
-            "token_count_event_count": 0,
-            "goal_token_event_count": 0,
-            "evidence_event_count": 0,
-            "evidence_events": [],
-            "missing_reason": "host token evidence not present on this token usage record",
-        }
-    actual_usage = token_usage.get("actual_usage") if isinstance(token_usage.get("actual_usage"), dict) else {}
-    actual_without = int(
-        token_usage.get(
-            "actual_without_token_optimizer",
-            actual_usage.get("without_optimizer", {}).get("tokens", without_optimizer)
-            if isinstance(actual_usage.get("without_optimizer"), dict)
-            else without_optimizer,
-        )
-    )
-    actual_with = int(
-        token_usage.get(
-            "actual_with_token_optimizer",
-            actual_usage.get("with_optimizer", {}).get("tokens", with_optimizer)
-            if isinstance(actual_usage.get("with_optimizer"), dict)
-            else with_optimizer,
-        )
-    )
-    actual_saved = max(0, actual_without - actual_with)
-    actual_without_bytes = int(
-        token_usage.get(
-            "actual_without_token_optimizer_bytes",
-            actual_usage.get("without_optimizer", {}).get("bytes", 0)
-            if isinstance(actual_usage.get("without_optimizer"), dict)
-            else 0,
-        )
-    )
-    actual_with_bytes = int(
-        token_usage.get(
-            "actual_with_token_optimizer_bytes",
-            actual_usage.get("with_optimizer", {}).get("bytes", 0)
-            if isinstance(actual_usage.get("with_optimizer"), dict)
-            else 0,
-        )
-    )
-    actual_without_chars = int(
-        token_usage.get(
-            "actual_without_token_optimizer_chars",
-            actual_usage.get("without_optimizer", {}).get("characters", 0)
-            if isinstance(actual_usage.get("without_optimizer"), dict)
-            else 0,
-        )
-    )
-    actual_with_chars = int(
-        token_usage.get(
-            "actual_with_token_optimizer_chars",
-            actual_usage.get("with_optimizer", {}).get("characters", 0)
-            if isinstance(actual_usage.get("with_optimizer"), dict)
-            else 0,
-        )
-    )
+    estimated_bytes_before = int(token_usage.get("estimated_payload_bytes_before", 0))
+    estimated_bytes_after = int(token_usage.get("estimated_payload_bytes_after", 0))
+    estimated_chars_before = int(token_usage.get("estimated_payload_characters_before", 0))
+    estimated_chars_after = int(token_usage.get("estimated_payload_characters_after", 0))
     return {
         "label": str(token_usage.get("label", "")),
         "strategy": str(token_usage.get("strategy", "")),
@@ -1184,46 +1330,40 @@ def _token_usage_record(record: Dict[str, Any]) -> Dict[str, Any]:
             strategy=str(token_usage.get("strategy", "")),
             label=str(token_usage.get("label", "")),
         ),
-        "without_token_optimizer": without_optimizer,
-        "with_token_optimizer": with_optimizer,
-        "estimated_tokens_saved": int(token_usage.get("estimated_tokens_saved", saved)),
-        "token_savings_ratio": float(token_usage.get("token_savings_ratio", _savings_ratio(without_optimizer, with_optimizer))),
-        "estimated_payload_without_optimizer": int(
-            token_usage.get("estimated_payload_without_optimizer", without_optimizer)
-        ),
-        "estimated_payload_with_optimizer": int(token_usage.get("estimated_payload_with_optimizer", with_optimizer)),
+        "estimated_payload_tokens_before": without_optimizer,
+        "estimated_payload_tokens_after": with_optimizer,
         "estimated_payload_tokens_saved": int(token_usage.get("estimated_payload_tokens_saved", saved)),
         "estimated_payload_token_savings_ratio": float(
             token_usage.get("estimated_payload_token_savings_ratio", _savings_ratio(without_optimizer, with_optimizer))
         ),
-        "payload_token_count_method": str(token_usage.get("payload_token_count_method", TOKEN_COUNT_METHOD)),
-        "payload_token_count_is_estimate": bool(token_usage.get("payload_token_count_is_estimate", True)),
+        "estimated_payload_token_count_method": str(
+            token_usage.get("estimated_payload_token_count_method", TOKEN_COUNT_METHOD)
+        ),
+        "estimated_payload_token_count_is_estimate": bool(
+            token_usage.get("estimated_payload_token_count_is_estimate", True)
+        ),
+        "estimated_payload_bytes_before": estimated_bytes_before,
+        "estimated_payload_bytes_after": estimated_bytes_after,
+        "estimated_payload_bytes_delta": int(
+            token_usage.get(
+                "estimated_payload_bytes_delta",
+                max(0, estimated_bytes_before - estimated_bytes_after),
+            )
+        ),
+        "estimated_payload_characters_before": estimated_chars_before,
+        "estimated_payload_characters_after": estimated_chars_after,
+        "estimated_payload_characters_delta": int(
+            token_usage.get(
+                "estimated_payload_characters_delta",
+                max(0, estimated_chars_before - estimated_chars_after),
+            )
+        ),
+        "billing_tokens_available": False,
+        "billing_counterfactual_available": False,
         "host_actual_tokens_available": bool(host_actual_token_evidence.get("host_actual_tokens_available", False)),
         "host_actual_tokens_used": int(host_actual_token_evidence.get("host_actual_tokens_used", 0)),
         "host_actual_token_source": str(host_actual_token_evidence.get("host_actual_token_source", "unavailable")),
         "host_actual_token_evidence": host_actual_token_evidence,
-        "actual_usage_scope": str(token_usage.get("actual_usage_scope", TOKEN_USAGE_SCOPE)),
-        "token_count_method": str(token_usage.get("token_count_method", TOKEN_COUNT_METHOD)),
-        "token_count_is_estimate": bool(token_usage.get("token_count_is_estimate", True)),
-        "billing_tokens_available": bool(token_usage.get("billing_tokens_available", False)),
-        "actual_without_token_optimizer": actual_without,
-        "actual_with_token_optimizer": actual_with,
-        "actual_tokens_saved": int(token_usage.get("actual_tokens_saved", actual_saved)),
-        "actual_token_savings_ratio": float(
-            token_usage.get("actual_token_savings_ratio", _savings_ratio(actual_without, actual_with))
-        ),
-        "actual_without_token_optimizer_bytes": actual_without_bytes,
-        "actual_with_token_optimizer_bytes": actual_with_bytes,
-        "actual_bytes_saved": int(token_usage.get("actual_bytes_saved", max(0, actual_without_bytes - actual_with_bytes))),
-        "actual_byte_savings_ratio": float(
-            token_usage.get("actual_byte_savings_ratio", _savings_ratio(actual_without_bytes, actual_with_bytes))
-        ),
-        "actual_without_token_optimizer_chars": actual_without_chars,
-        "actual_with_token_optimizer_chars": actual_with_chars,
-        "actual_chars_saved": int(token_usage.get("actual_chars_saved", max(0, actual_without_chars - actual_with_chars))),
-        "actual_char_savings_ratio": float(
-            token_usage.get("actual_char_savings_ratio", _savings_ratio(actual_without_chars, actual_with_chars))
-        ),
     }
 
 
@@ -1280,29 +1420,50 @@ def _family_important_line_indices(lines: list[str], command_family: str) -> lis
     return [index for _, index in sorted(weighted)]
 
 
-def _missing_required_facts(raw: str, filtered: str, command_family: str, exit_code: int) -> list[str]:
-    if exit_code == 0:
+def required_command_facts(raw: str, command_family: str, exit_code: int) -> list[str]:
+    """Return only concrete failure facts that a known family can verify exactly."""
+    if command_family not in {"test", "build"} or exit_code == 0:
         return []
+    return _required_command_facts(raw, command_family, exit_code)
+
+
+def _required_command_facts(raw: str, command_family: str, exit_code: int) -> list[str]:
     required_lines = []
     raw_lines = raw.splitlines()
-    for index in _family_important_line_indices(raw_lines, command_family):
-        line = raw_lines[index]
-        if _line_priority(line) >= 70:
-            required_lines.append(line)
-    if not required_lines and command_family == "generic":
+    if exit_code != 0:
+        for index in _family_important_line_indices(raw_lines, command_family):
+            line = raw_lines[index]
+            if _line_priority(line) >= 70:
+                required_lines.append(line)
+    elif command_family == "test":
+        required_lines.extend(line for line in raw_lines if _line_priority(line) >= 80)
+    elif command_family == "build":
+        required_lines.extend(
+            line
+            for line in raw_lines
+            if re.search(r"\bbuild\s+(?:succeeded|failed)\b|\b\d+\s+error\(s\)", line, re.IGNORECASE)
+        )
+    if exit_code != 0 and not required_lines and command_family == "generic":
         for index in _important_line_indices(raw_lines, excluded=set()):
             line = raw_lines[index]
             if _line_priority(line) >= 70:
                 required_lines.append(line)
-    return [line for line in required_lines if line and line not in filtered]
+    return list(dict.fromkeys(line for line in required_lines if line))
 
 
-def _append_missing_facts(filtered: str, missing: list[str]) -> str:
-    if not missing:
-        return filtered
-    sections = [filtered.rstrip(), "... [required facts appended after preservation check] ..."]
-    sections.extend(missing)
-    return "\n".join(section for section in sections if section)
+def _is_binary_or_high_entropy_output(text: str) -> bool:
+    if not text:
+        return False
+    if "\x00" in text or "\ufffd" in text:
+        return True
+    control_count = sum(1 for char in text if ord(char) < 32 and char not in "\n\r\t")
+    if control_count / max(1, len(text)) >= 0.01:
+        return True
+    compact = "".join(text.split())
+    if len(compact) < 512:
+        return False
+    base64ish = sum(char.isalnum() or char in "+/=_-" for char in compact) / len(compact)
+    return base64ish >= 0.98 and len(set(compact)) >= 48 and " " not in text[:256]
 
 
 def _agent_transcript_selected_indices(lines: list[str], max_lines: int) -> list[int]:
@@ -1363,14 +1524,6 @@ def _agent_transcript_line_priority(line: str) -> int:
     if any(marker in lowered for marker in ["changed files", "commands run", "evidence", "blocked", "approval"]):
         return 75
     return 0
-
-
-def _missing_agent_transcript_facts(lines: list[str], optimized: str) -> list[str]:
-    missing = []
-    for line in lines:
-        if _agent_transcript_line_priority(line) >= 90 and line not in optimized:
-            missing.append(line)
-    return missing
 
 
 def _looks_like_codex_session_jsonl(text: str) -> bool:

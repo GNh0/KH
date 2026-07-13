@@ -3,15 +3,19 @@ import base64
 import json
 import multiprocessing
 import os
-from typing import List
+from pathlib import Path
+from typing import Any, List
 
 from src.contracts import MemoryScope, WorkflowDispatchResult, WorkflowTaskResult
 from src.core.snapshot_manager import SnapshotManager
 from src.orchestration.artifacts import ArtifactStore, build_design_stage
 from src.orchestration.evidence_producers import collect_metadata_evidence
 from src.orchestration.goal_evidence import (
+    RuntimeProducerBoundary,
+    capture_evidence_envelope,
     collect_workflow_goal_evidence,
     evaluate_goal_evidence,
+    sha256_text,
 )
 from src.orchestration.gate_evaluators import build_qa_check
 from src.orchestration.goal_ledger import GoalLedger
@@ -143,6 +147,238 @@ def _gate_result_evidence(gate_results: List[dict]) -> List[str]:
     for gate in gate_results:
         evidence_records.extend(gate.get("evidence_records", []) or [])
     return collect_metadata_evidence({"evidence_records": evidence_records})
+
+
+def _goal_scope(goal: dict) -> dict:
+    return dict((goal.get("metadata", {}) or {}).get("scope", {}) or {})
+
+
+def _artifact_envelopes(
+    evidence_keys: List[str],
+    *,
+    producer: str,
+    scope: dict,
+    locator: str,
+    captured_output: Any,
+    status: str = "passed",
+    producer_boundary: RuntimeProducerBoundary,
+) -> List[dict]:
+    return [
+        capture_evidence_envelope(
+            evidence_type="artifact",
+            evidence_key=key,
+            producer=producer,
+            scope=scope,
+            status=status,
+            locator=locator,
+            captured_output=captured_output,
+            producer_boundary=producer_boundary,
+        )
+        for key in _dedupe_strings(evidence_keys)
+        if key
+    ]
+
+
+def _task_result_envelopes(
+    task_results: List[WorkflowTaskResult],
+    *,
+    scope: dict,
+    workflow_id: str,
+    producer_boundary: RuntimeProducerBoundary,
+) -> List[dict]:
+    envelopes: List[dict] = []
+    for result in task_results:
+        evidence_keys = collect_metadata_evidence(result.metadata)
+        if not evidence_keys:
+            continue
+        target_path = Path(str(result.metadata.get("target_path") or ""))
+        if target_path.is_file():
+            captured_output: Any = target_path.read_bytes()
+            locator = str(target_path.resolve())
+        else:
+            captured_output = result.to_dict()
+            locator = f"workflow:{workflow_id}:task:{result.task_id}"
+        envelopes.extend(
+            _artifact_envelopes(
+                evidence_keys,
+                producer=f"workflow.task_result:{result.metadata.get('runner') or result.role}",
+                scope=scope,
+                locator=locator,
+                captured_output=captured_output,
+                status="passed" if result.status == "success" else "failed",
+                producer_boundary=producer_boundary,
+            )
+        )
+    return envelopes
+
+
+def _workflow_result_envelopes(
+    *,
+    goal: dict,
+    workflow_id: str,
+    project_dir: str,
+    design_doc: str,
+    file_list: List[str],
+    task_results: List[WorkflowTaskResult],
+    design_stage: dict,
+    check_results,
+    workflow_metadata: dict,
+    workflow_success: bool,
+    producer_boundary: RuntimeProducerBoundary,
+) -> List[dict]:
+    scope = _goal_scope(goal)
+    envelopes: List[dict] = []
+    if design_doc and design_doc.strip():
+        envelopes.extend(
+            _artifact_envelopes(
+                ["design_doc"],
+                producer="workflow.design_input",
+                scope=scope,
+                locator=f"workflow:{workflow_id}:design_doc",
+                captured_output=design_doc,
+                producer_boundary=producer_boundary,
+            )
+        )
+    if file_list:
+        envelopes.extend(
+            _artifact_envelopes(
+                ["target_files"],
+                producer="workflow.target_files",
+                scope=scope,
+                locator=str(Path(project_dir).resolve()),
+                captured_output=list(file_list),
+                producer_boundary=producer_boundary,
+            )
+        )
+    dispatch_output = {
+        "workflow_id": workflow_id,
+        "task_results": [result.to_dict() for result in task_results],
+        "check_results": check_results.to_metadata(),
+        "success": bool(workflow_success),
+    }
+    envelopes.append(
+        capture_evidence_envelope(
+            evidence_type="tool_receipt",
+            evidence_key="workflow dispatch completed",
+            producer="workflow.dispatch",
+            scope=scope,
+            status="passed" if workflow_success else "failed",
+            tool_name="dispatch_project_workflow",
+            tool_call_id=workflow_id,
+            result_id=sha256_text(json.dumps(dispatch_output, ensure_ascii=False, sort_keys=True)),
+            result_status="success" if workflow_success else "failed",
+            captured_output=dispatch_output,
+            producer_boundary=producer_boundary,
+        )
+    )
+    envelopes.extend(
+        _task_result_envelopes(
+            task_results,
+            scope=scope,
+            workflow_id=workflow_id,
+            producer_boundary=producer_boundary,
+        )
+    )
+    envelopes.extend(
+        _artifact_envelopes(
+            list(design_stage.get("evidence", []) or []),
+            producer="workflow.design_stage",
+            scope=scope,
+            locator=f"workflow:{workflow_id}:design_stage",
+            captured_output=design_stage,
+            producer_boundary=producer_boundary,
+        )
+    )
+    for index, record in enumerate(check_results.command_results):
+        metadata = dict(record.get("metadata", {}) or {})
+        keys = list(record.get("evidence", []) or [])
+        if metadata.get("evidence_key"):
+            keys.append(metadata["evidence_key"])
+        for key in _dedupe_strings(keys):
+            envelopes.append(
+                capture_evidence_envelope(
+                    evidence_type="test",
+                    evidence_key=key,
+                    producer=str(metadata.get("runner") or "workflow.command_check"),
+                    scope=scope,
+                    status=str(record.get("status") or "failed"),
+                    command=str(metadata.get("command") or ""),
+                    command_id=f"{workflow_id}:command:{index}",
+                    exit_code=int(metadata.get("exit_code", 1)),
+                    captured_output={
+                        "stdout": metadata.get("stdout", ""),
+                        "stderr": metadata.get("stderr", ""),
+                    },
+                    producer_boundary=producer_boundary,
+                )
+            )
+    for index, record in enumerate(check_results.browser_qa_results):
+        metadata = dict(record.get("metadata", {}) or {})
+        keys = list(record.get("evidence", []) or [])
+        if metadata.get("evidence_key"):
+            keys.append(metadata["evidence_key"])
+        browser_specs = list(workflow_metadata.get("browser_qa_checks", []) or [])
+        if index < len(browser_specs) and isinstance(browser_specs[index], dict):
+            configured_key = browser_specs[index].get("evidence_key", "")
+            if configured_key:
+                keys.append(configured_key)
+        for key in _dedupe_strings(keys):
+            envelopes.append(
+                capture_evidence_envelope(
+                    evidence_type="tool_receipt",
+                    evidence_key=key,
+                    producer=str(metadata.get("runner") or "workflow.browser_qa"),
+                    scope=scope,
+                    status=str(record.get("status") or "failed"),
+                    tool_name=str(metadata.get("adapter") or "browser_qa"),
+                    tool_call_id=f"{workflow_id}:browser:{index}",
+                    result_id=sha256_text(json.dumps(record, ensure_ascii=False, sort_keys=True)),
+                    result_status=str(record.get("status") or "failed"),
+                    captured_output=record,
+                    producer_boundary=producer_boundary,
+                )
+            )
+    return envelopes
+
+
+def _review_envelopes(
+    gate_results: List[dict],
+    role_execution_audit: dict,
+    *,
+    goal: dict,
+    workflow_id: str,
+    producer_boundary: RuntimeProducerBoundary,
+) -> List[dict]:
+    scope = _goal_scope(goal)
+    envelopes: List[dict] = []
+    for gate in gate_results:
+        keys = _gate_result_evidence([gate])
+        for key in keys:
+            envelopes.append(
+                capture_evidence_envelope(
+                    evidence_type="review",
+                    evidence_key=key,
+                    producer=f"workflow.review_gate:{gate.get('role', '')}",
+                    scope=scope,
+                    status=str(gate.get("status") or "failed"),
+                    locator=str(gate.get("role") or "review"),
+                    result_id=f"{workflow_id}:gate:{gate.get('role', '')}",
+                    captured_output=gate,
+                    producer_boundary=producer_boundary,
+                )
+            )
+    envelopes.extend(
+        _artifact_envelopes(
+            list(role_execution_audit.get("evidence", []) or []),
+            producer="workflow.role_execution_audit",
+            scope=scope,
+            locator=f"workflow:{workflow_id}:role_execution_audit",
+            captured_output=role_execution_audit,
+            status="passed" if role_execution_audit.get("status") == "passed" else "failed",
+            producer_boundary=producer_boundary,
+        )
+    )
+    return envelopes
 
 
 def _goal_with_added_evidence(goal: dict, evidence_items: List[str]) -> dict:
@@ -554,6 +790,7 @@ async def async_project_workflow(
     queue = asyncio.Queue()
     project_id = _project_id(project_dir)
     workflow_id = f"workflow_{project_id}"
+    producer_boundary = RuntimeProducerBoundary(f"workflow:{workflow_id}")
     metadata = metadata or {}
     workflow_usability_preflight = build_workflow_usability_preflight(project_dir, metadata)
     if workflow_usability_preflight:
@@ -592,12 +829,13 @@ async def async_project_workflow(
     results: List[WorkflowTaskResult] = []
     thread_id = _thread_id_from_metadata(metadata)
     ledger = GoalLedger(project_dir, thread_id=thread_id) if goal_metadata else None
+    ledger_state = None
     goal_ledger_metadata = ledger.describe_paths() if ledger else {}
     resume_handoff_metadata = {}
 
     if ledger:
         existing_goal = ledger.load_current_goal()
-        ledger.save_current_goal(
+        ledger_state = ledger.save_current_goal(
             goal_metadata,
             active_task="workflow dispatch",
             tasks={
@@ -607,6 +845,7 @@ async def async_project_workflow(
                 "blocked": [],
             },
             next_recommended_action="wait for workflow dispatch results",
+            expected_revision=str(existing_goal.get("_ledger_revision", "")),
         )
         ledger.append_event(
             "goal_updated" if existing_goal else "goal_created",
@@ -650,19 +889,27 @@ async def async_project_workflow(
         result.status == "success"
         for result in ordered_results
     )
-    workflow_evidence = collect_workflow_goal_evidence(
-        design_doc=design_doc,
-        file_list=file_list,
-        workflow_completed=True,
+    initial_workflow_success = bool(
+        pre_role_orchestration.get("success") and task_success and check_success
     )
-    workflow_evidence.extend(_task_result_evidence(pre_role_task_results))
-    workflow_evidence.extend(_task_result_evidence(ordered_results))
-    workflow_evidence.extend(design_stage.get("evidence", []))
-    workflow_evidence.extend(check_results.evidence)
+    workflow_evidence = _workflow_result_envelopes(
+        goal=goal_metadata,
+        workflow_id=workflow_id,
+        project_dir=project_dir,
+        design_doc=design_doc,
+        file_list=list(file_list),
+        task_results=[*pre_role_task_results, *ordered_results],
+        design_stage=design_stage,
+        check_results=check_results,
+        workflow_metadata=metadata,
+        workflow_success=initial_workflow_success,
+        producer_boundary=producer_boundary,
+    )
     evaluated_goal = evaluate_goal_evidence(
         goal_metadata,
         workflow_evidence=workflow_evidence,
-        workflow_success=pre_role_orchestration.get("success") and task_success and check_success,
+        workflow_success=initial_workflow_success,
+        producer_boundary=producer_boundary,
     )
     review_role_context = dict(role_context)
     review_role_context["implementation_task_results"] = [
@@ -693,46 +940,24 @@ async def async_project_workflow(
         if role in gate_results_by_role
     ]
     gate_evidence = _gate_result_evidence(gate_results)
-    post_gate_evidence = gate_evidence + list(role_execution_audit.get("evidence", []))
-    final_goal = _goal_with_added_evidence(evaluated_goal, post_gate_evidence)
+    post_gate_evidence = _review_envelopes(
+        gate_results,
+        role_execution_audit,
+        goal=evaluated_goal,
+        workflow_id=workflow_id,
+        producer_boundary=producer_boundary,
+    )
     role_success = (
         pre_role_orchestration.get("success")
         and review_role_orchestration.get("success")
         and role_execution_audit.get("status") == "passed"
     )
     final_goal = evaluate_goal_evidence(
-        final_goal,
-        workflow_evidence=[],
+        evaluated_goal,
+        workflow_evidence=post_gate_evidence,
         workflow_success=role_success and task_success and check_success,
+        producer_boundary=producer_boundary,
     )
-    if ledger and final_goal:
-        ledger.append_event(
-            "evidence_added",
-            {
-                "workflow_id": workflow_id,
-                "evidence": list(final_goal.get("evidence", [])),
-            },
-        )
-        ledger.save_current_goal(
-            final_goal,
-            active_task="",
-            tasks=_task_ledger_summary(ordered_results, list(file_list)),
-            next_recommended_action=_next_goal_action(final_goal),
-        )
-        resume_handoff_metadata = ResumeHandoff(project_dir, thread_id=thread_id).save()
-        event_type = "goal_completed" if final_goal.get("status") == "complete" else "goal_updated"
-        if final_goal.get("status") == "blocked":
-            event_type = "goal_blocked"
-        ledger.append_event(
-            event_type,
-            {
-                "objective": final_goal.get("objective", ""),
-                "status": final_goal.get("status", ""),
-                "blocked_reason": final_goal.get("blocked_reason", ""),
-                "missing_evidence": final_goal.get("metadata", {}).get("missing_evidence", []),
-                "workflow_id": workflow_id,
-            },
-        )
     retention_summary = _apply_retention_policy(
         project_dir=project_dir,
         thread_id=thread_id,
@@ -757,23 +982,35 @@ async def async_project_workflow(
     if workflow_usability.enabled and workflow_usability.status == "blocked":
         success = False
         final_goal = _block_goal_for_workflow_usability(final_goal or goal_metadata, workflow_usability.to_dict())
-        if ledger and final_goal:
-            ledger.save_current_goal(
-                final_goal,
-                active_task="",
-                tasks=_task_ledger_summary(ordered_results, list(file_list)),
-                next_recommended_action=_next_goal_action(final_goal),
-            )
-            ledger.append_event(
-                "goal_blocked",
-                {
-                    "objective": final_goal.get("objective", ""),
-                    "status": final_goal.get("status", ""),
-                    "blocked_reason": final_goal.get("blocked_reason", ""),
-                    "missing_evidence": final_goal.get("metadata", {}).get("missing_evidence", []),
-                    "workflow_id": workflow_id,
-                },
-            )
+    if ledger and final_goal:
+        ledger.append_event(
+            "evidence_added",
+            {
+                "workflow_id": workflow_id,
+                "evidence": list(final_goal.get("evidence", [])),
+            },
+        )
+        ledger_state = ledger.save_current_goal(
+            final_goal,
+            active_task="",
+            tasks=_task_ledger_summary(ordered_results, list(file_list)),
+            next_recommended_action=_next_goal_action(final_goal),
+            expected_revision=str((ledger_state or {}).get("_ledger_revision", "")),
+        )
+        resume_handoff_metadata = ResumeHandoff(project_dir, thread_id=thread_id).save()
+        event_type = "goal_completed" if final_goal.get("status") == "complete" else "goal_updated"
+        if final_goal.get("status") == "blocked":
+            event_type = "goal_blocked"
+        ledger.append_event(
+            event_type,
+            {
+                "objective": final_goal.get("objective", ""),
+                "status": final_goal.get("status", ""),
+                "blocked_reason": final_goal.get("blocked_reason", ""),
+                "missing_evidence": final_goal.get("metadata", {}).get("missing_evidence", []),
+                "workflow_id": workflow_id,
+            },
+        )
     if workflow_usability.enabled and workflow_usability.progress_panel and not metadata.get("suppress_progress_panel"):
         print(workflow_usability.progress_panel.rstrip())
 

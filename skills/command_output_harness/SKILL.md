@@ -32,17 +32,17 @@ This is a personal UAF command output harness. It provides compact command outpu
 2. Before broad or noisy commands, build a retrieval budget plan: count/scope first, sample before full read, select fields/line ranges, require explicit limits, and write large structured output to a file.
 3. Route to a command-family filter for test, build, git-read, dependency, Python, or generic output.
 4. Execute the underlying command without changing its exit code semantics.
-5. Call `src.skills.token_optimizer.summarize_command_output` to filter stdout and stderr according to the command family.
-6. Print compact output that keeps actionable failures and summaries.
-7. Track raw size, filtered size, command family, elapsed time, and savings estimate.
+5. Supply required facts explicitly or derive them only from concrete test/build failure markers, then call `src.skills.token_optimizer.summarize_command_output`.
+6. Validate every required fact in the compact candidate. If any fact is missing, discard the candidate and return the exact raw channels.
+7. Put accepted compact output in the canonical model view with a stable raw reference/hash; keep raw recovery in caller-owned results or a project/chat/run-scoped external store.
 
 ## Filter rules
 
 - Keep error messages, failing tests, changed files, exit status, and actionable paths.
 - Drop repeated progress lines, banners, empty lines, duplicated stack frames, and known boilerplate.
 - Prefer grouping by file, package, test name, or error type.
-- If filtering fails or produces an unsafe empty result, return raw output with metadata explaining the fallback.
-- After filtering failing output, verify required facts such as failing test names, file paths, line numbers, error codes, assertion values, traceback, build failure markers, and exit code remain present; append or fallback when they do not.
+- If filtering fails, produces an unsafe empty result, does not shrink the canonical payload, or loses a required fact, return raw output unchanged with a fallback code.
+- NUL/binary/high-entropy data, generic prose, source text, and command output without verifiable required facts are passthrough unless a specialized adapter supplies a verified contract.
 
 ## External Benchmark Recipe
 
@@ -52,7 +52,7 @@ Use this harness when raw logs are too large to read safely:
 2. Call `summarize_command_output` so family-specific filters preserve required facts.
 3. Check metadata for raw size, filtered size, command family, token savings, and fallback reason.
 4. Report the compact output only if failure facts remain present.
-5. Return raw or appended context when preservation checks detect missing facts.
+5. Return exact raw context when preservation checks detect missing facts; never repair a lossy candidate by appending selected lines and still claim compression.
 
 Pressure scenario: if a pytest log has hundreds of passing tests and one failure in the middle, the failed test name, traceback, assertion, file/line, and exit code must survive compression.
 
@@ -63,6 +63,8 @@ Pressure scenario: if a pytest log has hundreds of passing tests and one failure
 - Retrieval budget plan for broad commands that could emit large stdout.
 - Fallback reason when output is returned raw.
 - Preserved exit code and enough context to reproduce the failing command.
+- Estimated chars/4 payload counts under `estimated_payload_*`, with `billing_tokens_available=false` and `billing_counterfactual_available=false`; command output and JSON lines cannot supply host-actual telemetry.
+- `provider_receipts` for every accepted RTK item, emitted only after a runtime-invoked adapter callable and retained when the overall provider is hybrid. Caller receipt dictionaries are `claimed_unverified`.
 
 ## Common mistakes
 
