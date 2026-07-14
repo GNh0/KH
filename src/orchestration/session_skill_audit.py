@@ -415,6 +415,22 @@ class SessionTextRecord:
 
 
 @dataclass(frozen=True)
+class CorrelatedFrontDoorReceipt:
+    call_index: int
+    output_index: int
+    data: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CorrelatedToolReceipt:
+    call_index: int
+    output_index: int
+    call: Dict[str, Any]
+    output: Dict[str, Any]
+    data: Dict[str, Any]
+
+
+@dataclass(frozen=True)
 class SessionSkillAudit:
     session_id: str
     path: str
@@ -433,6 +449,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     path = Path(session_path)
     postmortem = analyze_codex_session_jsonl(path)
     postmortem_data = postmortem.to_dict()
+    front_door_token_receipts = _apply_front_door_token_optimizer_evidence(path, postmortem_data)
     scoped_goal_evidence = _scoped_current_goal_evidence(path)
     goal_terminal_evidence = _terminal_goal_state_evidence(
         path,
@@ -461,6 +478,16 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
         active_texts,
         sql_scope_texts=sql_scope_texts,
     )
+    if _has_auditable_user_request(path):
+        required.setdefault(
+            "always-on-front-door",
+            "every new user request or task must enter KH front-door before another skill, work command, or final answer",
+        )
+    if front_door_token_receipts:
+        required.setdefault(
+            "token-optimizer",
+            "KH front-door runtime receipt recorded an auditable token-optimizer decision",
+        )
     skill_rows = []
     issues = []
 
@@ -518,8 +545,8 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             "evidence": observations["evidence"][:8],
         }
         if name == "token-optimizer":
-            row["token_optimizer_status"] = postmortem.token_optimizer_status
-            row["token_optimizer_status_reason"] = postmortem.token_optimizer_status_reason
+            row["token_optimizer_status"] = postmortem_data.get("token_optimizer_status", "")
+            row["token_optimizer_status_reason"] = postmortem_data.get("token_optimizer_status_reason", "")
         skill_rows.append(row)
         if is_required and STATUS_RANK.get(status, 0) < STATUS_RANK["considered"]:
             issues.append(
@@ -545,6 +572,11 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
                 }
             )
 
+    issues.extend(_session_integrity_issues(path))
+    issues.extend(_aggregate_skill_runtime_evidence_issues(path))
+    issues.extend(_user_instruction_supersession_issues(path))
+    issues.extend(_authoritative_reference_order_issues(path))
+    issues.extend(_forbidden_residual_completion_issues(path))
     issues.extend(_kh_front_door_issues(path))
     issues.extend(_immediate_next_skill_issues(path, skill_rows))
     issues.extend(_front_door_execution_gate_bypass_issues(path))
@@ -560,6 +592,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(_brainstorming_depth_issues(path))
     issues.extend(_subagent_strategy_issues(path, postmortem_data))
     issues.extend(_orchestration_decision_issues(path, postmortem_data))
+    issues.extend(_required_delegation_issues(path))
     issues.extend(_postmortem_guard_issues(postmortem_data))
     issues.extend(
         _goal_state_completion_absence_issues(
@@ -585,9 +618,10 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
         skills=skill_rows,
         issues=issues,
         postmortem={
-            "token_optimizer_status": postmortem.token_optimizer_status,
-            "token_optimizer_status_reason": postmortem.token_optimizer_status_reason,
-            "token_gate": postmortem.token_gate,
+            "token_optimizer_status": postmortem_data.get("token_optimizer_status", ""),
+            "token_optimizer_status_reason": postmortem_data.get("token_optimizer_status_reason", ""),
+            "token_gate": postmortem_data.get("token_gate", {}) or {},
+            "token_optimizer_evidence": postmortem_data.get("token_optimizer_evidence", {}) or {},
             "review_status": postmortem.review_status,
             "subagent_summary": postmortem.subagent_summary,
             "completion_guard": postmortem.completion_guard,
@@ -1066,14 +1100,18 @@ def _dedupe_text(values: Iterable[str]) -> List[str]:
 
 def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
+    events = _session_payload_events(path)
+    correlated_receipts = _correlated_front_door_receipts(events)
     waiting_for_front_door = False
     front_door_seen = False
     trigger_sample = ""
     trigger_kind = ""
     kh_active_directive_seen = False
     kh_active_directive_sample = ""
+    task_unfinished = False
+    active_goal = False
 
-    for event in _session_payload_events(path):
+    for event_index, event in enumerate(events):
         payload = event.get("payload", {})
         if not isinstance(payload, dict):
             continue
@@ -1081,38 +1119,54 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         text = _payload_text(payload)
         lowered = text.lower()
 
+        if payload_type == "thread_goal_updated":
+            goal = payload.get("goal", {}) or {}
+            if isinstance(goal, dict):
+                status = str(goal.get("status", "") or "").strip().lower()
+                if status == "active":
+                    active_goal = True
+                elif status in {"complete", "blocked"}:
+                    active_goal = False
+
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
             if _is_synthetic_context_message(text):
+                continue
+            if front_door_seen and task_unfinished and (
+                _is_bounded_same_task_continuation(text)
+                or (active_goal and bool(_extract_correction_claims(text)["invalidated"]))
+            ):
                 continue
             active_directive = _is_kh_active_directive(text)
             if active_directive:
                 kh_active_directive_seen = True
                 kh_active_directive_sample = _short(text)
-                if not _is_kh_active_followup_request(text):
-                    continue
-
             direct_code_question = _looks_like_direct_code_question(lowered)
-            if (
-                _is_kh_front_door_request(lowered)
-                or (_is_automatic_intake_request(text) and not _looks_like_external_specialist_direct_question(lowered))
-                or direct_code_question
-                or (kh_active_directive_seen and _is_kh_active_followup_request(text))
-            ):
-                waiting_for_front_door = True
-                front_door_seen = False
-                trigger_sample = _short(text)
-                if direct_code_question and not _is_kh_front_door_request(lowered):
-                    trigger_kind = "direct_code_question"
-                elif kh_active_directive_seen and not _is_kh_front_door_request(lowered):
-                    trigger_kind = "kh_active_directive"
-                else:
-                    trigger_kind = "explicit_kh" if _is_kh_front_door_request(lowered) else "automatic_intake"
+            waiting_for_front_door = True
+            front_door_seen = False
+            task_unfinished = True
+            trigger_sample = _short(text)
+            if _is_kh_front_door_request(lowered):
+                trigger_kind = "explicit_kh"
+            elif looks_like_sql_output_request(lowered):
+                trigger_kind = "sql_formatting_request"
+            elif direct_code_question:
+                trigger_kind = "direct_code_question"
+            elif active_directive or (kh_active_directive_seen and _is_kh_active_followup_request(text)):
+                trigger_kind = "kh_active_directive"
+            elif _is_automatic_intake_request(text):
+                trigger_kind = "automatic_intake"
+            else:
+                trigger_kind = "universal_request"
             continue
 
         if not waiting_for_front_door:
+            if payload_type == "task_complete":
+                front_door_seen = False
+                task_unfinished = False
+                active_goal = False
             continue
 
-        if _is_front_door_order_evidence(payload, lowered):
+        if event_index in correlated_receipts:
             front_door_seen = True
             continue
 
@@ -1123,13 +1177,13 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                     "status": "missing_front_door",
                     "severity": "P1",
                     "reason": (
-                        "A KH-capable session started non-trivial source/work commands before "
-                        "always-on front-door runtime intake."
+                        "A KH-capable session started another skill, work command, or final answer before "
+                        "always-on front-door runtime intake for the current user request."
                     ),
                     "action": (
-                        "For non-trivial work, the first standalone work-bearing tool call must run "
+                        "For every new user request or task, the first standalone skill/runtime call must run "
                         "KH front-door via `always_on_front_door/scripts/front_door.py` or "
-                        "`python -m src.orchestration.kh_front_door ... --summary`, or record an explicit blocked/direct rationale. "
+                        "`python -m src.orchestration.kh_front_door ... --summary`, or record a blocked runtime result. "
                         "Reading SKILL.md, listing the catalog, mentioning always-on-front-door, or running target-folder checks in the "
                         "same pre-intake batch does not satisfy the entry contract. Users should not need to name KH, skills, or harnesses. "
                         "If an earlier user message requested active KH skill/harness use, carry that kh_active_directive into later work-bearing turns."
@@ -1141,6 +1195,11 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                 }
             )
             waiting_for_front_door = False
+        if payload_type == "task_complete":
+            waiting_for_front_door = False
+            front_door_seen = False
+            task_unfinished = False
+            active_goal = False
     return issues
 
 
@@ -1198,6 +1257,7 @@ def _immediate_skill_sequence_issues(
     order_break_sample = ""
     previous_call_was_passive = False
     task_completed = False
+    pending_runtime_calls: Dict[str, Set[str]] = {}
 
     for event in events[start_index:]:
         payload = event.get("payload", {})
@@ -1217,6 +1277,18 @@ def _immediate_skill_sequence_issues(
         clean_text = _strip_passive_prefix(text)
         lowered = clean_text.lower()
         payload_type = str(payload.get("type", ""))
+        call_id = _payload_call_id(payload)
+        correlated_runtime_skills: Set[str] = set()
+        if payload_type in {"function_call", "custom_tool_call"} and call_id:
+            pending_runtime_calls[call_id] = {
+                skill_name
+                for skill_name in immediate
+                if _is_immediate_skill_runtime_call(payload, skill_name)
+            }
+        elif payload_type in {"function_call_output", "custom_tool_call_output"} and call_id:
+            correlated_runtime_skills = pending_runtime_calls.pop(call_id, set())
+            if not _runtime_tool_output_succeeded(payload):
+                correlated_runtime_skills = set()
         passive = _passive_reference(lowered) or (
             payload_type in {"function_call_output", "custom_tool_call_output"}
             and previous_call_was_passive
@@ -1235,7 +1307,13 @@ def _immediate_skill_sequence_issues(
         for position, skill_name in enumerate(immediate):
             if skill_name in resolved:
                 continue
-            status = _immediate_skill_event_status(payload, lowered, skill_name, passive)
+            status = _immediate_skill_event_status(
+                payload,
+                lowered,
+                skill_name,
+                passive,
+                correlated_runtime_call=skill_name in correlated_runtime_skills,
+            )
             if not status:
                 continue
             sample = _short(clean_text)
@@ -1663,6 +1741,8 @@ def _immediate_skill_event_status(
     lowered: str,
     skill_name: str,
     passive: bool,
+    *,
+    correlated_runtime_call: bool = False,
 ) -> str:
     if passive:
         return ""
@@ -1692,8 +1772,40 @@ def _immediate_skill_event_status(
         _is_immediate_applied_evidence(lowered, aliases)
         or (marker_hit and _has_runtime_output_context(lowered))
     ):
+        if (
+            payload_type in {"function_call_output", "custom_tool_call_output"}
+            and not correlated_runtime_call
+        ):
+            return ""
         return "applied"
     return ""
+
+
+def _is_immediate_skill_runtime_call(
+    payload: Dict[str, Any],
+    skill_name: str,
+) -> bool:
+    if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
+        return False
+    lowered = _payload_text(payload).lower()
+    if _is_current_skill_support_read(lowered, skill_name):
+        return False
+
+    tool_name = str(payload.get("name", "") or "").strip().lower()
+    tool_tail = re.split(r"[.:]", tool_name)[-1]
+    aliases = {
+        skill_name.lower(),
+        skill_name.replace("-", "_").lower(),
+        skill_name.removesuffix("-harness").replace("-", "_").lower(),
+    }
+    runtime_markers = {
+        str(marker).lower()
+        for marker in RUNTIME_MARKERS.get(skill_name, [])
+        if str(marker).strip()
+    }
+    if tool_name in aliases or tool_tail in aliases or tool_tail in runtime_markers:
+        return True
+    return any(marker in lowered for marker in runtime_markers)
 
 
 def _is_immediate_sequence_stop_user_message(text: str) -> bool:
@@ -1805,6 +1917,8 @@ def _immediate_order_break(payload: Dict[str, Any], lowered: str, skill_name: st
     if payload_type not in {"function_call", "custom_tool_call"}:
         return False
     if _is_current_skill_support_read(lowered, skill_name):
+        return False
+    if _is_immediate_skill_runtime_call(payload, skill_name):
         return False
     if _is_front_door_order_evidence(payload, lowered):
         return False
@@ -3941,6 +4055,857 @@ def _brainstorm_unilateral_decision_markers(text: str) -> List[str]:
     return matched
 
 
+_CLAIM_TOKEN = r"(?:`[^`\r\n]+`|\"[^\"\r\n]+\"|'[^'\r\n]+'|[A-Za-z][A-Za-z0-9_.-]{2,})"
+
+
+def _normalize_claim_token(raw: str) -> str:
+    value = str(raw or "").strip().strip("`\"'").strip().lower()
+    if not value or len(value) > 100:
+        return ""
+    if value in {
+        "assumption",
+        "behavior",
+        "constant",
+        "field",
+        "invalid",
+        "requirement",
+        "value",
+    }:
+        return ""
+    decorated = str(raw or "").strip().startswith(("`", "\"", "'"))
+    if not decorated and not any(marker in value for marker in ["_", ".", "-"]):
+        return ""
+    return re.sub(r"\s+", " ", value)
+
+
+def _extract_correction_claims(text: str) -> Dict[str, List[str]]:
+    invalidated: List[str] = []
+    replacements: List[str] = []
+
+    def add(target: List[str], raw: str) -> None:
+        value = _normalize_claim_token(raw)
+        if value and value not in target:
+            target.append(value)
+
+    paired_patterns = [
+        re.compile(rf"\breplace\s+({_CLAIM_TOKEN})\s+with\s+({_CLAIM_TOKEN})", re.IGNORECASE),
+        re.compile(rf"\buse\s+({_CLAIM_TOKEN})\s*,?\s+not\s+({_CLAIM_TOKEN})", re.IGNORECASE),
+        re.compile(rf"\bprefer\s+({_CLAIM_TOKEN})\s+(?:over|instead\s+of)\s+({_CLAIM_TOKEN})", re.IGNORECASE),
+    ]
+    for pattern in paired_patterns:
+        for match in pattern.finditer(text):
+            if pattern is paired_patterns[0]:
+                add(invalidated, match.group(1))
+                add(replacements, match.group(2))
+            else:
+                add(replacements, match.group(1))
+                add(invalidated, match.group(2))
+
+    negative_patterns = [
+        re.compile(
+            rf"\b(?:must|should)\s+not\s+(?:contain|include|emit|use|keep|require|have)\s+({_CLAIM_TOKEN})",
+            re.IGNORECASE,
+        ),
+        re.compile(
+            rf"\b(?:do\s+not|don't|never)\s+(?:contain|include|emit|use|keep|require|have)\s+({_CLAIM_TOKEN})",
+            re.IGNORECASE,
+        ),
+        re.compile(rf"\b(?:remove|drop|exclude|forbid)\s+({_CLAIM_TOKEN})", re.IGNORECASE),
+        re.compile(rf"\bnot\s+({_CLAIM_TOKEN})", re.IGNORECASE),
+        re.compile(
+            rf"({_CLAIM_TOKEN})\s+(?:is|was)\s+(?:invalid|wrong|incorrect|forbidden|obsolete)",
+            re.IGNORECASE,
+        ),
+        re.compile(rf"({_CLAIM_TOKEN})\s+(?:must|should)\s+not\b", re.IGNORECASE),
+    ]
+    for pattern in negative_patterns:
+        for match in pattern.finditer(text):
+            add(invalidated, match.group(1))
+    return {"invalidated": invalidated, "replacements": replacements}
+
+
+def _correlated_tool_receipts(
+    events: Sequence[Dict[str, Any]],
+) -> List[CorrelatedToolReceipt]:
+    pending: Dict[str, tuple[int, Dict[str, Any]]] = {}
+    receipts: List[CorrelatedToolReceipt] = []
+    for index, event in enumerate(events):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        call_id = _payload_call_id(payload)
+        if payload_type in {"function_call", "custom_tool_call"}:
+            if call_id:
+                pending[call_id] = (index, payload)
+            continue
+        if payload_type not in {"function_call_output", "custom_tool_call_output"} or not call_id:
+            continue
+        call_record = pending.pop(call_id, None)
+        if call_record is None or not _runtime_tool_output_succeeded(payload):
+            continue
+        call_index, call = call_record
+        receipts.append(
+            CorrelatedToolReceipt(
+                call_index=call_index,
+                output_index=index,
+                call=call,
+                output=payload,
+                data=_json_object_from_text(_payload_text(payload)),
+            )
+        )
+    return receipts
+
+
+def _is_implementation_call(payload: Dict[str, Any]) -> bool:
+    if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
+        return False
+    name = str(payload.get("name", "") or "").lower()
+    lowered = _payload_text(payload).lower()
+    if any(marker in name for marker in ["apply_patch", "write_file", "edit_file"]):
+        return True
+    if name != "shell_command" and "shell_command" not in name:
+        return False
+    return any(
+        marker in lowered
+        for marker in [
+            "apply_patch",
+            "set-content",
+            "out-file",
+            "new-item",
+            "copy-item",
+            "move-item",
+        ]
+    )
+
+
+def _is_verification_call(payload: Dict[str, Any]) -> bool:
+    if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
+        return False
+    name = str(payload.get("name", "") or "").lower()
+    lowered = _payload_text(payload).lower()
+    if any(marker in name for marker in ["verify", "test", "check"]):
+        return True
+    return any(
+        marker in lowered
+        for marker in [
+            "python -m unittest",
+            "pytest",
+            "dotnet test",
+            "npm test",
+            "npm run test",
+            "cargo test",
+            "go test",
+        ]
+    )
+
+
+def _claim_in_text(claim: str, text: str) -> bool:
+    return bool(
+        re.search(
+            rf"(?<![A-Za-z0-9_.-]){re.escape(claim)}(?![A-Za-z0-9_.-])",
+            str(text or "").lower(),
+        )
+    )
+
+
+def _reasserted_invalidated_claims(text: str, claims: Sequence[str]) -> List[str]:
+    lowered = str(text or "").lower()
+    repeated: List[str] = []
+    for claim in claims:
+        match = re.search(
+            rf"(?<![A-Za-z0-9_.-]){re.escape(claim)}(?![A-Za-z0-9_.-])",
+            lowered,
+        )
+        if not match:
+            continue
+        window = lowered[max(0, match.start() - 70) : match.end() + 90]
+        negative = any(
+            marker in window
+            for marker in [
+                "removed",
+                "remove ",
+                "without ",
+                "no longer",
+                "must not",
+                "should not",
+                "do not",
+                "forbidden",
+                "invalid",
+                "rejected",
+                "exclude",
+            ]
+        )
+        affirmative = any(
+            marker in window
+            for marker in [
+                " keep",
+                "kept",
+                "require",
+                "include",
+                "emit",
+                "still",
+                "must use",
+                "remains",
+                "retained",
+                "added",
+                "= true",
+            ]
+        )
+        if affirmative and not negative:
+            repeated.append(claim)
+    return repeated
+
+
+def _correction_implementation_receipt(
+    receipts: Sequence[CorrelatedToolReceipt],
+    correction_index: int,
+    completion_index: int,
+    invalidated_claims: Sequence[str],
+    replacement_claims: Sequence[str],
+) -> CorrelatedToolReceipt | None:
+    for receipt in receipts:
+        if not (correction_index < receipt.call_index < receipt.output_index < completion_index):
+            continue
+        if not _is_implementation_call(receipt.call):
+            continue
+        call_text = _payload_text(receipt.call)
+        if replacement_claims and all(
+            _implementation_adds_or_selects_claim(claim, call_text)
+            for claim in replacement_claims
+        ):
+            return receipt
+        if invalidated_claims and not replacement_claims and all(
+            _implementation_removes_claim(claim, call_text)
+            for claim in invalidated_claims
+        ):
+            return receipt
+    return None
+
+
+def _implementation_adds_or_selects_claim(claim: str, text: str) -> bool:
+    if not _claim_in_text(claim, text):
+        return False
+    lowered = str(text or "").lower()
+    if "*** begin patch" not in lowered:
+        return True
+    return any(
+        line.lstrip().startswith("+")
+        and not line.lstrip().startswith("+++")
+        and _claim_in_text(claim, line)
+        for line in lowered.splitlines()
+    )
+
+
+def _implementation_removes_claim(claim: str, text: str) -> bool:
+    lowered = str(text or "").lower()
+    for match in re.finditer(
+        rf"(?<![A-Za-z0-9_.-]){re.escape(claim)}(?![A-Za-z0-9_.-])",
+        lowered,
+    ):
+        line_start = lowered.rfind("\n", 0, match.start()) + 1
+        line_end = lowered.find("\n", match.end())
+        line = lowered[line_start : len(lowered) if line_end < 0 else line_end]
+        stripped = line.lstrip()
+        if stripped.startswith("-") and not stripped.startswith("---"):
+            return True
+        window = lowered[max(0, match.start() - 70) : match.end() + 70]
+        if any(
+            marker in window
+            for marker in [
+                "remove",
+                "removed",
+                "drop",
+                "exclude",
+                "without",
+                "no longer",
+                "forbid",
+                "delete",
+            ]
+        ):
+            return True
+    return False
+
+
+def _fresh_verification_receipt(
+    receipts: Sequence[CorrelatedToolReceipt],
+    after_index: int,
+    completion_index: int,
+) -> CorrelatedToolReceipt | None:
+    for receipt in receipts:
+        if after_index < receipt.call_index < receipt.output_index < completion_index and _is_verification_call(receipt.call):
+            return receipt
+    return None
+
+
+def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
+    events = _session_payload_events(path)
+    receipts = _correlated_tool_receipts(events)
+    corrections: List[Dict[str, Any]] = []
+    active_goal = False
+    completion_indexes: List[int] = []
+    for index, event in enumerate(events):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        if payload_type == "thread_goal_updated":
+            goal = payload.get("goal", {}) or {}
+            status = str(goal.get("status", "") or "").strip().lower() if isinstance(goal, dict) else ""
+            if status == "active":
+                active_goal = True
+            elif status in {"complete", "blocked"}:
+                active_goal = False
+        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+            claims = _extract_correction_claims(_payload_text(payload))
+            if claims["invalidated"]:
+                corrections.append(
+                    {
+                        "index": index,
+                        "active_goal": active_goal,
+                        "invalidated": claims["invalidated"],
+                        "replacements": claims["replacements"],
+                        "sample": _short(_payload_text(payload)),
+                    }
+                )
+        if payload_type == "task_complete":
+            completion_indexes.append(index)
+
+    issues: List[Dict[str, Any]] = []
+    for correction in corrections:
+        correction_index = int(correction["index"])
+        invalidated = list(correction["invalidated"])
+        completion_index = next(
+            (index for index in completion_indexes if index > correction_index),
+            len(events),
+        )
+        repeated: List[str] = []
+        repeated_sample = ""
+        for event in events[correction_index + 1 : completion_index + 1]:
+            payload = event.get("payload", {})
+            if not isinstance(payload, dict):
+                continue
+            payload_type = str(payload.get("type", ""))
+            role = str(payload.get("role", "")).lower()
+            if not (
+                (payload_type == "message" and role == "assistant")
+                or payload_type in {"agent_message", "task_complete"}
+            ):
+                continue
+            repeated = _reasserted_invalidated_claims(_payload_text(payload), invalidated)
+            if repeated:
+                repeated_sample = _short(_payload_text(payload))
+                break
+        if repeated:
+            issues.append(
+                {
+                    "skill": "context-state-harness",
+                    "status": "invalidated_user_correction_repeated",
+                    "severity": "P0" if completion_index < len(events) else "P1",
+                    "reason": "The assistant reasserted a claim after the user explicitly invalidated it.",
+                    "action": "Treat the latest user correction as authoritative and remove the invalidated assumption before completion.",
+                    "invalidated_claims": repeated,
+                    "correction": correction["sample"],
+                    "repetition": repeated_sample,
+                }
+            )
+        if not correction["active_goal"] or completion_index >= len(events):
+            continue
+        implementation = _correction_implementation_receipt(
+            receipts,
+            correction_index,
+            completion_index,
+            invalidated,
+            list(correction["replacements"]),
+        )
+        verification = (
+            _fresh_verification_receipt(receipts, implementation.output_index, completion_index)
+            if implementation
+            else None
+        )
+        missing = []
+        if not implementation:
+            missing.append("correlated_implementation")
+        if not verification:
+            missing.append("fresh_verification")
+        if missing:
+            issues.append(
+                {
+                    "skill": "goal-state-harness",
+                    "status": "corrective_feedback_unresolved",
+                    "severity": "P0",
+                    "reason": (
+                        "Corrective feedback arrived while the Goal was active, but completion was emitted "
+                        "without ordered implementation and verification receipts for that correction."
+                    ),
+                    "action": "Continue the same Goal, implement the correlated correction, then run fresh verification before task_complete.",
+                    "missing_evidence": missing,
+                    "correction": correction["sample"],
+                }
+            )
+    return issues
+
+
+def _aggregate_skill_runtime_evidence_issues(path: Path) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("type", "")) not in {"function_call_output", "custom_tool_call_output"}:
+            continue
+        data = _front_door_json(_payload_text(payload))
+        summary = data.get("skill_status_summary", {}) if data else {}
+        if not isinstance(summary, dict):
+            continue
+        for skill_name, status_record in summary.items():
+            if not isinstance(status_record, dict):
+                continue
+            if (
+                str(status_record.get("status", "")) != "applied"
+                or "runtime_evidence" not in status_record
+                or status_record.get("runtime_evidence")
+                or str(skill_name) in seen
+            ):
+                continue
+            seen.add(str(skill_name))
+            issues.append(
+                {
+                    "skill": str(skill_name),
+                    "status": "aggregate_applied_without_runtime_evidence",
+                    "severity": "P1",
+                    "reason": "Aggregate skill status claimed applied while its runtime_evidence collection was empty.",
+                    "action": "Downgrade the aggregate status or attach non-empty runtime receipt evidence from the actual skill execution.",
+                }
+            )
+    return issues
+
+
+def _authoritative_references(text: str) -> List[str]:
+    lowered = str(text or "").lower()
+    if not any(
+        marker in lowered
+        for marker in [
+            "authoritative",
+            "source of truth",
+            "canonical reference",
+            "authoritative reference",
+        ]
+    ):
+        return []
+    candidates = re.findall(r"`([^`]+)`|\"([^\"]+)\"|'([^']+)'", str(text or ""))
+    values = [next((part for part in match if part), "") for match in candidates]
+    values.extend(re.findall(r"https?://[^\s<>`\"']+", str(text or ""), flags=re.IGNORECASE))
+    values.extend(re.findall(r"[A-Za-z]:\\[^\s<>`\"']+", str(text or "")))
+    references: List[str] = []
+    for raw in values:
+        value = raw.strip().rstrip(".,;:)]}")
+        if not value or not (
+            "/" in value
+            or "\\" in value
+            or re.search(r"\.[A-Za-z0-9]{1,8}$", value)
+        ):
+            continue
+        if value not in references:
+            references.append(value)
+    return references
+
+
+def _normalized_reference(value: str) -> str:
+    return str(value or "").replace("\\", "/").lower().strip()
+
+
+def _is_reference_read_call(payload: Dict[str, Any], reference: str) -> bool:
+    if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
+        return False
+    name = str(payload.get("name", "") or "").lower()
+    lowered = _normalized_reference(_payload_text(payload))
+    if _normalized_reference(reference) not in lowered:
+        return False
+    return any(
+        marker in name or marker in lowered
+        for marker in [
+            "get-content",
+            "read_file",
+            "read_mcp_resource",
+            "open",
+            "cat ",
+            "type ",
+        ]
+    )
+
+
+def _introduces_constants_or_behavior(payload: Dict[str, Any]) -> bool:
+    if not _is_implementation_call(payload):
+        return False
+    additions = "\n".join(
+        line[1:]
+        for line in _payload_text(payload).splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    if not additions:
+        return False
+    return bool(
+        re.search(
+            r"(?im)(?:\b(?:const|static|readonly|final|enum|def|class|return|if|switch|case)\b|^[A-Z][A-Z0-9_]{2,}\s*=)",
+            additions,
+        )
+    )
+
+
+def _authoritative_reference_order_issues(path: Path) -> List[Dict[str, Any]]:
+    events = _session_payload_events(path)
+    receipts = _correlated_tool_receipts(events)
+    issues: List[Dict[str, Any]] = []
+    for user_index, event in enumerate(events):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict) or not (
+            str(payload.get("type", "")) == "message"
+            and str(payload.get("role", "")).lower() == "user"
+        ):
+            continue
+        for reference in _authoritative_references(_payload_text(payload)):
+            task_boundary = next(
+                (
+                    index
+                    for index, candidate in enumerate(events[user_index + 1 :], start=user_index + 1)
+                    if isinstance(candidate.get("payload"), dict)
+                    and str(candidate["payload"].get("type", "")) == "task_complete"
+                ),
+                len(events),
+            )
+            read_output_index = min(
+                (
+                    receipt.output_index
+                    for receipt in receipts
+                    if receipt.call_index > user_index
+                    and receipt.output_index < task_boundary
+                    and _is_reference_read_call(receipt.call, reference)
+                ),
+                default=task_boundary,
+            )
+            premature = next(
+                (
+                    (index, candidate.get("payload", {}))
+                    for index, candidate in enumerate(events[user_index + 1 : read_output_index], start=user_index + 1)
+                    if isinstance(candidate.get("payload"), dict)
+                    and _introduces_constants_or_behavior(candidate["payload"])
+                ),
+                None,
+            )
+            if not premature:
+                continue
+            issues.append(
+                {
+                    "skill": "context-state-harness",
+                    "status": "authoritative_reference_not_read_first",
+                    "severity": "P1",
+                    "reason": "Constants or behavior were introduced before a correlated read receipt for the user-named authoritative reference.",
+                    "action": "Read the named reference successfully, then derive constants and behavior from that evidence.",
+                    "reference": reference,
+                    "first_implementation": _short(_payload_text(premature[1])),
+                }
+            )
+    return issues
+
+
+def _is_residual_scan_call(payload: Dict[str, Any], patterns: Sequence[str]) -> bool:
+    if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
+        return False
+    lowered = _payload_text(payload).lower()
+    if not any(_claim_in_text(pattern, lowered) for pattern in patterns):
+        return False
+    return any(marker in lowered for marker in ["rg ", "select-string", "grep ", "findstr "])
+
+
+def _residual_matches(text: str, patterns: Sequence[str]) -> List[str] | None:
+    lowered = str(text or "").lower()
+    matches = [pattern for pattern in patterns if _claim_in_text(pattern, lowered)]
+    if matches:
+        return matches
+    if re.fullmatch(
+        r"\s*(?:exit code:\s*[01]\s*)?"
+        r"(?:no matches(?: found)?|0 matches|zero matches|not found|no residuals?)[.!]?\s*",
+        lowered,
+    ):
+        return []
+    return None
+
+
+def _forbidden_residual_completion_issues(path: Path) -> List[Dict[str, Any]]:
+    events = _session_payload_events(path)
+    receipts = _correlated_tool_receipts(events)
+    forbidden: Dict[str, int] = {}
+    issues: List[Dict[str, Any]] = []
+    for index, event in enumerate(events):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+            claims = _extract_correction_claims(_payload_text(payload))
+            for claim in claims["invalidated"]:
+                forbidden[claim] = index
+        if payload_type != "task_complete" or not forbidden:
+            continue
+        latest_implementation = max(
+            (
+                receipt.output_index
+                for receipt in receipts
+                if receipt.output_index < index and _is_implementation_call(receipt.call)
+            ),
+            default=-1,
+        )
+        matched: List[str] = []
+        scanned: Set[str] = set()
+        scan_sample = ""
+        for receipt in receipts:
+            eligible = [
+                claim
+                for claim, request_index in forbidden.items()
+                if max(request_index, latest_implementation) < receipt.call_index < receipt.output_index < index
+            ]
+            if not eligible or not _is_residual_scan_call(receipt.call, eligible):
+                continue
+            scanned_by_call = [
+                claim
+                for claim in eligible
+                if _claim_in_text(claim, _payload_text(receipt.call))
+            ]
+            found = _residual_matches(_payload_text(receipt.output), scanned_by_call)
+            if found is None:
+                continue
+            scanned.update(scanned_by_call)
+            if found:
+                matched.extend(claim for claim in found if claim not in matched)
+                scan_sample = _short(_payload_text(receipt.output))
+        if matched:
+            issues.append(
+                {
+                    "skill": "verification-before-completion-harness",
+                    "status": "forbidden_residuals_at_completion",
+                    "severity": "P0",
+                    "reason": "task_complete followed a fresh residual scan whose correlated output still contained user-forbidden patterns.",
+                    "action": "Remove every reported residual and run a new clean scan before completion.",
+                    "forbidden_patterns": matched,
+                    "scan_output": scan_sample,
+                }
+            )
+        missing_scans = [claim for claim in forbidden if claim not in scanned]
+        if missing_scans:
+            issues.append(
+                {
+                    "skill": "verification-before-completion-harness",
+                    "status": "missing_fresh_residual_scan_at_completion",
+                    "severity": "P0",
+                    "reason": (
+                        "task_complete was emitted with an active correction or forbidden-pattern "
+                        "obligation but no correlated residual scan receipt after the latest implementation."
+                    ),
+                    "action": "Run a fresh residual scan for every forbidden pattern and correlate its output before completion.",
+                    "forbidden_patterns": missing_scans,
+                }
+            )
+        forbidden.clear()
+    return issues
+
+
+def _explicit_user_delegation(text: str) -> bool:
+    lowered = str(text or "").lower()
+    if any(marker in lowered for marker in ["without delegation", "waive delegation", "single-controller waiver"]):
+        return False
+    return (
+        any(marker in lowered for marker in ["delegate", "delegation", "dispatch", "use nested agents", "use subagents"])
+        and any(marker in lowered for marker in ["agent", "subagent", "role", "implement", "review", "dispatch"])
+    )
+
+
+def _user_approved_delegation_waiver(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return (
+        any(marker in lowered for marker in ["without delegation", "waive delegation", "waiver", "single-controller"])
+        and any(marker in lowered for marker in ["approve", "approved", "i waive", "proceed", "for this run"])
+    )
+
+
+def _nested_agents_availability_in_data(value: Any) -> bool | None:
+    if isinstance(value, dict):
+        for key in ["nested_subagents_available", "nested_agents_available"]:
+            if isinstance(value.get(key), bool):
+                return bool(value[key])
+        for key in ["nested_agents", "nested_subagents"]:
+            nested = value.get(key)
+            if isinstance(nested, dict) and isinstance(nested.get("available"), bool):
+                return bool(nested["available"])
+        for item in value.values():
+            availability = _nested_agents_availability_in_data(item)
+            if availability is not None:
+                return availability
+    elif isinstance(value, list):
+        for item in value:
+            availability = _nested_agents_availability_in_data(item)
+            if availability is not None:
+                return availability
+    return None
+
+
+def _is_nested_capability_receipt(receipt: CorrelatedToolReceipt) -> bool:
+    call_text = _payload_text(receipt.call).lower()
+    return (
+        any(marker in call_text for marker in ["runtime_capabil", "nested_agent", "nested_subagent"])
+        and _nested_agents_availability_in_data(receipt.data) is not None
+    )
+
+
+def _is_dispatch_receipt(receipt: CorrelatedToolReceipt) -> bool:
+    call_text = _payload_text(receipt.call).lower()
+    if not any(
+        marker in call_text
+        for marker in ["spawn_agent", "dispatch_project_workflow", "async_project_workflow"]
+    ):
+        return False
+    data = receipt.data
+    return bool(
+        data.get("agent_id")
+        or data.get("thread_id")
+        or data.get("dispatch_receipt")
+        or data.get("role_results")
+    )
+
+
+def _is_fan_in_receipt(receipt: CorrelatedToolReceipt) -> bool:
+    call_text = _payload_text(receipt.call).lower()
+    if not any(marker in call_text for marker in ["wait_agent", "wait_for", "fan_in", "dispatch_project_workflow", "async_project_workflow"]):
+        return False
+    data = receipt.data
+    if data.get("fan_in_complete") is True or data.get("fan_in_receipt"):
+        return True
+    results = data.get("results") or data.get("role_results")
+    if not isinstance(results, list) or not results:
+        return False
+    terminal = {"complete", "completed", "success", "passed", "closed"}
+    return all(
+        isinstance(item, dict) and str(item.get("status", "")).lower() in terminal
+        for item in results
+    )
+
+
+def _required_delegation_issues(path: Path) -> List[Dict[str, Any]]:
+    events = _session_payload_events(path)
+    receipts = _correlated_tool_receipts(events)
+    requirement_indexes: List[int] = []
+    requirement_sources: List[str] = []
+    for index, event in enumerate(events):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if (
+            str(payload.get("type", "")) == "message"
+            and str(payload.get("role", "")).lower() == "user"
+            and _explicit_user_delegation(_payload_text(payload))
+        ):
+            requirement_indexes.append(index)
+            requirement_sources.append("explicit_user_delegation")
+    for output_index, receipt in _correlated_front_door_receipts(events).items():
+        classification = receipt.data.get("classification", {}) or {}
+        if isinstance(classification, dict) and str(classification.get("recommended_execution", "")) == "role_dag":
+            requirement_indexes.append(output_index)
+            requirement_sources.append("mandatory_role_dag")
+    if not requirement_indexes:
+        return []
+    requirement_index = min(requirement_indexes)
+    terminal_index = min(
+        (
+            index
+            for index, event in enumerate(events)
+            if isinstance(event.get("payload"), dict)
+            and str(event["payload"].get("type", "")) == "task_complete"
+            and index > requirement_index
+        ),
+        default=-1,
+    )
+    implementation_index = min(
+        (
+            index
+            for index, event in enumerate(events)
+            if index > requirement_index
+            and isinstance(event.get("payload"), dict)
+            and _is_implementation_call(event["payload"])
+        ),
+        default=-1,
+    )
+    decision_index = terminal_index if terminal_index >= 0 else implementation_index
+    if decision_index < 0:
+        return []
+    relevant_receipts = [
+        receipt
+        for receipt in receipts
+        if requirement_index < receipt.call_index < receipt.output_index < decision_index
+    ]
+    dispatches = [receipt for receipt in relevant_receipts if _is_dispatch_receipt(receipt)]
+    fan_ins = [
+        receipt
+        for receipt in relevant_receipts
+        if _is_fan_in_receipt(receipt)
+        and any(dispatch.output_index < receipt.call_index for dispatch in dispatches)
+    ]
+    user_waiver = any(
+        requirement_index < index < decision_index
+        and isinstance(event.get("payload"), dict)
+        and str(event["payload"].get("type", "")) == "message"
+        and str(event["payload"].get("role", "")).lower() == "user"
+        and _user_approved_delegation_waiver(_payload_text(event["payload"]))
+        for index, event in enumerate(events)
+    )
+    availability_receipts = [
+        receipt for receipt in relevant_receipts if _is_nested_capability_receipt(receipt)
+    ]
+    availability_values = [
+        _nested_agents_availability_in_data(receipt.data)
+        for receipt in availability_receipts
+    ]
+    nested_available: bool | None
+    if dispatches or any(value is True for value in availability_values):
+        nested_available = True
+    elif availability_values:
+        nested_available = False
+    else:
+        nested_available = None
+    if (dispatches and fan_ins) or user_waiver:
+        return []
+    explicit_user_requirement = "explicit_user_delegation" in requirement_sources
+    if nested_available is False:
+        return []
+    if nested_available is None and not explicit_user_requirement:
+        return []
+    if nested_available is None:
+        reason = (
+            "Explicit user delegation reached the decision boundary without a correlated "
+            "nested-agent availability receipt, ordered dispatch/fan-in receipts, or a user-approved waiver."
+        )
+    else:
+        reason = (
+            "Delegation was user-required or role_dag-mandated while nested agents were available, "
+            "but no ordered dispatch/fan-in receipts or user-approved waiver were present."
+        )
+    return [
+        {
+            "skill": "host-agent-orchestration",
+            "status": "missing_required_delegation_receipt",
+            "severity": "P0" if terminal_index >= 0 else "P1",
+            "reason": reason,
+            "action": "Dispatch and fan in nested-agent work, or obtain an explicit waiver from the user; a controller-authored waiver is insufficient.",
+            "requirement_sources": sorted(set(requirement_sources)),
+            "nested_agents_available": nested_available,
+            "availability_receipt": bool(availability_receipts),
+            "dispatch_receipts": len(dispatches),
+            "fan_in_receipts": len(fan_ins),
+            "user_approved_waiver": user_waiver,
+        }
+    ]
+
+
 def _front_door_selected_skill(path: Path, skill_name: str) -> bool:
     for text in _session_texts(path):
         data = _front_door_json(_strip_passive_prefix(text))
@@ -4909,6 +5874,697 @@ def _session_payload_events(path: Path) -> List[Dict[str, Any]]:
     return events
 
 
+def _payload_call_id(payload: Dict[str, Any]) -> str:
+    return str(payload.get("call_id", "") or payload.get("tool_call_id", "")).strip()
+
+
+def _correlated_front_door_receipts(
+    events: Sequence[Dict[str, Any]],
+) -> Dict[int, CorrelatedFrontDoorReceipt]:
+    pending_calls: Dict[str, tuple[int, Dict[str, Any]]] = {}
+    receipts: Dict[int, CorrelatedFrontDoorReceipt] = {}
+    latest_request_boundary = -1
+    for index, event in enumerate(events):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        call_id = _payload_call_id(payload)
+        text = _payload_text(payload)
+        lowered = text.lower()
+        if (
+            payload_type == "message"
+            and str(payload.get("role", "")).lower() == "user"
+            and not _is_synthetic_context_message(text)
+            and not _is_bounded_same_task_continuation(text)
+        ) or payload_type == "task_complete":
+            latest_request_boundary = index
+        if payload_type in {"function_call", "custom_tool_call"}:
+            if call_id and _is_front_door_runtime_command(payload, lowered):
+                pending_calls[call_id] = (index, payload)
+            continue
+        if payload_type not in {"function_call_output", "custom_tool_call_output"} or not call_id:
+            continue
+        pending = pending_calls.pop(call_id, None)
+        if pending is None or not _front_door_output_succeeded(payload):
+            continue
+        call_index, _call = pending
+        if call_index <= latest_request_boundary:
+            continue
+        data = _front_door_json(_payload_text(payload))
+        if _has_normalized_front_door_receipt(data):
+            receipts[index] = CorrelatedFrontDoorReceipt(
+                call_index=call_index,
+                output_index=index,
+                data=data,
+            )
+    return receipts
+
+
+def _front_door_output_succeeded(payload: Dict[str, Any]) -> bool:
+    recorded_exit_codes: List[int] = []
+    for key in ["exit_code", "return_code"]:
+        if key in payload:
+            try:
+                recorded_exit_codes.append(int(payload[key]))
+            except (TypeError, ValueError):
+                return False
+    text = _payload_text(payload)
+    recorded_exit_codes.extend(
+        int(code)
+        for code in re.findall(r"(?im)\bexit\s+code\s*:\s*(-?\d+)\b", text)
+    )
+    if any(code not in {0, 1, 3} for code in recorded_exit_codes):
+        return False
+    if 1 in recorded_exit_codes:
+        if any(code != 1 for code in recorded_exit_codes):
+            return False
+        return _is_strict_blocked_front_door_packet(_front_door_json(text))
+    if 3 in recorded_exit_codes:
+        if any(code != 3 for code in recorded_exit_codes):
+            return False
+        return _is_strict_blocked_front_door_packet(_front_door_json(text))
+
+    status = str(payload.get("status", "") or "").strip().lower()
+    if status in {"error", "failed", "failure"} or payload.get("success") is False:
+        return False
+    return not recorded_exit_codes or all(code == 0 for code in recorded_exit_codes)
+
+
+def _is_strict_blocked_front_door_packet(data: Dict[str, Any]) -> bool:
+    if not (
+        _is_valid_compact_front_door_packet(data)
+        or _is_valid_normalized_micro_front_door_packet(data)
+    ):
+        return False
+    if str(data.get("front_door_status", "")).strip().lower() != "ok":
+        return False
+
+    route = data.get("plugin_route", {}) or {}
+    gate = data.get("execution_gate", {}) or {}
+    authorization = data.get("execution_authorization", {}) or {}
+    action_codes = data.get("required_next_action_codes")
+    gate_status = str(gate.get("status", "")).strip()
+    authorization_status = str(authorization.get("status", "")).strip().lower()
+    current_gate_contract = bool(
+        gate.get("can_execute") is False and gate_status.startswith("blocked_")
+    )
+    legacy_gate_contract = bool(
+        gate.get("can_execute") is True
+        and gate_status == "execution_allowed_after_selected_skill_setup"
+    )
+    return bool(
+        route.get("route") in {"single", "hybrid", "clarify"}
+        and (current_gate_contract or legacy_gate_contract)
+        and authorization.get("must_stop_before_execution") is True
+        and ("blocked" in authorization_status or "pending" in authorization_status)
+        and isinstance(action_codes, list)
+        and action_codes
+        and all(isinstance(code, str) and code.strip() for code in action_codes)
+        and "stop_before_task_work" in action_codes
+        and "apply_immediate_next_skills" in action_codes
+    )
+
+
+def _latest_actual_runtime_token_optimizer_decision(
+    events: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    pending_calls: Dict[str, Dict[str, Any]] = {}
+    latest: Dict[str, Any] = {}
+    for event in events:
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        payload_type = str(payload.get("type", ""))
+        call_id = _payload_call_id(payload)
+        lowered = _payload_text(payload).lower()
+        if payload_type == "thread_goal_updated":
+            if not _has_explicit_token_optimizer_runtime_source(payload):
+                continue
+            decision = _actual_runtime_token_optimizer_decision(
+                json.dumps(payload, ensure_ascii=False)
+            )
+            if decision:
+                latest = decision
+            continue
+        if payload_type in {"function_call", "custom_tool_call"}:
+            if call_id and _is_token_optimizer_runtime_command(lowered):
+                pending_calls[call_id] = payload
+            continue
+        if payload_type not in {"function_call_output", "custom_tool_call_output"} or not call_id:
+            continue
+        if pending_calls.pop(call_id, None) is None:
+            continue
+        if not _runtime_tool_output_succeeded(payload):
+            continue
+        decision = _actual_runtime_token_optimizer_decision(_payload_text(payload))
+        if decision:
+            latest = decision
+    return latest
+
+
+def _runtime_tool_output_succeeded(payload: Dict[str, Any]) -> bool:
+    controls: List[Dict[str, Any]] = [payload]
+    text = _payload_text(payload)
+    data = _json_object_from_text(text)
+    if data:
+        controls.append(data)
+
+    if any(_runtime_mapping_failed(control) for control in controls):
+        return False
+
+    if re.search(r"(?im)\bexit\s+code\s*:\s*(?!0\b)-?\d+\b", text):
+        return False
+    return "script failed" not in text.lower()
+
+
+def _runtime_mapping_failed(control: Dict[str, Any]) -> bool:
+    status = str(control.get("status", "") or "").strip().lower()
+    if status in {"error", "failed", "failure"} or control.get("success") is False:
+        return True
+    for key in ["exit_code", "return_code", "returncode"]:
+        if key not in control:
+            continue
+        try:
+            if int(control[key]) != 0:
+                return True
+        except (TypeError, ValueError):
+            return True
+    return False
+
+
+def _actual_runtime_token_optimizer_decision(text: str) -> Dict[str, Any]:
+    data = _json_object_from_text(text)
+    if not data:
+        return {}
+    candidates: List[Dict[str, Any]] = []
+
+    def visit(value: Any, runtime_scope: bool = False) -> None:
+        if isinstance(value, dict):
+            if _runtime_mapping_failed(value):
+                return
+            source = str(value.get("source", "") or "").lower()
+            scoped = runtime_scope or any(
+                marker in source
+                for marker in [
+                    "src.skills.token_optimizer",
+                    "src.orchestration.runtime_token_optimizer",
+                    "optimize_workflow_task_results",
+                ]
+            )
+            status = str(value.get("status", "") or value.get("token_optimizer_status", "")).strip()
+            reason = str(
+                value.get("blocked_reason", "")
+                or value.get("not_used_reason", "")
+                or value.get("reason_code", "")
+                or value.get("token_optimizer_status_reason", "")
+            ).strip()
+            provider = str(
+                value.get("token_optimizer_provider", "")
+                or value.get("provider", "")
+            ).strip()
+            explicit_runtime_source = _has_explicit_token_optimizer_runtime_source(value)
+            valid_passthrough = bool(
+                status == "passthrough"
+                and provider in {"kh", "rtk", "hybrid"}
+                and explicit_runtime_source
+                and reason
+            )
+            if scoped and (status in {"used", "blocked"} or valid_passthrough):
+                candidates.append(
+                    {
+                        "status": status,
+                        "reason": reason or f"runtime_optimizer_status_{status}",
+                    }
+                )
+            for key, item in value.items():
+                visit(
+                    item,
+                    scoped
+                    or str(key).lower()
+                    in {"runtime_token_optimization", "runtime_token_optimizer", "token_optimization"},
+                )
+        elif isinstance(value, list):
+            for item in value:
+                visit(item, runtime_scope)
+
+    visit(data)
+    return candidates[-1] if candidates else {}
+
+
+def _has_explicit_token_optimizer_runtime_source(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() in {"source", "decision_source"}:
+                source = str(item).lower()
+                if any(
+                    marker in source
+                    for marker in [
+                        "src.skills.token_optimizer",
+                        "src.orchestration.runtime_token_optimizer",
+                        "optimize_workflow_task_results",
+                    ]
+                ):
+                    return True
+            if _has_explicit_token_optimizer_runtime_source(item):
+                return True
+    elif isinstance(value, list):
+        return any(_has_explicit_token_optimizer_runtime_source(item) for item in value)
+    return False
+
+
+def _full_summary_token_output_indexes(events: Sequence[Dict[str, Any]]) -> Set[int]:
+    indexes: Set[int] = set()
+    for index, event in enumerate(events):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict) or str(payload.get("type", "")) not in {
+            "function_call_output",
+            "custom_tool_call_output",
+        }:
+            continue
+        data = _json_object_from_text(_payload_text(payload))
+        if isinstance(data.get("token_optimizer_decision"), dict):
+            indexes.add(index)
+    return indexes
+
+
+def _threshold_token_gate_required(token_gate: Dict[str, Any]) -> bool:
+    reasons = {str(reason) for reason in token_gate.get("reasons", []) or []}
+    return bool(
+        token_gate.get("required")
+        and reasons
+        & {"cumulative_tokens_above_threshold", "context_ratio_above_threshold"}
+    )
+
+
+def _apply_front_door_token_optimizer_evidence(
+    path: Path,
+    postmortem: Dict[str, Any],
+) -> int:
+    events = _session_payload_events(path)
+    correlated_receipts = _correlated_front_door_receipts(events)
+    full_summary_token_outputs = _full_summary_token_output_indexes(events)
+    decisions: List[Dict[str, Any]] = []
+    for receipt in correlated_receipts.values():
+        data = receipt.data
+        token_decision = data.get("token_optimizer", {}) or {}
+        if isinstance(token_decision, dict) and str(token_decision.get("status", "")).strip():
+            decisions.append(token_decision)
+
+    latest_actual = _latest_actual_runtime_token_optimizer_decision(events)
+
+    evidence = dict(postmortem.get("token_optimizer_evidence", {}) or {})
+    existing_receipts = any(
+        int(evidence.get(key, 0) or 0) > 0
+        for key in [
+            "runtime_calls",
+            "explicit_usage_records",
+            "explicit_passthrough_records",
+            "structured_used_records",
+            "considered_not_needed_records",
+            "blocked_reason_records",
+        ]
+    )
+    full_summary_only_evidence = bool(full_summary_token_outputs) and not latest_actual
+    if full_summary_only_evidence:
+        existing_receipts = False
+    token_gate = dict(postmortem.get("token_gate", {}) or {})
+    token_gate["checked"] = bool(existing_receipts or decisions or latest_actual)
+
+    if latest_actual:
+        status = str(latest_actual.get("status", "")).strip()
+        postmortem["token_optimizer_status"] = status
+        postmortem["token_optimizer_status_reason"] = str(latest_actual.get("reason", "") or status)
+        token_gate["decision_source"] = "runtime_token_optimizer"
+        evidence["latest_actual_runtime_status"] = status
+        evidence["latest_actual_runtime_decision"] = dict(latest_actual)
+    elif (
+        decisions
+        and str(decisions[-1].get("status", "")) == "considered_not_needed"
+        and _threshold_token_gate_required(token_gate)
+    ):
+        status = "blocked"
+        reason = (
+            "Token gate required by cumulative/context threshold; the front-door "
+            "considered_not_needed planning decision is not independent runtime "
+            "optimizer, passthrough, or blocked evidence."
+        )
+        token_gate["decision_source"] = "kh_front_door_planning_insufficient"
+        postmortem["token_optimizer_status"] = status
+        postmortem["token_optimizer_status_reason"] = reason
+        token_gate["satisfied"] = status in {"used", "passthrough"}
+    elif decisions:
+        latest = decisions[-1]
+        status = str(latest.get("status", "")).strip()
+        postmortem["token_optimizer_status"] = status
+        postmortem["token_optimizer_status_reason"] = str(
+            latest.get("reason_code", "") or status
+        )
+        token_gate["decision_source"] = "kh_front_door_runtime_receipt"
+        evidence["front_door_runtime_receipts"] = len(decisions)
+        evidence["latest_front_door_decision"] = dict(latest)
+    else:
+        evidence.setdefault("front_door_runtime_receipts", 0)
+        if not existing_receipts and (
+            full_summary_only_evidence
+            or postmortem.get("token_optimizer_status") == "considered_not_needed"
+        ):
+            postmortem["token_optimizer_status"] = "not_checked"
+            postmortem["token_optimizer_status_reason"] = "no runtime token-optimizer receipt"
+
+    evidence["front_door_runtime_receipts"] = len(decisions)
+    if decisions:
+        evidence["latest_front_door_decision"] = dict(decisions[-1])
+
+    postmortem["token_gate"] = token_gate
+    postmortem["token_optimizer_evidence"] = evidence
+    return len(decisions)
+
+
+def _has_normalized_front_door_receipt(data: Dict[str, Any]) -> bool:
+    if not data:
+        return False
+    status = str(data.get("front_door_status", "")).strip().lower()
+    route = data.get("plugin_route", {})
+    gate = data.get("execution_gate", {})
+    return bool(
+        status in {"ok", "success", "passed", "blocked"}
+        and isinstance(route, dict)
+        and "route" in route
+        and isinstance(gate, dict)
+        and "can_execute" in gate
+    )
+
+
+def _session_integrity_issues(path: Path) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8", errors="replace").splitlines(),
+        start=1,
+    ):
+        if not line.strip():
+            continue
+        _, _, structure = _partial_session_json_string_fields(line)
+        duplicate_boundary_field = bool(structure.get("duplicate_boundary_field"))
+        error = ""
+        try:
+            json.loads(line)
+        except json.JSONDecodeError as exc:
+            if not duplicate_boundary_field and not _malformed_line_can_hide_task_boundary(line):
+                continue
+            error = str(exc)
+        if not duplicate_boundary_field and not error:
+            continue
+        duplicate_reason = (
+            "Duplicate boundary-bearing JSON keys make a session event ambiguous even when the JSON "
+            "is syntactically valid."
+        )
+        malformed_reason = (
+            "Malformed session JSONL can hide a user-request or task-complete boundary, "
+            "so front-door acknowledgement reuse cannot be audited safely."
+        )
+        issues.append(
+            {
+                "skill": "always-on-front-door",
+                "status": "session_jsonl_integrity_error",
+                "severity": "P0",
+                "reason": duplicate_reason if duplicate_boundary_field else malformed_reason,
+                "action": (
+                    "Repair or regenerate the ambiguous session event before accepting front-door "
+                    "ordering or same-task acknowledgement reuse."
+                ),
+                "line_number": line_number,
+                "error": error or "duplicate boundary-bearing JSON key",
+                "sample": _short(line),
+            }
+        )
+    return issues
+
+
+def _malformed_line_can_hide_task_boundary(line: str) -> bool:
+    event_fields, payload_fields, structure = _partial_session_json_string_fields(line)
+    if structure.get("duplicate_boundary_field"):
+        return True
+    event_type, event_type_closed = event_fields.get("type", ("", False))
+    event_type = event_type.lower()
+    if not event_type:
+        if not structure.get("payload_first") or not (
+            structure.get("root_unclosed") or structure.get("root_closed_trailing_garbage")
+        ):
+            return False
+        payload_type, payload_type_closed = payload_fields.get("type", ("", False))
+        if not payload_type_closed:
+            return False
+        payload_type = payload_type.lower()
+        if payload_type == "task_complete":
+            return True
+        if payload_type != "message":
+            return False
+        role, role_closed = payload_fields.get("role", ("", False))
+        return bool(role_closed and role.lower() == "user")
+
+    if event_type_closed:
+        if event_type not in {"response_item", "event_msg"}:
+            return False
+    elif not any(
+        len(event_type) >= 4 and expected.startswith(event_type)
+        for expected in ["response_item", "event_msg"]
+    ):
+        return False
+
+    payload_type, payload_type_closed = payload_fields.get("type", ("", False))
+    payload_type = payload_type.lower()
+    if event_type == "event_msg":
+        return bool(
+            payload_type == "task_complete"
+            or (
+                not payload_type_closed
+                and len(payload_type) >= 4
+                and "task_complete".startswith(payload_type)
+            )
+        )
+
+    if payload_type != "message":
+        return bool(
+            not payload_type_closed
+            and len(payload_type) >= 4
+            and "message".startswith(payload_type)
+        )
+
+    role, role_closed = payload_fields.get("role", ("", False))
+    if not role:
+        return True
+    role = role.lower()
+    if role_closed:
+        return role == "user"
+    return "user".startswith(role)
+
+
+def _partial_session_json_string_fields(
+    line: str,
+) -> tuple[
+    Dict[str, tuple[str, bool]],
+    Dict[str, tuple[str, bool]],
+    Dict[str, bool],
+]:
+    text = str(line or "")
+    if not text.lstrip().startswith("{"):
+        return {}, {}, {"payload_first": False, "root_unclosed": False}
+
+    event_fields: Dict[str, tuple[str, bool]] = {}
+    payload_fields: Dict[str, tuple[str, bool]] = {}
+    first_root_key = ""
+    payload_seen = False
+    event_keys_seen: Set[str] = set()
+    payload_keys_seen: Set[str] = set()
+    duplicate_boundary_field = False
+    depth = 0
+    payload_depth = 0
+    root_closed_at = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "{":
+            depth += 1
+            index += 1
+            continue
+        if char == "}":
+            if depth == payload_depth:
+                payload_depth = 0
+            if depth == 1 and not root_closed_at:
+                root_closed_at = index + 1
+            depth = max(0, depth - 1)
+            index += 1
+            continue
+        if char != '"':
+            index += 1
+            continue
+
+        key, next_index, key_closed = _scan_partial_json_string(text, index)
+        if not key_closed:
+            break
+        value_index = next_index
+        while value_index < len(text) and text[value_index].isspace():
+            value_index += 1
+        if value_index >= len(text) or text[value_index] != ":":
+            index = next_index
+            continue
+        value_index += 1
+        while value_index < len(text) and text[value_index].isspace():
+            value_index += 1
+
+        normalized_key = key.lower()
+        if depth == 1 and not first_root_key:
+            first_root_key = normalized_key
+        target = event_fields if depth == 1 else payload_fields if depth == payload_depth else None
+        if target is event_fields:
+            if normalized_key in {"type", "payload"} and normalized_key in event_keys_seen:
+                duplicate_boundary_field = True
+            event_keys_seen.add(normalized_key)
+        elif target is payload_fields:
+            if normalized_key in {"type", "role"} and normalized_key in payload_keys_seen:
+                duplicate_boundary_field = True
+            payload_keys_seen.add(normalized_key)
+        if value_index < len(text) and text[value_index] == '"':
+            value, index, value_closed = _scan_partial_json_string(text, value_index)
+            if target is not None:
+                target[normalized_key] = (value, value_closed)
+            continue
+        if value_index < len(text) and text[value_index] == "{":
+            if depth == 1 and normalized_key == "payload":
+                payload_seen = True
+                payload_depth = depth + 1
+            index = value_index
+            continue
+        index = max(value_index, next_index)
+
+    return event_fields, payload_fields, {
+        "payload_first": payload_seen and first_root_key == "payload",
+        "root_unclosed": depth > 0,
+        "root_closed_trailing_garbage": bool(
+            root_closed_at and text[root_closed_at:].strip()
+        ),
+        "duplicate_boundary_field": duplicate_boundary_field,
+    }
+
+
+def _scan_partial_json_string(text: str, start: int) -> tuple[str, int, bool]:
+    value: List[str] = []
+    index = start + 1
+    while index < len(text):
+        char = text[index]
+        if char == '"':
+            return "".join(value), index + 1, True
+        if char != "\\":
+            value.append(char)
+            index += 1
+            continue
+        if index + 1 >= len(text):
+            value.append("\ufffd")
+            return "".join(value), len(text), False
+
+        escape = text[index + 1]
+        simple_escapes = {
+            '"': '"',
+            "\\": "\\",
+            "/": "/",
+            "b": "\b",
+            "f": "\f",
+            "n": "\n",
+            "r": "\r",
+            "t": "\t",
+        }
+        if escape in simple_escapes:
+            value.append(simple_escapes[escape])
+            index += 2
+            continue
+        if escape == "u":
+            digits = text[index + 2 : index + 6]
+            if len(digits) == 4 and re.fullmatch(r"[0-9a-fA-F]{4}", digits):
+                value.append(chr(int(digits, 16)))
+                index += 6
+                continue
+        value.append("\ufffd")
+        index += 2
+    return "".join(value), len(text), False
+
+
+def _has_auditable_user_request(path: Path) -> bool:
+    for event in _session_payload_events(path):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("type") != "message" or str(payload.get("role", "")).lower() != "user":
+            continue
+        text = _payload_text(payload)
+        if text.strip() and not _is_synthetic_context_message(text):
+            return True
+    return False
+
+
+_SAME_TASK_ACKNOWLEDGEMENTS = {
+    "y",
+    "yes",
+    "ok",
+    "okay",
+    "sure",
+    "approved",
+    "approve",
+    "continue",
+    "continue please",
+    "go ahead",
+    "proceed",
+    "thanks",
+    "thank you",
+    "thank you so much",
+    "gracias",
+    "merci",
+    "danke",
+    "s\u00ed",
+    "si",
+    "oui",
+    "ja",
+    "\u306f\u3044",
+    "\u3042\u308a\u304c\u3068\u3046",
+    "\u662f",
+    "\u597d\u7684",
+    "\u8c22\u8c22",
+    "네",
+    "예",
+    "응",
+    "ㅇㅇ",
+    "그래",
+    "좋아",
+    "맞아",
+    "알겠어",
+    "진행",
+    "진행해",
+    "진행해줘",
+    "계속",
+    "계속해",
+    "그대로",
+    "감사",
+    "감사합니다",
+    "고마워",
+    "고마워요",
+}
+
+
+def _is_bounded_same_task_continuation(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    normalized = normalized.strip(".!?~。！？,，;；:：")
+    if not normalized or len(normalized) > 48 or len(normalized.split()) > 6:
+        return False
+    if normalized in _SAME_TASK_ACKNOWLEDGEMENTS:
+        return True
+    return bool(
+        re.fullmatch(
+            r"\d+\s*(?:번|option)?\s*(?:으로|로)?\s*(?:(?:진행|선택)(?:해|해주세요|해줘)?|해|해주세요|해줘)?",
+            normalized,
+        )
+    )
+
+
 def _is_kh_front_door_request(lowered: str) -> bool:
     if "kh" not in lowered:
         return False
@@ -5188,24 +6844,223 @@ def _is_front_door_runtime_command(payload: Dict[str, Any], lowered: str) -> boo
     payload_type = str(payload.get("type", ""))
     if payload_type not in {"function_call", "custom_tool_call"}:
         return False
+    tool_name = str(payload.get("name", "") or "").strip().lower()
+    if _is_trusted_front_door_tool_name(tool_name):
+        return True
     return any(
-        marker in lowered
-        for marker in [
-            "src.orchestration.kh_front_door",
-            "kh_front_door",
-            "front_door.py",
-            "always_on_front_door",
-        ]
+        _command_invokes_front_door(command)
+        for command in _runtime_command_candidates(payload)
     )
+
+
+def _is_trusted_front_door_tool_name(tool_name: str) -> bool:
+    normalized = str(tool_name or "").strip().lower()
+    if normalized in {
+        "src.orchestration.kh_front_door",
+        "src.orchestration.kh_front_door.build_kh_front_door",
+        "kh_uaf.front_door",
+        "kh_uaf.kh_front_door",
+        "kh-uaf.front_door",
+        "kh-uaf.kh_front_door",
+    }:
+        return True
+    if not normalized.startswith("mcp__"):
+        return False
+    parts = [part for part in normalized.split("__") if part]
+    return bool(
+        len(parts) >= 3
+        and parts[1] in {"kh", "kh_uaf", "kh-uaf"}
+        and parts[-1] in {"front_door", "kh_front_door"}
+    )
+
+
+def _runtime_command_candidates(payload: Dict[str, Any]) -> List[str]:
+    raw = payload.get("arguments") or payload.get("input") or ""
+    candidates: List[str] = []
+    if isinstance(raw, dict):
+        command = raw.get("command")
+        if isinstance(command, str) and command.strip():
+            candidates.append(command)
+        return candidates
+    if not isinstance(raw, str) or not raw.strip():
+        return candidates
+
+    tool_name = str(payload.get("name", "") or "").strip().lower()
+    tool_tail = re.split(r"[.:]", tool_name)[-1]
+    if tool_tail == "shell_command":
+        candidates.append(raw)
+
+    try:
+        structured = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        structured = None
+    if isinstance(structured, dict):
+        command = structured.get("command")
+        if isinstance(command, str) and command.strip():
+            candidates.append(command)
+
+    command_literal = re.compile(
+        r'(?:[\"\']command[\"\']|\bcommand)\s*:\s*'
+        r'(?P<literal>\"(?:\\.|[^\"\\])*\"|\'(?:\\.|[^\'\\])*\')'
+    )
+    for match in command_literal.finditer(raw):
+        command = _decode_command_literal(match.group("literal"))
+        if command:
+            candidates.append(command)
+
+    if tool_tail == "exec" and not candidates and re.match(
+        r"\s*(?:python|python3|py)(?:\.exe)?\b", raw, re.IGNORECASE
+    ):
+        candidates.append(raw)
+    return _dedupe_text(candidates)
+
+
+def _decode_command_literal(literal: str) -> str:
+    if literal.startswith('"'):
+        try:
+            value = json.loads(literal)
+        except json.JSONDecodeError:
+            return ""
+        return value if isinstance(value, str) else ""
+    if literal.startswith("'") and literal.endswith("'"):
+        return literal[1:-1].replace("\\'", "'").replace("\\\\", "\\")
+    return ""
+
+
+def _command_invokes_front_door(command: str) -> bool:
+    for segment in _shell_command_segments(command):
+        tokens = _shell_command_tokens(segment)
+        if not tokens:
+            continue
+        executable = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if executable not in {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}:
+            continue
+
+        index = 1
+        while index < len(tokens):
+            token = tokens[index]
+            lowered_token = token.lower()
+            if lowered_token in {"-c", "-"}:
+                break
+            if lowered_token == "-m":
+                return bool(
+                    index + 1 < len(tokens)
+                    and tokens[index + 1].lower() == "src.orchestration.kh_front_door"
+                )
+            if lowered_token == "--":
+                index += 1
+                if index >= len(tokens):
+                    break
+                token = tokens[index]
+                lowered_token = token.lower()
+            if lowered_token.startswith("-"):
+                index += 2 if lowered_token in {"-w", "-x"} else 1
+                continue
+            return _is_trusted_front_door_script_path(token)
+        continue
+    return False
+
+
+def _is_trusted_front_door_script_path(value: str) -> bool:
+    normalized = str(value or "").strip().replace("\\", "/").lower()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    relative_path = "skills/always_on_front_door/scripts/front_door.py"
+    if normalized == relative_path:
+        return True
+    suffix = f"/{relative_path}"
+    if not normalized.endswith(suffix):
+        return False
+
+    prefix = normalized[: -len(suffix)].rstrip("/")
+    if re.search(
+        r"/(?:\.codex|\.claude|\.gemini)/(?:plugins/cache/)?"
+        r"kh-uaf-marketplace/kh-uaf/[^/]+$",
+        prefix,
+    ):
+        return True
+    if re.search(r"/(?:\.codex|\.claude|\.gemini)$", prefix):
+        return True
+
+    segments = [segment for segment in prefix.split("/") if segment]
+    repo_names = {"kh", "kh-uaf", "universal-agent-framework"}
+    if segments and segments[-1] in repo_names:
+        return True
+    return any(
+        segment == ".worktrees" and index > 0 and segments[index - 1] in repo_names
+        for index, segment in enumerate(segments)
+    )
+
+
+def _shell_command_segments(command: str) -> List[str]:
+    segments: List[str] = []
+    current: List[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            current.append(char)
+            if char == "\\" and index + 1 < len(command):
+                index += 1
+                current.append(command[index])
+            elif char == quote:
+                quote = ""
+        elif char in {"\"", "'"}:
+            quote = char
+            current.append(char)
+        elif char in {"\r", "\n", ";", "|", "&"}:
+            segment = "".join(current).strip()
+            if segment:
+                segments.append(segment)
+            current = []
+        else:
+            current.append(char)
+        index += 1
+    segment = "".join(current).strip()
+    if segment:
+        segments.append(segment)
+    return segments
+
+
+def _shell_command_tokens(segment: str) -> List[str]:
+    tokens = re.findall(
+        r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[^\s]+',
+        segment,
+    )
+    return [
+        token[1:-1] if len(token) >= 2 and token[0] == token[-1] and token[0] in {"\"", "'"} else token
+        for token in tokens
+    ]
 
 
 def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:
     payload_type = str(payload.get("type", ""))
+    if payload_type == "agent_message":
+        phase = str(payload.get("phase", "")).lower()
+        if phase in {"commentary", "analysis"}:
+            return False
+        if phase in {"final", "final_answer"}:
+            return bool(lowered.strip())
+        return bool(lowered.strip()) and not _looks_like_progress_commentary(lowered)
+    if payload_type == "task_complete":
+        return True
+    if payload_type == "message":
+        if str(payload.get("role", "")).lower() != "assistant" or not lowered.strip():
+            return False
+        phase = str(payload.get("phase", "")).lower()
+        if phase in {"commentary", "analysis"}:
+            return False
+        if phase in {"final", "final_answer"}:
+            return True
+        return not _looks_like_progress_commentary(lowered)
     if payload_type not in {"function_call", "custom_tool_call"}:
         return False
     if _is_non_bootstrap_kh_skill_read(payload, lowered):
         return True
-    if _is_kh_front_door_evidence(lowered):
+    if _is_front_door_runtime_command(payload, lowered):
+        return False
+    if _is_bootstrap_front_door_skill_read(payload, lowered):
         return False
     tool_name = str(payload.get("name", "")).lower()
     if tool_name in {"apply_patch"}:
@@ -5250,6 +7105,47 @@ def _is_non_kh_work_start(payload: Dict[str, Any], lowered: str) -> bool:
     )
 
 
+def _looks_like_progress_commentary(lowered: str) -> bool:
+    text = re.sub(r"\s+", " ", str(lowered or "").strip())
+    if not text:
+        return False
+    english = re.match(
+        r"^(?:i(?:'ll| will| am|'m)\b|let me\b|next[, ]+i(?:'ll| will)\b|"
+        r"(?:now )?(?:checking|inspecting|reading|running|testing|reviewing|tracing|investigating)\b)",
+        text,
+    )
+    if english and any(
+        marker in text
+        for marker in [
+            "check",
+            "inspect",
+            "read",
+            "run",
+            "test",
+            "review",
+            "trace",
+            "investigat",
+            "look",
+            "examin",
+            "patch",
+            "edit",
+            "update",
+        ]
+    ):
+        return True
+    return any(
+        marker in text
+        for marker in [
+            "\ud655\uc778\ud558\uaca0\uc2b5\ub2c8\ub2e4",
+            "\uc0b4\ud3b4\ubcf4\uaca0\uc2b5\ub2c8\ub2e4",
+            "\ucd94\uc801\ud558\uaca0\uc2b5\ub2c8\ub2e4",
+            "\ud14c\uc2a4\ud2b8\ud558\uaca0\uc2b5\ub2c8\ub2e4",
+            "\uc9c4\ud589 \uc911\uc785\ub2c8\ub2e4",
+            "\ud655\uc778 \uc911\uc785\ub2c8\ub2e4",
+        ]
+    )
+
+
 def _is_non_bootstrap_kh_skill_read(payload: Dict[str, Any], lowered: str) -> bool:
     tool_name = str(payload.get("name", "")).lower()
     if tool_name not in {"shell_command", "functions.shell_command"}:
@@ -5259,6 +7155,37 @@ def _is_non_bootstrap_kh_skill_read(payload: Dict[str, Any], lowered: str) -> bo
     if "skill.md" not in lowered or "\\skills\\" not in lowered and "/skills/" not in lowered:
         return False
     return "always_on_front_door" not in lowered
+
+
+def _is_bootstrap_front_door_skill_read(payload: Dict[str, Any], lowered: str) -> bool:
+    tool_name = str(payload.get("name", "")).lower()
+    if tool_name not in {"shell_command", "functions.shell_command"}:
+        return False
+    return bool(
+        "skill.md" in lowered
+        and "always_on_front_door" in lowered
+        and any(
+            marker in lowered
+            for marker in [
+                "get-content",
+                "read_text",
+                "select-string",
+                "findstr",
+                "rg ",
+            ]
+        )
+        and not any(
+            marker in lowered
+            for marker in [
+                "apply_patch",
+                "set-content",
+                "add-content",
+                "remove-item",
+                "move-item",
+                "copy-item",
+            ]
+        )
+    )
 
 
 def summarize_session_skill_audits(paths: Iterable[str | Path]) -> Dict[str, Any]:
@@ -5536,7 +7463,14 @@ def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str],
         passive = _is_passive_text(text)
         clean_text = _strip_passive_prefix(text)
         lowered = clean_text.lower()
+        normalized_front_door = _front_door_json(clean_text)
         front_door_status = _front_door_skill_status(clean_text, skill_name)
+        if (
+            skill_name == "token-optimizer"
+            and front_door_status
+            and payload_type not in {"function_call_output", "custom_tool_call_output"}
+        ):
+            front_door_status = ""
         alias_hit = bool(front_door_status) or any(alias.lower() in lowered for alias in aliases)
         runtime_marker_hit = not front_door_status and any(marker.lower() in lowered for marker in runtime_markers)
         if skill_name == "token-optimizer" and runtime_marker_hit:
@@ -5563,7 +7497,13 @@ def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str],
         if len(evidence) < 8:
             evidence.append(_short(clean_text))
         if not passive and len(active_evidence) < 8:
-            active_evidence.append(clean_text)
+            if normalized_front_door and payload_type in {
+                "function_call_output",
+                "custom_tool_call_output",
+            }:
+                active_evidence.append(json.dumps(normalized_front_door, sort_keys=True))
+            else:
+                active_evidence.append(clean_text)
 
     status = "absent"
     if mentions:
@@ -5659,18 +7599,39 @@ def _front_door_skill_status(text: str, skill_name: str) -> str:
     data = _front_door_json(text)
     if not data:
         return ""
+    status_summary = data.get("skill_status_summary", {}) or {}
+    summary = (
+        status_summary.get(skill_name, {})
+        if isinstance(status_summary, dict)
+        else {}
+    )
+    if (
+        isinstance(summary, dict)
+        and str(summary.get("status", "")) == "applied"
+        and "runtime_evidence" in summary
+        and not summary.get("runtime_evidence")
+    ):
+        return "selected"
     runtime_applied = {str(item) for item in data.get("runtime_applied_skills", []) or []}
     if skill_name in runtime_applied:
         return "applied"
+    if skill_name == "token-optimizer":
+        token_decision = data.get("token_optimizer", {}) or {}
+        if isinstance(token_decision, dict):
+            token_status = str(token_decision.get("status", "")).strip()
+            if token_status == "used" or token_decision.get("used") is True:
+                return "applied"
+            if token_status == "blocked":
+                return "blocked"
+            if token_status:
+                return "considered"
     immediate = {str(item) for item in data.get("immediate_next_skills", []) or []}
     if skill_name in immediate:
         return "selected"
     selected = {str(item) for item in data.get("selected_not_executed_skills", []) or []}
     if skill_name in selected:
         return "selected"
-    status_summary = data.get("skill_status_summary", {}) or {}
     if isinstance(status_summary, dict) and skill_name in status_summary:
-        summary = status_summary.get(skill_name, {}) or {}
         status = str(summary.get("status", ""))
         if status == "applied":
             return "applied"
@@ -5684,10 +7645,351 @@ def _front_door_skill_status(text: str, skill_name: str) -> str:
 
 
 def _front_door_json(text: str) -> Dict[str, Any]:
-    lowered = text.lower()
-    if not _looks_like_front_door_runtime_output(lowered):
+    data = _json_object_from_text(text)
+    if not data:
         return {}
-    return _json_object_from_text(text)
+    if data.get("m") == "kh_fd_micro":
+        if not _is_valid_micro_front_door_packet(data):
+            return {}
+        return _normalize_micro_front_door_packet(data)
+    if _is_valid_compact_front_door_packet(data):
+        return data
+    if not _looks_like_front_door_runtime_output(text.lower()):
+        return {}
+    if "token_optimizer_decision" in data:
+        return _normalize_full_summary_front_door_packet(data)
+    return data
+
+
+def _is_valid_micro_front_door_packet(data: Dict[str, Any]) -> bool:
+    if data.get("m") != "kh_fd_micro" or type(data.get("v")) is not int or data.get("v") != 1:
+        return False
+    if str(data.get("s", "")) not in {"ok", "blocked"}:
+        return False
+
+    classification = data.get("cls")
+    route = data.get("r")
+    gate = data.get("g")
+    goal = data.get("ga")
+    token = data.get("t")
+    if not all(isinstance(value, dict) for value in [classification, route, gate, goal, token]):
+        return False
+    if str(classification.get("c", "")) not in {"l", "m", "h", "a"}:
+        return False
+    if str(classification.get("x", "")) not in {"direct", "skill", "dag", "clarify"}:
+        return False
+    if "d" in classification and str(classification.get("d", "")) not in {
+        "sw",
+        "db",
+        "product",
+        "ops",
+        "doc",
+        "general",
+    }:
+        return False
+
+    if str(route.get("r", "")) not in {"direct", "single", "hybrid", "clarify"}:
+        return False
+    if "c" in route and not str(route.get("c", "")).strip():
+        return False
+
+    gate_status = str(gate.get("s", ""))
+    if gate_status not in {"ok", "preflight", "brainstorm", "clarify", "credential", "stop"}:
+        return False
+    if type(gate.get("ok")) is not bool:
+        return False
+    if bool(gate["ok"]) != (gate_status == "ok"):
+        return False
+
+    if type(goal.get("r")) is not bool:
+        return False
+    if str(goal.get("s", "")) not in {"p", "e", "n", "u"}:
+        return False
+    if str(goal.get("b", "")) not in {"k", "h", "y", "u"}:
+        return False
+
+    token_status = str(token.get("s", ""))
+    if token_status not in {"used", "not_needed", "pass", "blocked"}:
+        return False
+    if type(token.get("u")) is not bool or not str(token.get("why", "")).strip():
+        return False
+    if bool(token["u"]) != (token_status == "used"):
+        return False
+    if token_status == "used":
+        if type(token.get("saved")) is not int or token.get("saved", -1) < 0:
+            return False
+        ratio = token.get("ratio")
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
+            return False
+
+    authorization = data.get("auth")
+    if authorization is not None:
+        if not isinstance(authorization, dict) or type(authorization.get("stop")) is not bool:
+            return False
+        if "s" in authorization and str(authorization.get("s", "")) not in {
+            "gate_block",
+            "next_block",
+            "ok",
+        }:
+            return False
+    return True
+
+
+def _is_valid_compact_front_door_packet(data: Dict[str, Any]) -> bool:
+    classification = data.get("classification", {})
+    route = data.get("plugin_route", {})
+    gate = data.get("execution_gate", {})
+    token_decision = data.get("token_optimizer", {})
+    skill_source = data.get("skill_source", {})
+    return bool(
+        data.get("summary_mode") == "ultra_compact"
+        and str(data.get("front_door_status", "")).strip()
+        and isinstance(classification, dict)
+        and "complexity" in classification
+        and "recommended_execution" in classification
+        and isinstance(route, dict)
+        and "route" in route
+        and isinstance(gate, dict)
+        and "status" in gate
+        and "can_execute" in gate
+        and isinstance(token_decision, dict)
+        and _is_valid_normalized_front_door_token_decision(token_decision)
+        and isinstance(skill_source, dict)
+        and bool(skill_source)
+    )
+
+
+def _is_valid_normalized_micro_front_door_packet(data: Dict[str, Any]) -> bool:
+    protocol = data.get("micro_protocol", {})
+    route = data.get("plugin_route", {})
+    gate = data.get("execution_gate", {})
+    token_decision = data.get("token_optimizer", {})
+    authorization = data.get("execution_authorization", {})
+    actions = data.get("required_next_action_codes")
+    return bool(
+        data.get("summary_mode") == "micro"
+        and protocol == {"marker": "kh_fd_micro", "version": 1}
+        and str(data.get("front_door_status", "")) in {"ok", "blocked"}
+        and isinstance(route, dict)
+        and route.get("route") in {"direct", "single", "hybrid", "clarify"}
+        and isinstance(gate, dict)
+        and type(gate.get("can_execute")) is bool
+        and isinstance(token_decision, dict)
+        and _is_valid_normalized_front_door_token_decision(token_decision)
+        and isinstance(authorization, dict)
+        and type(authorization.get("must_stop_before_execution")) is bool
+        and isinstance(actions, list)
+        and all(isinstance(action, str) and action for action in actions)
+    )
+
+
+def _is_valid_normalized_front_door_token_decision(
+    decision: Dict[str, Any],
+) -> bool:
+    status = str(decision.get("status", ""))
+    if status not in {"used", "considered_not_needed", "passthrough", "blocked"}:
+        return False
+    if type(decision.get("used")) is not bool or decision["used"] != (status == "used"):
+        return False
+    if not str(decision.get("reason_code", "")).strip():
+        return False
+    if status != "used":
+        return True
+    saved = decision.get("saved")
+    ratio = decision.get("ratio")
+    return bool(
+        type(saved) is int
+        and saved >= 0
+        and not isinstance(ratio, bool)
+        and isinstance(ratio, (int, float))
+        and 0 <= ratio <= 1
+    )
+
+
+def _normalize_full_summary_front_door_packet(data: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(data)
+    normalized.pop("token_optimizer", None)
+    token_decision = _normalize_full_summary_token_optimizer_decision(
+        data.get("token_optimizer_decision")
+    )
+    if token_decision:
+        normalized["token_optimizer"] = token_decision
+    return normalized
+
+
+def _normalize_full_summary_token_optimizer_decision(value: Any) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    status = str(value.get("token_optimizer_status", "")).strip()
+    reason = str(value.get("token_optimizer_status_reason", "")).strip()
+    provider = str(
+        value.get("token_optimizer_provider", "") or value.get("provider", "")
+    ).strip()
+    expected_used = status == "used"
+    if status not in {"used", "considered_not_needed", "passthrough", "blocked"}:
+        return {}
+    if not reason or provider not in {"kh", "rtk", "hybrid"}:
+        return {}
+    if (
+        value.get("token_optimizer_gate_status") != "checked"
+        or value.get("front_door_gate") is not True
+    ):
+        return {}
+    if str(value.get("actual_optimization_status", "")).strip() != status:
+        return {}
+    for key in [
+        "optimization_applied",
+        "actual_optimization_used",
+        "actual_optimization_claimed",
+    ]:
+        if type(value.get(key)) is not bool or value[key] != expected_used:
+            return {}
+    evidence = value.get("evidence")
+    if (
+        not isinstance(evidence, list)
+        or "front_door_token_optimizer_gate" not in evidence
+    ):
+        return {}
+    if not expected_used and not str(value.get("not_used_reason", "")).strip():
+        return {}
+
+    normalized: Dict[str, Any] = {
+        "status": status,
+        "used": expected_used,
+        "reason_code": _full_summary_token_reason_code(value),
+    }
+    if expected_used:
+        normalized.update(
+            {
+                "provider": provider,
+                "saved": value.get("estimated_payload_tokens_saved"),
+                "ratio": value.get("estimated_payload_token_savings_ratio"),
+            }
+        )
+    if not _is_valid_normalized_front_door_token_decision(normalized):
+        return {}
+    return normalized
+
+
+def _full_summary_token_reason_code(decision: Dict[str, Any]) -> str:
+    status = str(decision.get("token_optimizer_status", "")).strip()
+    if status in {"used", "passthrough", "blocked"}:
+        return status
+    reason = str(
+        decision.get("not_used_reason", "")
+        or decision.get("token_optimizer_status_reason", "")
+    ).lower()
+    if (
+        "no command output" in reason
+        or "subagent transcript" in reason
+        or "compressible artifact" in reason
+    ):
+        return "no_candidate_output"
+    if "too small" in reason or "small" in reason:
+        return "small_input"
+    if "contract" in reason or "source-of-truth" in reason or "preserve" in reason:
+        return "quality_passthrough"
+    return status
+
+
+def _normalize_micro_front_door_packet(data: Dict[str, Any]) -> Dict[str, Any]:
+    status = str(data.get("s", "")).strip().lower()
+    route = data.get("r", {}) or {}
+    gate = data.get("g", {}) or {}
+    if not status or not isinstance(route, dict) or not isinstance(gate, dict):
+        return {}
+
+    plugin_route: Dict[str, Any] = {"route": str(route.get("r", "") or "")}
+    controller = str(route.get("c", "") or "")
+    if controller:
+        plugin_route["controller"] = controller
+
+    gate_status_codes = {
+        "ok": "allowed",
+        "preflight": "blocked_until_large_work_preflight",
+        "brainstorm": "blocked_until_brainstorming_handoff",
+        "clarify": "blocked_until_clarification",
+        "credential": "blocked_until_credential_safety_gate",
+        "stop": "blocked_until_user_stop_checkpoint",
+    }
+    skill_codes = {
+        "brainstorm": "brainstorming-harness",
+        "goal": "goal-state-harness",
+        "workflow": "workflow-usability-harness",
+        "host": "host-agent-orchestration",
+        "parallel": "parallel-orchestration-harness",
+        "pb2cs": "pb-to-csharp-migration-harness",
+        "sql-style": "sql-formatting-style-harness",
+        "review": "review-gate-harness",
+        "qa": "qa-gate-harness",
+        "verify": "verification-before-completion-harness",
+    }
+    immediate = [
+        skill_codes.get(str(item), str(item))
+        for item in data.get("next", []) or []
+        if str(item).strip()
+    ]
+    normalized: Dict[str, Any] = {
+        "summary_mode": "micro",
+        "micro_protocol": {"marker": "kh_fd_micro", "version": 1},
+        "front_door_status": status,
+        "plugin_route": plugin_route,
+        "execution_gate": {
+            "status": gate_status_codes.get(
+                str(gate.get("s", "") or ""),
+                str(gate.get("s", "") or ""),
+            ),
+            "can_execute": bool(gate.get("ok")),
+        },
+        "immediate_next_skills": immediate,
+    }
+    action_codes = {
+        "stop": "stop_before_task_work",
+        "next": "apply_immediate_next_skills",
+        "preflight": "large_work_preflight",
+        "brainstorm": "brainstorming_handoff",
+        "provider": "apply_selected_provider",
+    }
+    normalized["required_next_action_codes"] = [
+        action_codes.get(str(item), str(item))
+        for item in data.get("act", []) or []
+        if str(item).strip()
+    ]
+    authorization = data.get("auth", {}) or {}
+    if isinstance(authorization, dict) and "stop" in authorization:
+        authorization_statuses = {
+            "gate_block": "blocked_by_execution_gate",
+            "next_block": "blocked_by_pending_immediate_skill_gate",
+            "ok": "allowed",
+        }
+        normalized["execution_authorization"] = {
+            "must_stop_before_execution": bool(authorization.get("stop")),
+            "status": authorization_statuses.get(
+                str(authorization.get("s", "") or ""),
+                str(authorization.get("s", "") or ""),
+            ),
+        }
+    token_decision = data.get("t", {}) or {}
+    if isinstance(token_decision, dict) and str(token_decision.get("s", "")).strip():
+        token_status_codes = {
+            "not_needed": "considered_not_needed",
+            "pass": "passthrough",
+        }
+        normalized_token = {
+            "status": token_status_codes.get(
+                str(token_decision.get("s", "")),
+                str(token_decision.get("s", "")),
+            ),
+            "used": bool(token_decision.get("u")),
+            "reason_code": str(token_decision.get("why", "") or ""),
+        }
+        for key in ["saved", "ratio"]:
+            if key in token_decision:
+                normalized_token[key] = token_decision[key]
+        normalized["token_optimizer"] = normalized_token
+    if status in {"ok", "success", "passed"}:
+        normalized["runtime_applied_skills"] = ["always-on-front-door"]
+    return normalized
 
 
 def _json_object_from_text(text: str) -> Dict[str, Any]:
@@ -5700,6 +8002,33 @@ def _json_object_from_text(text: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _structured_front_door_acceptance_outputs(
+    skill_name: str,
+    observations: Dict[str, Any],
+) -> Set[str]:
+    if skill_name not in {"always-on-front-door", "automatic-intake-harness"}:
+        return set()
+
+    satisfied: Set[str] = set()
+    split_fields = ACCEPTANCE_OUTPUT_MARKERS[skill_name]["status_split"]
+    for text in observations.get("active_evidence", []):
+        data = _front_door_json(_strip_passive_prefix(str(text)))
+        if not _is_valid_compact_front_door_packet(data):
+            continue
+        satisfied.add("intake_evidence")
+        classification = data.get("classification", {})
+        route = data.get("plugin_route", {})
+        gate = data.get("execution_gate", {})
+        if (
+            classification.get("recommended_execution") == "direct_answer"
+            and route.get("route") == "direct"
+            and gate.get("can_execute") is True
+            and not any(data.get(field) for field in split_fields)
+        ):
+            satisfied.add("status_split")
+    return satisfied
 
 
 def _acceptance_for_skill(
@@ -5761,10 +8090,11 @@ def _acceptance_for_skill(
 
     active_text = "\n".join(observations.get("active_evidence", []))
     lowered = active_text.lower()
+    structured_outputs = _structured_front_door_acceptance_outputs(skill_name, observations)
     satisfied_outputs = []
     missing_outputs = []
     for output_name, markers in ACCEPTANCE_OUTPUT_MARKERS.get(skill_name, {}).items():
-        if any(marker.lower() in lowered for marker in markers):
+        if output_name in structured_outputs or any(marker.lower() in lowered for marker in markers):
             satisfied_outputs.append(output_name)
         else:
             missing_outputs.append(output_name)
@@ -6019,6 +8349,13 @@ def _contains_standalone_action_verb(lowered: str) -> bool:
 def _looks_like_front_door_runtime_output(lowered: str) -> bool:
     if "{" not in lowered or "}" not in lowered:
         return False
+    if (
+        ('"m": "kh_fd_micro"' in lowered or '"m":"kh_fd_micro"' in lowered)
+        and '"s"' in lowered
+        and '"r"' in lowered
+        and '"g"' in lowered
+    ):
+        return True
     has_status = '"front_door_status"' in lowered or "'front_door_status'" in lowered
     if not has_status:
         return False
@@ -6117,8 +8454,8 @@ def _required_skills(
         return required
 
     if _has_nontrivial_work_signals(postmortem, lowered):
-        _add(required, "always-on-front-door", "non-trivial KH-capable session should enter KH front-door before any other work")
-        _add(required, "automatic-intake-harness", "non-trivial KH-capable session should start with automatic intake")
+        _add(required, "always-on-front-door", "each new user request or task should enter KH front-door before any other work")
+        _add(required, "automatic-intake-harness", "each new user request or task should start with automatic intake")
         _add(required, "plugin-composition-policy", "automatic intake should choose direct, single-provider, hybrid, or clarify route")
         _add(required, "request-complexity-router", "automatic intake should classify request complexity before work")
         _add(required, "skill-catalog", "automatic intake should resolve the packaged skill source before claiming skill use")

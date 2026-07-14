@@ -1,13 +1,13 @@
 ---
 name: automatic-intake-harness
-description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when non-trivial Codex, Antigravity-style, Claude Code, or local agent work involves project files, code changes, deliverables, reviews, long logs, verification, subagents, persistence, or high-risk actions, even if the user did not name KH, UAF, a skill, or a harness.
+description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it to classify every new Codex, Antigravity-style, Claude Code, or local-agent request without requiring the user to name KH, UAF, a skill, or a harness, then exit directly or route governed work.
 ---
 
 # Automatic Intake Harness
 
 ## KH Entry Contract
 
-- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
+- Start every new request through `always-on-front-door`; light/direct is a runtime exit classification, not a bootstrap exception.
 - If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
 - Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
@@ -29,7 +29,7 @@ This is the always-on KH intake skill. It prevents useful KH behavior from depen
 3. If the conversation or project already contains an active instruction to actively, always, or by default use KH/UAF skills or harnesses, carry `kh_active_directive=active` into later work-bearing turns until the user explicitly opts out.
 4. Keep simple direct questions cheap: use direct answer when classification is light and no project artifact, command output, safety, persistence, or verification evidence is needed.
 5. For project-file work, code changes, substantial docs, long logs, review, QA, security, branch finishing, or stateful workflows, record the selected skills before acting.
-6. Treat the intake command itself as runtime evidence for `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`.
+6. Treat the intake command itself as runtime evidence for `automatic-intake-harness`, `plugin-composition-policy`, and `request-complexity-router`. Count `skill-catalog` as applied only when full catalog discovery actually ran; targeted micro validation is separate evidence.
 7. Treat every other selected skill as `selected_not_executed` until its implementation target, gate, artifact, or explicit passthrough evidence actually runs.
 8. If the installed host points to a stale KH cache path, stop and resolve the current repo-local `skills/` folder or latest installed cache before claiming skill use.
 9. After the work, report what was actually applied, what was only selected for next steps, and any residual risk.
@@ -46,7 +46,7 @@ This is the always-on KH intake skill. It prevents useful KH behavior from depen
 
 ## Common mistakes
 
-- Do not wait for the user to enumerate skill names before routing a non-trivial task.
+- Do not wait for the user to enumerate skill names before routing a new request.
 - Do not drop a prior "actively use KH skills/harnesses" instruction on later turns where the user says only "continue", "finish", or describes ordinary work.
 - Do not run the full role DAG for simple definitions, one-line explanations, or tiny edits.
 - Do not claim a selected skill was executed just because its name appears in routing output.

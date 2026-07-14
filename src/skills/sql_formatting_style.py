@@ -4,7 +4,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from src.contracts import HarnessResult
 
@@ -37,6 +37,13 @@ _CLAUSE_WORDS = {
     "WITH",
 }
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
+_INSERT_SELECT_LAYOUT_CONTRACT = {
+    "wide_mapping_min_items": 8,
+    "horizontal_expression_max_length": 72,
+    "vertical_fallback_min_expression_length": 73,
+    "max_short_singleton_lines": 1,
+    "measurement": "canonical_non_comment_token_text_length",
+}
 
 
 @dataclass(frozen=True)
@@ -131,6 +138,7 @@ def verify_sql_formatting_style(
     cte_temp_table_reason: str | None = None,
     alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     scalar_function_refactor: Mapping[str, Any] | None = None,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None = None,
     operation: str = "formatting",
 ) -> HarnessResult:
     """Return deterministic formatting evidence without inferring SQL semantics."""
@@ -200,7 +208,7 @@ def verify_sql_formatting_style(
         boundary_requested = (
             operation_name == "refactor"
             and isinstance(scalar_function_refactor, Mapping)
-            and str(scalar_function_refactor.get("decision", "")).strip().lower() == "convert"
+            and _evidence_text(scalar_function_refactor.get("decision")).lower() == "convert"
         )
         boundary_valid = False
         if boundary_requested:
@@ -287,6 +295,7 @@ def verify_sql_formatting_style(
         "status": "blocked" if _has_errors(style_issues) else "passed",
         "issues": [item.to_dict() for item in style_issues],
         "contract_source": style_source,
+        "insert_select_layout_contract": dict(_INSERT_SELECT_LAYOUT_CONTRACT),
     }
 
     refactor_metadata, refactor_issues = _validate_scalar_function_refactor(
@@ -294,6 +303,7 @@ def verify_sql_formatting_style(
         operation=operation_name,
         original_sha256=original_sha256,
         formatted_sha256=formatted_sha256,
+        runtime_receipt_authenticator=runtime_receipt_authenticator,
     )
     semantic_status = refactor_metadata["scalar_function_refactor"].get(
         "semantic_status",
@@ -360,13 +370,21 @@ def verify_sql_formatting_style(
         "semantic_refactor_evidence": refactor_metadata,
         "semantic_checks": {
             "status": semantic_status,
-            "reason": "Python validates evidence shape and correlation only; database semantics are not proven.",
-            "requires": [
-                "authoritative scalar-function definition",
-                "pure deterministic lookup analysis",
-                "cardinality and unmatched-row proof",
-                "trusted execution authenticated outside caller-supplied metadata",
-            ],
+            "reason": (
+                "Authenticated runtime result comparison is bound to the exact SQL and equivalence contract."
+                if semantic_status == "proven"
+                else "Python validates evidence shape and correlation only; database semantics are not proven."
+            ),
+            "requires": (
+                []
+                if semantic_status == "proven"
+                else [
+                    "authoritative scalar-function definition",
+                    "pure deterministic lookup analysis",
+                    "cardinality and unmatched-row proof",
+                    "trusted execution authenticated outside caller-supplied metadata",
+                ]
+            ),
         },
         "release_readiness": {
             "status": "ready" if release_ready else ("pending" if pending else "blocked"),
@@ -374,14 +392,18 @@ def verify_sql_formatting_style(
                 "formatting_verification_completed"
                 if release_ready and operation_name != "refactor"
                 else (
-                    "authenticated_runtime_semantic_execution_required"
-                    if pending
-                    else "mechanical_or_evidence_gate_blocked"
+                    "authenticated_runtime_refactor_verified"
+                    if release_ready
+                    else (
+                        "authenticated_runtime_semantic_execution_required"
+                        if pending
+                        else "mechanical_or_evidence_gate_blocked"
+                    )
                 )
             ),
             "requires": (
                 []
-                if operation_name != "refactor"
+                if operation_name != "refactor" or release_ready
                 else [
                     "semantic_checks.status=proven",
                     "execution_authentication=authenticated",
@@ -948,7 +970,9 @@ def _build_sql_scopes(tokens: Sequence[_SqlToken]) -> List[_SqlScope]:
     code_indices = [
         item.index
         for item in tokens
-        if item.kind not in {"line_comment", "block_comment"} and item.normalized == "SELECT"
+        if item.kind not in {"line_comment", "block_comment"}
+        and item.normalized in {"SELECT", "UPDATE", "DELETE", "MERGE"}
+        and _is_sql_scope_start(tokens, item.index)
     ]
     scopes: List[_SqlScope] = []
     for ordinal, start in enumerate(code_indices, start=1):
@@ -962,7 +986,7 @@ def _build_sql_scopes(tokens: Sequence[_SqlToken]) -> List[_SqlScope]:
             if token.depth == depth and token.normalized == ";":
                 end = cursor + 1
                 break
-            if token.depth == depth and token.normalized == "SELECT" and cursor in code_indices:
+            if token.depth == depth and cursor in code_indices:
                 end = cursor
                 break
         scope_id = f"scope_{ordinal}"
@@ -979,6 +1003,28 @@ def _build_sql_scopes(tokens: Sequence[_SqlToken]) -> List[_SqlScope]:
     return scopes
 
 
+def _is_sql_scope_start(tokens: Sequence[_SqlToken], index: int) -> bool:
+    keyword = tokens[index].normalized
+    if keyword in {"SELECT", "MERGE"}:
+        return True
+    if keyword not in {"UPDATE", "DELETE"}:
+        return False
+
+    depth = tokens[index].depth
+    cursor = index - 1
+    while cursor >= 0:
+        token = tokens[cursor]
+        if token.kind in {"line_comment", "block_comment"}:
+            cursor -= 1
+            continue
+        if token.depth < depth or (token.depth == depth and token.normalized == ";"):
+            break
+        if token.depth == depth and token.normalized == "MERGE":
+            return False
+        cursor -= 1
+    return True
+
+
 def _parse_scope_declarations(
     tokens: Sequence[_SqlToken],
     scope_id: str,
@@ -987,18 +1033,39 @@ def _parse_scope_declarations(
     depth: int,
 ) -> List[_SourceDeclaration]:
     declarations: List[_SourceDeclaration] = []
-    cursor = start + 1
+    statement_kind = tokens[start].normalized
+    cursor = start if statement_kind == "MERGE" else start + 1
     while cursor < end:
         token = tokens[cursor]
         if token.kind in {"line_comment", "block_comment"}:
             cursor += 1
             continue
-        if token.depth != depth or token.normalized not in {"FROM", "JOIN", "APPLY"}:
+        source_markers = {"FROM", "JOIN", "APPLY"}
+        if statement_kind == "MERGE":
+            source_markers.add("USING")
+        is_merge_target = statement_kind == "MERGE" and cursor == start
+        if token.depth != depth or (not is_merge_target and token.normalized not in source_markers):
             cursor += 1
             continue
         value_index = _next_code_token(tokens, cursor + 1, end)
         if value_index is None:
             break
+        if (
+            statement_kind == "DELETE"
+            and token.normalized == "FROM"
+            and cursor == _next_after_top_modifier(tokens, start + 1, end)
+            and _has_later_scope_keyword(tokens, value_index + 1, end, depth, "FROM")
+        ):
+            cursor = value_index + 1
+            continue
+        if is_merge_target:
+            value_index = _next_after_top_modifier(tokens, cursor + 1, end)
+            if value_index is None:
+                break
+        if is_merge_target and tokens[value_index].normalized == "INTO":
+            value_index = _next_code_token(tokens, value_index + 1, end)
+            if value_index is None:
+                break
         if tokens[value_index].text == "(":
             close = _matching_parenthesis_token(tokens, value_index, end)
             if close is None:
@@ -1067,6 +1134,44 @@ def _parse_scope_declarations(
         )
         cursor = max(cursor + 1, source_end + 1)
     return declarations
+
+
+def _has_later_scope_keyword(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    end: int,
+    depth: int,
+    keyword: str,
+) -> bool:
+    return any(
+        token.kind not in {"line_comment", "block_comment"}
+        and token.depth == depth
+        and token.normalized == keyword
+        for token in tokens[start:end]
+    )
+
+
+def _next_after_top_modifier(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    end: int,
+) -> int | None:
+    value = _next_code_token(tokens, start, end)
+    if value is None or tokens[value].normalized != "TOP":
+        return value
+    amount = _next_code_token(tokens, value + 1, end)
+    if amount is None:
+        return None
+    if tokens[amount].text == "(":
+        close = _matching_parenthesis_token(tokens, amount, end)
+        if close is None:
+            return None
+        value = _next_code_token(tokens, close + 1, end)
+    else:
+        value = _next_code_token(tokens, amount + 1, end)
+    if value is not None and tokens[value].normalized == "PERCENT":
+        value = _next_code_token(tokens, value + 1, end)
+    return value
 
 
 def _find_alias_changes(
@@ -1178,6 +1283,18 @@ def _validate_alias_role_plan(
             conflicts.append(f"scope {scope_id!r} needs roles")
             issue_codes.add("alias_plan_incomplete")
             continue
+        main_role_indexes = [
+            index
+            for index, role in enumerate(roles)
+            if isinstance(role, Mapping)
+            and str(role.get("kind", "support")).strip().lower() == "main"
+        ]
+        if main_role_indexes != [0]:
+            conflicts.append(
+                f"scope {scope_id!r} requires exactly one main role as the first role; "
+                f"found indexes={main_role_indexes!r}"
+            )
+            issue_codes.add("alias_main_role_required")
         members: List[Tuple[str, str, str]] = []
         next_role_letter = ord("B")
         for role_index, role in enumerate(roles):
@@ -1309,6 +1426,7 @@ def _canonical_token_stream(
     insert_after: Dict[int, str] = {}
     replacement: Dict[int, str] = {}
     range_markers: Dict[int, str] = {}
+    declarations = [declaration for scope in scopes for declaration in scope.declarations]
     for start, end, marker in range_replacements:
         skip.update(range(start, end + 1))
         if marker:
@@ -1327,13 +1445,13 @@ def _canonical_token_stream(
         for index in range(scope.start, min(scope.end, len(tokens))):
             if any(
                 item.source_start <= index <= item.source_name_end
-                for item in scope.declarations
+                for item in declarations
             ):
                 continue
             token = tokens[index]
             if _identifier_value(token) != alias:
                 continue
-            if _is_bound_alias_reference(tokens, index, scope, alias):
+            if _is_bound_alias_reference(tokens, index, scope, alias, scopes):
                 replacement[index] = marker
 
     values: List[str] = []
@@ -1353,11 +1471,21 @@ def _is_bound_alias_reference(
     index: int,
     scope: _SqlScope,
     alias: str,
+    scopes: Sequence[_SqlScope] | None = None,
 ) -> bool:
     if _identifier_value(tokens[index]) != alias:
         return False
-    if sum(item.effective_alias == alias for item in scope.declarations) != 1:
+    binding_scope = (
+        _binding_scope_for_alias(scopes, index, alias)
+        if scopes is not None
+        else scope
+    )
+    if binding_scope is None or binding_scope.scope_id != scope.scope_id:
         return False
+    if sum(item.effective_alias == alias for item in binding_scope.declarations) != 1:
+        return False
+    if _is_dml_target_alias(tokens, index, binding_scope):
+        return True
     dot = _next_code_token(tokens, index + 1, scope.end)
     if dot is None or tokens[dot].text != ".":
         return False
@@ -1366,6 +1494,45 @@ def _is_bound_alias_reference(
         return False
     following = _next_code_token(tokens, member + 1, scope.end)
     return following is None or tokens[following].text != "."
+
+
+def _is_dml_target_alias(
+    tokens: Sequence[_SqlToken],
+    index: int,
+    scope: _SqlScope,
+) -> bool:
+    statement_kind = tokens[scope.start].normalized
+    if statement_kind not in {"UPDATE", "DELETE"}:
+        return False
+    target = _next_after_top_modifier(tokens, scope.start + 1, scope.end)
+    if target is None:
+        return False
+    if statement_kind == "DELETE" and tokens[target].normalized == "FROM":
+        target = _next_code_token(tokens, target + 1, scope.end)
+        if target is None:
+            return False
+    return index == target
+
+
+def _binding_scope_for_alias(
+    scopes: Sequence[_SqlScope],
+    token_index: int,
+    alias: str,
+) -> _SqlScope | None:
+    containing = sorted(
+        (scope for scope in scopes if scope.start <= token_index < scope.end),
+        key=lambda scope: (scope.depth, scope.start, -scope.end),
+        reverse=True,
+    )
+    for candidate in containing:
+        matches = [
+            declaration
+            for declaration in candidate.declarations
+            if declaration.effective_alias == alias
+        ]
+        if matches:
+            return candidate if len(matches) == 1 else None
+    return None
 
 
 def _validate_scalar_refactor_boundary(
@@ -1391,7 +1558,7 @@ def _validate_scalar_refactor_boundary(
     errors: List[str] = []
     function = evidence.get("function") if isinstance(evidence.get("function"), Mapping) else {}
     analysis = evidence.get("analysis") if isinstance(evidence.get("analysis"), Mapping) else {}
-    function_name = str(function.get("name", "")).strip()
+    function_name = _evidence_text(function.get("name"))
     function_parts = _normalized_identifier_path(function_name)
     if not function_parts:
         errors.append("function.name must be a multipart identifier")
@@ -1403,7 +1570,7 @@ def _validate_scalar_refactor_boundary(
     if formatted_calls:
         errors.append(f"formatted SQL still contains {len(formatted_calls)} matching scalar call(s)")
 
-    source_table = _normalize_source(str(analysis.get("source_table", "")))
+    source_table = _normalize_source(_evidence_text(analysis.get("source_table")))
     formatted_sources = [
         (scope, declaration)
         for scope in formatted_scopes
@@ -1443,7 +1610,7 @@ def _validate_scalar_refactor_boundary(
     if join_boundary is None:
         errors.append("source_table must be introduced by one parsed LEFT OUTER JOIN ... ON clause")
 
-    return_tokens, _ = _scan_sql_tokens(str(analysis.get("return_expression", "")))
+    return_tokens, _ = _scan_sql_tokens(_evidence_text(analysis.get("return_expression")))
     return_code = [item for item in return_tokens if item.kind not in {"line_comment", "block_comment"}]
     if len(return_code) != 1 or not _is_identifier_token(return_code[0]):
         errors.append("analysis.return_expression must identify one returned source column")
@@ -1460,6 +1627,7 @@ def _validate_scalar_refactor_boundary(
                 index,
                 formatted_scope,
                 formatted_declaration.effective_alias,
+                formatted_scopes,
             ):
                 continue
             dot = _next_code_token(formatted_tokens, index + 1, formatted_scope.end)
@@ -1482,7 +1650,7 @@ def _validate_scalar_refactor_boundary(
             else []
         )
         expected_arguments = [
-            _canonical_sql_fragment(str(item.get("call_argument", "")))
+            _canonical_sql_fragment(_evidence_text(item.get("call_argument")))
             for item in mapping_values
             if isinstance(item, Mapping)
         ]
@@ -1491,13 +1659,15 @@ def _validate_scalar_refactor_boundary(
             errors.append("parsed scalar call arguments do not match analysis.key_mappings")
 
         predicate_fragments = [
-            str(item.get("join_expression", ""))
+            _evidence_text(item.get("join_expression"))
             for item in mapping_values
             if isinstance(item, Mapping)
         ]
         filters = analysis.get("filters")
         if isinstance(filters, Sequence) and not isinstance(filters, (str, bytes)):
-            predicate_fragments.extend(str(item) for item in filters)
+            predicate_fragments.extend(
+                _evidence_text(item) for item in filters if _is_nonempty_text(item)
+            )
         expected_predicate: List[str] = []
         for fragment in predicate_fragments:
             values = _canonical_sql_fragment(fragment)
@@ -1642,7 +1812,10 @@ def _scope_containing_token(
     scopes: Sequence[_SqlScope],
     token_index: int,
 ) -> _SqlScope | None:
-    return next((item for item in scopes if item.start <= token_index < item.end), None)
+    containing = [item for item in scopes if item.start <= token_index < item.end]
+    if not containing:
+        return None
+    return max(containing, key=lambda item: (item.depth, item.start, -item.end))
 
 
 def _left_outer_join_boundary(
@@ -1737,6 +1910,7 @@ def _validate_scalar_function_refactor(
     operation: str,
     original_sha256: str,
     formatted_sha256: str,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None,
 ) -> Tuple[Dict[str, Any], List[SqlFormattingIssue]]:
     base = {
         "status": "not_requested",
@@ -1776,7 +1950,7 @@ def _validate_scalar_function_refactor(
             }
         }, [issue]
 
-    decision = str(evidence.get("decision", "")).strip().lower()
+    decision = _evidence_text(evidence.get("decision")).lower()
     if operation != "refactor":
         issue = _scalar_refactor_issue(
             "scalar_refactor_requires_separate_operation",
@@ -1799,7 +1973,7 @@ def _validate_scalar_function_refactor(
             issues,
         )
     if decision in {"retain", "blocked"}:
-        reason = str(evidence.get("reason", "")).strip() or "conversion_not_proven"
+        reason = _evidence_text(evidence.get("reason")) or "conversion_not_proven"
         issue = _scalar_refactor_issue("scalar_refactor_conversion_blocked", [reason])
         return (
             {
@@ -1814,8 +1988,13 @@ def _validate_scalar_function_refactor(
 
     missing = _scalar_refactor_missing_fields(evidence)
     analysis = evidence.get("analysis") if isinstance(evidence.get("analysis"), Mapping) else {}
-    disqualifiers = [str(item) for item in analysis.get("disqualifiers", []) if str(item).strip()]
-    classification = str(analysis.get("classification", "")).strip().lower()
+    raw_disqualifiers = analysis.get("disqualifiers", [])
+    disqualifiers = (
+        [item.strip() for item in raw_disqualifiers if isinstance(item, str) and item.strip()]
+        if _is_non_text_sequence(raw_disqualifiers)
+        else []
+    )
+    classification = _evidence_text(analysis.get("classification")).lower()
     if classification and classification != "pure_deterministic_lookup":
         disqualifiers.append(classification)
     if disqualifiers:
@@ -1848,6 +2027,7 @@ def _validate_scalar_function_refactor(
             [issue],
         )
 
+    equivalence_contract_sha256 = _scalar_equivalence_contract_sha256(evidence)
     external = evidence.get("trusted_external_verification")
     correlation_errors = _external_refactor_correlation_errors(
         external,
@@ -1864,6 +2044,62 @@ def _validate_scalar_function_refactor(
                     "evidence_status": "complete",
                     "reason": "trusted_external_result_comparison_required",
                     "external_correlation": "not_proven",
+                    "equivalence_contract_sha256": equivalence_contract_sha256,
+                }
+            },
+            [issue],
+        )
+
+    if runtime_receipt_authenticator is None:
+        return (
+            {
+                "scalar_function_refactor": {
+                    **base,
+                    "status": "mechanically_valid",
+                    "evidence_status": "complete",
+                    "semantic_status": "not_proven",
+                    "reason": "external_result_comparison_is_provenance_only",
+                    "external_correlation": "provenance_correlated",
+                    "equivalence_contract_sha256": equivalence_contract_sha256,
+                }
+            },
+            [],
+        )
+
+    runtime_errors = _authenticated_runtime_receipt_errors(
+        external,
+        evidence,
+        equivalence_contract_sha256,
+    )
+    if not runtime_errors and isinstance(external, Mapping):
+        signature = _evidence_text(external.get("signature"))
+        try:
+            authenticated = runtime_receipt_authenticator(
+                _runtime_receipt_payload(external),
+                signature,
+            )
+        except Exception as exc:  # The trust provider must fail closed without exposing its data.
+            runtime_errors.append(f"runtime receipt authenticator raised {type(exc).__name__}")
+        else:
+            if authenticated is not True:
+                runtime_errors.append("runtime receipt signature was not authenticated")
+
+    if runtime_errors:
+        issue = _scalar_refactor_issue(
+            "scalar_refactor_runtime_receipt_invalid",
+            runtime_errors,
+        )
+        return (
+            {
+                "scalar_function_refactor": {
+                    **base,
+                    "status": "blocked",
+                    "evidence_status": "complete",
+                    "semantic_status": "not_proven",
+                    "reason": "authenticated_runtime_receipt_invalid",
+                    "external_correlation": "provenance_correlated",
+                    "execution_authentication": "not_authenticated",
+                    "equivalence_contract_sha256": equivalence_contract_sha256,
                 }
             },
             [issue],
@@ -1873,29 +2109,89 @@ def _validate_scalar_function_refactor(
         {
             "scalar_function_refactor": {
                 **base,
-                "status": "mechanically_valid",
+                "status": "verified",
                 "evidence_status": "complete",
-                "semantic_status": "not_proven",
-                "reason": "external_result_comparison_is_provenance_only",
-                "external_correlation": "provenance_correlated",
+                "semantic_status": "proven",
+                "reason": "authenticated_runtime_result_comparison",
+                "external_correlation": "authenticated",
+                "execution_authentication": "authenticated",
+                "equivalence_contract_sha256": equivalence_contract_sha256,
+                "runtime_receipt_id": _evidence_text(external.get("receipt_id")),
+                "runtime_provider": _evidence_text(external.get("provider")),
             }
         },
         [],
     )
 
 
+def _scalar_equivalence_contract_sha256(evidence: Mapping[str, Any]) -> str:
+    function = evidence.get("function") if isinstance(evidence.get("function"), Mapping) else {}
+    analysis = evidence.get("analysis") if isinstance(evidence.get("analysis"), Mapping) else {}
+    contract = {
+        "version": "1",
+        "function": {
+            "name": function.get("name", ""),
+            "definition_sha256": function.get("definition_sha256", ""),
+        },
+        "analysis": analysis,
+    }
+    payload = json.dumps(
+        _json_contract_value(contract),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _runtime_receipt_payload(receipt: Mapping[str, Any]) -> bytes:
+    unsigned = {key: value for key, value in receipt.items() if key != "signature"}
+    return json.dumps(
+        _json_contract_value(unsigned),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _authenticated_runtime_receipt_errors(
+    external: Any,
+    evidence: Mapping[str, Any],
+    equivalence_contract_sha256: str,
+) -> List[str]:
+    if not isinstance(external, Mapping):
+        return ["trusted_external_verification is missing"]
+    errors: List[str] = []
+    for key in ["receipt_id", "database_identity", "executed_at", "signature"]:
+        if not _is_nonempty_text(external.get(key)):
+            errors.append(f"trusted_external_verification.{key}")
+    comparison_count = external.get("comparison_count")
+    if isinstance(comparison_count, bool) or not isinstance(comparison_count, int) or comparison_count < 1:
+        errors.append("trusted_external_verification.comparison_count(positive_integer)")
+
+    function = evidence.get("function") if isinstance(evidence.get("function"), Mapping) else {}
+    definition_sha256 = _evidence_text(function.get("definition_sha256")).lower()
+    receipt_definition_sha256 = _evidence_text(external.get("function_definition_sha256"))
+    if not receipt_definition_sha256 or receipt_definition_sha256.lower() != definition_sha256:
+        errors.append("trusted_external_verification.function_definition_sha256")
+    receipt_contract_sha256 = _evidence_text(external.get("equivalence_contract_sha256"))
+    if not receipt_contract_sha256 or receipt_contract_sha256.lower() != equivalence_contract_sha256:
+        errors.append("trusted_external_verification.equivalence_contract_sha256")
+    return errors
+
+
 def _scalar_refactor_missing_fields(evidence: Mapping[str, Any]) -> List[str]:
     missing: List[str] = []
-    if str(evidence.get("decision", "")).strip().lower() != "convert":
+    if _evidence_text(evidence.get("decision")).lower() != "convert":
         missing.append("decision=convert")
     function = evidence.get("function") if isinstance(evidence.get("function"), Mapping) else {}
     for key in ["name", "definition_source_kind", "definition_source_ref", "definition_sha256"]:
-        if not str(function.get(key, "")).strip():
+        if not _is_nonempty_text(function.get(key)):
             missing.append(f"function.{key}")
-    source_kind = str(function.get("definition_source_kind", "")).strip().lower()
+    source_kind = _evidence_text(function.get("definition_source_kind")).lower()
     if source_kind and source_kind not in {"database", "mcp", "project_source"}:
         missing.append("function.definition_source_kind(authoritative)")
-    digest = str(function.get("definition_sha256", "")).strip()
+    digest = _evidence_text(function.get("definition_sha256"))
     if digest and not _HASH_PATTERN.fullmatch(digest):
         missing.append("function.definition_sha256(valid_sha256)")
 
@@ -1909,10 +2205,10 @@ def _scalar_refactor_missing_fields(evidence: Mapping[str, Any]) -> List[str]:
         "unmatched_row_behavior",
         "preferred_reason",
     ]:
-        if not str(analysis.get(key, "")).strip():
+        if not _is_nonempty_text(analysis.get(key)):
             missing.append(f"analysis.{key}")
     mappings = analysis.get("key_mappings")
-    if not isinstance(mappings, Sequence) or isinstance(mappings, (str, bytes)) or not mappings:
+    if not _is_non_text_sequence(mappings) or not mappings:
         missing.append("analysis.key_mappings")
     else:
         for index, mapping in enumerate(mappings):
@@ -1920,31 +2216,44 @@ def _scalar_refactor_missing_fields(evidence: Mapping[str, Any]) -> List[str]:
                 missing.append(f"analysis.key_mappings[{index}]")
                 continue
             for key in ["parameter", "source_column", "call_argument", "join_expression"]:
-                if not str(mapping.get(key, "")).strip():
+                if not _is_nonempty_text(mapping.get(key)):
                     missing.append(f"analysis.key_mappings[{index}].{key}")
     filters = analysis.get("filters")
-    if not isinstance(filters, Sequence) or isinstance(filters, (str, bytes)):
+    if not _is_non_text_sequence(filters):
         missing.append("analysis.filters")
-    if "disqualifiers" not in analysis or not isinstance(analysis.get("disqualifiers"), Sequence):
+    else:
+        for index, item in enumerate(filters):
+            if not isinstance(item, str) or not item.strip():
+                missing.append(f"analysis.filters[{index}]")
+    disqualifier_values = analysis.get("disqualifiers")
+    if "disqualifiers" not in analysis or not _is_non_text_sequence(disqualifier_values):
         missing.append("analysis.disqualifiers")
-    if str(analysis.get("cardinality", "")).strip().lower() not in {"zero_or_one", "exactly_one"}:
+    else:
+        for index, item in enumerate(disqualifier_values):
+            if not isinstance(item, str) or not item.strip():
+                missing.append(f"analysis.disqualifiers[{index}]")
+    if _evidence_text(analysis.get("cardinality")).lower() not in {"zero_or_one", "exactly_one"}:
         missing.append("analysis.cardinality(proven_zero_or_one)")
 
     artifacts = evidence.get("artifacts")
-    if not isinstance(artifacts, Sequence) or isinstance(artifacts, (str, bytes)):
+    if not _is_non_text_sequence(artifacts):
         missing.append("artifacts")
     else:
+        for index, item in enumerate(artifacts):
+            if not isinstance(item, Mapping):
+                missing.append(f"artifacts[{index}]")
         definition_artifacts = [
             item
             for item in artifacts
-            if isinstance(item, Mapping) and str(item.get("kind", "")).strip() == "function_definition"
+            if isinstance(item, Mapping)
+            and _evidence_text(item.get("kind")) == "function_definition"
         ]
         if not definition_artifacts:
             missing.append("artifacts.function_definition")
         for artifact in definition_artifacts:
-            if not str(artifact.get("artifact_id", "")).strip():
+            if not _is_nonempty_text(artifact.get("artifact_id")):
                 missing.append("artifacts.function_definition.artifact_id")
-            artifact_digest = str(artifact.get("sha256", "")).strip()
+            artifact_digest = _evidence_text(artifact.get("sha256"))
             if not _HASH_PATTERN.fullmatch(artifact_digest):
                 missing.append("artifacts.function_definition.sha256")
             elif digest and artifact_digest.lower() != digest.lower():
@@ -1960,22 +2269,30 @@ def _external_refactor_correlation_errors(
     if not isinstance(external, Mapping):
         return ["trusted_external_verification is missing"]
     errors = []
-    required = ["provider", "artifact_id", "artifact_sha256", "kind", "status"]
+    required = [
+        "provider",
+        "artifact_id",
+        "artifact_sha256",
+        "kind",
+        "status",
+        "original_sha256",
+        "formatted_sha256",
+    ]
     for key in required:
-        if not str(external.get(key, "")).strip():
+        if not _is_nonempty_text(external.get(key)):
             errors.append(f"trusted_external_verification.{key}")
-    if str(external.get("kind", "")).strip().lower() not in {
+    if _evidence_text(external.get("kind")).lower() not in {
         "db_result_comparison",
         "result_comparison",
     }:
         errors.append("trusted_external_verification.kind")
-    if str(external.get("status", "")).strip().lower() != "matched":
+    if _evidence_text(external.get("status")).lower() != "matched":
         errors.append("trusted_external_verification.status=matched")
-    if not _HASH_PATTERN.fullmatch(str(external.get("artifact_sha256", "")).strip()):
+    if not _HASH_PATTERN.fullmatch(_evidence_text(external.get("artifact_sha256"))):
         errors.append("trusted_external_verification.artifact_sha256")
-    if str(external.get("original_sha256", "")).strip().lower() != original_sha256:
+    if _evidence_text(external.get("original_sha256")).lower() != original_sha256:
         errors.append("trusted_external_verification.original_sha256")
-    if str(external.get("formatted_sha256", "")).strip().lower() != formatted_sha256:
+    if _evidence_text(external.get("formatted_sha256")).lower() != formatted_sha256:
         errors.append("trusted_external_verification.formatted_sha256")
     return errors
 
@@ -2437,67 +2754,257 @@ def _check_insert_select_value_layout(sql: str) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
     for statement in _extract_insert_select_statements(sql):
         target_block = statement["target_block"]
-        if len(_split_top_level_commas(target_block)) < 8:
+        if len(_split_top_level_commas(target_block)) < _INSERT_SELECT_LAYOUT_CONTRACT[
+            "wide_mapping_min_items"
+        ]:
             continue
         target_lines = _meaningful_insert_lines(target_block)
         if _target_columns_are_vertical(target_lines):
             continue
-        select_lines = _meaningful_select_value_lines(statement["select_block"])
-        if len(select_lines) < 8:
+        expressions = _select_expression_layout(statement["select_block"])
+        if len(expressions) < _INSERT_SELECT_LAYOUT_CONTRACT["wide_mapping_min_items"]:
             continue
-        single_lines = [line for line in select_lines if _looks_like_single_select_value_line(line)]
-        if len(single_lines) >= max(8, int(len(select_lines) * 0.8)):
+        starts_per_line: Dict[int, int] = {}
+        for expression in expressions:
+            line = int(expression["start_line"])
+            starts_per_line[line] = starts_per_line.get(line, 0) + 1
+        short_singletons = [
+            expression
+            for expression in expressions
+            if int(expression["canonical_length"])
+            <= _INSERT_SELECT_LAYOUT_CONTRACT["horizontal_expression_max_length"]
+            and starts_per_line[int(expression["start_line"])] == 1
+        ]
+        if len(short_singletons) > _INSERT_SELECT_LAYOUT_CONTRACT["max_short_singleton_lines"]:
+            evidence = [
+                (
+                    f"line={int(item['start_line']) + 1}; "
+                    f"canonical_length={item['canonical_length']}; "
+                    f"expression={item['text']}"
+                )
+                for item in short_singletons[:6]
+            ]
+            issues.append(
+                SqlFormattingIssue(
+                    code="insert_select_short_expressions_verticalized",
+                    severity="error",
+                    message=(
+                        "Short INSERT ... SELECT mappings must remain horizontally grouped; "
+                        "only expressions above the declared length threshold may use vertical fallback."
+                    ),
+                    evidence=evidence,
+                    check_kind="style",
+                )
+            )
             issues.append(
                 SqlFormattingIssue(
                     code="insert_select_value_list_verticalized",
                     severity="error",
                     message="Wide SELECT value lists must retain grouped horizontal mapping rows.",
-                    evidence=single_lines[:6],
+                    evidence=evidence,
                     check_kind="style",
                 )
             )
     return issues
 
 
+def _select_expression_layout(select_block: str) -> List[Dict[str, Any]]:
+    tokens, _ = _scan_sql_tokens(select_block)
+    select_token = next(
+        (
+            token
+            for token in tokens
+            if token.kind not in {"line_comment", "block_comment"}
+            and token.depth == 0
+            and token.normalized == "SELECT"
+        ),
+        None,
+    )
+    if select_token is None:
+        return []
+    projection = select_block[select_token.end :]
+    result: List[Dict[str, Any]] = []
+    for text, start, _ in _split_top_level_comma_spans(projection):
+        expression_tokens, _ = _scan_sql_tokens(text)
+        canonical = [
+            _canonical_token_value(token)
+            for token in expression_tokens
+            if token.kind not in {"line_comment", "block_comment"}
+        ]
+        result.append(
+            {
+                "text": " ".join(text.split()),
+                "start_line": projection.count("\n", 0, start),
+                "canonical_length": len(" ".join(canonical)),
+            }
+        )
+    return result
+
+
+def _split_top_level_comma_spans(value: str) -> List[Tuple[str, int, int]]:
+    tokens, _ = _scan_sql_tokens(value)
+    result: List[Tuple[str, int, int]] = []
+    start = 0
+    for token in tokens:
+        if token.text != "," or token.depth != 0:
+            continue
+        _append_sql_span(result, value, start, token.start)
+        start = token.end
+    _append_sql_span(result, value, start, len(value))
+    return result
+
+
+def _append_sql_span(
+    result: List[Tuple[str, int, int]],
+    value: str,
+    start: int,
+    end: int,
+) -> None:
+    raw = value[start:end]
+    leading = len(raw) - len(raw.lstrip())
+    trailing = len(raw.rstrip())
+    if trailing <= leading:
+        return
+    actual_start = start + leading
+    actual_end = start + trailing
+    result.append((value[actual_start:actual_end], actual_start, actual_end))
+
+
 def _extract_insert_column_blocks(sql: str) -> List[str]:
-    masked = _masked_sql(sql)
-    blocks = []
-    for match in re.finditer(r"\bINSERT\s+INTO\b", masked, flags=re.IGNORECASE):
-        open_index = masked.find("(", match.end())
-        if open_index < 0:
-            continue
-        close_index = _find_matching_parenthesis(masked, open_index)
-        if close_index < 0:
-            continue
-        if re.search(r"\bSELECT\b", masked[close_index + 1 : close_index + 2500], flags=re.IGNORECASE):
-            blocks.append(sql[open_index + 1 : close_index])
-    return blocks
+    return [item["target_block"] for item in _extract_insert_select_statements(sql)]
 
 
 def _extract_insert_select_statements(sql: str) -> List[Dict[str, str]]:
     masked = _masked_sql(sql)
     statements = []
     for match in re.finditer(r"\bINSERT\s+INTO\b", masked, flags=re.IGNORECASE):
-        open_index = masked.find("(", match.end())
+        statement_end = _find_statement_end(masked, match.start())
+        open_index = masked.find("(", match.end(), statement_end)
         if open_index < 0:
             continue
         close_index = _find_matching_parenthesis(masked, open_index)
-        if close_index < 0:
+        if close_index < 0 or close_index >= statement_end:
             continue
-        select_match = re.search(r"\bSELECT\b", masked[close_index + 1 :], flags=re.IGNORECASE)
-        if not select_match:
+        source_starts = {
+            keyword: _find_first_top_level_keyword(
+                masked,
+                close_index + 1,
+                statement_end,
+                {keyword},
+            )
+            for keyword in {"SELECT", "VALUES", "EXEC", "EXECUTE", "DEFAULT"}
+        }
+        source_candidates = [
+            (position, keyword)
+            for keyword, position in source_starts.items()
+            if position >= 0
+        ]
+        if not source_candidates:
             continue
-        select_start = close_index + 1 + select_match.start()
-        from_index = _find_top_level_keyword(masked, select_start, "FROM")
-        if from_index < 0:
+        select_start, source_kind = min(source_candidates)
+        if source_kind != "SELECT":
             continue
+        next_statement = _find_next_top_level_statement_start(
+            masked,
+            select_start + len("SELECT"),
+            statement_end,
+        )
+        if next_statement >= 0:
+            statement_end = next_statement
+        projection_end = _find_first_top_level_keyword(
+            masked,
+            select_start + len("SELECT"),
+            statement_end,
+            {"FROM", "UNION", "EXCEPT", "INTERSECT", "ORDER", "OPTION", "FOR"},
+        )
+        if projection_end < 0:
+            projection_end = statement_end
         statements.append(
             {
                 "target_block": sql[open_index + 1 : close_index],
-                "select_block": sql[select_start:from_index],
+                "select_block": sql[select_start:projection_end],
             }
         )
     return statements
+
+
+def _find_statement_end(sql: str, start: int) -> int:
+    tokens, _ = _scan_sql_tokens(sql[start:])
+    for token in tokens:
+        if token.depth == 0 and (token.text == ";" or token.kind == "batch_separator"):
+            return start + token.start
+    return len(sql)
+
+
+def _find_next_top_level_statement_start(sql: str, start: int, end: int) -> int:
+    statement_starters = {
+        "ALTER",
+        "BACKUP",
+        "BEGIN",
+        "COMMIT",
+        "CREATE",
+        "DBCC",
+        "DECLARE",
+        "DELETE",
+        "DENY",
+        "DROP",
+        "EXEC",
+        "EXECUTE",
+        "GRANT",
+        "IF",
+        "INSERT",
+        "MERGE",
+        "PRINT",
+        "RAISERROR",
+        "RESTORE",
+        "RETURN",
+        "REVOKE",
+        "ROLLBACK",
+        "SELECT",
+        "SET",
+        "THROW",
+        "TRUNCATE",
+        "UPDATE",
+        "USE",
+        "WHILE",
+        "WITH",
+    }
+    tokens, _ = _scan_sql_tokens(sql[start:end])
+    code_tokens = [
+        token for token in tokens if token.kind not in {"line_comment", "block_comment"}
+    ]
+    for index, token in enumerate(code_tokens):
+        if token.depth != 0 or token.normalized not in statement_starters:
+            continue
+        absolute_start = start + token.start
+        line_start = sql.rfind("\n", 0, absolute_start) + 1
+        if sql[line_start:absolute_start].strip():
+            continue
+        previous = code_tokens[index - 1].normalized if index else ""
+        previous_previous = code_tokens[index - 2].normalized if index > 1 else ""
+        if token.normalized == "SELECT" and (
+            previous in {"UNION", "EXCEPT", "INTERSECT"}
+            or (
+                previous == "ALL"
+                and previous_previous in {"UNION", "EXCEPT", "INTERSECT"}
+            )
+        ):
+            continue
+        return absolute_start
+    return -1
+
+
+def _find_first_top_level_keyword(
+    sql: str,
+    start: int,
+    end: int,
+    keywords: set[str],
+) -> int:
+    tokens, _ = _scan_sql_tokens(sql[start:end])
+    for token in tokens:
+        if token.depth == 0 and token.normalized in keywords:
+            return start + token.start
+    return -1
 
 
 def _meaningful_insert_lines(block: str) -> List[str]:
@@ -2839,9 +3346,26 @@ def _json_contract_value(value: Any) -> Any:
         return {str(key): _json_contract_value(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_json_contract_value(item) for item in value]
+    if isinstance(value, (bytes, bytearray)):
+        return {"invalid_binary_evidence": bytes(value).hex()}
     if isinstance(value, os.PathLike):
         return str(value)
     return value
+
+
+def _is_non_text_sequence(value: Any) -> bool:
+    return isinstance(value, Sequence) and not isinstance(
+        value,
+        (str, bytes, bytearray),
+    )
+
+
+def _is_nonempty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _evidence_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _verification_id(**values: Any) -> str:

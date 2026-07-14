@@ -1,25 +1,28 @@
 # SQL Formatting Bridge
 
-This harness composes with the host-local `sql-formatting` skill.
+This harness composes with host-local `sql-formatting` and `sql-formatting-style-harness`.
 
-## Division of responsibility
+## Responsibilities
 
-- `sql-formatting`: formats, cleans, and standardizes SQL/T-SQL.
-- `sql-formatting-style-harness`: verifies preservation and style evidence.
-- `pb-to-csharp-migration-harness`: decides migration flow, PB evidence, C# style, SP target shape, and completion checklist.
+- `pb-to-csharp-migration-harness`: caller/SP contract, result/write shape, migration rules, and completion evidence.
+- `sql-formatting`: presentation-only SQL formatting.
+- `sql-formatting-style-harness`: deterministic preservation and style evidence.
 
-## Required behavior
+## Normal Generation
 
-1. Preserve original SQL as source-of-truth passthrough text.
-2. Apply the host-local formatter when formatting or generating SQL is required.
-3. Run `verify_sql_formatting_style(original, formatted)` when proof is required.
-4. Treat `semantic_checks.status=not_proven` as a real limitation when DB behavior matters.
-5. Use DB-backed checks for scalar-function conversion, target schema differences, performance claims, or result equivalence.
+1. Preserve supplied SQL as source-text passthrough.
+2. Generate SQL only from the packaged style contract and current request evidence.
+3. Apply the host-local formatter when SQL formatting is requested or required.
+4. Run the formatting verifier against the exact original/final pair when proof is required.
+5. Keep `semantic_checks.status=not_proven` unless the user supplies independently validated execution evidence.
 
-## Token optimizer policy
+Normal generation does not query a database or inspect local SQL source. Database/source discovery belongs only to the maintenance-only profile-update workflow, which never runs during normal generation.
 
-SQL/stored procedure text is contract-sensitive. Do not summarize or minify it. Token optimizer may summarize noisy command output from SQL verification only if it preserves procedure name, branch, error code, line number, failing statement, and exit code.
+## Boundaries
 
-## Default recommendation policy
+- Formatting must not alter parameters, predicates, joins, calculations, literals, comments, result order, or write behavior.
+- Scalar-function conversion and schema-dependent rewrites require a separate explicit semantic-refactor request and authoritative evidence.
+- Do not introduce CTEs, temporary tables, `MERGE`, `NOT EXISTS`, or tuning rewrites by default.
+- Do not report database equivalence from lexer, formatter, or static migration checks.
 
-Do not recommend CTE, `#` temporary table, `MERGE`, `NOT EXISTS`, nested `WHERE` subqueries inside `IF EXISTS` guards, scalar-function-to-join conversion, or performance tuning just because the SQL looks cleaner that way. Those are exceptions requiring a concrete reason or user request.
+SQL text remains uncompressed. Noisy verifier output may be summarized only when the procedure identifier, branch, issue code, line, failing statement, and exit code remain available.

@@ -1,12 +1,22 @@
+import hashlib
 import json
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping
 from xml.sax.saxutils import escape
 
 from src.contracts import HarnessResult
+
+
+_PB_MIGRATION_REFERENCE_ROOT = (
+    Path(__file__).resolve().parents[2]
+    / "skills"
+    / "pb_to_csharp_migration_harness"
+    / "references"
+)
+PACKAGED_MIGRATION_PROFILE_PATH = _PB_MIGRATION_REFERENCE_ROOT / "packaged-style-contract.json"
 
 
 DATAWINDOW_COLUMN_PATTERN = re.compile(r"column\s*=\s*\(", re.IGNORECASE)
@@ -245,7 +255,8 @@ PB_MIGRATION_DEVELOPMENT_SPEC_RULES = {
         r"\bDML\b",
     ),
     "style_profile_contract": (
-        r"\bauthor-tagged\b",
+        r"\bpackaged\s+style\b",
+        r"\breviewed\s+profile\b",
         r"\bprogram\s+key\b",
         r"\bstyle\s+profile\b",
         r"\bfallback\s+program\b",
@@ -289,80 +300,18 @@ SP_METADATA_HEADER_PATTERN = re.compile(
 )
 SP_PROCEDURE_NAME_PATTERN = re.compile(
     r"\b(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE\s+"
-    r"(?:\[[^\]]+\]|\w+)?\s*\.?\s*(?:\[(?P<bracketed>SP_[A-Z0-9_]+)\]|(?P<plain>SP_[A-Z0-9_]+))",
+    r"(?:\[[^\]]+\]|\w+)?\s*\.?\s*(?:\[(?P<bracketed>U?SP_[A-Z0-9_]+)\]|(?P<plain>U?SP_[A-Z0-9_]+))",
     re.IGNORECASE,
 )
 
 AUTHOR_TAGGED_CSHARP_STYLE_BASELINE: Dict[str, Any] = {
-    "snapshot_date": "2026-07-03",
-    "db_source": "C_KONE110 SYS.OBJECTS + SYS.SQL_MODULES",
-    "sp_selector": "procedure definition contains KH, Geunho, or Jang Geunho author text",
-    "sp_count": 62,
-    "normalized_program_key_count": 41,
-    "primary_csharp_baseline_files_analyzed": 37,
-    "designer_files_analyzed": 37,
-    "source_root": r"C:\Users\KONEIT\Desktop\Source\TY\C_KONE110_1\Programs",
+    "source": "packaged_sanitized_profile",
     "baseline_exclusions": {
-        "SA900100": "current generated/repair target, not accepted as a seed style sample",
-        "SA116T": "author-tagged SP only; no same-name C# screen file found",
-        "PopDwgnoFrm": "platform popup mapping, no same-name screen file under Programs",
-        "popSendMail": "platform popup mapping, no same-name screen file under Programs",
-    },
-    "primary_csharp_pattern_counts": {
-        "dbClient.GetDataSetFromSP": {"files": 35, "hits": 38},
-        "CallSelectProcedure": {"files": 31, "hits": 135},
-        "CallViewQuery": {"files": 5, "hits": 43},
-        "SelectType": {"files": 33, "hits": 339},
-        "SearchCommand": {"files": 34, "hits": 136},
-        "SaveCommand": {"files": 31, "hits": 124},
-        "DataUtil.DataTableToXml": {"files": 27, "hits": 71},
-        "dbClient.ExecSPTrn": {"files": 24, "hits": 32},
-        "dbClient.ExecSP": {"files": 5, "hits": 5},
-        "GetFocusedDataRow": {"files": 27, "hits": 74},
-        "dr_index_ToString": {"files": 20, "hits": 91},
-        "devFnc.InitControl": {"files": 29, "hits": 154},
-    },
-    "designer_pattern_counts": {
-        "u_GridControl": {"files": 35, "hits": 221},
-        "u_GridView": {"files": 21, "hits": 235},
-        "u_TextEdit": {"files": 25, "hits": 1990},
-        "u_ButtonEdit": {"files": 11, "hits": 176},
-        "u_DateEdit": {"files": 28, "hits": 206},
-        "u_SpinEdit": {"files": 18, "hits": 922},
-        "u_RadioButton": {"files": 16, "hits": 265},
-        "u_CheckEdit": {"files": 12, "hits": 246},
-        "BindingField": {"files": 31, "hits": 754},
-        "explicit_GridColumn_fields": {"files": 34, "hits": 2336},
-        "Columns.AddRange": {"files": 35, "hits": 93},
-        "AppearanceHeader.Options.UseFont": {"files": 34, "hits": 2493},
-        "AppearanceHeader.HAlignment.Center": {"files": 34, "hits": 2578},
-        "AppearanceHeader.VAlignment.Center": {"files": 33, "hits": 2072},
-        "AppearanceCell.Options.UseFont": {"files": 35, "hits": 2432},
-        "ColumnEdit_repository": {"files": 26, "hits": 387},
-        "RepositoryItemSpinEdit": {"files": 27, "hits": 791},
-        "TabIndex": {"files": 37, "hits": 1911},
-    },
-    "zero_hit_generated_patterns": {
-        "private_sealed_class": 0,
-        "context_class_or_GetContext": 0,
-        "GetEditValue_helper": 0,
-        "GetColumnText_helper": 0,
-        "DBNull_ternary_row_value": 0,
-        "SelectType_DETAIL_ternary": 0,
-        "percent_null_coalesce": 0,
-        "ButtonEdit_null_string_empty_ternary": 0,
-        "radio_Convert_ToString_local": 0,
-        "CallSelectProcedure_inline_wildcard_argument": 0,
-        "CSharp_like_wildcard_shaping": 0,
-        "DateEdit_null_SetToDay_default": 0,
-        "DateEdit_year_or_now_parameter_shaping": 0,
-        "generated_date_boundary_DateTime_block": 0,
-        "direct_grid_datasource_null_reset": 0,
-        "CallDetailQuery_generated_method": 0,
+        "MIGRATIONTARGET": "active migration targets cannot seed their own style evidence",
     },
     "positive_generation_recipe": {
         "source_priority": [
-            "author-tagged SP definition",
+            "verified stored-procedure definition",
             "normalized program key from procedure name",
             "same-program primary C# file",
             "same-program Designer file",
@@ -371,7 +320,7 @@ AUTHOR_TAGGED_CSHARP_STYLE_BASELINE: Dict[str, Any] = {
         "screen_base": {
             "normal_screen": "FrmDevBase",
             "popup_screen": "FrmPopBase",
-            "evidence": "34 normal screens and 3 popup screens in the matched baseline",
+            "evidence": "use only the immutable packaged profile or explicit reviewed evidence",
         },
         "command_flow": [
             "keep SearchCommand, SaveCommand, and ClearCommand override/event flow when the matched source has it",
@@ -391,7 +340,7 @@ AUTHOR_TAGGED_CSHARP_STYLE_BASELINE: Dict[str, Any] = {
         ],
         "focused_row_detail_flow": [
             "use gvw*.GetFocusedDataRow() and direct dr[\"FIELD\"].ToString() style when matched evidence supports focused detail refresh",
-            "use devFnc.InitControl(grd*) or matched local reset helpers for KoneLib grid resets",
+            "use target-evidenced grid reset helpers instead of inventing a new reset path",
             "avoid DBNull ternary wrappers, null-coalesced wildcard defaults, and generated value helper methods",
         ],
         "designer_flow": [
@@ -420,48 +369,873 @@ AUTHOR_TAGGED_CSHARP_STYLE_BASELINE: Dict[str, Any] = {
 }
 
 AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS: Dict[str, List[str]] = {
-    "AS100100": [r"Programs\50.품질(QC)\Konesystem.QC02\AS100100.cs", r"Programs\50.품질(QC)\Konesystem.QC02\AS100100.Designer.cs"],
-    "AS100110": [r"Programs\50.품질(QC)\Konesystem.QC02\AS100110.cs", r"Programs\50.품질(QC)\Konesystem.QC02\AS100110.Designer.cs"],
-    "AS200100": [r"Programs\50.품질(QC)\Konesystem.QC02\AS200100.cs", r"Programs\50.품질(QC)\Konesystem.QC02\AS200100.Designer.cs"],
-    "AS200110": [r"Programs\50.품질(QC)\Konesystem.QC02\AS200110.cs", r"Programs\50.품질(QC)\Konesystem.QC02\AS200110.Designer.cs"],
-    "BA000100": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000100.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000100.Designer.cs"],
-    "BA000200": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000200.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000200.Designer.cs"],
-    "BA000500": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000500.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000500.Designer.cs"],
-    "BA000600": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000600.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000600.Designer.cs"],
-    "BA000700": [r"Programs\10.기준(BA)\Konesystem.BA01\BA000700.cs", r"Programs\10.기준(BA)\Konesystem.BA01\BA000700.Designer.cs"],
-    "DE000500": [r"Programs\60.설계(DE)\Konesystem.DE01\DE000500.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE000500.Designer.cs"],
-    "DE000600": [r"Programs\60.설계(DE)\Konesystem.DE01\DE000600.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE000600.Designer.cs"],
-    "DE000700": [r"Programs\60.설계(DE)\Konesystem.DE01\DE000700.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE000700.Designer.cs"],
-    "DE100100": [r"Programs\60.설계(DE)\Konesystem.DE01\DE100100.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE100100.Designer.cs"],
-    "DE600100": [r"Programs\60.설계(DE)\Konesystem.DE01\DE600100.cs", r"Programs\60.설계(DE)\Konesystem.DE01\DE600100.Designer.cs"],
-    "MA100100": [r"Programs\30.자재물류(MA)\Konesystem.MA01\MA100100.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\MA100100.Designer.cs"],
-    "MA100100_POP": [r"Programs\30.자재물류(MA)\Konesystem.MA01\POP\MA100100_POP.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\POP\MA100100_POP.Designer.cs"],
-    "MA100200": [r"Programs\30.자재물류(MA)\Konesystem.MA01\MA100200.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\MA100200.Designer.cs"],
-    "MA200100": [r"Programs\30.자재물류(MA)\Konesystem.MA01\MA200100.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\MA200100.Designer.cs"],
-    "MA400100": [r"Programs\30.자재물류(MA)\Konesystem.MA01\MA400100.cs", r"Programs\30.자재물류(MA)\Konesystem.MA01\MA400100.Designer.cs"],
-    "PR100350": [r"Programs\40.생산(PR)\Konesystem.PR01\PR100350.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR100350.Designer.cs"],
-    "PR100350_USERPOP": [r"Programs\40.생산(PR)\Konesystem.PR01\POP\PR100350_USERPOP.cs", r"Programs\40.생산(PR)\Konesystem.PR01\POP\PR100350_USERPOP.Designer.cs"],
-    "PR300100": [r"Programs\40.생산(PR)\Konesystem.PR01\PR300100.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR300100.Designer.cs"],
-    "PR300110": [r"Programs\40.생산(PR)\Konesystem.PR01\PR300110.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR300110.Designer.cs"],
-    "PR300120": [r"Programs\40.생산(PR)\Konesystem.PR01\PR300120.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR300120.Designer.cs"],
-    "PR300500": [r"Programs\40.생산(PR)\Konesystem.PR01\PR300500.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR300500.Designer.cs"],
-    "PR600100": [r"Programs\40.생산(PR)\Konesystem.PR01\PR600100.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR600100.Designer.cs"],
-    "PR600200": [r"Programs\40.생산(PR)\Konesystem.PR01\PR600200.cs", r"Programs\40.생산(PR)\Konesystem.PR01\PR600200.Designer.cs"],
-    "QC000100": [r"Programs\50.품질(QC)\Konesystem.QC01\QC000100.cs", r"Programs\50.품질(QC)\Konesystem.QC01\QC000100.Designer.cs"],
-    "QC100100": [r"Programs\50.품질(QC)\Konesystem.QC01\QC100100.cs", r"Programs\50.품질(QC)\Konesystem.QC01\QC100100.Designer.cs"],
-    "SA100100": [r"Programs\20.영업(SA)\Konesystem.SA01\SA100100.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA100100.Designer.cs"],
-    "SA100100_COPYPOP": [r"Programs\20.영업(SA)\Konesystem.SA01\POP\SA100100_COPYPOP.cs", r"Programs\20.영업(SA)\Konesystem.SA01\POP\SA100100_COPYPOP.Designer.cs"],
-    "SA100110": [r"Programs\20.영업(SA)\Konesystem.SA01\SA100110.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA100110.Designer.cs"],
-    "SA200100": [r"Programs\20.영업(SA)\Konesystem.SA01\SA200100.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA200100.Designer.cs"],
-    "SA200150": [r"Programs\20.영업(SA)\Konesystem.SA01\SA200150.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA200150.Designer.cs"],
-    "SA400100": [r"Programs\20.영업(SA)\Konesystem.SA01\SA400100.cs", r"Programs\20.영업(SA)\Konesystem.SA01\SA400100.Designer.cs"],
-    "SA800100": [r"Programs\20.영업(SA)\Konesystem.SA02\SA800100.cs", r"Programs\20.영업(SA)\Konesystem.SA02\SA800100.Designer.cs"],
-    "TEST": [r"Programs\10.기준(BA)\Konesystem.BA01\TEST.cs", r"Programs\10.기준(BA)\Konesystem.BA01\TEST.Designer.cs"],
+    "GENERALIZED": [
+        r"packaged\style\GENERALIZED.cs",
+        r"packaged\style\GENERALIZED.Designer.cs",
+    ],
+    "REFERENCESCREEN": [
+        r"packaged\style\ReferenceScreen.cs",
+        r"packaged\style\ReferenceScreen.Designer.cs",
+    ],
 }
 
 
+def _canonical_profile_payload(profile: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        "profile_id": str(profile.get("profile_id") or "").strip(),
+        "version": str(profile.get("version") or profile.get("profile_version") or "").strip(),
+        "sanitized": bool(profile.get("sanitized")),
+        "rules": dict(profile.get("rules") or {}),
+    }
+
+
+def _compute_packaged_profile_hash(profile: Mapping[str, Any]) -> str:
+    canonical = json.dumps(
+        _canonical_profile_payload(profile),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _profile_rules_hash(rules: Mapping[str, Any]) -> str:
+    canonical = json.dumps(
+        dict(rules),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _profile_consumption_token(
+    profile_id: str,
+    profile_version: str,
+    profile_hash: str,
+    rules_hash: str,
+) -> str:
+    identity = "\n".join((profile_id, profile_version, profile_hash, rules_hash))
+    return "sha256:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _identifier_template_pattern(template: str) -> str:
+    value = str(template or "").strip()
+    if not value or re.search(r"[^A-Za-z0-9_<>]", value):
+        return ""
+    chunks: List[str] = []
+    cursor = 0
+    for match in re.finditer(r"(?:<[A-Za-z][A-Za-z0-9]*>)+", value):
+        chunks.append(re.escape(value[cursor : match.start()]))
+        chunks.append(r"[A-Za-z][A-Za-z0-9]*")
+        cursor = match.end()
+    chunks.append(re.escape(value[cursor:]))
+    return "".join(chunks) if cursor else ""
+
+
+def _profile_method_names(value: Any) -> List[str]:
+    candidates = value if isinstance(value, list) else [value]
+    return [
+        str(item)
+        for item in candidates
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(item or ""))
+    ]
+
+
+def _generalized_contract_profile_entry(
+    payload: Mapping[str, Any],
+    raw_bytes: bytes,
+) -> Dict[str, Any] | None:
+    contract_id = str(payload.get("contract_id") or "").strip()
+    contract_version = str(payload.get("contract_version") or "").strip()
+    normal_generation = payload.get("normal_generation")
+    naming_grammar = payload.get("naming_grammar")
+    event_shapes = payload.get("event_method_shapes")
+    designer_properties = payload.get("designer_properties")
+    grid_repository_conventions = payload.get("grid_repository_conventions")
+    stored_procedure_rules = payload.get("stored_procedure_rules")
+    packaged_rule_groups = payload.get("rules")
+    packaged_csharp_rules = (
+        packaged_rule_groups.get("csharp")
+        if isinstance(packaged_rule_groups, Mapping)
+        else None
+    )
+    if (
+        payload.get("schema_version") != 2
+        or not contract_id
+        or not contract_version
+        or not isinstance(normal_generation, Mapping)
+        or not isinstance(naming_grammar, Mapping)
+        or not isinstance(event_shapes, Mapping)
+        or not isinstance(designer_properties, list)
+        or not designer_properties
+        or not isinstance(grid_repository_conventions, Mapping)
+        or not isinstance(stored_procedure_rules, Mapping)
+        or not isinstance(packaged_csharp_rules, Mapping)
+    ):
+        return None
+    sanitized = bool(
+        normal_generation.get("profile_source") == "packaged-only"
+        and normal_generation.get("external_discovery_allowed") is False
+        and normal_generation.get("profile_update_runs_during_normal_generation") is False
+    )
+    form_template = str(naming_grammar.get("form") or "").strip()
+    load_handler_template = str(naming_grammar.get("load_handler") or "").strip()
+    focus_handler_template = str(naming_grammar.get("focus_handler") or "").strip()
+    form_identifier_pattern = _identifier_template_pattern(form_template)
+    load_identifier_pattern = _identifier_template_pattern(load_handler_template)
+    focus_identifier_pattern = _identifier_template_pattern(focus_handler_template)
+    query_methods = _profile_method_names(naming_grammar.get("query_method"))
+    save_methods = _profile_method_names(naming_grammar.get("save_method"))
+    command_handlers = _profile_method_names(event_shapes.get("command_handlers"))
+    procedure_template = str(naming_grammar.get("procedure") or "").strip()
+    if (
+        not sanitized
+        or not form_identifier_pattern
+        or not load_identifier_pattern
+        or not focus_identifier_pattern
+        or not query_methods
+        or not save_methods
+        or not command_handlers
+        or not procedure_template
+    ):
+        return None
+
+    artifact_hash = "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
+    return {
+        "profile_id": contract_id,
+        "version": contract_version,
+        "sanitized": sanitized,
+        "profile_hash": artifact_hash,
+        "hash_mode": "artifact_sha256",
+        "artifact_hash": artifact_hash,
+        "rules": {
+            "csharp": {
+                "required_patterns": _normalized_profile_patterns(
+                    packaged_csharp_rules.get("required_patterns")
+                ),
+                "forbidden_patterns": _normalized_profile_patterns(
+                    packaged_csharp_rules.get("forbidden_patterns")
+                ),
+                "form_contract": {
+                    "form_template": form_template,
+                    "form_identifier_pattern": form_identifier_pattern,
+                    "load_handler_template": load_handler_template,
+                    "query_methods": query_methods,
+                    "save_methods": save_methods,
+                    "focus_handler_template": focus_handler_template,
+                    "command_handlers": command_handlers,
+                    "requested_mapping_required": True,
+                },
+                "designer_contract": {
+                    "properties": [str(item) for item in designer_properties if str(item)],
+                    "grid_repository_conventions": dict(grid_repository_conventions),
+                    "static_ui_requires_designer": True,
+                    "runtime_dynamic_evidence_required": True,
+                },
+            },
+            "sql": {
+                "allowed_procedure_patterns": [
+                    r"^U?SP_[A-Z][A-Z0-9_]*_(?:SELECT|SAVE|SELECT_SAVE)$"
+                ],
+                "forbidden_patterns": [
+                    {"id": "temporary_table", "pattern": r"#[A-Za-z][A-Za-z0-9_]*"},
+                    {"id": "merge", "pattern": r"\bMERGE\b"},
+                    {"id": "not_exists", "pattern": r"\bNOT\s+EXISTS\b"},
+                ],
+            },
+        },
+    }
+
+
+def _profile_load_result(
+    *,
+    success: bool,
+    profile_id: str,
+    profile_version: str,
+    profile_hash: str,
+    issues: List[Dict[str, Any]],
+    profile_path: str = "",
+    rules: Mapping[str, Any] | None = None,
+) -> HarnessResult:
+    normalized_rules = dict(rules or {})
+    rules_hash = _profile_rules_hash(normalized_rules) if success else ""
+    consumption = {
+        "status": "loaded" if success else "blocked",
+        "consumed": False,
+        "source": "packaged_sanitized_profile",
+        "profile_id": profile_id,
+        "profile_version": profile_version,
+        "profile_hash": profile_hash,
+        "sanitized": success,
+        "profile_hash_verified": success,
+        "profile_rules_hash": rules_hash,
+        "consumption_token": (
+            _profile_consumption_token(
+                profile_id,
+                profile_version,
+                profile_hash,
+                rules_hash,
+            )
+            if success
+            else ""
+        ),
+        "applied_rule_groups": [],
+    }
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "operation": "load_packaged_migration_profile",
+        "status": "loaded" if success else "blocked",
+        "profile_path": profile_path,
+        "profile_rules": normalized_rules,
+        "profile_consumption": consumption,
+        "issues": issues,
+        "external_sources_consulted": [],
+        "token_optimizer_status": "passthrough",
+    }
+    return HarnessResult(
+        success=success,
+        stdout=json.dumps(
+            {
+                "status": metadata["status"],
+                "profile_id": profile_id,
+                "profile_version": profile_version,
+                "profile_hash": profile_hash,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        stderr="" if success else "Packaged migration profile identity validation failed.",
+        exit_code=0 if success else 1,
+        metadata=metadata,
+    )
+
+
+def load_packaged_migration_profile(
+    profile_id: str,
+    profile_version: str,
+    profile_hash: str,
+) -> HarnessResult:
+    """Load one sanitized packaged profile by exact immutable identity."""
+    requested_id = str(profile_id or "").strip()
+    requested_version = str(profile_version or "").strip()
+    requested_hash = str(profile_hash or "").strip().lower()
+    if not requested_id or not requested_version or not requested_hash:
+        return _profile_load_result(
+            success=False,
+            profile_id=requested_id,
+            profile_version=requested_version,
+            profile_hash=requested_hash,
+            issues=[
+                {
+                    "code": "packaged_profile_identity_required",
+                    "severity": "error",
+                    "message": "profile_id, profile_version, and profile_hash are all required.",
+                }
+            ],
+        )
+
+    path = Path(PACKAGED_MIGRATION_PROFILE_PATH)
+    if not path.is_file():
+        return _profile_load_result(
+            success=False,
+            profile_id=requested_id,
+            profile_version=requested_version,
+            profile_hash=requested_hash,
+            issues=[
+                {
+                    "code": "packaged_profile_document_missing",
+                    "severity": "error",
+                    "message": "The generalized packaged style contract is missing.",
+                    "path": str(path),
+                }
+            ],
+        )
+    try:
+        raw_bytes = path.read_bytes()
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return _profile_load_result(
+            success=False,
+            profile_id=requested_id,
+            profile_version=requested_version,
+            profile_hash=requested_hash,
+            issues=[
+                {
+                    "code": "packaged_profile_document_invalid",
+                    "severity": "error",
+                    "message": str(exc),
+                    "path": str(path),
+                }
+            ],
+        )
+    entry = (
+        _generalized_contract_profile_entry(payload, raw_bytes)
+        if isinstance(payload, Mapping)
+        else None
+    )
+    if entry is None:
+        return _profile_load_result(
+            success=False,
+            profile_id=requested_id,
+            profile_version=requested_version,
+            profile_hash=requested_hash,
+            issues=[
+                {
+                    "code": "packaged_profile_contract_invalid",
+                    "severity": "error",
+                    "message": (
+                        "Runtime loading accepts only the schema-v2 generalized packaged-style-contract "
+                        "with packaged-only generation and complete C#/SQL structural declarations."
+                    ),
+                    "path": str(path),
+                }
+            ],
+        )
+    available_id = str(entry.get("profile_id") or "").strip()
+    available_version = str(entry.get("version") or "").strip()
+    if requested_id != available_id:
+        return _profile_load_result(
+            success=False,
+            profile_id=requested_id,
+            profile_version=requested_version,
+            profile_hash=requested_hash,
+            issues=[
+                {
+                    "code": "packaged_profile_id_not_found",
+                    "severity": "error",
+                    "message": "The requested profile_id does not match the generalized packaged contract.",
+                    "profile_id": requested_id,
+                }
+            ],
+        )
+    if requested_version != available_version:
+        return _profile_load_result(
+            success=False,
+            profile_id=requested_id,
+            profile_version=requested_version,
+            profile_hash=requested_hash,
+            issues=[
+                {
+                    "code": "packaged_profile_version_mismatch",
+                    "severity": "error",
+                    "message": "The packaged profile version does not match the requested version.",
+                    "available_versions": [available_version],
+                }
+            ],
+        )
+
+    canonical = _canonical_profile_payload(entry)
+    declared_hash = str(
+        entry.get("profile_hash") or entry.get("sha256") or entry.get("hash") or ""
+    ).strip().lower()
+    computed_hash = (
+        str(entry.get("artifact_hash") or "").strip().lower()
+        if entry.get("hash_mode") == "artifact_sha256"
+        else _compute_packaged_profile_hash(entry).lower()
+    )
+    issues: List[Dict[str, Any]] = []
+    if not canonical["sanitized"]:
+        issues.append(
+            {
+                "code": "packaged_profile_not_sanitized",
+                "severity": "error",
+                "message": "Runtime generation accepts only explicitly sanitized packaged profiles.",
+            }
+        )
+    if not isinstance(canonical["rules"].get("csharp"), Mapping) or not isinstance(
+        canonical["rules"].get("sql"), Mapping
+    ):
+        issues.append(
+            {
+                "code": "packaged_profile_domain_rules_missing",
+                "severity": "error",
+                "message": "The profile must contain generalized csharp and sql rule groups.",
+            }
+        )
+    if not declared_hash or declared_hash != computed_hash or requested_hash != computed_hash:
+        issues.append(
+            {
+                "code": "packaged_profile_hash_mismatch",
+                "severity": "error",
+                "message": "The declared, computed, and requested profile hashes must match.",
+                "declared_hash": declared_hash,
+                "computed_hash": computed_hash,
+                "requested_hash": requested_hash,
+            }
+        )
+    success = not issues
+    return _profile_load_result(
+        success=success,
+        profile_id=requested_id,
+        profile_version=requested_version,
+        profile_hash=computed_hash if success else requested_hash,
+        issues=issues,
+        profile_path=str(path),
+        rules=canonical["rules"] if success else {},
+    )
+
+
+def _load_runtime_packaged_migration_profile(
+    profile_id: str = "",
+    profile_version: str = "",
+    profile_hash: str = "",
+) -> HarnessResult:
+    requested = [
+        str(profile_id or "").strip(),
+        str(profile_version or "").strip(),
+        str(profile_hash or "").strip(),
+    ]
+    if any(requested):
+        return load_packaged_migration_profile(*requested)
+
+    path = Path(PACKAGED_MIGRATION_PROFILE_PATH)
+    try:
+        raw_bytes = path.read_bytes()
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return load_packaged_migration_profile("packaged-contract", "missing", "sha256:missing")
+    entry = (
+        _generalized_contract_profile_entry(payload, raw_bytes)
+        if isinstance(payload, Mapping)
+        else None
+    )
+    if entry is None:
+        return load_packaged_migration_profile("packaged-contract", "invalid", "sha256:invalid")
+    return load_packaged_migration_profile(
+        str(entry["profile_id"]),
+        str(entry["version"]),
+        str(entry["profile_hash"]),
+    )
+
+
+def _consume_profile_evidence(
+    profile_evidence: Any,
+    domain: str,
+) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    metadata: Mapping[str, Any] = {}
+    evidence_success = False
+    if isinstance(profile_evidence, HarnessResult):
+        metadata = profile_evidence.metadata
+        evidence_success = bool(profile_evidence.success)
+    elif isinstance(profile_evidence, Mapping):
+        candidate_metadata = profile_evidence.get("metadata", profile_evidence)
+        metadata = candidate_metadata if isinstance(candidate_metadata, Mapping) else {}
+        evidence_success = bool(profile_evidence.get("success", True))
+    consumption = dict(metadata.get("profile_consumption") or {})
+    rules = dict(metadata.get("profile_rules") or {})
+    identity_valid = bool(
+        evidence_success
+        and metadata.get("status") == "loaded"
+        and consumption.get("source") == "packaged_sanitized_profile"
+        and consumption.get("sanitized") is True
+        and consumption.get("profile_hash_verified") is True
+        and consumption.get("profile_id")
+        and consumption.get("profile_version")
+        and consumption.get("profile_hash")
+        and consumption.get("profile_rules_hash") == _profile_rules_hash(rules)
+        and consumption.get("consumption_token")
+        == _profile_consumption_token(
+            str(consumption.get("profile_id")),
+            str(consumption.get("profile_version")),
+            str(consumption.get("profile_hash")),
+            str(consumption.get("profile_rules_hash")),
+        )
+        and isinstance(rules.get(domain), Mapping)
+    )
+    if not identity_valid:
+        return (
+            {
+                "status": "blocked",
+                "consumed": False,
+                "applied_rule_groups": [],
+            },
+            [
+                {
+                    "code": "packaged_profile_consumption_required",
+                    "severity": "error",
+                    "message": (
+                        f"{domain} validation requires a successfully loaded sanitized packaged profile "
+                        "with matching profile_id, version, hash, and consumption token."
+                    ),
+                }
+            ],
+        )
+    consumption.update(
+        {
+            "status": "consumed",
+            "consumed": True,
+            "domain": domain,
+            "applied_rule_groups": [],
+        }
+    )
+    return {"consumption": consumption, "rules": dict(rules[domain])}, []
+
+
+def _normalized_profile_patterns(value: Any) -> List[Dict[str, str]]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    patterns: List[Dict[str, str]] = []
+    for index, item in enumerate(value):
+        if isinstance(item, str):
+            patterns.append({"id": f"pattern_{index + 1}", "pattern": item})
+        elif isinstance(item, Mapping) and str(item.get("pattern") or "").strip():
+            patterns.append(
+                {
+                    "id": str(item.get("id") or f"pattern_{index + 1}"),
+                    "pattern": str(item.get("pattern")),
+                }
+            )
+    return patterns
+
+
+@dataclass(frozen=True)
+class _CSharpStringLiteral:
+    start: int
+    end: int
+    value: str | None
+    interpolated: bool
+    terminated: bool
+
+
+@dataclass(frozen=True)
+class _CSharpLexicalView:
+    code: str
+    comments_removed: str
+    string_literals: tuple[_CSharpStringLiteral, ...]
+
+
+def _csharp_string_prefix(source: str, index: int) -> tuple[int, bool, bool] | None:
+    for prefix, verbatim, interpolated in (
+        ('$@"', True, True),
+        ('@$"', True, True),
+        ('$"', False, True),
+        ('@"', True, False),
+        ('"', False, False),
+    ):
+        if source.startswith(prefix, index):
+            return len(prefix), verbatim, interpolated
+    return None
+
+
+def _scan_csharp_char_literal(source: str, start: int) -> int:
+    index = start + 1
+    while index < len(source):
+        char = source[index]
+        if char == "\\":
+            index = min(index + 2, len(source))
+            continue
+        if char == "'":
+            return index + 1
+        if char in "\r\n":
+            return index
+        index += 1
+    return len(source)
+
+
+def _scan_csharp_string_literal(
+    source: str,
+    start: int,
+    prefix_length: int,
+    *,
+    verbatim: bool,
+    interpolated: bool,
+) -> tuple[int, int, bool]:
+    index = start + prefix_length
+    interpolation_depth = 0
+    while index < len(source):
+        if interpolation_depth:
+            if source.startswith("//", index):
+                newline = source.find("\n", index + 2)
+                index = len(source) if newline < 0 else newline
+                continue
+            if source.startswith("/*", index):
+                closing = source.find("*/", index + 2)
+                index = len(source) if closing < 0 else closing + 2
+                continue
+            nested_prefix = _csharp_string_prefix(source, index)
+            if nested_prefix is not None:
+                nested_length, nested_verbatim, nested_interpolated = nested_prefix
+                index, _, _ = _scan_csharp_string_literal(
+                    source,
+                    index,
+                    nested_length,
+                    verbatim=nested_verbatim,
+                    interpolated=nested_interpolated,
+                )
+                continue
+            if source[index] == "'":
+                index = _scan_csharp_char_literal(source, index)
+                continue
+            if source[index] == "{":
+                interpolation_depth += 1
+            elif source[index] == "}":
+                interpolation_depth -= 1
+            index += 1
+            continue
+
+        char = source[index]
+        if interpolated and char == "{":
+            if index + 1 < len(source) and source[index + 1] == "{":
+                index += 2
+            else:
+                interpolation_depth = 1
+                index += 1
+            continue
+        if interpolated and char == "}" and index + 1 < len(source) and source[index + 1] == "}":
+            index += 2
+            continue
+        if verbatim:
+            if char == '"':
+                if index + 1 < len(source) and source[index + 1] == '"':
+                    index += 2
+                    continue
+                return index + 1, index, True
+            index += 1
+            continue
+        if char == "\\":
+            index = min(index + 2, len(source))
+            continue
+        if char == '"':
+            return index + 1, index, True
+        if char in "\r\n":
+            return index, index, False
+        index += 1
+    return len(source), len(source), False
+
+
+def _decode_csharp_regular_string(value: str) -> str | None:
+    simple_escapes = {
+        "'": "'",
+        '"': '"',
+        "\\": "\\",
+        "0": "\0",
+        "a": "\a",
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "v": "\v",
+    }
+    decoded: List[str] = []
+    index = 0
+    while index < len(value):
+        if value[index] != "\\":
+            decoded.append(value[index])
+            index += 1
+            continue
+        if index + 1 >= len(value):
+            return None
+        escape = value[index + 1]
+        if escape in simple_escapes:
+            decoded.append(simple_escapes[escape])
+            index += 2
+            continue
+        if escape in {"u", "U"}:
+            digits = 4 if escape == "u" else 8
+            encoded = value[index + 2 : index + 2 + digits]
+            if len(encoded) != digits or not re.fullmatch(r"[0-9A-Fa-f]+", encoded):
+                return None
+            try:
+                decoded.append(chr(int(encoded, 16)))
+            except ValueError:
+                return None
+            index += 2 + digits
+            continue
+        if escape == "x":
+            match = re.match(r"[0-9A-Fa-f]{1,4}", value[index + 2 :])
+            if not match:
+                return None
+            decoded.append(chr(int(match.group(0), 16)))
+            index += 2 + len(match.group(0))
+            continue
+        return None
+    return "".join(decoded)
+
+
+def _lex_csharp_non_code(source_text: str) -> _CSharpLexicalView:
+    source = str(source_text or "")
+    masked = list(source)
+    comments_removed = list(source)
+    literals: List[_CSharpStringLiteral] = []
+
+    def mask(target: List[str], start: int, end: int) -> None:
+        for position in range(start, min(end, len(target))):
+            if target[position] not in "\r\n":
+                target[position] = " "
+
+    index = 0
+    while index < len(source):
+        if source.startswith("//", index):
+            newline = source.find("\n", index + 2)
+            end = len(source) if newline < 0 else newline
+            mask(masked, index, end)
+            mask(comments_removed, index, end)
+            index = end
+            continue
+        if source.startswith("/*", index):
+            closing = source.find("*/", index + 2)
+            end = len(source) if closing < 0 else closing + 2
+            mask(masked, index, end)
+            mask(comments_removed, index, end)
+            index = end
+            continue
+        prefix = _csharp_string_prefix(source, index)
+        if prefix is not None:
+            prefix_length, verbatim, interpolated = prefix
+            end, content_end, terminated = _scan_csharp_string_literal(
+                source,
+                index,
+                prefix_length,
+                verbatim=verbatim,
+                interpolated=interpolated,
+            )
+            value: str | None = None
+            if terminated and not interpolated:
+                raw_value = source[index + prefix_length : content_end]
+                value = raw_value.replace('""', '"') if verbatim else _decode_csharp_regular_string(raw_value)
+            literals.append(
+                _CSharpStringLiteral(
+                    start=index,
+                    end=end,
+                    value=value,
+                    interpolated=interpolated,
+                    terminated=terminated,
+                )
+            )
+            mask(masked, index, end)
+            index = end if end > index else index + 1
+            continue
+        if source[index] == "'":
+            end = _scan_csharp_char_literal(source, index)
+            mask(masked, index, end)
+            index = end if end > index else index + 1
+            continue
+        index += 1
+    return _CSharpLexicalView(
+        code="".join(masked),
+        comments_removed="".join(comments_removed),
+        string_literals=tuple(literals),
+    )
+
+
+def _apply_consumed_profile_rules(
+    source_text: str,
+    profile_context: Dict[str, Any],
+    *,
+    domain: str,
+    procedure_name: str = "",
+    required_source_text: str | None = None,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not profile_context.get("consumption"):
+        return [], profile_context
+    rules = dict(profile_context.get("rules") or {})
+    consumption = dict(profile_context["consumption"])
+    applied: List[str] = []
+    issues: List[Dict[str, Any]] = []
+
+    required_patterns = _normalized_profile_patterns(rules.get("required_patterns"))
+    required_pattern_ids = [item["id"] for item in required_patterns]
+    matched_required_pattern_ids: List[str] = []
+    missing_required_pattern_ids: List[str] = []
+    if required_patterns:
+        applied.append(f"{domain}.required_patterns")
+    required_source = source_text if required_source_text is None else required_source_text
+    for item in required_patterns:
+        try:
+            matched = re.search(item["pattern"], required_source, flags=re.IGNORECASE | re.MULTILINE) is not None
+        except re.error as exc:
+            issues.append(
+                {
+                    "code": "profile_rule_regex_invalid",
+                    "severity": "error",
+                    "rule_id": item["id"],
+                    "message": str(exc),
+                }
+            )
+            continue
+        if not matched:
+            missing_required_pattern_ids.append(item["id"])
+            issues.append(
+                {
+                    "code": f"profile_required_{domain}_pattern_missing",
+                    "severity": "error",
+                    "rule_id": item["id"],
+                    "message": f"Generated {domain} did not consume required packaged profile convention {item['id']}.",
+                }
+            )
+        else:
+            matched_required_pattern_ids.append(item["id"])
+
+    forbidden_patterns = _normalized_profile_patterns(rules.get("forbidden_patterns"))
+    if forbidden_patterns:
+        applied.append(f"{domain}.forbidden_patterns")
+    for item in forbidden_patterns:
+        try:
+            matched = re.search(item["pattern"], source_text, flags=re.IGNORECASE | re.MULTILINE) is not None
+        except re.error as exc:
+            issues.append(
+                {
+                    "code": "profile_rule_regex_invalid",
+                    "severity": "error",
+                    "rule_id": item["id"],
+                    "message": str(exc),
+                }
+            )
+            continue
+        if matched:
+            issues.append(
+                {
+                    "code": f"profile_forbidden_{domain}_pattern",
+                    "severity": "error",
+                    "rule_id": item["id"],
+                    "message": f"Generated {domain} matched forbidden packaged profile convention {item['id']}.",
+                }
+            )
+
+    if domain == "sql":
+        allowed_patterns = _normalized_profile_patterns(rules.get("allowed_procedure_patterns"))
+        if allowed_patterns:
+            applied.append("sql.allowed_procedure_patterns")
+        allowed = False
+        for item in allowed_patterns:
+            try:
+                if re.fullmatch(item["pattern"], procedure_name, flags=re.IGNORECASE):
+                    allowed = True
+                    break
+            except re.error as exc:
+                issues.append(
+                    {
+                        "code": "profile_rule_regex_invalid",
+                        "severity": "error",
+                        "rule_id": item["id"],
+                        "message": str(exc),
+                    }
+                )
+        if not procedure_name or not allowed_patterns or not allowed:
+            issues.append(
+                {
+                    "code": "profile_unmapped_sp_output",
+                    "severity": "error",
+                    "procedure_name": procedure_name,
+                    "message": (
+                        "The generated procedure must match the loaded profile's generalized procedure mapping; "
+                        "path strings or unrelated source evidence do not satisfy this contract."
+                    ),
+                }
+            )
+
+    consumption["applied_rule_groups"] = applied
+    consumption["required_pattern_ids"] = required_pattern_ids
+    consumption["matched_required_pattern_ids"] = matched_required_pattern_ids
+    consumption["missing_required_pattern_ids"] = missing_required_pattern_ids
+    profile_context = {"consumption": consumption, "rules": rules}
+    return issues, profile_context
+
+
 def get_author_tagged_csharp_style_baseline() -> Dict[str, Any]:
-    """Return the bundled author-tagged SP-to-C# style evidence snapshot."""
+    """Return the detached generalized style recipe through the legacy API."""
     return json.loads(json.dumps(AUTHOR_TAGGED_CSHARP_STYLE_BASELINE))
 
 
@@ -519,27 +1293,6 @@ def _author_tagged_evidence_paths_match(program_key: str, evidence_paths: Iterab
     expected_tails = {_author_tagged_path_tail(path) for path in expected_paths}
     actual_tails = {_author_tagged_path_tail(path) for path in actual_paths}
     return bool(expected_tails) and expected_tails.issubset(actual_tails)
-
-
-def _load_author_tagged_program_style_profile(program_key: str) -> Dict[str, Any]:
-    """Load the bundled per-program profile without requiring the user's source tree."""
-    key = str(program_key or "").upper()
-    if not key:
-        return {}
-    profile_path = (
-        Path(__file__).resolve().parents[2]
-        / "skills"
-        / "pb_to_csharp_migration_harness"
-        / "references"
-        / "author-tagged-program-style-profiles.json"
-    )
-    try:
-        with profile_path.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, json.JSONDecodeError):
-        return {}
-    profile = payload.get("profiles", {}).get(key, {})
-    return dict(profile) if isinstance(profile, dict) else {}
 
 
 def _discover_author_tagged_csharp_paths(program_key: str, csharp_root: str) -> List[str]:
@@ -620,68 +1373,172 @@ def _build_author_tagged_screen_style_profile(program_key: str, source_text: str
     }
 
 
+def build_author_tagged_style_profile_update(
+    procedure_name: str,
+    *,
+    csharp_root: str,
+    profile_id: str,
+    profile_version: str,
+) -> HarnessResult:
+    """Inspect live C# only through an explicit, candidate-only relearning operation."""
+    program_key = normalize_author_tagged_program_key(procedure_name)
+    discovered_paths = _discover_author_tagged_csharp_paths(program_key, csharp_root)
+    issues: List[Dict[str, Any]] = []
+    if not profile_id or not profile_version:
+        issues.append(
+            {
+                "code": "profile_update_identity_required",
+                "severity": "error",
+                "message": "Explicit profile update requires profile_id and profile_version.",
+            }
+        )
+    if len(discovered_paths) < 2:
+        issues.append(
+            {
+                "code": "profile_update_csharp_pair_missing",
+                "severity": "error",
+                "message": "Explicit profile update requires matching primary C# and Designer files.",
+            }
+        )
+    candidate: Dict[str, Any] = {}
+    if not issues:
+        try:
+            source_text = Path(discovered_paths[0]).read_text(encoding="utf-8-sig", errors="ignore")
+            designer_text = Path(discovered_paths[1]).read_text(encoding="utf-8-sig", errors="ignore")
+        except OSError as exc:
+            issues.append(
+                {
+                    "code": "profile_update_csharp_read_failed",
+                    "severity": "error",
+                    "message": str(exc),
+                }
+            )
+        else:
+            extracted = _build_author_tagged_screen_style_profile(
+                program_key,
+                source_text,
+                designer_text,
+            )
+            candidate = {
+                "profile_id": str(profile_id),
+                "version": str(profile_version),
+                "sanitized": False,
+                "candidate_source": "explicit_live_csharp_update",
+                "program_key": program_key,
+                "extracted_style": extracted,
+            }
+    success = not issues
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "operation": "explicit_profile_update",
+        "status": "candidate_ready" if success else "blocked",
+        "write_status": "candidate_only",
+        "program_key": program_key,
+        "profile_id": str(profile_id or ""),
+        "profile_version": str(profile_version or ""),
+        "source_paths": discovered_paths,
+        "candidate_profile": candidate,
+        "issues": issues,
+        "runtime_generation_eligible": False,
+        "next_action": (
+            "Sanitize, generalize, review, hash, and package the candidate before runtime use."
+            if success
+            else "Provide a valid C# root and explicit profile identity."
+        ),
+        "token_optimizer_status": "passthrough",
+    }
+    return HarnessResult(
+        success=success,
+        stdout=json.dumps(
+            {
+                "status": metadata["status"],
+                "operation": metadata["operation"],
+                "program_key": program_key,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        stderr="" if success else "Explicit profile update could not build a candidate.",
+        exit_code=0 if success else 1,
+        metadata=metadata,
+    )
+
+
+def build_migration_profile_update(
+    procedure_name: str,
+    *,
+    csharp_root: str,
+    profile_id: str,
+    profile_version: str,
+) -> HarnessResult:
+    """Public maintenance entrypoint for explicit profile relearning."""
+    return build_author_tagged_style_profile_update(
+        procedure_name,
+        csharp_root=csharp_root,
+        profile_id=profile_id,
+        profile_version=profile_version,
+    )
+
+
 def resolve_author_tagged_style_evidence(
     procedure_name: str,
     *,
     csharp_root: str = "",
+    profile_id: str = "",
+    profile_version: str = "",
+    profile_hash: str = "",
 ) -> HarnessResult:
-    """Resolve author-tagged SP style evidence through the program-key C# mapping."""
+    """Resolve runtime style only from an immutable packaged profile identity."""
     program_key = normalize_author_tagged_program_key(procedure_name)
-    exclusions = {key.upper(): value for key, value in AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["baseline_exclusions"].items()}
-    relative_paths = AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS.get(program_key, [])
-    discovered_paths = _discover_author_tagged_csharp_paths(program_key, csharp_root)
-    evidence_paths = discovered_paths or [
-        os.path.normpath(os.path.join(csharp_root, rel_path)) if csharp_root else rel_path
-        for rel_path in relative_paths
-    ]
-    exists = [os.path.exists(path) for path in evidence_paths] if csharp_root else []
-    status = "matched"
-    if program_key in exclusions:
-        status = "excluded"
-    elif not relative_paths:
-        status = "unmapped"
-    elif csharp_root and len(discovered_paths) < 2:
-        status = "stale_or_missing"
-    elif csharp_root and exists and not all(exists):
-        status = "stale_or_missing"
-    style_profile: Dict[str, Any] = {}
-    if status == "matched" and csharp_root and len(evidence_paths) >= 2 and all(os.path.exists(path) for path in evidence_paths[:2]):
-        try:
-            with open(evidence_paths[0], "r", encoding="utf-8-sig", errors="ignore") as source_file:
-                source_text = source_file.read()
-            with open(evidence_paths[1], "r", encoding="utf-8-sig", errors="ignore") as designer_file:
-                designer_text = designer_file.read()
-            style_profile = _build_author_tagged_screen_style_profile(program_key, source_text, designer_text)
-        except OSError:
-            style_profile = {}
-    if status == "matched" and not style_profile:
-        style_profile = _load_author_tagged_program_style_profile(program_key)
-    metadata = {
-        "harness": "pb-to-csharp-migration-harness",
-        "procedure_name": procedure_name,
-        "program_key": program_key,
-        "status": status,
-        "primary_style_evidence_paths": evidence_paths,
-        "path_exists": exists,
-        "missing_style_evidence_paths": [
-            path for path, path_exists in zip(evidence_paths, exists) if not path_exists
-        ],
-        "exclusion_reason": exclusions.get(program_key, ""),
-        "style_profile": style_profile,
-        "baseline_counts": {
-            "sp_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["sp_count"],
-            "normalized_program_key_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["normalized_program_key_count"],
-            "primary_csharp_baseline_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["primary_csharp_baseline_files_analyzed"],
-            "designer_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["designer_files_analyzed"],
-        },
-        "author_tagged_generation_recipe": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["positive_generation_recipe"],
-    }
-    success = status == "matched" and bool(relative_paths) and (not csharp_root or all(exists))
+    if str(csharp_root or "").strip():
+        metadata = {
+            "harness": "pb-to-csharp-migration-harness",
+            "operation": "runtime_profile_resolution",
+            "procedure_name": procedure_name,
+            "program_key": program_key,
+            "status": "explicit_profile_update_required",
+            "issues": [
+                {
+                    "code": "live_csharp_source_forbidden_in_runtime_generation",
+                    "severity": "error",
+                    "message": (
+                        "Runtime generation does not walk or read C# roots. Use "
+                        "build_author_tagged_style_profile_update for explicit relearning."
+                    ),
+                }
+            ],
+            "external_sources_consulted": [],
+        }
+        return HarnessResult(
+            success=False,
+            stdout=json.dumps({"status": metadata["status"], "program_key": program_key}),
+            stderr="Live C# style discovery is disabled during runtime generation.",
+            exit_code=1,
+            metadata=metadata,
+        )
+
+    requested_profile_id = str(profile_id or program_key).strip()
+    loaded = load_packaged_migration_profile(
+        requested_profile_id,
+        profile_version,
+        profile_hash,
+    )
+    metadata = dict(loaded.metadata)
+    metadata.update(
+        {
+            "operation": "runtime_profile_resolution",
+            "procedure_name": procedure_name,
+            "program_key": program_key,
+            "primary_style_evidence_paths": [],
+            "path_evidence_accepted": False,
+            "style_profile": dict(metadata.get("profile_rules") or {}),
+        }
+    )
     return HarnessResult(
-        success=success,
-        stdout=json.dumps({"status": status, "program_key": program_key, "evidence_count": len(evidence_paths)}, ensure_ascii=False, sort_keys=True),
-        stderr="" if success else "Author-tagged SP did not resolve to fresh primary same-program C# style evidence.",
-        exit_code=0 if success else 1,
+        success=loaded.success,
+        stdout=loaded.stdout,
+        stderr=loaded.stderr,
+        exit_code=loaded.exit_code,
         metadata=metadata,
     )
 
@@ -699,8 +1556,47 @@ def _is_numeric_grid_field_name(field_name: str) -> bool:
     )
 
 
+def _is_numeric_grid_data_type(data_type: str) -> bool | None:
+    normalized = re.sub(r"\s+", "", str(data_type or "")).lower()
+    if not normalized:
+        return None
+    base_type = normalized.split("(", 1)[0]
+    if base_type in {
+        "bigint",
+        "byte",
+        "decimal",
+        "double",
+        "float",
+        "int",
+        "integer",
+        "long",
+        "money",
+        "number",
+        "numeric",
+        "real",
+        "short",
+        "smallint",
+        "smallmoney",
+        "tinyint",
+        "uint",
+        "ulong",
+        "ushort",
+    }:
+        return True
+    return False
+
+
+def _is_numeric_grid_column(column: "DataWindowColumnSpec") -> bool:
+    declared_type_result = _is_numeric_grid_data_type(column.data_type)
+    if declared_type_result is not None:
+        return declared_type_result
+    return _is_numeric_grid_field_name(column.field_name)
+
+
 def _extract_sp_procedure_name(sql_text: str) -> str:
-    match = SP_PROCEDURE_NAME_PATTERN.search(sql_text or "")
+    match = SP_PROCEDURE_NAME_PATTERN.search(
+        _strip_sql_literals_and_comments_for_pb_contract(sql_text)
+    )
     if not match:
         return ""
     return str(match.group("bracketed") or match.group("plain") or "").upper()
@@ -712,21 +1608,6 @@ def _display_format_string_looks_numeric(format_string: str) -> bool:
         return False
     return bool(re.fullmatch(r"[#,0.]+", stripped))
 
-KONELIB_CONTROL_TYPES = {
-    "grid": "KoneLib.Controls.u_GridControl",
-    "text": "KoneLib.Controls.u_TextEdit",
-    "label": "KoneLib.Controls.u_Label",
-    "group": "KoneLib.Controls.u_GroupControl",
-    "panel": "KoneLib.Controls.u_Panel",
-    "tab": "KoneLib.Controls.u_TabControl",
-    "date": "KoneLib.Controls.u_DateEdit",
-    "spin": "KoneLib.Controls.u_SpinEdit",
-    "button": "KoneLib.Controls.u_ButtonEdit",
-    "combo": "KoneLib.Controls.u_ComboBox",
-    "memo": "KoneLib.Controls.u_MemoEdit",
-    "check": "KoneLib.Controls.u_CheckEdit",
-    "tree": "KoneLib.Controls.u_TreeList",
-}
 CONTROL_FALLBACKS = {
     "grid": {
         "target_suffixes": ("u_gridcontrol", "gridcontrol"),
@@ -850,6 +1731,9 @@ class MigrationInputState:
     procedure_name: str = ""
     program_key: str = ""
     fallback_program_key: str = ""
+    profile_id: str = ""
+    profile_version: str = ""
+    profile_hash: str = ""
     author_tagged_required: bool = False
     primary_style_evidence_paths: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -873,6 +1757,9 @@ class MigrationInputState:
             "procedure_name": self.procedure_name,
             "program_key": self.program_key,
             "fallback_program_key": self.fallback_program_key,
+            "profile_id": self.profile_id,
+            "profile_version": self.profile_version,
+            "profile_hash": self.profile_hash,
             "author_tagged_required": self.author_tagged_required,
             "primary_style_evidence_paths": list(self.primary_style_evidence_paths),
             "notes": list(self.notes),
@@ -900,6 +1787,9 @@ class MigrationInputState:
             procedure_name=str(data.get("procedure_name", "")),
             program_key=str(data.get("program_key", "")),
             fallback_program_key=str(data.get("fallback_program_key", "")),
+            profile_id=str(data.get("profile_id", "")),
+            profile_version=str(data.get("profile_version", data.get("version", ""))),
+            profile_hash=str(data.get("profile_hash", "")),
             author_tagged_required=bool(data.get("author_tagged_required", False)),
             primary_style_evidence_paths=[
                 str(item) for item in data.get("primary_style_evidence_paths", []) if str(item)
@@ -913,6 +1803,7 @@ class DataWindowColumnSpec:
     field_name: str
     caption: str
     csharp_name: str
+    data_type: str = ""
     source: str = "table-column"
     x: int | None = None
     y: int | None = None
@@ -924,6 +1815,7 @@ class DataWindowColumnSpec:
             "field_name": self.field_name,
             "caption": self.caption,
             "csharp_name": self.csharp_name,
+            "data_type": self.data_type,
             "source": self.source,
             "x": self.x,
             "y": self.y,
@@ -1258,8 +2150,11 @@ def build_detail_form_layout_plan(
     row_height: int = 28,
     label_editor_gap: int = 8,
     column_gap: int = 96,
+    provider_contract: Mapping[str, Any] | None = None,
+    binding_map: Mapping[str, Any] | None = None,
+    result_fields: Iterable[str] | None = None,
 ) -> HarnessResult:
-    """Build a clean SA100100-style detail form layout plan for label/editor pairs."""
+    """Build a clean target-style detail form layout plan for label/editor pairs."""
     normalized_fields = _normalize_detail_form_fields(fields)
     if not normalized_fields:
         return HarnessResult(
@@ -1276,8 +2171,22 @@ def build_detail_form_layout_plan(
 
     safe_columns = max(1, int(columns or 1))
     data_source = str(data_source_name or "bindingSource1")
+    provider = dict(provider_contract or {})
+    provider_name = str(provider.get("provider") or "winforms").strip().lower()
+    supports_binding_field = provider.get("supports_binding_field") is True
+    supplied_binding_map = dict(binding_map or {})
+    normalized_result_fields = (
+        None
+        if result_fields is None
+        else {
+            _normalize_datawindow_field_name(item)
+            for item in result_fields
+            if _normalize_datawindow_field_name(item)
+        }
+    )
     pitch = label_width + label_editor_gap + editor_width + column_gap
     specs: List[DetailFormFieldSpec] = []
+    issues: List[Dict[str, Any]] = []
     for index, field in enumerate(normalized_fields):
         row = index // safe_columns
         column = index % safe_columns
@@ -1289,7 +2198,41 @@ def build_detail_form_layout_plan(
         caption = field["caption"] or field_name
         editor_type = field["editor_type"]
         editor_name = field.get("csharp_editor_name") or _build_editor_control_name(editor_type, logical_name, field_name)
-        binding_property = "BindingField"
+        binding_evidence = supplied_binding_map.get(field_name, supplied_binding_map.get(editor_name, {}))
+        if isinstance(binding_evidence, str):
+            binding_evidence = {"result_field": binding_evidence}
+        binding_evidence = dict(binding_evidence) if isinstance(binding_evidence, Mapping) else {}
+        result_field = _normalize_datawindow_field_name(
+            binding_evidence.get("result_field") or field_name
+        )
+        explicit_binding_field = bool(
+            str(binding_evidence.get("binding_property") or "").lower() == "bindingfield"
+            and isinstance(binding_evidence.get("evidence"), Mapping)
+            and binding_evidence["evidence"].get("observed") is True
+        )
+        if normalized_result_fields is not None and result_field not in normalized_result_fields:
+            issues.append(
+                {
+                    "code": "binding_result_field_mismatch",
+                    "severity": "error",
+                    "field_name": field_name,
+                    "result_field": result_field,
+                    "message": "The editor binding field must correspond to a declared result field.",
+                }
+            )
+        if supports_binding_field or explicit_binding_field:
+            binding_property = "BindingField"
+            binding_code = f'this.{editor_name}.BindingField = "{result_field}";'
+        else:
+            binding_property = "DataBindings"
+            target_property = "Checked" if editor_type == "CheckEdit" else (
+                "EditValue" if provider_name in {"devexpress", "konelib"} else "Text"
+            )
+            data_source_reference = data_source if data_source.startswith("this.") else f"this.{data_source}"
+            binding_code = (
+                f'this.{editor_name}.DataBindings.Add("{target_property}", '
+                f'{data_source_reference}, "{result_field}");'
+            )
         specs.append(
             DetailFormFieldSpec(
                 logical_name=logical_name,
@@ -1299,7 +2242,7 @@ def build_detail_form_layout_plan(
                 csharp_label_name=field.get("csharp_label_name") or f"lbl{_normalize_datawindow_field_name(field_name)}",
                 csharp_editor_name=editor_name,
                 binding_property=binding_property,
-                binding_code=f'this.{editor_name}.BindingField = "{field_name}";',
+                binding_code=binding_code,
                 tab_index=index,
                 tab_index_code=f"this.{editor_name}.TabIndex = {index};",
                 row=row,
@@ -1312,13 +2255,13 @@ def build_detail_form_layout_plan(
 
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
-        "status": "passed",
+        "status": "passed" if not issues else "blocked",
         "section_caption": str(section_caption or "detail"),
         "data_source_name": data_source,
         "field_count": len(specs),
         "columns": safe_columns,
         "layout_rule": (
-            "SA100100-style aligned detail form: place label/editor pairs in fixed rows and columns; "
+            "Target-style aligned detail form: place label/editor pairs in fixed rows and columns; "
             "use PB/source order and captions, but do not copy PB pixel coordinates blindly."
         ),
         "control_pair_rule": (
@@ -1326,17 +2269,82 @@ def build_detail_form_layout_plan(
             "fallback names use observed prefixes txt/btn/cbo/Spin/ymd/Chk/memo plus pn/grp/grd/gvw/treeList/tab for containers."
         ),
         "binding_rule": (
-            "Each editor carries the source field name and a target-project BindingField assignment. "
-            "Existing target control names override generated fallback names."
+            "Each editor carries the source/result field through provider-supported BindingField or an explicit "
+            "DataBindings map. Existing target control names override generated fallback names."
         ),
+        "provider_contract": provider,
+        "result_fields": sorted(normalized_result_fields or []),
+        "issues": issues,
         "tab_order_rule": "Input editor TabIndex follows the generated left-to-right, top-to-bottom row/column order.",
         "fields": [spec.to_dict() for spec in specs],
     }
     return HarnessResult(
-        success=True,
+        success=not issues,
         stdout=json.dumps(metadata, ensure_ascii=False, indent=2),
-        stderr="",
-        exit_code=0,
+        stderr="" if not issues else "Detail-form binding/result-field validation failed.",
+        exit_code=0 if not issues else 1,
+        metadata=metadata,
+    )
+
+
+def build_offline_pb_to_csharp_runtime_generation(
+    objective: str,
+    *,
+    profile_id: str,
+    profile_version: str,
+    profile_hash: str,
+    csharp_root: str = "",
+) -> HarnessResult:
+    """Build ordinary runtime-generation context from packaged profile data only."""
+    loaded = load_packaged_migration_profile(profile_id, profile_version, profile_hash)
+    objective_present = bool(str(objective or "").strip())
+    success = bool(objective_present and loaded.success)
+    issues = list(loaded.metadata.get("issues", []))
+    if not objective_present:
+        issues.append(
+            {
+                "code": "runtime_generation_objective_required",
+                "severity": "error",
+                "message": "Runtime generation objective is required.",
+            }
+        )
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "operation": "runtime_generation",
+        "runtime_mode": "offline_packaged_profile",
+        "status": "ready" if success else "blocked",
+        "objective": str(objective or ""),
+        "profile_consumption": dict(loaded.metadata.get("profile_consumption", {})),
+        "profile_rules": dict(loaded.metadata.get("profile_rules", {})),
+        "profile_path": loaded.metadata.get("profile_path", ""),
+        "external_sources_consulted": [],
+        "ignored_live_source_request": bool(str(csharp_root or "").strip()),
+        "capabilities_invoked": {
+            "csharp_root_walk": False,
+            "csharp_source_read": False,
+            "db": False,
+            "pbl": False,
+            "orca": False,
+            "pblscripter": False,
+        },
+        "issues": issues,
+        "token_optimizer_status": "passthrough",
+        "token_optimizer_status_reason": "C#/SQL/PB generation contracts remain exact.",
+    }
+    return HarnessResult(
+        success=success,
+        stdout=json.dumps(
+            {
+                "status": metadata["status"],
+                "runtime_mode": metadata["runtime_mode"],
+                "profile_id": profile_id,
+                "profile_version": profile_version,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        stderr="" if success else "Offline packaged runtime generation context could not be built.",
+        exit_code=0 if success else 1,
         metadata=metadata,
     )
 
@@ -1350,67 +2358,31 @@ def build_pb_to_csharp_migration_plan(
     input_state = _coerce_state(state)
     pbl_export_strategy = build_pbl_export_strategy(input_state)
     control_stack = resolve_csharp_control_stack(dict(state or {}).get("available_controls") if isinstance(state, dict) else None)
-    target_style_text = " ".join(
-        [
-            input_state.target_style,
-            input_state.target_project_name,
-            input_state.procedure_name,
-            input_state.program_key,
-        ]
-    ).upper()
-    author_tagged_required = bool(
-        input_state.author_tagged_required
-        or "C_KONE110" in target_style_text
-        or "KH" in target_style_text
-        or input_state.procedure_name
-        or input_state.program_key
-    )
     resolved_program_key = (
         input_state.program_key.upper()
         if input_state.program_key
         else normalize_author_tagged_program_key(input_state.procedure_name)
     )
-    author_tagged_style_resolution: Dict[str, Any] = {
-        "required": author_tagged_required,
-        "status": "not_requested",
+    loaded_profile = _load_runtime_packaged_migration_profile(
+        input_state.profile_id,
+        input_state.profile_version,
+        input_state.profile_hash,
+    )
+    packaged_style_resolution: Dict[str, Any] = {
+        "required": True,
+        "status": "loaded" if loaded_profile.success else "blocked",
         "program_key": resolved_program_key,
-        "fallback_program_key": input_state.fallback_program_key.upper(),
-        "primary_style_evidence_paths": list(input_state.primary_style_evidence_paths),
-        "generation_recipe": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["positive_generation_recipe"] if author_tagged_required else {},
+        "profile_id": loaded_profile.metadata.get("profile_consumption", {}).get("profile_id", ""),
+        "profile_version": loaded_profile.metadata.get("profile_consumption", {}).get("profile_version", ""),
+        "profile_hash": loaded_profile.metadata.get("profile_consumption", {}).get("profile_hash", ""),
+        "profile_path": loaded_profile.metadata.get("profile_path", ""),
+        "profile_consumption": dict(loaded_profile.metadata.get("profile_consumption", {})),
+        "profile_rules": dict(loaded_profile.metadata.get("profile_rules", {})),
+        "issues": list(loaded_profile.metadata.get("issues", [])),
+        "external_sources_consulted": [],
+        "source_analysis_invoked": False,
+        "runtime_mode": "offline_packaged_profile",
     }
-    if author_tagged_required:
-        if input_state.primary_style_evidence_paths:
-            expected_key = input_state.fallback_program_key.upper() or resolved_program_key
-            author_tagged_style_resolution.update(
-                {
-                    "status": "provided",
-                    "expected_style_program_key": expected_key,
-                    "path_match": _author_tagged_evidence_paths_match(
-                        expected_key,
-                        input_state.primary_style_evidence_paths,
-                    ),
-                }
-            )
-        elif input_state.procedure_name:
-            resolved = resolve_author_tagged_style_evidence(input_state.procedure_name)
-            author_tagged_style_resolution.update(resolved.metadata)
-        elif resolved_program_key:
-            expected_paths = _expected_author_tagged_style_paths(resolved_program_key)
-            author_tagged_style_resolution.update(
-                {
-                    "status": "matched" if expected_paths else "unmapped",
-                    "expected_style_program_key": resolved_program_key,
-                    "primary_style_evidence_paths": expected_paths,
-                    "path_match": bool(expected_paths),
-                }
-            )
-        else:
-            author_tagged_style_resolution.update(
-                {
-                    "status": "blocked",
-                    "blocked_reason": "author_tagged_style_requested_without_procedure_or_program_key",
-                }
-            )
     steps = [
         "Frame the PB screen/program objective, operator workflow, and target C# surface.",
         "Select the PBL export provider: PblScripter wrapper, direct ORCA, pre-exported source, pasted source, described behavior, or bundled fallback.",
@@ -1421,10 +2393,10 @@ def build_pb_to_csharp_migration_plan(
         "Write a substantial analysis markdown handoff before C# generation and verify it with verify_pb_migration_analysis_document.",
         "Map DataWindow columns to target-project controls; fall back to DevExpress and then WinForms basics when needed.",
         "For detail forms, lay out label/editor pairs in clean aligned rows and columns instead of blindly copying PB coordinates.",
-        "Resolve the target-project control stack before generating C# so project-specific controls are not replaced by a fixed TY/KoneLib assumption.",
-        "For C_KONE110/KH style, resolve author-tagged SP -> program key -> same-program C#/Designer evidence before generating code.",
+        "Resolve the target-project control stack before generating C# so project-specific controls are not replaced by a fixed private-wrapper assumption.",
+        "Load and consume the generalized packaged style contract before generating C# or SQL.",
         "Draft C# flow by preserving existing target-project method paths such as CallViewQuery, CallProc, SelectType, DataTableToXml, and SetModified when present.",
-        "Draft SELECT/SAVE stored procedures from the packaged KH SP style reference and host-local sql-formatting contract.",
+        "Draft SELECT/SAVE stored procedures from the packaged generalized style contract and host-local sql-formatting contract.",
         "Separate formatting-only cleanup from semantic/performance rewrites; require DB-backed evidence for semantic changes.",
         "Produce a migration checklist, traceability table, and verification plan before implementation claims.",
     ]
@@ -1451,17 +2423,25 @@ def build_pb_to_csharp_migration_plan(
         "target_project_name": input_state.target_project_name,
         "pbl_export_strategy": pbl_export_strategy,
         "control_stack": control_stack,
-        "author_tagged_style_resolution": author_tagged_style_resolution,
+        "packaged_style_resolution": packaged_style_resolution,
         "token_optimizer_status": "passthrough",
         "token_optimizer_status_reason": (
             "PB source, SQL, C# style rules, and business literals are source-of-truth content; do not compress them."
         ),
     }
     return HarnessResult(
-        success=bool(objective.strip()),
+        success=bool(objective.strip() and loaded_profile.success),
         stdout=json.dumps(payload, ensure_ascii=False, sort_keys=True),
-        stderr="" if objective.strip() else "Migration objective is required.",
-        exit_code=0 if objective.strip() else 1,
+        stderr=(
+            ""
+            if objective.strip() and loaded_profile.success
+            else (
+                "Migration objective is required."
+                if not objective.strip()
+                else "Generalized packaged style contract validation failed."
+            )
+        ),
+        exit_code=0 if objective.strip() and loaded_profile.success else 1,
         metadata=payload,
     )
 
@@ -1641,12 +2621,29 @@ def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_
     """Extract DataWindow grid columns, C# column names, and best-effort captions from SRD text."""
     source = str(source_text or "")
     starts = [match.start() for match in DATAWINDOW_COLUMN_PATTERN.finditer(source)]
-    table_columns: List[str] = []
+    table_columns: List[Dict[str, str]] = []
     for index, start in enumerate(starts):
         end = starts[index + 1] if index + 1 < len(starts) else len(source)
-        name_match = DATAWINDOW_NAME_PATTERN.search(source[start:end])
+        block = source[start:end]
+        name_match = DATAWINDOW_NAME_PATTERN.search(block)
         if name_match:
-            table_columns.append(_normalize_datawindow_field_name(name_match.group("name")))
+            type_match = re.search(
+                r"\btype\s*=\s*(?P<data_type>[A-Za-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?)",
+                block,
+                flags=re.IGNORECASE,
+            )
+            table_columns.append(
+                {
+                    "field_name": _normalize_datawindow_field_name(name_match.group("name")),
+                    "data_type": str(type_match.group("data_type") if type_match else "").strip(),
+                }
+            )
+
+    table_data_types = {
+        item["field_name"]: item["data_type"]
+        for item in table_columns
+        if item["field_name"]
+    }
 
     visual_columns = _extract_visual_datawindow_columns(source)
     text_controls = _extract_datawindow_text_controls(source)
@@ -1663,6 +2660,7 @@ def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_
                 field_name=field_name,
                 caption=caption,
                 csharp_name=build_csharp_grid_column_name(field_name, prefix=prefix),
+                data_type=table_data_types.get(field_name, ""),
                 source="visual-column",
                 x=column.get("x"),
                 y=column.get("y"),
@@ -1672,7 +2670,8 @@ def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_
         )
         seen.add(field_name)
 
-    for field_name in table_columns:
+    for table_column in table_columns:
+        field_name = table_column["field_name"]
         if field_name in seen:
             continue
         specs.append(
@@ -1680,6 +2679,7 @@ def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_
                 field_name=field_name,
                 caption=field_name,
                 csharp_name=build_csharp_grid_column_name(field_name, prefix=prefix),
+                data_type=table_column["data_type"],
             )
         )
         seen.add(field_name)
@@ -1687,7 +2687,7 @@ def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_
 
 
 def build_csharp_grid_column_name(field_name: str, *, prefix: str = "colList_") -> str:
-    """Build a target C# GridColumn member/control name such as colList_ITEMCD."""
+    """Build a target C# GridColumn member/control name such as colList_ENTITY_ID."""
     normalized = _normalize_datawindow_field_name(field_name)
     safe = re.sub(r"[^A-Z0-9_]", "_", normalized)
     if safe and safe[0].isdigit():
@@ -1848,6 +2848,7 @@ def build_csharp_grid_column_designer_plan(
     purpose_name: str = "",
     grid_view_name: str = "",
     default_allow_edit: bool = False,
+    result_fields: Iterable[str] | None = None,
 ) -> HarnessResult:
     """Build explicit Designer-style GridColumn declarations and assignments."""
     resolved_prefix = prefix or resolve_csharp_grid_column_prefix(
@@ -1869,10 +2870,30 @@ def build_csharp_grid_column_designer_plan(
             },
         )
 
+    normalized_result_fields = (
+        None
+        if result_fields is None
+        else {
+            _normalize_datawindow_field_name(item)
+            for item in result_fields
+            if _normalize_datawindow_field_name(item)
+        }
+    )
+    issues = [
+        {
+            "code": "grid_field_result_mismatch",
+            "severity": "error",
+            "field_name": column.field_name,
+            "message": "GridColumn FieldName must correspond to a declared result field.",
+        }
+        for column in normalized
+        if normalized_result_fields is not None
+        and column.field_name not in normalized_result_fields
+    ]
     numeric_repository_by_column: Dict[str, str] = {}
     for column in normalized:
         field_upper = str(column.field_name or "").upper()
-        if _is_numeric_grid_field_name(field_upper):
+        if _is_numeric_grid_column(column):
             if "QTY" in field_upper or "WGT" in field_upper:
                 numeric_repository_by_column[column.csharp_name] = "rpsSpinQty"
             else:
@@ -1958,7 +2979,7 @@ def build_csharp_grid_column_designer_plan(
     ]
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
-        "status": "passed",
+        "status": "passed" if not issues else "blocked",
         "columns": [column.to_dict() for column in normalized],
         "csharp_column_prefix": resolved_prefix,
         "csharp_grid_names": grid_names,
@@ -1970,6 +2991,8 @@ def build_csharp_grid_column_designer_plan(
         "repository_registration": repository_registration,
         "repository_assignments": repository_assignments,
         "numeric_repository_by_column": numeric_repository_by_column,
+        "result_fields": sorted(normalized_result_fields or []),
+        "issues": issues,
         "designer_contract": (
             "Use explicit GridColumn members and Columns.AddRange with colList_/colDetail_/col<TABLE>_/col<PURPOSE>_ "
             "names. Do not generate runtime AddGridColumn, Columns.AddField, or view.Name + \"_\" + fieldName helpers by default."
@@ -1978,10 +3001,10 @@ def build_csharp_grid_column_designer_plan(
         "token_optimizer_status_reason": "Generated Designer code is contract-sensitive and was not compressed.",
     }
     return HarnessResult(
-        success=True,
+        success=not issues,
         stdout="\n".join(designer_lines),
-        stderr="",
-        exit_code=0,
+        stderr="" if not issues else "Grid FieldName/result-field validation failed.",
+        exit_code=0 if not issues else 1,
         metadata=metadata,
     )
 
@@ -2103,34 +3126,602 @@ def extract_csharp_designer_control_specs(source_text: str) -> HarnessResult:
     )
 
 
+def _requested_csharp_form_class(program_key: str, form_class: str) -> str:
+    explicit = str(form_class or "").strip()
+    if explicit:
+        return explicit
+    program = str(program_key or "").strip().strip("[]")
+    if "." in program:
+        program = program.split(".")[-1].strip().strip("[]")
+    program = re.sub(r"^(?:U?SP_)", "", program, flags=re.IGNORECASE)
+    program = re.sub(r"_(?:SELECT|SAVE|SELECT_SAVE)$", "", program, flags=re.IGNORECASE)
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", program):
+        return ""
+    return program if program.lower().endswith("form") else f"{program}Form"
+
+
+def _validate_csharp_program_form_contract(
+    source: str,
+    rules: Mapping[str, Any],
+    *,
+    program_key: str,
+    form_class: str,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    contract = rules.get("form_contract")
+    contract = dict(contract) if isinstance(contract, Mapping) else {}
+    expected_form = _requested_csharp_form_class(program_key, form_class)
+    declared_forms = re.findall(
+        r"\b(?:(?:public|internal|protected|private|abstract|sealed|partial)\s+)*class\s+"
+        r"([A-Za-z_][A-Za-z0-9_]*)\b",
+        source,
+    )
+    mapped = bool(expected_form and expected_form.lower() in {item.lower() for item in declared_forms})
+    issues: List[Dict[str, Any]] = []
+    if contract.get("requested_mapping_required") is not True or not expected_form:
+        issues.append(
+            {
+                "code": "generated_csharp_program_form_contract_required",
+                "severity": "error",
+                "message": "Generated C# validation requires a requested program key or explicit form class.",
+            }
+        )
+    elif not mapped:
+        issues.append(
+            {
+                "code": "generated_csharp_form_contract_mismatch",
+                "severity": "error",
+                "message": "Generated C# must declare the form mapped to the requested program/form contract.",
+                "expected_form_class": expected_form,
+                "declared_form_classes": declared_forms,
+            }
+        )
+    return issues, {
+        "requested_program_key": str(program_key or ""),
+        "requested_form_class": str(form_class or ""),
+        "expected_form_class": expected_form,
+        "declared_form_classes": declared_forms,
+        "profile_form_template": str(contract.get("form_template") or ""),
+        "mapped": mapped,
+    }
+
+
+def _runtime_dynamic_ui_allowances(
+    evidence: Any,
+) -> tuple[set[tuple[str, str]], bool]:
+    if not isinstance(evidence, Mapping):
+        return set(), False
+
+    reason = str(evidence.get("reason") or "").strip()
+    source_evidence = evidence.get("source_evidence")
+    verification = evidence.get("verification")
+
+    def has_evidence(value: Any) -> bool:
+        if isinstance(value, (Mapping, list, tuple, set)):
+            return bool(value)
+        return bool(str(value or "").strip())
+
+    def has_observed_verification_receipt(value: Any) -> bool:
+        if not isinstance(value, Mapping):
+            return False
+        receipt_kind = str(value.get("kind") or value.get("type") or "").strip().lower()
+        status = str(value.get("status") or "").strip().lower()
+        if value.get("observed") is not True or status not in {
+            "completed",
+            "passed",
+            "success",
+            "verified",
+        }:
+            return False
+        if receipt_kind == "command":
+            return bool(str(value.get("command") or "").strip()) and value.get("exit_code") == 0
+        if receipt_kind == "artifact":
+            return bool(str(value.get("artifact") or value.get("path") or "").strip()) and bool(
+                str(value.get("sha256") or value.get("content_hash") or "").strip()
+            )
+        if receipt_kind == "test":
+            return bool(str(value.get("test") or value.get("test_name") or "").strip())
+        if receipt_kind == "tool_receipt":
+            return bool(
+                str(value.get("receipt") or value.get("result_id") or value.get("tool_call_id") or "").strip()
+            )
+        return False
+
+    has_source_evidence = has_evidence(source_evidence)
+    has_verification = has_observed_verification_receipt(verification)
+    core_accepted = bool(
+        evidence.get("kind") == "runtime_dynamic_ui"
+        and evidence.get("approved") is True
+        and reason
+        and has_source_evidence
+        and has_verification
+    )
+    if not core_accepted:
+        return set(), False
+
+    allowances: set[tuple[str, str]] = set()
+    transitions = evidence.get("transitions", [])
+    if isinstance(transitions, Mapping):
+        transitions = [transitions]
+    if isinstance(transitions, (list, tuple)):
+        for item in transitions:
+            if not isinstance(item, Mapping):
+                continue
+            member = str(item.get("member") or "").strip()
+            property_path = str(item.get("property") or "").strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", member) and re.fullmatch(
+                r"[A-Za-z_][A-Za-z0-9_.]*",
+                property_path,
+            ):
+                allowances.add((member.lower(), property_path.lower()))
+
+    members = [
+        str(item)
+        for item in evidence.get("members", [])
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", str(item or ""))
+    ]
+    properties = [
+        str(item)
+        for item in evidence.get("properties", [])
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", str(item or ""))
+    ]
+    allowances.update(
+        (member.lower(), property_path.lower())
+        for member in members
+        for property_path in properties
+    )
+    return allowances, bool(allowances)
+
+
+def _designer_owned_ui_findings(source: str) -> List[Dict[str, Any]]:
+    findings: List[Dict[str, Any]] = []
+    ui_type_pattern = (
+        r"(?:System\.Windows\.Forms|System\.ComponentModel|DevExpress\.)[A-Za-z0-9_.<>]+|"
+        r"[A-Za-z_][A-Za-z0-9_.<>]*(?:Button|CheckBox|ComboBox|Component|Container|Control|"
+        r"DataGridView|DateTimePicker|Edit|GridColumn|GridView|GridControl|GroupBox|Label|"
+        r"NumericUpDown|Panel|RepositoryItem[A-Za-z0-9_]*|TabControl|TextBox|Timer)"
+    )
+    declaration_pattern = re.compile(
+        rf"(?m)^\s*(?:public|protected|internal|private)\s+"
+        rf"(?:(?:static|readonly)\s+)*(?P<type>{ui_type_pattern})\s+"
+        r"(?P<member>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=[^;]+)?;",
+    )
+    for match in declaration_pattern.finditer(source):
+        findings.append(
+            {
+                "member": match.group("member"),
+                "category": "declaration",
+                "property": "",
+                "token": match.group(0).strip(),
+                "dynamic_eligible": False,
+            }
+        )
+
+    for match in re.finditer(
+        rf"(?:this\.)?(?P<member>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+"
+        rf"(?P<type>{ui_type_pattern})\s*\(",
+        source,
+    ):
+        findings.append(
+            {
+                "member": match.group("member"),
+                "category": "construction",
+                "property": "",
+                "token": match.group(0),
+                "dynamic_eligible": False,
+            }
+        )
+
+    property_categories = {
+        "Appearance": "appearance",
+        "Options": "options",
+        "DisplayFormat": "display_format",
+        "Location": "layout",
+        "Size": "layout",
+        "Dock": "layout",
+        "Anchor": "layout",
+        "Margin": "layout",
+        "MinimumSize": "layout",
+        "MaximumSize": "layout",
+        "Name": "name",
+        "TabIndex": "tab_index",
+        "BindingField": "binding",
+        "FieldName": "binding",
+        "DataPropertyName": "binding",
+        "ColumnEdit": "repository",
+        "MainView": "grid",
+        "GridControl": "grid",
+        "VisibleIndex": "designer_property",
+        "Text": "designer_property",
+        "Caption": "designer_property",
+        "EditValue": "designer_property",
+        "Enabled": "designer_property",
+        "Visible": "designer_property",
+        "ReadOnly": "designer_property",
+        "Checked": "designer_property",
+        "SelectedIndex": "designer_property",
+        "Properties": "designer_property",
+    }
+    dynamic_roots = {
+        "Text",
+        "Caption",
+        "EditValue",
+        "Enabled",
+        "Visible",
+        "ReadOnly",
+        "Checked",
+        "SelectedIndex",
+        "Properties",
+    }
+    assignment_pattern = re.compile(
+        r"(?:this\.)?(?P<member>[A-Za-z_][A-Za-z0-9_]*)\."
+        r"(?P<property>[A-Za-z_][A-Za-z0-9_.]*)\s*=",
+    )
+    for match in assignment_pattern.finditer(source):
+        property_path = match.group("property")
+        root = property_path.split(".", 1)[0]
+        category = next(
+            (
+                value
+                for key, value in property_categories.items()
+                if root == key or root.startswith(key)
+            ),
+            "",
+        )
+        if category:
+            findings.append(
+                {
+                    "member": match.group("member"),
+                    "category": category,
+                    "property": property_path,
+                    "token": match.group(0),
+                    "dynamic_eligible": root in dynamic_roots,
+                }
+            )
+
+    collection_pattern = (
+        r"(?:Controls|Columns|RepositoryItems|ViewCollection|Items|Buttons|"
+        r"Properties\.[A-Za-z0-9_.]+)"
+    )
+    for match in re.finditer(
+        rf"(?:this\.)?(?P<member>[A-Za-z_][A-Za-z0-9_]*)\."
+        rf"(?P<property>{collection_pattern})\.(?:Add|AddRange)\s*\(",
+        source,
+    ):
+        findings.append(
+            {
+                "member": match.group("member"),
+                "category": "collection",
+                "property": match.group("property"),
+                "token": match.group(0),
+                "dynamic_eligible": False,
+            }
+        )
+    for match in re.finditer(
+        rf"\bthis\.(?P<property>{collection_pattern})\.(?:Add|AddRange)\s*\(",
+        source,
+    ):
+        findings.append(
+            {
+                "member": "$form",
+                "category": "collection",
+                "property": match.group("property"),
+                "token": match.group(0),
+                "dynamic_eligible": False,
+            }
+        )
+
+    unique: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+    for finding in findings:
+        key = (
+            str(finding["member"]),
+            str(finding["category"]),
+            str(finding.get("property") or ""),
+        )
+        unique.setdefault(key, finding)
+    return list(unique.values())
+
+
+def _declared_partial_class_names(source: str) -> set[str]:
+    return {
+        match.group(1).lower()
+        for match in re.finditer(
+            r"\bpartial\s+class\s+([A-Za-z_][A-Za-z0-9_]*)\b",
+            source,
+            flags=re.IGNORECASE,
+        )
+    }
+
+
+def _extract_csharp_result_field_mappings(
+    lexical_view: _CSharpLexicalView,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    mappings: List[Dict[str, Any]] = []
+    unresolved: List[Dict[str, Any]] = []
+    assignment_pattern = re.compile(
+        r'(?:this\.)?(?P<member>[A-Za-z_][A-Za-z0-9_]*)\.'
+        r'(?P<property>BindingField|FieldName|DataPropertyName)\s*='
+    )
+    for match in assignment_pattern.finditer(lexical_view.code):
+        literal = next(
+            (
+                item
+                for item in lexical_view.string_literals
+                if item.start >= match.end()
+                and not lexical_view.code[match.end() : item.start].strip()
+            ),
+            None,
+        )
+        literal_start = literal.start if literal is not None else match.end()
+        location = {
+            "offset": literal_start,
+            "line": lexical_view.code.count("\n", 0, literal_start) + 1,
+            "column": literal_start - lexical_view.code.rfind("\n", 0, literal_start),
+        }
+        base = {
+            "member": match.group("member"),
+            "property": match.group("property"),
+            **location,
+        }
+        if literal is None or not literal.terminated or literal.value is None:
+            unresolved.append(
+                {
+                    **base,
+                    "interpolated": bool(literal and literal.interpolated),
+                    "message": "Result-field assignment does not use a statically comparable direct string literal.",
+                }
+            )
+            continue
+        mappings.append(
+            {
+                **base,
+                "field_name": _normalize_datawindow_field_name(literal.value),
+            }
+        )
+    return mappings, unresolved
+
+
+def _validate_csharp_result_field_contract(
+    source_view: _CSharpLexicalView,
+    designer_view: _CSharpLexicalView,
+    result_fields: Iterable[str] | None,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if result_fields is None:
+        return [], {"status": "not_requested", "declared_result_fields": [], "mappings": []}
+    declared = {
+        _normalize_datawindow_field_name(item)
+        for item in result_fields
+        if _normalize_datawindow_field_name(item)
+    }
+    source_mappings, source_unresolved = _extract_csharp_result_field_mappings(source_view)
+    designer_mappings, designer_unresolved = _extract_csharp_result_field_mappings(designer_view)
+    mappings = source_mappings + designer_mappings
+    unresolved = source_unresolved + designer_unresolved
+    mismatches = [item for item in mappings if item["field_name"] not in declared]
+    issues = [
+        {
+            "code": "csharp_result_field_mapping_mismatch",
+            "severity": "error",
+            **item,
+            "message": "C# BindingField/FieldName must correspond to a declared result field.",
+        }
+        for item in mismatches
+    ]
+    return issues, {
+        "status": "passed" if not issues else "blocked",
+        "declared_result_fields": sorted(declared),
+        "mappings": mappings,
+        "mismatches": mismatches,
+        "unresolved_mappings": unresolved,
+    }
+
+
+def _runtime_dynamic_finding_allowed(
+    finding: Mapping[str, Any],
+    allowances: set[tuple[str, str]],
+) -> bool:
+    if finding.get("dynamic_eligible") is not True:
+        return False
+    member = str(finding.get("member") or "").lower()
+    property_path = str(finding.get("property") or "").lower()
+    return any(
+        member == allowed_member
+        and (
+            property_path == allowed_property
+            or property_path.startswith(allowed_property + ".")
+        )
+        for allowed_member, allowed_property in allowances
+    )
+
+
+def _validate_designer_owned_ui_contract(
+    source: str,
+    rules: Mapping[str, Any],
+    *,
+    source_role: str,
+    designer_source: str,
+    runtime_dynamic_ui_evidence: Any,
+    require_designer_companion: bool,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    contract = rules.get("designer_contract")
+    contract = dict(contract) if isinstance(contract, Mapping) else {}
+    role = str(source_role or "code-behind").strip().lower()
+    if role in {"codebehind", "code_behind", "runtime"}:
+        role = "code-behind"
+    findings = _designer_owned_ui_findings(source) if role != "designer" else []
+    designer_findings = _designer_owned_ui_findings(designer_source) if designer_source.strip() else []
+    dynamic_allowances, evidence_accepted = _runtime_dynamic_ui_allowances(
+        runtime_dynamic_ui_evidence
+    )
+    blocked = [
+        item
+        for item in findings
+        if not _runtime_dynamic_finding_allowed(item, dynamic_allowances)
+    ]
+    issues = [
+        {
+            "code": "designer_owned_ui_in_code_behind",
+            "severity": "error",
+            "member": item["member"],
+            "category": item["category"],
+            "message": (
+                "Static UI construction and Designer-owned property setup belong in Designer.cs; "
+                "code-behind is limited to events, data flow, and evidenced runtime-dynamic UI behavior."
+            ),
+        }
+        for item in blocked
+        if contract.get("static_ui_requires_designer") is True
+    ]
+    source_classes = _declared_partial_class_names(source)
+    designer_classes = _declared_partial_class_names(designer_source)
+    companion_class_matches = bool(source_classes.intersection(designer_classes))
+    if require_designer_companion and role == "code-behind" and not designer_source.strip():
+        issues.append(
+            {
+                "code": "designer_companion_required",
+                "severity": "error",
+                "message": "Generated code-behind validation requires its paired Designer source.",
+            }
+        )
+    if designer_source.strip() and source_classes and not companion_class_matches:
+        issues.append(
+            {
+                "code": "designer_companion_class_mismatch",
+                "severity": "error",
+                "message": "The supplied Designer companion must declare the same partial form class as code-behind.",
+                "code_behind_classes": sorted(source_classes),
+                "designer_classes": sorted(designer_classes),
+            }
+        )
+    if designer_source.strip() and not designer_findings:
+        issues.append(
+            {
+                "code": "designer_companion_static_setup_missing",
+                "severity": "error",
+                "message": "The supplied Designer companion must contain the form's static control setup.",
+            }
+        )
+    split_contract_validated = bool(
+        role == "code-behind"
+        and designer_source.strip()
+        and designer_findings
+        and companion_class_matches
+        and not blocked
+    )
+    return issues, {
+        "source_role": role,
+        "profile_rule_applied": contract.get("static_ui_requires_designer") is True,
+        "detected_categories": sorted({item["category"] for item in findings}),
+        "detected_members": sorted({item["member"] for item in findings}),
+        "blocked_members": sorted({item["member"] for item in blocked}),
+        "runtime_dynamic_evidence_accepted": evidence_accepted,
+        "runtime_dynamic_allowances": [
+            {"member": member, "property": property_path}
+            for member, property_path in sorted(dynamic_allowances)
+        ],
+        "designer_static_finding_count": len(designer_findings),
+        "designer_detected_categories": sorted(
+            {item["category"] for item in designer_findings}
+        ),
+        "companion_class_matches": companion_class_matches,
+        "split_contract_validated": split_contract_validated,
+        "designer_companion_required": bool(require_designer_companion),
+    }
+
+
 def verify_migration_generated_csharp_style(
     source_text: str,
     *,
+    designer_source_text: str = "",
+    profile_evidence: Any = None,
     program_key: str = "",
     fallback_program_key: str = "",
+    form_class: str = "",
+    source_role: str = "code-behind",
+    runtime_dynamic_ui_evidence: Any = None,
+    result_fields: Iterable[str] | None = None,
+    require_designer_companion: bool = False,
     primary_style_evidence_paths: Any = None,
     excluded_paths: Any = None,
     require_author_tagged_evidence: bool = False,
 ) -> HarnessResult:
     """Block generated C# patterns that do not match the target Designer/grid style."""
-    source = str(source_text or "")
+    source_view = _lex_csharp_non_code(source_text)
+    designer_view = _lex_csharp_non_code(designer_source_text)
+    source = source_view.comments_removed
+    designer_source = designer_view.comments_removed
     issues: List[Dict[str, Any]] = []
+    if not source_view.code.strip():
+        issues.append(
+            {
+                "code": "generated_csharp_empty",
+                "severity": "error",
+                "message": "Generated C# source must not be empty.",
+            }
+        )
     normalized_program_key = str(program_key or "").upper()
     primary_paths = [str(path) for path in (primary_style_evidence_paths or []) if str(path)]
     excluded = [str(path) for path in (excluded_paths or []) if str(path)]
+    profile_context, profile_issues = _consume_profile_evidence(profile_evidence, "csharp")
+    issues.extend(profile_issues)
+    if not profile_issues:
+        applied_issues, profile_context = _apply_consumed_profile_rules(
+            f"{source}\n{designer_source}",
+            profile_context,
+            domain="csharp",
+            required_source_text=f"{source_view.code}\n{designer_view.code}",
+        )
+        issues.extend(applied_issues)
+    profile_rules = dict(profile_context.get("rules") or {}) if isinstance(profile_context, dict) else {}
+    program_form_issues, program_form_contract = _validate_csharp_program_form_contract(
+        source_view.code,
+        profile_rules,
+        program_key=program_key,
+        form_class=form_class,
+    )
+    issues.extend(program_form_issues)
+    designer_issues, designer_owned_ui_contract = _validate_designer_owned_ui_contract(
+        source_view.code,
+        profile_rules,
+        source_role=source_role,
+        designer_source=designer_view.code,
+        runtime_dynamic_ui_evidence=runtime_dynamic_ui_evidence,
+        require_designer_companion=require_designer_companion,
+    )
+    issues.extend(designer_issues)
+    result_field_issues, result_field_contract = _validate_csharp_result_field_contract(
+        source_view,
+        designer_view,
+        result_fields,
+    )
+    issues.extend(result_field_issues)
+    profile_consumption = dict(
+        profile_context.get("consumption", profile_context)
+        if isinstance(profile_context, dict)
+        else {}
+    )
+    if profile_consumption.get("consumed"):
+        applied_groups = list(profile_consumption.get("applied_rule_groups", []))
+        for group in ("csharp.program_form_contract", "csharp.designer_contract"):
+            if group not in applied_groups:
+                applied_groups.append(group)
+        profile_consumption["applied_rule_groups"] = applied_groups
 
-    if require_author_tagged_evidence and not primary_paths:
+    if require_author_tagged_evidence and not primary_paths and not profile_consumption.get("consumed"):
         issues.append(
             {
                 "code": "author_tagged_style_evidence_required",
                 "severity": "error",
                 "message": (
-                    "C_KONE110/KH-style generated C# must name primary style evidence resolved from "
-                    "author-tagged SP -> program key -> matching C# screen source."
+                    "Target-style generated C# must name primary style evidence resolved from "
+                    "a reviewed procedure-to-program mapping."
                 ),
             }
         )
-    excluded_keys = {key.upper() for key in AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["baseline_exclusions"]}
+    excluded_keys = (
+        {key.upper() for key in AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["baseline_exclusions"]}
+        if require_author_tagged_evidence
+        else set()
+    )
     excluded_seed_used = any(key in path.upper() for key in excluded_keys for path in primary_paths)
     expected_style_program_key = normalized_program_key
     normalized_fallback_program_key = str(fallback_program_key or "").upper()
@@ -2143,7 +3734,7 @@ def verify_migration_generated_csharp_style(
                     "severity": "error",
                     "message": (
                         "Excluded or current repair targets cannot seed their own style. Provide a fallback_program_key "
-                        "resolved from established author-tagged same-module evidence."
+                        "resolved from established same-module evidence."
                     ),
                     "program_key": normalized_program_key,
                 }
@@ -2156,7 +3747,7 @@ def verify_migration_generated_csharp_style(
                     "code": "author_tagged_style_evidence_path_mismatch",
                     "severity": "error",
                     "message": (
-                        "Primary style evidence must match the author-tagged SP -> program key -> same-program "
+                        "Primary style evidence must match the reviewed procedure-to-program same-program "
                         "C# and Designer mapping, not an arbitrary same-project file."
                     ),
                     "program_key": normalized_program_key,
@@ -2170,7 +3761,7 @@ def verify_migration_generated_csharp_style(
                 {
                     "code": "author_tagged_style_mapping_missing",
                     "severity": "error",
-                    "message": "No bundled author-tagged C# mapping exists for the requested style program key.",
+                    "message": "No bundled generalized C# mapping exists for the requested style program key.",
                     "program_key": normalized_program_key,
                     "expected_style_program_key": expected_style_program_key,
                 }
@@ -2205,7 +3796,7 @@ def verify_migration_generated_csharp_style(
                 "code": "author_tagged_sp_call_missing_explicit_dbparameters",
                 "severity": "error",
                 "message": (
-                    "Matched C_KONE110/KH screen retrieve code keeps explicit DbParameter entries near "
+                    "Matched target screen retrieve code keeps explicit DbParameter entries near "
                     "dbClient.GetDataSetFromSP; do not present a bare SP call as style-complete generated C#."
                 ),
             }
@@ -2306,7 +3897,7 @@ def verify_migration_generated_csharp_style(
                 "code": "missing_target_grid_column_name_pattern",
                 "severity": "warning",
                 "message": (
-                    "GridColumn generation did not expose target-style column names such as colList_ITEMCD."
+                    "GridColumn generation did not expose target-style column names such as colList_ENTITY_ID."
                 ),
             }
         )
@@ -2317,7 +3908,7 @@ def verify_migration_generated_csharp_style(
                 "code": "generated_internal_dto_class_detected",
                 "severity": "error",
                 "message": (
-                    "C_KONE110/KH-style screen retrieval code should not invent private sealed DTO/context "
+                    "Target-style screen retrieval code should not invent private sealed DTO/context "
                     "classes such as RetrieveContext. Keep ordinary retrieve parameters as local variables "
                     "near the procedure call unless the target source already proves this pattern."
                 ),
@@ -2341,7 +3932,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_private_parameter_helper_class_detected",
                 "severity": "error",
-                "message": "Do not generate private SearchParams/Request/Criteria helper classes for C_KONE110/KH-style screen code.",
+                "message": "Do not generate private SearchParams/Request/Criteria helper classes for target-style screen code.",
             }
         )
     if re.search(
@@ -2352,7 +3943,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_get_edit_value_helper_detected",
                 "severity": "error",
-                "message": "Do not generate a generic GetEditValue helper for ordinary C_KONE110/KH-style screen code.",
+                "message": "Do not generate a generic GetEditValue helper for ordinary target-style screen code.",
             }
         )
     if re.search(
@@ -2363,7 +3954,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_get_column_text_helper_detected",
                 "severity": "error",
-                "message": "Do not generate a generic GetColumnText helper for ordinary C_KONE110/KH-style screen code.",
+                "message": "Do not generate a generic GetColumnText helper for ordinary target-style screen code.",
             }
         )
     if re.search(r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+SetVisibleIndex\s*\(", source):
@@ -2377,23 +3968,23 @@ def verify_migration_generated_csharp_style(
     generated_helper_patterns = {
         "generated_call_detail_query_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+CallDetailQuery\s*\(",
-            "Do not invent CallDetailQuery for C_KONE110/KH focused-row detail handling; use the target event shape or proven fnFocusedRowChanged/CallViewQuery pattern.",
+            "Do not invent CallDetailQuery for target focused-row detail handling; use the target event shape or proven fnFocusedRowChanged/CallViewQuery pattern.",
         ),
         "generated_default_search_values_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+SetDefaultSearchValues\s*\(",
-            "Do not invent SetDefaultSearchValues for ordinary C_KONE110/KH screens; set default control values directly in Load/Clear unless a target file proves that helper.",
+            "Do not invent SetDefaultSearchValues for ordinary target screens; set default control values directly in Load/Clear unless a target file proves that helper.",
         ),
         "generated_list_column_layout_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+ApplyListColumnLayout\s*\(",
             "Do not invent ApplyListColumnLayout/runtime column-layout helpers; preserve Designer columns and use narrow direct assignments only when required.",
         ),
         "generated_basis_year_helper_detected": (
-            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?string\s+GetBasisYear\s*\(",
-            "Do not invent GetBasisYear for u_DateEdit year inputs; read the date control near the procedure call in the same style as existing screens.",
+            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?string\s+GetDerivedYear\s*\(",
+            "Do not invent GetDerivedYear for date inputs; read the date control near the procedure call in the same style as existing screens.",
         ),
         "generated_customer_like_helper_detected": (
-            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?string\s+GetCustomerLike\s*\(",
-            "Do not invent GetCustomerLike wrappers; keep simple LIKE parameter composition near the SP call unless target code already has the helper.",
+            r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?string\s+GetEntityCodeLike\s*\(",
+            "Do not invent GetEntityCodeLike wrappers; keep simple LIKE parameter composition near the SP call unless target code already has the helper.",
         ),
         "generated_validate_search_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?bool\s+ValidateSearch\s*\(",
@@ -2411,12 +4002,12 @@ def verify_migration_generated_csharp_style(
                 "message": "Do not lay out monthly AMT columns through a runtime VisibleIndex loop; preserve explicit Designer column order.",
             }
         )
-    if "PopCustFrm" in source and re.search(r"DialogResult\.Yes\s*\|\|\s*di\s*==\s*DialogResult\.OK|DialogResult\.OK\s*\|\|\s*di\s*==\s*DialogResult\.Yes", source):
+    if "EntityLookupDialog" in source and re.search(r"DialogResult\.Yes\s*\|\|\s*di\s*==\s*DialogResult\.OK|DialogResult\.OK\s*\|\|\s*di\s*==\s*DialogResult\.Yes", source):
         issues.append(
             {
                 "code": "popcust_dialogresult_yes_or_ok_detected",
                 "severity": "error",
-                "message": "PopCustFrm selection should follow the target popup contract; do not broaden it to DialogResult.Yes || DialogResult.OK without source evidence.",
+                "message": "Entity lookup selection should follow the target popup contract; do not broaden it to DialogResult.Yes || DialogResult.OK without source evidence.",
             }
         )
     mojibake_tokens = (
@@ -2442,7 +4033,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_dbnull_ternary_row_value_detected",
                 "severity": "error",
-                "message": "Do not generate DBNull ternary wrappers around focused-row values for ordinary C_KONE110/KH detail lookups; follow target direct row-value access unless source proves otherwise.",
+                "message": "Do not generate DBNull ternary wrappers around focused-row values for ordinary target detail lookups; follow target direct row-value access unless source proves otherwise.",
             }
         )
     dbnull_variant_patterns = {
@@ -2481,22 +4072,23 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_callselect_inline_wildcard_argument_detected",
                 "severity": "error",
-                "message": "Do not generate CallSelectProcedure call-site arguments that inline LIKE wildcards such as btnCUSTCD.Text + \"%\" or rowValue + \"%\"; pass raw values and let the stored procedure own LIKE shaping.",
+                "message": "Do not generate CallSelectProcedure call-site arguments that inline LIKE wildcards such as txtFilter.Text + \"%\" or rowValue + \"%\"; pass raw values and let the stored procedure own LIKE shaping.",
             }
         )
-    if re.search(r"\b(?:custcd|itemcd|[A-Za-z0-9_]*(?:cd|CD))\s*=\s*[^;\n]+\+\s*\"%\"\s*;", source) or re.search(
-        r"\b(?:custcd|itemcd|[A-Za-z0-9_]*(?:cd|CD))\s*=\s*\"%\"\s*;",
+    if re.search(r"\b[A-Za-z_][A-Za-z0-9_]*(?:_?code)\s*=\s*[^;\n]+\+\s*\"%\"\s*;", source, re.IGNORECASE) or re.search(
+        r"\b[A-Za-z_][A-Za-z0-9_]*(?:_?code)\s*=\s*\"%\"\s*;",
         source,
+        re.IGNORECASE,
     ):
         issues.append(
             {
                 "code": "generated_csharp_like_wildcard_shaping_detected",
                 "severity": "error",
-                "message": "Do not generate C# wildcard shaping such as custcd = custcd + \"%\" or itemcd = \"%\" for migration SELECT parameters; pass raw values and handle LIKE defaults in the stored procedure.",
+                "message": "Do not generate C# wildcard shaping such as entityCode = entityCode + \"%\" or filterCode = \"%\" for migration SELECT parameters; pass raw values and handle LIKE defaults in the stored procedure.",
             }
         )
     if re.search(
-        r"if\s*\(\s*(ymd[A-Z0-9_]*)\.EditValue\s*==\s*null\s*\)\s*(?:\{\s*)?\1\.SetToDay\s*\(\s*0\s*\)",
+        r"if\s*\(\s*(ymd[A-Za-z0-9_]*)\.EditValue\s*==\s*null\s*\)\s*(?:\{\s*)?\1\.SetToDay\s*\(\s*0\s*\)",
         source,
     ):
         issues.append(
@@ -2506,15 +4098,15 @@ def verify_migration_generated_csharp_style(
                 "message": "Do not generate DateEdit null guards that silently call SetToDay(0) inside search/procedure paths; initialize in Load/Clear or validate before execution.",
             }
         )
-    if re.search(r'new\s+DbParameter\s*\(\s*"@(?:YYYY|BASYYYY)"\s*,\s*ymd[A-Z0-9_]*\.DateTime\.Year\.ToString\s*\(\s*\)\s*\)', source) or re.search(
-        r'new\s+DbParameter\s*\(\s*"@(?:MM|BASYYYY)"\s*,\s*DateTime\.Now\.[A-Za-z]+\.ToString\s*\(',
+    if re.search(r'new\s+DbParameter\s*\(\s*"@(?:DERIVED_YEAR|BASE_YEAR|BOUNDARY_DATE)"\s*,\s*ymd[A-Za-z0-9_]*\.DateTime\.Year\.ToString\s*\(\s*\)\s*\)', source) or re.search(
+        r'new\s+DbParameter\s*\(\s*"@(?:DERIVED_MONTH|DERIVED_YEAR|BASE_YEAR|BOUNDARY_DATE)"\s*,\s*DateTime\.Now\.[A-Za-z]+\.ToString\s*\(',
         source,
     ):
         issues.append(
             {
                 "code": "generated_dateedit_year_or_now_parameter_shaping_detected",
                 "severity": "error",
-                "message": "Do not generate C# parameters that split u_DateEdit values into @YYYY/@MM/@BASYYYY with DateTime.Year.ToString() or DateTime.Now; pass the target-style raw YYYYMMDD() value and let the stored procedure derive related date parameters.",
+                "message": "Do not generate C# parameters that split a date input into @DERIVED_YEAR/@DERIVED_MONTH/@BASE_YEAR/@BOUNDARY_DATE with DateTime.Year.ToString() or DateTime.Now; pass the raw date value and let the stored procedure derive related values.",
             }
         )
     if re.search(r"\bgrd[A-Za-z0-9_]*\.DataSource\s*=\s*null\s*;", source):
@@ -2522,7 +4114,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_direct_grid_datasource_null_reset_detected",
                 "severity": "error",
-                "message": "Do not generate direct grd*.DataSource = null resets for KoneLib-style screens; use devFnc.InitControl(grd*) unless the active target source proves otherwise.",
+                "message": "Do not generate direct grd*.DataSource = null resets for target-wrapper screens; use the reset helper proven by active target evidence.",
             }
         )
     if any(
@@ -2541,7 +4133,7 @@ def verify_migration_generated_csharp_style(
                 "message": "Do not generate ad hoc month-end DateTime construction blocks in migrated screen code unless matched target evidence proves that exact pattern.",
             }
         )
-    if re.search(r"new\s+DateTime\s*\(\s*ymd[A-Z0-9_]*\.DateTime\.Year\s*-\s*1\s*,\s*12\s*,\s*31\s*\)", source):
+    if re.search(r"new\s+DateTime\s*\(\s*ymd[A-Za-z0-9_]*\.DateTime\.Year\s*-\s*1\s*,\s*12\s*,\s*31\s*\)", source):
         issues.append(
             {
                 "code": "generated_year_end_datetime_block_detected",
@@ -2549,12 +4141,12 @@ def verify_migration_generated_csharp_style(
                 "message": "Do not generate ad hoc year-end DateTime construction blocks from DateEdit values unless matched target evidence proves that exact pattern.",
             }
         )
-    if re.search(r"\(\s*ymd[A-Z0-9_]*\.DateTime\.Year\s*-\s*1\s*\)\s*\.ToString\s*\(\s*\"0000\"\s*\)\s*\+\s*\"1231\"", source):
+    if re.search(r"\(\s*ymd[A-Za-z0-9_]*\.DateTime\.Year\s*-\s*1\s*\)\s*\.ToString\s*\(\s*\"0000\"\s*\)\s*\+\s*\"1231\"", source):
         issues.append(
             {
                 "code": "generated_year_end_string_boundary_detected",
                 "severity": "error",
-                "message": "Do not generate year-end boundary strings such as (ymdGIJUN.DateTime.Year - 1).ToString(\"0000\") + \"1231\" in C#; let the stored procedure own derived date boundaries.",
+                "message": "Do not generate year-end boundary strings such as (ymdInput.DateTime.Year - 1).ToString(\"0000\") + \"1231\" in C#; let the stored procedure own derived date boundaries.",
             }
         )
     if re.search(r"\?\?\s*\"%\"", source):
@@ -2562,7 +4154,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_percent_null_coalesce_detected",
                 "severity": "error",
-                "message": "Do not generate null-coalescing wildcard defaults such as _itemcd ?? \"%\" for migration C# unless the target code proves that pattern.",
+                "message": "Do not generate null-coalescing wildcard defaults such as _entityCode ?? \"%\" for migration C# unless the target code proves that pattern.",
             }
         )
     if re.search(r"btn[A-Z0-9_]*\.EditValue\s*==\s*null\s*\?\s*string\.Empty", source):
@@ -2581,12 +4173,16 @@ def verify_migration_generated_csharp_style(
                 "message": "Do not generate extra Convert.ToString(rad*.EditValue) local variables for SP parameters; pass the target control value in the existing style.",
             }
         )
-    if re.search(r"KoneLib\.Controls\.u_DateEdit\s+txt[A-Z0-9_]*NM\b", source):
+    if re.search(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*\.)+(?:u_)?DateEdit\s+txt[A-Z0-9_]*(?:NAME|TEXT)\b",
+        source,
+        re.IGNORECASE,
+    ):
         issues.append(
             {
                 "code": "text_name_field_generated_as_dateedit",
                 "severity": "error",
-                "message": "Name/display fields such as txtCUSTNM should use a text edit, not u_DateEdit.",
+                "message": "Name/display fields such as txtDisplayName should use a text edit, not u_DateEdit.",
             }
         )
 
@@ -2667,15 +4263,17 @@ def verify_migration_generated_csharp_style(
         "fallback_program_key": normalized_fallback_program_key,
         "expected_style_program_key": expected_style_program_key,
         "require_author_tagged_evidence": bool(require_author_tagged_evidence),
+        "profile_consumption": profile_consumption,
+        "program_form_contract": program_form_contract,
+        "designer_owned_ui_contract": designer_owned_ui_contract,
+        "result_field_contract": result_field_contract,
         "primary_style_evidence_paths": primary_paths,
         "excluded_paths": excluded,
-        "author_tagged_baseline_counts": {
-            "sp_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["sp_count"],
-            "normalized_program_key_count": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["normalized_program_key_count"],
-            "primary_csharp_baseline_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["primary_csharp_baseline_files_analyzed"],
-            "designer_files_analyzed": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["designer_files_analyzed"],
-        },
-        "author_tagged_generation_recipe": AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["positive_generation_recipe"],
+        "author_tagged_generation_recipe": (
+            AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["positive_generation_recipe"]
+            if require_author_tagged_evidence
+            else {}
+        ),
         "column_style_contract": (
             "Generated grid columns must use explicit target-style names, Designer/AddRange registration, "
             "and RepositoryItemSpinEdit ColumnEdit for numeric AMT/QTY/UNP/WGT/PRICE/RATE/COST/TOTAL columns instead of GridColumn DisplayFormat."
@@ -2698,10 +4296,26 @@ def verify_pb_migration_sp_generation_contract(
     *,
     source_evidence: Any = None,
     allow_inferred_draft: bool = False,
+    profile_evidence: Any = None,
 ) -> HarnessResult:
     """Check that generated SELECT/SAVE SP work is evidence-gated before it is presented as migration output."""
     sql = str(sql_text or "")
     issues: List[Dict[str, Any]] = []
+    profile_context, profile_issues = _consume_profile_evidence(profile_evidence, "sql")
+    issues.extend(profile_issues)
+    if not profile_issues:
+        applied_issues, profile_context = _apply_consumed_profile_rules(
+            _strip_sql_literals_and_comments_for_pb_contract(sql),
+            profile_context,
+            domain="sql",
+            procedure_name=_extract_sp_procedure_name(sql),
+        )
+        issues.extend(applied_issues)
+    profile_consumption = dict(
+        profile_context.get("consumption", profile_context)
+        if isinstance(profile_context, dict)
+        else {}
+    )
     upper_unprotected = _strip_sql_literals_and_comments_for_pb_contract(sql).upper()
     comments_stripped = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
     comments_stripped = re.sub(r"--.*?$", " ", comments_stripped, flags=re.MULTILINE)
@@ -2763,7 +4377,7 @@ def verify_pb_migration_sp_generation_contract(
                 "code": "missing_sp_metadata_header",
                 "severity": "error",
                 "message": (
-                    "C_KONE110/KH-style procedure output must include the standard metadata comment block "
+                    "Target-style procedure output must include the standard metadata comment block "
                     "immediately above CREATE/ALTER PROCEDURE: AUTHOR, CREATE DATE, and DESCRIPTION."
                 ),
             }
@@ -2785,10 +4399,11 @@ def verify_pb_migration_sp_generation_contract(
                     "message": "DESCRIPTION must be the target program/screen description, not a placeholder or sample text.",
                 }
             )
-        if expected_descriptions and not any(
+        description_mismatch = bool(expected_descriptions) and not any(
             expected in header_description or header_description in expected
             for expected in expected_descriptions
-        ):
+        )
+        if description_mismatch:
             issues.append(
                 {
                     "code": "sp_metadata_description_mismatch",
@@ -2798,10 +4413,10 @@ def verify_pb_migration_sp_generation_contract(
                     "actual_description": header_description,
                 }
             )
-        if (
-            header_description == "총괄조회 조회"
-            and procedure_name
-            and not procedure_name.startswith("SP_SA900100_")
+        if description_mismatch or re.search(
+            r"\b(?:COPIED|UNRELATED)\b",
+            header_description,
+            flags=re.IGNORECASE,
         ):
             issues.append(
                 {
@@ -2836,23 +4451,23 @@ def verify_pb_migration_sp_generation_contract(
             {
                 "code": "worktype_empty_string_default_detected",
                 "severity": "error",
-                "message": "C_KONE110/KH-style procedures do not default @WORKTYPE to an empty string; use NULL or the verified required parameter contract.",
+                "message": "Target-style procedures do not default @WORKTYPE to an empty string; use NULL or the verified required parameter contract.",
             }
         )
-    if re.search(r"@(CUSTCD|ITEMCD)\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'%'", upper_comments_stripped):
+    if re.search(r"@[A-Z][A-Z0-9_]*\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'%'", upper_comments_stripped):
         issues.append(
             {
                 "code": "wildcard_filter_parameter_default_detected",
                 "severity": "error",
-                "message": "Do not default filter parameters such as @CUSTCD or @ITEMCD to '%' unless verified target SP evidence uses that exact contract.",
+                "message": "Do not default text filter parameters to '%' unless verified target procedure evidence uses that exact contract.",
             }
         )
-    if re.search(r"@(GUBUN|GB)\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'(?:T|1)'", upper_comments_stripped):
+    if re.search(r"@[A-Z][A-Z0-9_]*\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'(?:T|1)'", upper_comments_stripped):
         issues.append(
             {
                 "code": "business_flag_parameter_default_detected",
                 "severity": "error",
-                "message": "Do not default business selector parameters such as @GUBUN or @GB to generated literals unless verified target SP evidence uses them.",
+                "message": "Do not default business selector parameters to generated literals unless verified target procedure evidence uses them.",
             }
         )
     signature_match = re.search(
@@ -2905,7 +4520,7 @@ def verify_pb_migration_sp_generation_contract(
         helper_date_params = sorted(
             set(
                 re.findall(
-                    r"@(YYYY|MM|BASYYYY|LASTDT)\s+(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*))?(?:\s*\([^)]*\))?",
+                    r"@(DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s+(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*))?(?:\s*\([^)]*\))?",
                     signature_text,
                 )
             )
@@ -2916,7 +4531,7 @@ def verify_pb_migration_sp_generation_contract(
                     "code": "derived_date_helper_parameter_detected",
                     "severity": "error",
                     "message": (
-                        "Do not expose derived helper date values such as @YYYY, @MM, @BASYYYY, or @LASTDT "
+                        "Do not expose derived helper date values such as @DERIVED_YEAR, @DERIVED_MONTH, @BASE_YEAR, or @BOUNDARY_DATE "
                         "as generated procedure parameters. Accept the raw target-style date input, then use local DECLARE and SET "
                         "inside the procedure when derived values are needed."
                     ),
@@ -2924,7 +4539,7 @@ def verify_pb_migration_sp_generation_contract(
                 }
             )
     if re.search(
-        r"IF\s*\(?\s*ISNULL\s*\(\s*@(GIJUNDT|YYYY|MM|BASYYYY|LASTDT)\s*,\s*''\s*\)",
+        r"IF\s*\(?\s*ISNULL\s*\(\s*@(INPUT_DATE|DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s*,\s*''\s*\)",
         upper_comments_stripped,
     ):
         issues.append(
@@ -2938,10 +4553,10 @@ def verify_pb_migration_sp_generation_contract(
             }
         )
     if re.search(
-        r"SET\s+@(YYYY|MM|BASYYYY|LASTDT)\s*=\s*(?:LEFT\s*\(\s*@GIJUNDT|SUBSTRING\s*\(\s*@GIJUNDT|RIGHT\s*\(\s*'0'\s*\+|CONVERT\s*\(\s*VARCHAR\s*\(\s*[48]\s*\)\s*,\s*(?:YEAR|DATEADD|CONVERT))",
+        r"SET\s+@(DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s*=\s*(?:LEFT\s*\(\s*@INPUT_DATE|SUBSTRING\s*\(\s*@INPUT_DATE|RIGHT\s*\(\s*'0'\s*\+|CONVERT\s*\(\s*VARCHAR\s*\(\s*[48]\s*\)\s*,\s*(?:YEAR|DATEADD|CONVERT))",
         upper_comments_stripped,
     ) and re.search(
-        r"IF\s*\(?\s*(?:ISNULL\s*\(\s*@(GIJUNDT|YYYY|MM|BASYYYY|LASTDT)|@(GIJUNDT|YYYY|MM|BASYYYY|LASTDT)\s*(?:<>|=|>|<|>=|<=))",
+        r"IF\s*\(?\s*(?:ISNULL\s*\(\s*@(INPUT_DATE|DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)|@(INPUT_DATE|DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s*(?:<>|=|>|<|>=|<=))",
         upper_comments_stripped,
     ):
         issues.append(
@@ -2955,7 +4570,7 @@ def verify_pb_migration_sp_generation_contract(
             }
         )
     if re.search(
-        r"IF\s*\(?\s*@(GIJUNDT|YYYY|MM|BASYYYY|LASTDT)\s*(?:<>|=|>|<|>=|<=)[\s\S]{0,240}\bSET\s+@(YYYY|MM|BASYYYY|LASTDT)\s*=",
+        r"IF\s*\(?\s*@(INPUT_DATE|DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s*(?:<>|=|>|<|>=|<=)[\s\S]{0,240}\bSET\s+@(DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s*=",
         upper_comments_stripped,
     ):
         issues.append(
@@ -3060,6 +4675,7 @@ def verify_pb_migration_sp_generation_contract(
         "source_evidence": accepted_source_evidence,
         "source_evidence_count": len(accepted_source_evidence),
         "allow_inferred_draft": bool(allow_inferred_draft),
+        "profile_consumption": profile_consumption,
         "issues": issues,
         "sp_generation_contract": (
             "Full migration SP output must be backed by structured PB/DataWindow SQL, existing SP, pasted SQL, DB evidence, "
@@ -3138,6 +4754,7 @@ def verify_pb_migration_sp_with_sql_formatting(
     source_evidence: Any = None,
     allow_inferred_draft: bool = False,
     cte_temp_table_reason: str = "",
+    profile_evidence: Any = None,
 ) -> HarnessResult:
     """Verify migration SP evidence and host-local SQL formatting style as one composed gate."""
     from src.skills.sql_formatting_style import verify_sql_formatting_style
@@ -3146,6 +4763,7 @@ def verify_pb_migration_sp_with_sql_formatting(
         formatted_sql_text,
         source_evidence=source_evidence,
         allow_inferred_draft=allow_inferred_draft,
+        profile_evidence=profile_evidence,
     )
     style_result = verify_sql_formatting_style(
         original_sql_text,
@@ -3176,6 +4794,160 @@ def verify_pb_migration_sp_with_sql_formatting(
         exit_code=0 if success else 1,
         metadata=metadata,
     )
+
+
+def orchestrate_pb_migration_validation(
+    *,
+    csharp_source_text: str,
+    designer_source_text: str,
+    original_sql_text: str,
+    formatted_sql_text: str,
+    profile_id: str,
+    profile_version: str,
+    profile_hash: str,
+    program_key: str = "",
+    form_class: str = "",
+    csharp_source_role: str = "code-behind",
+    runtime_dynamic_ui_evidence: Any = None,
+    result_fields: Iterable[str] | None = None,
+    source_evidence: Any = None,
+    allow_inferred_draft: bool = False,
+    cte_temp_table_reason: str = "",
+) -> HarnessResult:
+    """Run the fail-closed offline profile, C#, SP, and formatting validation contract."""
+    required_order = [
+        "load-profile",
+        "validate-csharp",
+        "validate-sp",
+        "formatting-evidence",
+    ]
+    stages: List[Dict[str, Any]] = []
+    evidence: Dict[str, Any] = {}
+
+    def finish(success: bool) -> HarnessResult:
+        completed_order = [stage["name"] for stage in stages]
+        profile_consumptions = [
+            evidence.get("csharp", {}).get("profile_consumption", {}),
+            evidence.get("sp", {}).get("profile_consumption", {}),
+        ]
+        identities = {
+            (
+                str(item.get("profile_id") or ""),
+                str(item.get("profile_version") or ""),
+                str(item.get("profile_hash") or ""),
+            )
+            for item in profile_consumptions
+            if item.get("consumed")
+        }
+        identity_match = bool(
+            evidence.get("profile", {}).get("status") == "loaded"
+            and (not profile_consumptions or len(identities) <= 1)
+        )
+        completion_allowed = bool(
+            success
+            and completed_order == required_order
+            and identity_match
+            and all(item.get("consumed") for item in profile_consumptions)
+        )
+        contract = {
+            "contract_id": "offline-packaged-pb-migration-validation-v1",
+            "required_stage_order": required_order,
+            "completed_stage_order": completed_order,
+            "stages": stages,
+            "profile_identity_match": identity_match,
+            "completion_allowed": completion_allowed,
+            "database_execution_attempted": False,
+            "database_execution_allowed": False,
+            "failure_boundary": stages[-1]["name"] if stages and not completion_allowed else "",
+        }
+        metadata = {
+            "harness": "pb-to-csharp-migration-harness",
+            "operation": "orchestrated_offline_validation",
+            "status": "passed" if completion_allowed else "blocked",
+            "validation_contract": contract,
+            "evidence": evidence,
+            "token_optimizer_status": "passthrough",
+            "token_optimizer_status_reason": "C#/SQL validation inputs remained exact.",
+        }
+        return HarnessResult(
+            success=completion_allowed,
+            stdout=json.dumps(
+                {
+                    "status": metadata["status"],
+                    "completed_stage_order": completed_order,
+                    "profile_identity_match": identity_match,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            stderr="" if completion_allowed else "Offline PB migration validation contract failed closed.",
+            exit_code=0 if completion_allowed else 1,
+            metadata=metadata,
+        )
+
+    loaded_profile = load_packaged_migration_profile(profile_id, profile_version, profile_hash)
+    stages.append(
+        {
+            "name": "load-profile",
+            "status": "passed" if loaded_profile.success else "blocked",
+        }
+    )
+    evidence["profile"] = loaded_profile.metadata
+    if not loaded_profile.success:
+        return finish(False)
+
+    csharp_result = verify_migration_generated_csharp_style(
+        csharp_source_text,
+        designer_source_text=designer_source_text,
+        profile_evidence=loaded_profile,
+        program_key=program_key,
+        form_class=form_class,
+        source_role=csharp_source_role,
+        runtime_dynamic_ui_evidence=runtime_dynamic_ui_evidence,
+        result_fields=result_fields,
+        require_designer_companion=True,
+    )
+    stages.append(
+        {
+            "name": "validate-csharp",
+            "status": "passed" if csharp_result.success else "blocked",
+        }
+    )
+    evidence["csharp"] = csharp_result.metadata
+    if not csharp_result.success:
+        return finish(False)
+
+    sp_result = verify_pb_migration_sp_generation_contract(
+        formatted_sql_text,
+        source_evidence=source_evidence,
+        allow_inferred_draft=allow_inferred_draft,
+        profile_evidence=loaded_profile,
+    )
+    stages.append(
+        {
+            "name": "validate-sp",
+            "status": "passed" if sp_result.success else "blocked",
+        }
+    )
+    evidence["sp"] = sp_result.metadata
+    if not sp_result.success:
+        return finish(False)
+
+    from src.skills.sql_formatting_style import verify_sql_formatting_style
+
+    formatting_result = verify_sql_formatting_style(
+        original_sql_text,
+        formatted_sql_text,
+        cte_temp_table_reason=cte_temp_table_reason,
+    )
+    stages.append(
+        {
+            "name": "formatting-evidence",
+            "status": "passed" if formatting_result.success else "blocked",
+        }
+    )
+    evidence["formatting"] = formatting_result.metadata
+    return finish(bool(formatting_result.success))
 
 
 def build_datawindow_grid_layout(
@@ -3243,6 +5015,7 @@ def _normalize_grid_column_specs(columns: Iterable[Any], *, prefix: str) -> List
                         caption=str(item.caption or item.field_name),
                         csharp_name=item.csharp_name
                         or build_csharp_grid_column_name(item.field_name, prefix=prefix),
+                        data_type=item.data_type,
                         source=item.source,
                         x=item.x,
                         y=item.y,
@@ -3261,7 +5034,17 @@ def _normalize_grid_column_specs(columns: Iterable[Any], *, prefix: str) -> List
                         field_name=field_name,
                         caption=str(item.get("caption") or field_name),
                         csharp_name=str(item.get("csharp_name") or build_csharp_grid_column_name(field_name, prefix=prefix)),
+                        data_type=str(
+                            item.get("data_type")
+                            or item.get("datatype")
+                            or item.get("type")
+                            or ""
+                        ).strip(),
                         source=str(item.get("source") or "provided"),
+                        x=_parse_optional_int(item.get("x")),
+                        y=_parse_optional_int(item.get("y")),
+                        width=_parse_optional_int(item.get("width")),
+                        height=_parse_optional_int(item.get("height")),
                     )
                 )
             continue
@@ -3656,8 +5439,6 @@ def _normalize_control_inventory(available_controls: Dict[str, Any] | Iterable[s
         for logical_name, type_name in (available_controls.get("target_project_controls") or {}).items():
             inventory["target_project_controls"][str(logical_name).lower()] = str(type_name)
             inventory["types"].add(str(type_name))
-        if available_controls.get("has_konelib") or available_controls.get("konelib"):
-            inventory["types"].update(KONELIB_CONTROL_TYPES.values())
         if available_controls.get("has_devexpress") or available_controls.get("devexpress"):
             inventory["types"].update(
                 [

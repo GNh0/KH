@@ -1,8 +1,15 @@
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
 
+from skills.pb_to_csharp_migration_harness.scripts.smoke_check import (
+    REQUIRED_SUPPORT_FILES,
+    SHIPPED_RUNTIME_SOURCE_FILES,
+    collect_privacy_scan_paths,
+    scan_private_runtime_fingerprints,
+)
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 
 
@@ -72,16 +79,259 @@ class PluginPackagingTests(unittest.TestCase):
         self.assertNotIn("BA011T", sql_docs)
         self.assertNotIn("F_BA011T", sql_docs)
 
-    def test_sql_provider_and_artifact_layout_are_exposed_without_version_bump(self):
+    def test_pb_migration_package_uses_only_the_sanitized_offline_contract(self):
+        skill = Path("skills") / "pb_to_csharp_migration_harness"
+        references = skill / "references"
+        contract_path = references / "packaged-style-contract.json"
+        contract_doc_path = references / "packaged-style-contract.md"
+        update_path = references / "profile-update-workflow.md"
+
+        self.assertTrue(contract_path.is_file())
+        self.assertTrue(contract_doc_path.is_file())
+        self.assertTrue(update_path.is_file())
+        self.assertFalse((references / "author-tagged-style-baseline.md").exists())
+        self.assertFalse((references / "author-tagged-program-style-profiles.json").exists())
+
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        self.assertEqual(contract["contract_id"], "pb-csharp-offline-generalized")
+        self.assertEqual(contract["normal_generation"]["profile_source"], "packaged-only")
+        self.assertFalse(contract["normal_generation"]["external_discovery_allowed"])
+        self.assertFalse(
+            contract["normal_generation"]["profile_update_runs_during_normal_generation"]
+        )
+        self.assertEqual(
+            contract["control_fallback_order"],
+            ["target-wrapper", "konelib", "devexpress", "winforms"],
+        )
+
+        contract_docs = contract_doc_path.read_text(encoding="utf-8")
+        for marker in (
+            "Style Families",
+            "Naming Grammar",
+            "Event And Method Shapes",
+            "Control Provider Fallback",
+            "Designer Contract",
+            "Grid And Repository Contract",
+            "Caller And Procedure Contract",
+            "Stored Procedure Shapes",
+            "Forbidden Generation Patterns",
+            "Evidence Requirements",
+        ):
+            with self.subTest(contract_marker=marker):
+                self.assertIn(marker, contract_docs)
+
+        ordinary_runtime_paths = (
+            skill / "SKILL.md",
+            references / "usage.md",
+            contract_doc_path,
+            contract_path,
+            references / "datawindow-layout-mapping.md",
+            references / "sql-formatting-bridge.md",
+            references / "migration-output-checklist.md",
+            skill / "examples" / "minimal-workflow.md",
+        )
+        ordinary_runtime_docs = "\n".join(
+            path.read_text(encoding="utf-8") for path in ordinary_runtime_paths
+        )
+        for discovery_term in (
+            "PblScripter",
+            "ORCA",
+            "SYS.OBJECTS",
+            "SYS.SQL_MODULES",
+            "source_sha256",
+            "designer_sha256",
+            "snapshot_date",
+            "source_root",
+        ):
+            with self.subTest(discovery_term=discovery_term):
+                self.assertNotIn(discovery_term, ordinary_runtime_docs)
+
+        update_docs = update_path.read_text(encoding="utf-8")
+        self.assertIn("never runs during normal generation", update_docs)
+        for update_marker in ("PblScripter", "ORCA", "database", "scan", "Sanitization Gate"):
+            with self.subTest(update_marker=update_marker):
+                self.assertIn(update_marker, update_docs)
+
+        packaged_docs = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in skill.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".md", ".json"}
+        )
+        private_literals = (
+            "C_KONE110",
+            "GWERP",
+            "Geunho",
+            "Jang-Geunho",
+            "author-tagged",
+            "CUSTCD",
+            "ITEMCD",
+            "ORGDIV",
+        )
+        for private_literal in private_literals:
+            with self.subTest(private_literal=private_literal):
+                self.assertNotIn(private_literal, packaged_docs)
+
+        private_patterns = (
+            r"\b[A-Za-z]:\\",
+            r"\b[0-9A-Fa-f]{64}\b",
+            r"\b[A-Z]{2}\d{6}(?:_[A-Z]+)?\b",
+            r"\b[A-Z]{2}\d{3}T\b",
+            r"\b(?:SP|sp)_[A-Z]{2}\d{6}[A-Z0-9_]*\b",
+        )
+        for private_pattern in private_patterns:
+            with self.subTest(private_pattern=private_pattern):
+                self.assertIsNone(re.search(private_pattern, packaged_docs))
+
+        runtime_path = Path("src") / "skills" / "pb_to_csharp_migration.py"
+        runtime_text = runtime_path.read_text(encoding="utf-8")
+        runtime_issues = scan_private_runtime_fingerprints(
+            runtime_text,
+            runtime_path.as_posix(),
+        )
+        self.assertEqual([], runtime_issues)
+
+        for retained_grammar in (
+            "grdList",
+            "gvwList",
+            "colList",
+            "colDetail",
+            "Designer.cs",
+        ):
+            with self.subTest(retained_grammar=retained_grammar):
+                self.assertIn(retained_grammar, runtime_text)
+
+        for removed_metric in (
+            "primary_csharp_pattern_counts",
+            "designer_pattern_counts",
+            "primary_csharp_baseline_files_analyzed",
+            "designer_files_analyzed",
+            "author_tagged_baseline_counts",
+        ):
+            with self.subTest(removed_metric=removed_metric):
+                self.assertNotIn(removed_metric, runtime_text)
+
+    def test_pb_privacy_scan_covers_manifest_all_declared_support_files_and_runtime(self):
+        skill_dir = Path("skills") / "pb_to_csharp_migration_harness"
+        scan_paths = collect_privacy_scan_paths(skill_dir, Path("."))
+        expected_labels = {
+            "SKILL.md",
+            *REQUIRED_SUPPORT_FILES,
+            *SHIPPED_RUNTIME_SOURCE_FILES,
+        }
+
+        self.assertEqual(expected_labels, {label for label, _ in scan_paths})
+        self.assertEqual(12, len(scan_paths))
+        self.assertTrue(all(path.is_file() for _, path in scan_paths))
+        for label, path in scan_paths:
+            with self.subTest(privacy_path=label):
+                self.assertEqual(
+                    [],
+                    scan_private_runtime_fingerprints(
+                        path.read_text(encoding="utf-8"),
+                        label,
+                    ),
+                )
+
+    def test_pb_runtime_privacy_scanner_detects_all_nine_leak_categories_by_default(self):
+        leak_samples = {
+            "absolute_windows_path": r'SOURCE_ROOT = "R:\\Internal\\Migration\\screen.txt"',
+            "legacy_source_corpus_metric": 'STYLE_METRIC = "designer_files_analyzed"',
+            "concrete_business_example_identifier": 'BUSINESS_FIELD = "CUSTCD"',
+            "private_identity_assignment": 'PROFILE_OWNER = "Morgan Analyst"',
+            "private_database_identifier": "USE [FinanceArchive2024];",
+            "private_company_namespace": "using LedgerWorks.Internal.Controls;",
+            "production_program_identifier": 'PROGRAM_ID = "QZ846205"',
+            "production_procedure_identifier": 'PROCEDURE_NAME = "SP_RV731904_SELECT"',
+            "production_source_identifier": (
+                'SOURCE_FILE = "Programs/MK562817/MK562817.Designer.cs"'
+            ),
+        }
+
+        for expected_code, sample in leak_samples.items():
+            with self.subTest(expected_code=expected_code):
+                issue_codes = {
+                    issue["code"]
+                    for issue in scan_private_runtime_fingerprints(sample)
+                }
+                self.assertIn(expected_code, issue_codes)
+
+        combined_issue_codes = {
+            issue["code"]
+            for issue in scan_private_runtime_fingerprints("\n".join(leak_samples.values()))
+        }
+        self.assertEqual(set(leak_samples), combined_issue_codes)
+
+        for database_reference in (
+            "SELECT * FROM [FinanceArchive2024].[dbo].[LedgerEntry];",
+            "SELECT * FROM FinanceArchive2024.dbo.LedgerEntry;",
+            'DATABASE_NAME = "FinanceArchive2024"',
+        ):
+            with self.subTest(database_reference=database_reference):
+                self.assertIn(
+                    "private_database_identifier",
+                    {
+                        issue["code"]
+                        for issue in scan_private_runtime_fingerprints(database_reference)
+                    },
+                )
+
+        self.assertIn(
+            "private_company_namespace",
+            {
+                issue["code"]
+                for issue in scan_private_runtime_fingerprints(
+                    "namespace LedgerWorks.Migration"
+                )
+            },
+        )
+
+    def test_pb_runtime_privacy_scanner_allows_documented_generic_placeholders(self):
+        generic_synthetic_runtime = '''
+USE [<Database>];
+SELECT * FROM [<Database>].[dbo].[<Object>];
+using System.Data;
+using Microsoft.Extensions.DependencyInjection;
+namespace SyntheticMigration
+SYNTHETIC_PROGRAM = "<ProgramId>"
+SYNTHETIC_PROCEDURE = "[dbo].[usp_<Feature>_<Operation>]"
+SYNTHETIC_SOURCE = "examples/programs/<ProgramId>.Designer.cs"
+SYNTHETIC_FORM = "CatalogBrowseForm"
+SYNTHETIC_FIELDS = ("ENTITY_CODE", "INPUT_DATE", "DERIVED_YEAR", "BOUNDARY_DATE")
+SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_CODE", "Designer.cs")
+'''
+        self.assertEqual(
+            [],
+            scan_private_runtime_fingerprints(generic_synthetic_runtime),
+        )
+
+    def test_pb_privacy_scanner_source_has_no_private_detection_literals(self):
+        scanner_path = (
+            Path("skills")
+            / "pb_to_csharp_migration_harness"
+            / "scripts"
+            / "smoke_check.py"
+        )
+        scanner_text = scanner_path.read_text(encoding="utf-8")
+        self.assertEqual(
+            [],
+            scan_private_runtime_fingerprints(
+                scanner_text,
+                scanner_path.as_posix(),
+            ),
+        )
+
+    def test_sql_provider_artifact_layout_and_release_version_are_synchronized(self):
         root_manifest = _manifest(Path("plugin.json"))
         codex_manifest = _manifest(Path(".codex-plugin") / "plugin.json")
+        agent_manifest = _manifest(Path(".agents") / "plugins" / "kh-uaf" / "plugin.json")
         catalog_names = {skill["name"] for skill in collect_packaged_skills()["skills"]}
         root_skill_names = {skill["name"] for skill in root_manifest["skills"]}
 
         self.assertIn("sql-formatting", catalog_names)
         self.assertIn("sql-formatting", root_skill_names)
-        self.assertEqual(root_manifest["version"], "2.9.130")
-        self.assertEqual(codex_manifest["version"], "2.9.130")
+        self.assertEqual(root_manifest["version"], "2.9.131")
+        self.assertEqual(codex_manifest["version"], "2.9.131")
+        self.assertEqual(agent_manifest["version"], "2.9.131")
         for manifest in [root_manifest, codex_manifest]:
             with self.subTest(manifest=manifest["description"]):
                 layout = manifest["artifact_layout"]
@@ -129,6 +379,12 @@ class PluginPackagingTests(unittest.TestCase):
                 self.assertTrue(manifest["description"].strip())
                 self.assertEqual(manifest["version"], root_manifest["version"])
 
+        self.assertEqual(
+            {manifest["description"] for manifest in manifests},
+            {root_manifest["description"]},
+        )
+        self.assertIn("cannot guarantee host auto-selection", root_manifest["description"])
+
         self.assertGreaterEqual(_version_tuple(root_manifest["version"]), (2, 9, 10))
 
     def test_default_prompt_is_a_compact_bootstrap_contract(self):
@@ -142,6 +398,10 @@ class PluginPackagingTests(unittest.TestCase):
         prompt = "\n".join(segments)
         character_count = len(prompt)
         estimated_tokens = (character_count + 3) // 4
+
+        self.assertLess(character_count, 1800)
+        self.assertLess(estimated_tokens, 450)
+        self.assertEqual(len(segments), len(set(segments)))
 
         required_markers = [
             "kh-uaf:always-on-front-door",
@@ -159,6 +419,12 @@ class PluginPackagingTests(unittest.TestCase):
             "verification-before-completion-harness",
             "user's current language",
             "selected skill docs",
+            "cannot guarantee host auto-selection",
+            "Audit compliance",
+            "normal machine bootstrap",
+            "current unfinished task evidence",
+            "task completion",
+            "new task",
         ]
         for marker in required_markers:
             with self.subTest(required_marker=marker):
@@ -179,9 +445,27 @@ class PluginPackagingTests(unittest.TestCase):
             with self.subTest(detailed_procedure_marker=marker):
                 self.assertNotIn(marker, prompt)
 
-        self.assertLessEqual(character_count, 1_800)
-        self.assertLessEqual(estimated_tokens, 450)
-        self.assertEqual(len(segments), len(set(segments)))
+    def test_front_door_docs_bound_host_selection_and_same_task_reuse(self):
+        skill = Path("skills") / "always_on_front_door"
+        content = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                skill / "SKILL.md",
+                skill / "references" / "usage.md",
+                skill / "examples" / "minimal-workflow.md",
+            )
+        )
+
+        for marker in (
+            "cannot guarantee host auto-selection",
+            "Audit compliance",
+            "normal machine bootstrap",
+            "current unfinished task",
+            "task completion",
+            "new task",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, content)
 
     def test_repo_marketplace_exposes_git_backed_plugin(self):
         marketplace_path = Path(".agents") / "plugins" / "marketplace.json"

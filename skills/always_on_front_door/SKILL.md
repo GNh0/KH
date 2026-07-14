@@ -1,13 +1,13 @@
 ---
 name: always-on-front-door
-description: Use when any non-trivial Codex, Antigravity-style, Claude Code, or local agent request should run this plugin's KH front-door FIRST and ALONE before MEMORY.md lookup, memory quick pass, target/sibling folder inspection, project file reads, other skills/plugins, browser, image, document, code, shell, subagent, review, QA, or verification work, even when the user does not name KH, UAF, a skill, or a harness.
+description: Use when plugin instructions request KH front-door routing for a new Codex, Antigravity-style, Claude Code, or local-agent task; the host must invoke it first and alone, and audit evidence must verify compliance because instructions cannot guarantee host auto-selection.
 ---
 
 # Always On Front Door
 
 ## Immediate Action
 
-Run the front-door command as the next standalone tool call. Do not spend a reasoning/planning pass here, do not read other skill files, and do not run target, memory, source, browser, document, QA, verification, or subagent tools before or alongside this command.
+When this skill is selected for a new user task, run the front-door command as the next standalone tool call. Do not decide that a request is too short or simple to enter KH. Do not spend a reasoning/planning pass here, do not read other skill files, and do not run target, memory, source, browser, document, QA, verification, or subagent tools before or alongside this command.
 
 Target bootstrap latency: under 10 seconds from reading this file to starting the command. If the command path is missing or stale, resolve the latest installed `kh-uaf` cache path or repo skill folder once, then run the command. If it still cannot run, report blocked with the missing path.
 
@@ -33,22 +33,26 @@ python "<this skill folder>\scripts\front_door.py" --prompt-file $promptPath --c
 
 For short ASCII-only prompts, `--prompt "<user request>"` is accepted. If running from the KH repository root, `python -m src.orchestration.kh_front_door ...` is also valid. Keep `--strict-execution-gate` on normal host runs so a blocked execution gate returns a non-zero code instead of looking like successful task authorization.
 
-Use `--micro-summary` instead of `--summary` only for machine-only host handoff paths with a hard token budget. Normal interactive runs should keep `--summary` so audit keys such as `front_door_status`, `execution_gate`, `execution_authorization`, `immediate_next_skills`, `required_next_action_codes`, and `token_optimizer` remain human-readable.
+Use `--micro-summary` as the normal machine bootstrap for short/direct work. It still executes the same runtime classification and gate; it never means skip KH. A returned direct route exits without opening another `SKILL.md`, while a returned `next` list is executed in order. Use `--summary` when human-readable audit keys such as `front_door_status`, `execution_gate`, `execution_authorization`, `immediate_next_skills`, `required_next_action_codes`, and `token_optimizer` are required.
 
 Only after the command returns should selected follow-up skills be read or applied.
 
+Plugin instructions request this routing order but cannot guarantee host auto-selection or plugin injection. Audit compliance from actual front-door receipts or session logs; manifest text alone is not execution evidence.
+
+A bounded confirmation or status message may reuse current evidence only while the same task is unfinished and its scope is unchanged. Rerun front-door after task completion, for a new task, or when a message adds new work.
+
 ## KH Entry Contract
 
-- Use this bootstrap for work-bearing requests: project files, code changes, generated assets/documents, long logs, review, QA, verification, subagents, persistence, branch work, or risky commands.
-- If an earlier message in the same conversation or project asked to actively/default-use KH/UAF skills or harnesses, keep `kh_active_directive=active` for later work-bearing turns until explicit opt-out.
-- Count this skill as `applied` only when the runtime front-door command ran or a concrete blocked/direct rationale was recorded.
+- Request this bootstrap for every new user task, including light/direct and work-bearing tasks; verify that the host actually invoked it.
+- If an earlier message in the same conversation or project asked to actively/default-use KH/UAF skills or harnesses, keep `kh_active_directive=active` for later turns until explicit opt-out. The directive is additional context, not a prerequisite for bootstrap.
+- Count this skill as `applied` only when the runtime front-door command ran or a concrete blocked result was recorded because the runtime was unavailable.
 - A SKILL.md read, plugin listing, marketplace metadata, or `selected_not_executed_skills` entry is not execution evidence.
 - `immediate_next_skills` must produce same-turn applied/skipped/blocked evidence before source exploration, implementation, verification, or final claims; session audit treats SKILL.md-only handling as `immediate_next_skill_not_applied`.
 
 ## Workflow
 
-1. Decide only whether the request is direct/light or work-bearing.
-2. For work-bearing requests, run the front-door command immediately.
+1. Run the front-door command for every new user request or task.
+2. Let the front-door runtime decide whether the request is direct/light, specialist-routed, or work-bearing. The runtime, not the host selector, makes this decision.
 3. Treat `runtime_applied_skills` as executed and `selected_not_executed_skills` as selected follow-up only.
 4. Execute `immediate_next_skills` first, in order. Do not treat the full `recommended_skills` or `selected_not_executed_skills` list as the next execution plan.
 5. If `execution_gate.can_execute=false`, stop before global memory lookup, source reads, file writes, scaffolding, deliverable generation, browser QA, verification, or subagent dispatch. First apply, skip with rationale, or block `immediate_next_skills`.
@@ -60,7 +64,7 @@ Only after the command returns should selected follow-up skills be read or appli
 - `front_door_status`, request classification, plugin route, `execution_gate`, and `execution_authorization`.
 - `runtime_applied_skills`, `selected_not_executed_skills`, `immediate_next_skills`, and `skill_status_summary`.
 - `kh_active_directive` when persistent KH use was requested.
-- Blocked/direct rationale when the runtime command cannot run.
+- Blocked rationale when the runtime command cannot run. A direct rationale is valid only as runtime output, never as a host-side reason to skip the command.
 
 ## User-Facing Reporting
 
@@ -71,6 +75,7 @@ Only after the command returns should selected follow-up skills be read or appli
 ## Common mistakes
 
 - Do not read MEMORY.md, source files, target folders, parent/sibling folders, other SKILL.md files, or support references before the front-door command.
+- Do not skip front-door because the request is short, simple, conversational, SQL-only, translation, rewrite, lookup, or arithmetic.
 - Do not parallelize the front-door command with pre-intake reads.
 - Do not use `--prompt "<non-ASCII text>"` on Windows; use `--prompt-file`.
 - Do not ignore stale cache path failures; resolve the latest cache or repo skills path before claiming KH use.

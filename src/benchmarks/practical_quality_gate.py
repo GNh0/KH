@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,17 @@ PRIMARY_SIGNAL = "kh_bench_verified"
 STATIC_QUALITY_ROLE = "advisory_structure_gate"
 MINIMUM_BENCH_PASS_RATE = 1.0
 MINIMUM_BENCH_TASK_COUNT = 8
+CANONICAL_RELEASE_PLUGIN_NAME = "kh-uaf"
+RELEASE_VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+CANONICAL_RELEASE_HASH_ALGORITHM = "sha256-length-prefixed-path-and-canonical-content-v3"
+RAW_RELEASE_HASH_ALGORITHM = "sha256-length-prefixed-path-and-raw-content-v2"
+RELEASE_TEXT_SUFFIXES = frozenset({".json", ".md", ".py"})
+RELEASE_TEXT_FILENAMES = frozenset({"license", "notice", "readme"})
+REQUIRED_RELEASE_MANIFEST_PATHS = (
+    Path("plugin.json"),
+    Path(".codex-plugin") / "plugin.json",
+    Path(".agents") / "plugins" / "kh-uaf" / "plugin.json",
+)
 
 
 def run_practical_quality_gate(output_root: Optional[Path] = None) -> Dict[str, Any]:
@@ -235,8 +247,16 @@ def _build_release_identity_report(source_root: Path, cache_root: Path) -> Dict[
         return {
             "status": "missing_release_root",
             "content_hashes_match": False,
+            "raw_content_hashes_match": False,
             "catalogs_valid": False,
             "catalog_names_match": False,
+            "required_release_manifests_present": False,
+            "manifest_identity_valid": False,
+            "source_manifest_identity": {"status": "missing_root"},
+            "cache_manifest_identity": {"status": "missing_root"},
+            "source_cache_manifest_identity_mismatches": [],
+            "content_hash_algorithm": CANONICAL_RELEASE_HASH_ALGORITHM,
+            "raw_content_hash_algorithm": RAW_RELEASE_HASH_ALGORITHM,
             "authenticity_status": "unverified",
             "identity_scope": "local_release_content_only",
             "source_root": str(source_root),
@@ -247,23 +267,77 @@ def _build_release_identity_report(source_root: Path, cache_root: Path) -> Dict[
     cache_catalog = collect_packaged_skills(str(cache_root / "skills"))
     source_names = {str(item.get("name", "")) for item in source_catalog.get("skills", [])}
     cache_names = {str(item.get("name", "")) for item in cache_catalog.get("skills", [])}
-    source_hash, source_count = _release_content_hash(source_root)
-    cache_hash, cache_count = _release_content_hash(cache_root)
+    source_content = _release_content_hash_details(source_root)
+    cache_content = _release_content_hash_details(cache_root)
+    source_manifest_identity = _release_manifest_identity_details(source_root)
+    cache_manifest_identity = _release_manifest_identity_details(cache_root)
+    source_cache_manifest_identity_mismatches = _manifest_identity_mismatches(
+        source_manifest_identity.get("identity", {}),
+        cache_manifest_identity.get("identity", {}),
+        left_label="source",
+        right_label="cache",
+    )
     catalogs_valid = bool(source_catalog.get("validation", {}).get("success")) and bool(
         cache_catalog.get("validation", {}).get("success")
     )
     names_match = source_names == cache_names
+    source_hash = str(source_content["canonical_sha256"])
+    cache_hash = str(cache_content["canonical_sha256"])
     hashes_match = bool(source_hash) and source_hash == cache_hash
-    status = "ok" if hashes_match and catalogs_valid and names_match else "content_mismatch"
+    raw_hashes_match = bool(source_content["raw_sha256"]) and (
+        source_content["raw_sha256"] == cache_content["raw_sha256"]
+    )
+    source_missing_manifests = list(source_manifest_identity["missing_manifest_paths"])
+    cache_missing_manifests = list(cache_manifest_identity["missing_manifest_paths"])
+    missing_manifests = [*source_missing_manifests, *cache_missing_manifests]
+    required_manifests_present = not missing_manifests
+    manifest_identity_valid = (
+        source_manifest_identity["status"] == "ok"
+        and cache_manifest_identity["status"] == "ok"
+        and not source_cache_manifest_identity_mismatches
+    )
+    status = (
+        "ok"
+        if (
+            hashes_match
+            and catalogs_valid
+            and names_match
+            and required_manifests_present
+            and manifest_identity_valid
+        )
+        else "content_mismatch"
+    )
     return {
         "status": status,
         "content_hashes_match": hashes_match,
+        "raw_content_hashes_match": raw_hashes_match,
         "catalogs_valid": catalogs_valid,
         "catalog_names_match": names_match,
+        "required_release_manifest_paths": [
+            path.as_posix() for path in REQUIRED_RELEASE_MANIFEST_PATHS
+        ],
+        "required_release_manifests_present": required_manifests_present,
+        "missing_required_manifest_paths": missing_manifests,
+        "source_missing_required_manifest_paths": source_missing_manifests,
+        "cache_missing_required_manifest_paths": cache_missing_manifests,
+        "manifest_identity_valid": manifest_identity_valid,
+        "source_manifest_identity": source_manifest_identity,
+        "cache_manifest_identity": cache_manifest_identity,
+        "source_cache_manifest_identity_mismatches": (
+            source_cache_manifest_identity_mismatches
+        ),
         "source_content_sha256": source_hash,
         "cache_content_sha256": cache_hash,
-        "source_file_count": source_count,
-        "cache_file_count": cache_count,
+        "source_raw_content_sha256": source_content["raw_sha256"],
+        "cache_raw_content_sha256": cache_content["raw_sha256"],
+        "source_file_count": source_content["file_count"],
+        "cache_file_count": cache_content["file_count"],
+        "source_text_file_count": source_content["text_file_count"],
+        "cache_text_file_count": cache_content["text_file_count"],
+        "source_binary_file_count": source_content["binary_file_count"],
+        "cache_binary_file_count": cache_content["binary_file_count"],
+        "content_hash_algorithm": CANONICAL_RELEASE_HASH_ALGORITHM,
+        "raw_content_hash_algorithm": RAW_RELEASE_HASH_ALGORITHM,
         "source_catalog_valid": bool(source_catalog.get("validation", {}).get("success")),
         "cache_catalog_valid": bool(cache_catalog.get("validation", {}).get("success")),
         "source_skill_count": len(source_names),
@@ -274,7 +348,180 @@ def _build_release_identity_report(source_root: Path, cache_root: Path) -> Dict[
 
 
 def _release_content_hash(root: Path) -> tuple[str, int]:
-    manifest_paths = [Path("plugin.json"), Path(".codex-plugin") / "plugin.json"]
+    """Return the canonical release hash while preserving the legacy tuple API."""
+    details = _release_content_hash_details(root)
+    return str(details["canonical_sha256"]), int(details["file_count"])
+
+
+def _release_manifest_identity_details(root: Path) -> Dict[str, Any]:
+    manifests: List[Dict[str, Any]] = []
+    missing_manifest_paths: List[str] = []
+    invalid_manifests: List[Dict[str, Any]] = []
+    missing_values: List[Dict[str, Any]] = []
+    invalid_values: List[Dict[str, Any]] = []
+    valid_values: Dict[str, List[Dict[str, str]]] = {"name": [], "version": []}
+
+    for relative_path in REQUIRED_RELEASE_MANIFEST_PATHS:
+        manifest_path = (root / relative_path).resolve()
+        path_text = str(manifest_path)
+        record: Dict[str, Any] = {
+            "path": path_text,
+            "relative_path": relative_path.as_posix(),
+        }
+        if not manifest_path.is_file():
+            record["status"] = "missing"
+            manifests.append(record)
+            missing_manifest_paths.append(path_text)
+            continue
+
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            invalid = {"path": path_text, "reason": "read_error", "error": str(exc)}
+            record.update({"status": "invalid", **invalid})
+            manifests.append(record)
+            invalid_manifests.append(invalid)
+            continue
+        except UnicodeError as exc:
+            invalid = {"path": path_text, "reason": "invalid_utf8", "error": str(exc)}
+            record.update({"status": "invalid", **invalid})
+            manifests.append(record)
+            invalid_manifests.append(invalid)
+            continue
+        except json.JSONDecodeError as exc:
+            invalid = {"path": path_text, "reason": "invalid_json", "error": str(exc)}
+            record.update({"status": "invalid", **invalid})
+            manifests.append(record)
+            invalid_manifests.append(invalid)
+            continue
+
+        if not isinstance(manifest, dict):
+            invalid = {
+                "path": path_text,
+                "reason": "invalid_document",
+                "value_type": type(manifest).__name__,
+            }
+            record.update({"status": "invalid", **invalid})
+            manifests.append(record)
+            invalid_manifests.append(invalid)
+            continue
+
+        record["status"] = "ok"
+        record_issues: List[Dict[str, Any]] = []
+        for field in ("name", "version"):
+            value = manifest.get(field)
+            record[field] = value
+            if field not in manifest or value is None or (
+                isinstance(value, str) and not value.strip()
+            ):
+                issue = {"path": path_text, "field": field}
+                missing_values.append(issue)
+                record_issues.append({"kind": "missing_value", "field": field})
+            elif not isinstance(value, str):
+                issue = {
+                    "path": path_text,
+                    "field": field,
+                    "value": value,
+                    "value_type": type(value).__name__,
+                }
+                invalid_values.append(issue)
+                record_issues.append(
+                    {
+                        "kind": "invalid_value",
+                        "field": field,
+                        "value": value,
+                        "value_type": type(value).__name__,
+                    }
+                )
+            else:
+                valid_values[field].append({"path": path_text, "value": value})
+                if field == "name" and value != CANONICAL_RELEASE_PLUGIN_NAME:
+                    issue = {
+                        "path": path_text,
+                        "field": field,
+                        "value": value,
+                        "reason": "noncanonical_plugin_name",
+                        "expected": CANONICAL_RELEASE_PLUGIN_NAME,
+                    }
+                    invalid_values.append(issue)
+                    record_issues.append({"kind": "invalid_value", **issue})
+                elif field == "version" and RELEASE_VERSION_PATTERN.fullmatch(value) is None:
+                    issue = {
+                        "path": path_text,
+                        "field": field,
+                        "value": value,
+                        "reason": "invalid_release_version",
+                        "expected_format": "MAJOR.MINOR.PATCH",
+                    }
+                    invalid_values.append(issue)
+                    record_issues.append({"kind": "invalid_value", **issue})
+        if record_issues:
+            record["status"] = "invalid"
+            record["issues"] = record_issues
+        manifests.append(record)
+
+    mismatched_values = [
+        {
+            "field": field,
+            "values": values,
+        }
+        for field, values in valid_values.items()
+        if len({item["value"] for item in values}) > 1
+    ]
+    if missing_manifest_paths:
+        status = "missing"
+    elif mismatched_values:
+        status = "mismatch"
+    elif invalid_manifests or missing_values or invalid_values:
+        status = "invalid"
+    else:
+        status = "ok"
+
+    identity = (
+        {field: values[0]["value"] for field, values in valid_values.items()}
+        if status == "ok"
+        else {}
+    )
+    return {
+        "status": status,
+        "identity": identity,
+        "manifests": manifests,
+        "missing_manifest_paths": missing_manifest_paths,
+        "invalid_manifests": invalid_manifests,
+        "missing_values": missing_values,
+        "invalid_values": invalid_values,
+        "mismatched_values": mismatched_values,
+    }
+
+
+def _manifest_identity_mismatches(
+    left: Dict[str, Any],
+    right: Dict[str, Any],
+    *,
+    left_label: str,
+    right_label: str,
+) -> List[Dict[str, Any]]:
+    if not left or not right:
+        return []
+    return [
+        {
+            "field": field,
+            f"{left_label}_value": left.get(field),
+            f"{right_label}_value": right.get(field),
+        }
+        for field in ("name", "version")
+        if left.get(field) != right.get(field)
+    ]
+
+
+def _release_content_hash_details(root: Path) -> Dict[str, Any]:
+    """Hash a release using canonical UTF-8 text and raw-byte diagnostics.
+
+    Only explicitly supported text paths receive strict UTF-8 EOL
+    canonicalization. Unknown extensions, invalid UTF-8, and binary-like content
+    remain byte-exact. Paths are included, so missing and extra files still fail.
+    """
+    manifest_paths = list(REQUIRED_RELEASE_MANIFEST_PATHS)
     relative_paths = [*manifest_paths]
     relative_paths.extend(_manifest_executable_paths(root, manifest_paths))
     for folder in [root / "src", root / "skills"]:
@@ -286,18 +533,78 @@ def _release_content_hash(root: Path) -> tuple[str, int]:
                 and "__pycache__" not in path.parts
                 and path.suffix.lower() not in {".pyc", ".pyo"}
             )
-    digest = hashlib.sha256()
+    canonical_digest = hashlib.sha256()
+    raw_digest = hashlib.sha256()
     count = 0
+    text_count = 0
+    binary_count = 0
     for relative_path in sorted(set(relative_paths), key=lambda item: item.as_posix()):
         path = root / relative_path
         if not path.is_file():
             continue
-        digest.update(relative_path.as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
+        path_bytes = relative_path.as_posix().encode("utf-8")
+        raw_content = path.read_bytes()
+        canonical_content, is_text = _canonical_release_content(relative_path, raw_content)
+        for digest, content in (
+            (canonical_digest, canonical_content),
+            (raw_digest, raw_content),
+        ):
+            _update_length_prefixed_release_digest(digest, path_bytes, content)
+        if is_text:
+            text_count += 1
+        else:
+            binary_count += 1
         count += 1
-    return (digest.hexdigest() if count else "", count)
+    return {
+        "canonical_sha256": canonical_digest.hexdigest() if count else "",
+        "raw_sha256": raw_digest.hexdigest() if count else "",
+        "file_count": count,
+        "text_file_count": text_count,
+        "binary_file_count": binary_count,
+        "missing_required_manifest_paths": [
+            str((root / relative_path).resolve())
+            for relative_path in REQUIRED_RELEASE_MANIFEST_PATHS
+            if not (root / relative_path).is_file()
+        ],
+    }
+
+
+def _update_length_prefixed_release_digest(
+    digest: Any,
+    path: bytes,
+    content: bytes,
+) -> None:
+    digest.update(len(path).to_bytes(8, byteorder="big", signed=False))
+    digest.update(path)
+    digest.update(len(content).to_bytes(8, byteorder="big", signed=False))
+    digest.update(content)
+
+
+def _is_release_text_path(relative_path: Path) -> bool:
+    return (
+        relative_path.suffix.casefold() in RELEASE_TEXT_SUFFIXES
+        or relative_path.name.casefold() in RELEASE_TEXT_FILENAMES
+    )
+
+
+def _canonical_release_content(relative_path: Path, content: bytes) -> tuple[bytes, bool]:
+    if not _is_release_text_path(relative_path):
+        return content, False
+
+    try:
+        text = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return content, False
+
+    allowed_controls = {"\t", "\n", "\r", "\f"}
+    if any(
+        (ord(character) < 32 and character not in allowed_controls) or ord(character) == 127
+        for character in text
+    ):
+        return content, False
+
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.encode("utf-8"), True
 
 
 def _manifest_executable_paths(root: Path, manifest_paths: List[Path]) -> List[Path]:
@@ -341,6 +648,8 @@ def _release_identity_ok(identity: Dict[str, Any]) -> bool:
         and identity.get("content_hashes_match") is True
         and identity.get("catalogs_valid") is True
         and identity.get("catalog_names_match") is True
+        and identity.get("required_release_manifests_present") is True
+        and identity.get("manifest_identity_valid") is True
     )
 
 
@@ -348,15 +657,26 @@ def _release_identity_message(identity: Dict[str, Any]) -> str:
     if _release_identity_ok(identity):
         return (
             "local source and installed cache content hashes match and both skill catalogs "
-            "are valid; authenticity=unverified"
+            "are valid; required manifest identities are consistent; authenticity=unverified"
         )
+    missing_paths = list(identity.get("missing_required_manifest_paths", []) or [])
+    missing_path_evidence = (
+        f"; missing_required_manifest_paths={', '.join(str(path) for path in missing_paths)}"
+        if missing_paths
+        else ""
+    )
     return (
         "release identity failed: "
         f"status={identity.get('status', '<missing>')}; "
         f"content_hashes_match={identity.get('content_hashes_match', False)}; "
         f"catalogs_valid={identity.get('catalogs_valid', False)}; "
         f"catalog_names_match={identity.get('catalog_names_match', False)}; "
+        f"manifest_identity_valid={identity.get('manifest_identity_valid', False)}; "
+        "manifest_identity_statuses="
+        f"source:{dict(identity.get('source_manifest_identity', {}) or {}).get('status', '<missing>')},"
+        f"cache:{dict(identity.get('cache_manifest_identity', {}) or {}).get('status', '<missing>')}; "
         f"authenticity={identity.get('authenticity_status', 'unverified')}"
+        f"{missing_path_evidence}"
     )
 
 

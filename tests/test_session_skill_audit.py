@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.session_skill_audit import (
     analyze_session_skills,
     summarize_session_skill_audits,
@@ -31,6 +32,177 @@ class SessionSkillAuditTests(unittest.TestCase):
         lines.extend(json.dumps(event) for event in events)
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
+
+    @staticmethod
+    def front_door_call(call_id="front-door-1", summary_mode="micro-summary"):
+        return {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "shell_command",
+                "call_id": call_id,
+                "arguments": (
+                    "python -m src.orchestration.kh_front_door "
+                    f'--prompt "Inspect this module." --{summary_mode}'
+                ),
+            },
+        }
+
+    @staticmethod
+    def front_door_output(receipt, call_id="front-door-1", *, exit_code=0):
+        return {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": f"Exit code: {exit_code}\n{json.dumps(receipt)}",
+            },
+        }
+
+    @staticmethod
+    def front_door_exec_call(call_id="front-door-exec-1"):
+        return {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": call_id,
+                "name": "exec",
+                "input": (
+                    "const r = await tools.shell_command({"
+                    '"command":"python C:\\\\kh-uaf\\\\skills\\\\always_on_front_door'
+                    '\\\\scripts\\\\front_door.py --prompt \\\"Fix the audit.\\\" '
+                    '--summary --strict-execution-gate"}); text(r);'
+                ),
+            },
+        }
+
+    @staticmethod
+    def actual_escaped_front_door_exec_call(call_id="actual-front-door-exec-1"):
+        return {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": call_id,
+                "name": "exec",
+                "input": (
+                    'const r = await tools.shell_command({"command":"python \\"'
+                    'C:\\\\Users\\\\KONEIT\\\\.codex\\\\plugins\\\\cache\\\\kh-uaf-marketplace'
+                    '\\\\kh-uaf\\\\2.9.129\\\\skills\\\\always_on_front_door\\\\scripts'
+                    '\\\\front_door.py\\" --prompt-file \\"C:\\\\Temp\\\\kh-front-door-prompt.txt\\" '
+                    '--context-file \\"C:\\\\Temp\\\\kh-front-door-context.json\\" '
+                    '--project \\"C:\\\\worktree\\" --host codex --summary '
+                    '--strict-execution-gate","timeout_ms":120000});\ntext(r);'
+                ),
+            },
+        }
+
+    @staticmethod
+    def front_door_exec_output(receipt, call_id="front-door-exec-1", *, exit_code=1):
+        output = json.dumps(receipt) if isinstance(receipt, dict) else str(receipt)
+        return {
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": call_id,
+                "output": [
+                    {
+                        "type": "input_text",
+                        "text": "Script failed\nWall time 1.2 seconds\nOutput:\n",
+                    },
+                    {
+                        "type": "input_text",
+                        "text": (
+                            f"Script error:\nExit code: {exit_code}\n"
+                            f"Wall time: 1.2 seconds\nOutput:\n{output}\n"
+                        ),
+                    },
+                ],
+            },
+        }
+
+    @staticmethod
+    def producer_micro_receipt():
+        return build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+
+    @staticmethod
+    def legacy_2_9_129_pending_front_door_receipt():
+        return {
+            "summary_mode": "ultra_compact",
+            "front_door_status": "ok",
+            "classification": {
+                "complexity": "medium",
+                "recommended_execution": "skill_orchestration",
+                "domain": "software",
+            },
+            "plugin_route": {"route": "single", "controller": "kh"},
+            "execution_gate": {
+                "status": "execution_allowed_after_selected_skill_setup",
+                "can_execute": True,
+            },
+            "token_optimizer": {
+                "status": "considered_not_needed",
+                "used": False,
+                "reason_code": "no_candidate_output",
+            },
+            "skill_source": {
+                "source_type": "codex-plugin-cache",
+                "version": "2.9.129",
+            },
+            "immediate_next_skills": ["workflow-usability-harness"],
+            "required_next_action_codes": [
+                "stop_before_task_work",
+                "apply_immediate_next_skills",
+            ],
+            "execution_authorization": {
+                "must_stop_before_execution": True,
+                "status": "blocked_by_pending_immediate_skill_gate",
+            },
+        }
+
+    @staticmethod
+    def runtime_optimizer_events(status, call_id):
+        result = {
+            "runtime_token_optimization": {
+                "status": status,
+                "source": "src.orchestration.runtime_token_optimizer.optimize_workflow_task_results",
+                "provider": "kh",
+            }
+        }
+        if status == "used":
+            result["runtime_token_optimization"].update(
+                {
+                    "estimated_payload_tokens_saved": 128,
+                    "estimated_payload_token_savings_ratio": 0.25,
+                }
+            )
+        elif status == "passthrough":
+            result["runtime_token_optimization"]["not_used_reason"] = (
+                "Exact source evidence must be preserved."
+            )
+        else:
+            result["runtime_token_optimization"]["blocked_reason"] = "provider_unavailable"
+        return [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "shell_command",
+                    "call_id": call_id,
+                    "arguments": "python -m src.skills.token_optimizer --log-file audit.log",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": json.dumps(result),
+                },
+            },
+        ]
 
     def write_subagent_session(self, events):
         tmp = tempfile.TemporaryDirectory()
@@ -2514,7 +2686,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
         evidence = audit.usage_summary["sql_formatting_evidence"]
 
-        self.assertNotIn(("always-on-front-door", "missing_front_door"), issues)
+        self.assertIn(("always-on-front-door", "missing_front_door"), issues)
         self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
         self.assertIn(("sql-formatting", "formatter_application_not_proven"), issues)
         self.assertNotIn("provider_inspected", evidence["states"])
@@ -5428,6 +5600,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call",
                         "name": "shell_command",
+                        "call_id": "front-door-active-directive",
                         "arguments": (
                             "python -m src.orchestration.kh_front_door "
                             "--prompt \"간단한 월별 KPI 대시보드를 만들어줘.\" --summary"
@@ -5438,9 +5611,12 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "type": "response_item",
                     "payload": {
                         "type": "function_call_output",
+                        "call_id": "front-door-active-directive",
                         "output": json.dumps(
                             {
                                 "front_door_status": "ok",
+                                "plugin_route": {"route": "single"},
+                                "execution_gate": {"status": "allowed", "can_execute": True},
                                 "runtime_applied_skills": ["always-on-front-door"],
                                 "selected_not_executed_skills": [],
                                 "skill_status_summary": {
@@ -5592,6 +5768,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call",
                         "name": "shell_command",
+                        "call_id": "front-door-plugin-request",
                         "arguments": (
                             "python -m src.orchestration.kh_front_door "
                             "--prompt \"Use the KH plugin for this source analysis.\" --summary"
@@ -5602,9 +5779,12 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "type": "response_item",
                     "payload": {
                         "type": "function_call_output",
+                        "call_id": "front-door-plugin-request",
                         "output": json.dumps(
                             {
                                 "front_door_status": "ok",
+                                "plugin_route": {"route": "single"},
+                                "execution_gate": {"status": "allowed", "can_execute": True},
                                 "runtime_applied_skills": ["always-on-front-door"],
                                 "selected_not_executed_skills": [],
                                 "skill_status_summary": {
@@ -5729,6 +5909,8 @@ class SessionSkillAuditTests(unittest.TestCase):
     def test_kh_front_door_command_counts_as_front_door_evidence(self):
         front_door_output = {
             "front_door_status": "ok",
+            "plugin_route": {"route": "single"},
+            "execution_gate": {"status": "allowed", "can_execute": True},
             "runtime_applied_skills": ["always-on-front-door"],
             "selected_not_executed_skills": [],
             "skill_status_summary": {
@@ -5750,6 +5932,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call",
                         "name": "shell_command",
+                        "call_id": "front-door-command",
                         "arguments": (
                             "python -m src.orchestration.kh_front_door "
                             "--prompt \"Use the KH plugin for this source analysis.\" --summary"
@@ -5760,6 +5943,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "type": "response_item",
                     "payload": {
                         "type": "function_call_output",
+                        "call_id": "front-door-command",
                         "output": json.dumps(front_door_output),
                     },
                 },
@@ -5831,6 +6015,8 @@ class SessionSkillAuditTests(unittest.TestCase):
     def test_custom_tool_front_door_output_counts_as_front_door_evidence(self):
         front_door_output = {
             "front_door_status": "ok",
+            "plugin_route": {"route": "single"},
+            "execution_gate": {"status": "allowed", "can_execute": True},
             "runtime_applied_skills": ["always-on-front-door"],
             "selected_not_executed_skills": [],
             "skill_status_summary": {
@@ -5852,6 +6038,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "custom_tool_call",
                         "name": "shell_command",
+                        "call_id": "front-door-custom",
                         "input": "python -m src.orchestration.kh_front_door --summary",
                     },
                 },
@@ -5859,6 +6046,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "type": "response_item",
                     "payload": {
                         "type": "custom_tool_call_output",
+                        "call_id": "front-door-custom",
                         "output": json.dumps(front_door_output),
                     },
                 },
@@ -5932,6 +6120,8 @@ class SessionSkillAuditTests(unittest.TestCase):
     def test_skill_local_front_door_wrapper_counts_as_front_door_evidence(self):
         front_door_output = {
             "front_door_status": "ok",
+            "plugin_route": {"route": "single"},
+            "execution_gate": {"status": "allowed", "can_execute": True},
             "runtime_applied_skills": ["always-on-front-door"],
             "selected_not_executed_skills": [],
             "skill_status_summary": {
@@ -5953,6 +6143,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call",
                         "name": "shell_command",
+                        "call_id": "front-door-wrapper",
                         "arguments": (
                             "python C:\\kh\\skills\\always_on_front_door\\scripts\\front_door.py "
                             "--prompt \"Build an operations support product in this folder.\" --summary"
@@ -5963,6 +6154,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "type": "response_item",
                     "payload": {
                         "type": "function_call_output",
+                        "call_id": "front-door-wrapper",
                         "output": json.dumps(front_door_output),
                     },
                 },
@@ -6841,7 +7033,20 @@ class SessionSkillAuditTests(unittest.TestCase):
                 {
                     "type": "response_item",
                     "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "out-of-order-workflow-runtime",
+                        "arguments": (
+                            "python -c \"from src.orchestration.session_start_context import "
+                            "build_session_start_context; print(build_session_start_context('.'))\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
                         "type": "function_call_output",
+                        "call_id": "out-of-order-workflow-runtime",
                         "output": json.dumps(
                             {
                                 "skill": "workflow-usability-harness",
@@ -7173,7 +7378,20 @@ class SessionSkillAuditTests(unittest.TestCase):
                 {
                     "type": "response_item",
                     "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "workflow-runtime",
+                        "arguments": (
+                            "python -c \"from src.orchestration.session_start_context import "
+                            "build_session_start_context; print(build_session_start_context('.'))\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
                         "type": "function_call_output",
+                        "call_id": "workflow-runtime",
                         "output": json.dumps(
                             {
                                 "skill": "workflow-usability-harness",
@@ -7487,7 +7705,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         )
         self.assertEqual(issue["severity"], "P0")
 
-    def test_report_procedure_csharp_question_does_not_require_sql_formatting_harness(self):
+    def test_report_procedure_csharp_question_skips_sql_harness_but_requires_front_door(self):
         path = self.write_session(
             [
                 {
@@ -7529,7 +7747,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             "sql-formatting-style-harness",
             audit.coverage["required_missing_skill_names"],
         )
-        self.assertNotIn(
+        self.assertIn(
             "always-on-front-door",
             audit.coverage["required_missing_skill_names"],
         )
@@ -7724,6 +7942,54 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_bare_direct_ultra_compact_front_door_output_does_not_count_as_order_evidence(self):
+        front_door_output = {
+            "summary_mode": "ultra_compact",
+            "front_door_status": "ok",
+            "classification": {"complexity": "light", "recommended_execution": "direct"},
+            "plugin_route": {"route": "direct"},
+            "execution_gate": {"status": "allowed", "can_execute": True},
+            "token_optimizer": {
+                "status": "considered_not_needed",
+                "used": False,
+                "reason_code": "no_candidate_output",
+            },
+            "skill_source": {"source_type": "codex-plugin-cache", "version": "2.9.130"},
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "Inspect this module."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n session_skill_audit src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
     def test_ultra_compact_front_door_output_with_user_request_preserves_gate_bypass(self):
         front_door_output = {
             "summary_mode": "ultra_compact",
@@ -7766,7 +8032,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertFalse(
+        self.assertTrue(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
@@ -7777,6 +8043,3141 @@ class SessionSkillAuditTests(unittest.TestCase):
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "front_door_execution_gate_bypassed"
+                for issue in audit.issues
+            )
+        )
+
+    def test_micro_front_door_success_is_order_evidence_without_applying_skipped_catalog(self):
+        receipt = self.producer_micro_receipt()
+        receipt["next"] = ["skill-catalog"]
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Inspect the audit implementation.",
+                    },
+                },
+                self.front_door_call("front-door-catalog"),
+                self.front_door_output(receipt, "front-door-catalog"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "skill": "skill-catalog",
+                                "status": "skipped_with_rationale",
+                                "reason": "The micro packet already resolved the installed source.",
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n session_skill_audit src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        catalog = next(skill for skill in audit.skills if skill["name"] == "skill-catalog")
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+        self.assertNotEqual(catalog["status"], "applied")
+        self.assertNotIn("skill-catalog", audit.coverage["runtime_applied_skill_names"])
+
+    def test_micro_front_door_receipt_satisfies_normalized_acceptance_outputs(self):
+        receipt = self.producer_micro_receipt()
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "Inspect this module."},
+                },
+                self.front_door_call("front-door-acceptance"),
+                self.front_door_output(receipt, "front-door-acceptance"),
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        front_door = next(skill for skill in audit.skills if skill["name"] == "always-on-front-door")
+
+        self.assertEqual(front_door["acceptance"]["status"], "passed")
+        self.assertEqual(front_door["acceptance"]["missing_outputs"], [])
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_outputs"
+                for issue in audit.issues
+            )
+        )
+
+    def test_direct_compact_front_door_receipt_satisfies_empty_status_split(self):
+        receipt = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_compact_summary_dict()
+        self.assertEqual(receipt["plugin_route"]["route"], "direct")
+        self.assertFalse(
+            any(
+                key in receipt
+                for key in [
+                    "runtime_applied_skills",
+                    "selected_not_executed_skills",
+                    "skill_status_summary",
+                    "immediate_next_skills",
+                    "required_next_action_codes",
+                    "deferred_skill_count",
+                ]
+            )
+        )
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "What is 1 + 1?"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(receipt),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        front_door = next(skill for skill in audit.skills if skill["name"] == "always-on-front-door")
+
+        self.assertEqual(front_door["acceptance"]["status"], "passed")
+        self.assertEqual(
+            front_door["acceptance"]["satisfied_outputs"],
+            ["intake_evidence", "status_split"],
+        )
+        self.assertEqual(front_door["acceptance"]["missing_outputs"], [])
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_outputs"
+                for issue in audit.issues
+            )
+        )
+
+    def test_micro_front_door_token_decision_is_auditable_runtime_evidence(self):
+        receipt = self.producer_micro_receipt()
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "Inspect this module."},
+                },
+                self.front_door_call("front-door-token"),
+                self.front_door_output(receipt, "front-door-token"),
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        token_optimizer = next(skill for skill in audit.skills if skill["name"] == "token-optimizer")
+
+        self.assertEqual(token_optimizer["token_optimizer_status"], "considered_not_needed")
+        self.assertEqual(token_optimizer["acceptance"]["status"], "passed")
+        self.assertTrue(audit.postmortem["token_gate"]["checked"])
+        self.assertEqual(
+            audit.postmortem["token_optimizer_evidence"]["front_door_runtime_receipts"],
+            1,
+        )
+
+    def test_paired_producer_micro_receipt_satisfies_order_and_token_gates(self):
+        receipt = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "What is 1 + 1?"},
+                },
+                self.front_door_call(),
+                self.front_door_output(receipt),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "2",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+        self.assertEqual(audit.postmortem["token_optimizer_status"], "considered_not_needed")
+        self.assertEqual(
+            audit.postmortem["token_optimizer_evidence"]["front_door_runtime_receipts"],
+            1,
+        )
+
+    def test_paired_producer_full_summary_receipt_satisfies_token_gate(self):
+        receipt = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_summary_dict()
+        self.assertIn("token_optimizer_decision", receipt)
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "What is 1 + 1?",
+                    },
+                },
+                self.front_door_call("front-door-full-summary", "summary"),
+                self.front_door_output(receipt, "front-door-full-summary"),
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertEqual(audit.postmortem["token_optimizer_status"], "considered_not_needed")
+        self.assertTrue(audit.postmortem["token_gate"]["checked"])
+        self.assertEqual(
+            audit.postmortem["token_optimizer_evidence"]["front_door_runtime_receipts"],
+            1,
+        )
+
+    def test_real_exec_exit_one_accepts_only_strict_blocked_front_door_receipt(self):
+        produced = build_kh_front_door(
+            "Implement a large cross-module software redesign with tests and review.",
+            project=Path(__file__).resolve().parents[1],
+        ).to_compact_summary_dict()
+        self.assertEqual(produced["front_door_status"], "ok")
+        self.assertTrue(
+            produced["execution_authorization"]["must_stop_before_execution"]
+        )
+        self.assertTrue(produced["required_next_action_codes"])
+
+        legacy_2_9_129 = self.legacy_2_9_129_pending_front_door_receipt()
+
+        missing_actions = json.loads(json.dumps(produced))
+        missing_actions.pop("required_next_action_codes")
+        allowed_authorization = json.loads(json.dumps(produced))
+        allowed_authorization["execution_authorization"] = {
+            "must_stop_before_execution": True,
+            "status": "allowed",
+        }
+        cases = {
+            "current_blocked_packet": (produced, False),
+            "legacy_2_9_129_pending_skill_packet": (legacy_2_9_129, False),
+            "missing_required_actions": (missing_actions, True),
+            "nonblocked_authorization": (allowed_authorization, True),
+            "malformed_packet": ('{"front_door_status":"ok"', True),
+            "non_front_door_output": ({"status": "blocked", "reason": "failed"}, True),
+        }
+        for label, (output, expected_missing) in cases.items():
+            with self.subTest(label=label):
+                call_id = f"real-exec-{label}"
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Fix the audit implementation.",
+                            },
+                        },
+                        self.front_door_exec_call(call_id),
+                        self.front_door_exec_output(output, call_id),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+                found_missing = any(
+                    issue["skill"] == "always-on-front-door"
+                    and issue["status"] == "missing_front_door"
+                    for issue in audit.issues
+                )
+
+                self.assertEqual(found_missing, expected_missing)
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"][
+                        "front_door_runtime_receipts"
+                    ],
+                    0 if expected_missing else 1,
+                )
+
+    def test_actual_escaped_exec_call_correlates_legacy_exit_one_receipt(self):
+        receipt = self.legacy_2_9_129_pending_front_door_receipt()
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Fix the audit implementation.",
+                    },
+                },
+                self.actual_escaped_front_door_exec_call("actual-escaped-front-door"),
+                self.front_door_exec_output(receipt, "actual-escaped-front-door"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n session_skill_audit src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertEqual(
+            audit.postmortem["token_optimizer_evidence"][
+                "front_door_runtime_receipts"
+            ],
+            1,
+        )
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
+    def test_front_door_skill_read_with_valid_output_is_not_execution(self):
+        receipt = self.legacy_2_9_129_pending_front_door_receipt()
+        call_id = "front-door-skill-read"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Fix the audit implementation.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "call_id": call_id,
+                        "name": "exec",
+                        "input": (
+                            'const r = await tools.shell_command({"command":"Get-Content '
+                            '-Path \\"C:\\\\kh-uaf\\\\skills\\\\always_on_front_door'
+                            '\\\\SKILL.md\\""}); text(r);'
+                        ),
+                    },
+                },
+                self.front_door_exec_output(receipt, call_id),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n session_skill_audit src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertEqual(
+            audit.postmortem["token_optimizer_evidence"][
+                "front_door_runtime_receipts"
+            ],
+            0,
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
+    def test_pre_intake_front_door_source_reference_is_still_work(self):
+        commands = {
+            "git_diff": "git diff -- src/orchestration/kh_front_door.py",
+            "source_read": "Get-Content src/orchestration/kh_front_door.py",
+        }
+        for label, command in commands.items():
+            with self.subTest(label=label):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Fix the audit implementation.",
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": command,
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "missing_front_door"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_python_text_references_and_skill_doc_reads_are_not_front_door_runtime(self):
+        receipt = self.legacy_2_9_129_pending_front_door_receipt()
+        commands = {
+            "script_name_in_python_code": (
+                'python -c "x=\'front_door.py\'; print(x)"'
+            ),
+            "module_name_in_python_code": (
+                'python -c "print(\'python -m src.orchestration.kh_front_door\')"'
+            ),
+            "skill_doc_inspection": (
+                'python -c "from pathlib import Path; '
+                "p=Path('C:\\\\kh-uaf\\\\skills\\\\always_on_front_door\\\\SKILL.md'); "
+                "print(p.read_text()); print('front_door.py')\""
+            ),
+        }
+        for label, command in commands.items():
+            with self.subTest(label=label):
+                call_id = f"text-only-{label}"
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Fix the audit implementation.",
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "call_id": call_id,
+                                "arguments": command,
+                            },
+                        },
+                        self.front_door_output(receipt, call_id),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"][
+                        "front_door_runtime_receipts"
+                    ],
+                    0,
+                )
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "missing_front_door"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_real_session_line_18_19_escaped_exec_shape_is_front_door_runtime(self):
+        receipt = self.legacy_2_9_129_pending_front_door_receipt()
+        call_id = "real-session-line-18-19"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Fix the audit implementation.",
+                    },
+                },
+                self.actual_escaped_front_door_exec_call(call_id),
+                self.front_door_exec_output(receipt, call_id),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n session_skill_audit src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertEqual(
+            audit.postmortem["token_optimizer_evidence"][
+                "front_door_runtime_receipts"
+            ],
+            1,
+        )
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
+    def test_exit_three_requires_strict_blocked_front_door_packet(self):
+        blocked = build_kh_front_door(
+            "Implement a large cross-module software redesign with tests and review.",
+            project=Path(__file__).resolve().parents[1],
+        ).to_compact_summary_dict()
+        nonblocked = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_compact_summary_dict()
+        cases = {
+            "strict_blocked": (blocked, False, 1),
+            "inconsistent_nonblocked": (nonblocked, True, 0),
+        }
+        for label, (receipt, expected_missing, expected_receipts) in cases.items():
+            with self.subTest(label=label):
+                call_id = f"exit-three-{label}"
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Fix the audit implementation.",
+                            },
+                        },
+                        self.front_door_call(call_id, "summary"),
+                        self.front_door_output(receipt, call_id, exit_code=3),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+                found_missing = any(
+                    issue["skill"] == "always-on-front-door"
+                    and issue["status"] == "missing_front_door"
+                    for issue in audit.issues
+                )
+
+                self.assertEqual(found_missing, expected_missing)
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"][
+                        "front_door_runtime_receipts"
+                    ],
+                    expected_receipts,
+                )
+
+    def test_required_large_session_rejects_front_door_planning_considered_not_needed(self):
+        receipt = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_summary_dict()
+        self.assertEqual(
+            receipt["token_optimizer_decision"]["token_optimizer_status"],
+            "considered_not_needed",
+        )
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "What is 1 + 1?",
+                    },
+                },
+                self.front_door_call("large-session-front-door", "summary"),
+                self.front_door_output(receipt, "large-session-front-door"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 250_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        token_optimizer = next(
+            skill for skill in audit.skills if skill["name"] == "token-optimizer"
+        )
+
+        self.assertTrue(audit.postmortem["token_gate"]["required"])
+        self.assertEqual(token_optimizer["token_optimizer_status"], "blocked")
+        self.assertEqual(token_optimizer["acceptance"]["status"], "blocked")
+        self.assertEqual(
+            audit.postmortem["token_gate"].get("decision_source"),
+            "kh_front_door_planning_insufficient",
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "token-optimizer"
+                and issue["status"] == "blocked"
+                for issue in audit.issues
+            )
+        )
+
+    def test_required_large_session_dangling_optimizer_call_remains_blocked(self):
+        receipt = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_summary_dict()
+        dangling_call = self.runtime_optimizer_events("used", "dangling-optimizer")[0]
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Inspect this module.",
+                    },
+                },
+                self.front_door_call("dangling-front-door", "summary"),
+                self.front_door_output(receipt, "dangling-front-door"),
+                dangling_call,
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {"total_tokens": 250_000},
+                            "last_token_usage": {"input_tokens": 120_000},
+                            "model_context_window": 200_000,
+                        },
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        token_optimizer = next(
+            skill for skill in audit.skills if skill["name"] == "token-optimizer"
+        )
+
+        self.assertEqual(token_optimizer["token_optimizer_status"], "blocked")
+        self.assertEqual(token_optimizer["acceptance"]["status"], "blocked")
+        self.assertEqual(
+            audit.postmortem["token_gate"].get("decision_source"),
+            "kh_front_door_planning_insufficient",
+        )
+        self.assertNotIn(
+            "latest_actual_runtime_status",
+            audit.postmortem["token_optimizer_evidence"],
+        )
+
+    def test_required_large_session_preserves_independent_token_evidence(self):
+        produced = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_summary_dict()
+        token_count = {
+            "type": "response_item",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {"total_tokens": 250_000},
+                    "last_token_usage": {"input_tokens": 120_000},
+                    "model_context_window": 200_000,
+                },
+            },
+        }
+        cases = {
+            "explicit_passthrough": (
+                self.runtime_optimizer_events(
+                    "passthrough",
+                    "large-runtime-passthrough",
+                ),
+                "passthrough",
+            ),
+            "bare_passthrough_output": (
+                [self.runtime_optimizer_events("passthrough", "bare-passthrough")[1]],
+                "blocked",
+            ),
+            "runtime_used": (self.runtime_optimizer_events("used", "large-runtime-used"), "used"),
+            "runtime_blocked": (
+                self.runtime_optimizer_events("blocked", "large-runtime-blocked"),
+                "blocked",
+            ),
+        }
+        for label, (independent_events, expected_status) in cases.items():
+            with self.subTest(label=label):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect this module.",
+                            },
+                        },
+                        self.front_door_call("large-independent-front-door", "summary"),
+                        self.front_door_output(
+                            produced,
+                            "large-independent-front-door",
+                        ),
+                        token_count,
+                        *independent_events,
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_status"],
+                    expected_status,
+                )
+
+    def test_full_summary_token_decision_statuses_are_normalized(self):
+        produced = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_summary_dict()
+        cases = {
+            "considered_not_needed": False,
+            "used": True,
+            "passthrough": False,
+            "blocked": False,
+        }
+        for status, used in cases.items():
+            with self.subTest(status=status):
+                receipt = json.loads(json.dumps(produced))
+                decision = receipt["token_optimizer_decision"]
+                decision.update(
+                    {
+                        "token_optimizer_status": status,
+                        "token_optimizer_status_reason": f"full_summary_{status}",
+                        "optimization_applied": used,
+                        "actual_optimization_used": used,
+                        "actual_optimization_claimed": used,
+                        "actual_optimization_status": status,
+                        "not_used_reason": "" if used else f"full_summary_{status}",
+                    }
+                )
+                if used:
+                    decision.update(
+                        {
+                            "estimated_payload_tokens_saved": 1,
+                            "estimated_payload_token_savings_ratio": 0.25,
+                        }
+                    )
+                call_id = f"front-door-full-{status}"
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect this module.",
+                            },
+                        },
+                        self.front_door_call(call_id, "summary"),
+                        self.front_door_output(receipt, call_id),
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertEqual(audit.postmortem["token_optimizer_status"], status)
+                self.assertTrue(audit.postmortem["token_gate"]["checked"])
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"]["front_door_runtime_receipts"],
+                    1,
+                )
+
+    def test_invalid_full_summary_token_decisions_fail_closed(self):
+        produced = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_summary_dict()
+        invalid_mutations = {
+            "unsupported_status": {"token_optimizer_status": "unknown"},
+            "non_boolean_used": {"actual_optimization_used": 1},
+            "inconsistent_used": {
+                "token_optimizer_status": "used",
+                "optimization_applied": False,
+                "actual_optimization_used": False,
+            },
+            "missing_reason": {
+                "token_optimizer_status_reason": "",
+                "not_used_reason": "",
+            },
+        }
+        for label, mutation in invalid_mutations.items():
+            with self.subTest(label=label):
+                receipt = json.loads(json.dumps(produced))
+                receipt["token_optimizer_decision"].update(mutation)
+                call_id = f"front-door-invalid-full-{label}"
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect this module.",
+                            },
+                        },
+                        self.front_door_call(call_id, "summary"),
+                        self.front_door_output(receipt, call_id),
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertEqual(audit.postmortem["token_optimizer_status"], "not_checked")
+                self.assertFalse(audit.postmortem["token_gate"]["checked"])
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"]["front_door_runtime_receipts"],
+                    0,
+                )
+
+    def test_uncorrelated_or_failed_front_door_output_satisfies_neither_gate(self):
+        produced = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        )
+        receipts = {
+            "micro": produced.to_micro_summary_dict(),
+            "full": produced.to_summary_dict(),
+        }
+        for receipt_kind, receipt in receipts.items():
+            summary_mode = "summary" if receipt_kind == "full" else "micro-summary"
+            cases = {
+                "bare_output": [self.front_door_output(receipt)],
+                "mismatched_call_id": [
+                    self.front_door_call("front-door-call", summary_mode),
+                    self.front_door_output(receipt, "different-output"),
+                ],
+                "failed_output": [
+                    self.front_door_call("front-door-failed", summary_mode),
+                    self.front_door_output(receipt, "front-door-failed", exit_code=1),
+                ],
+            }
+            for label, evidence_events in cases.items():
+                with self.subTest(receipt_kind=receipt_kind, label=label):
+                    path = self.write_session(
+                        [
+                            {
+                                "type": "response_item",
+                                "payload": {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": "Inspect this module.",
+                                },
+                            },
+                            *evidence_events,
+                            {
+                                "type": "response_item",
+                                "payload": {
+                                    "type": "function_call",
+                                    "name": "shell_command",
+                                    "arguments": "rg -n session_skill_audit src",
+                                },
+                            },
+                        ]
+                    )
+
+                    audit = analyze_session_skills(path)
+
+                    self.assertTrue(
+                        any(
+                            issue["skill"] == "always-on-front-door"
+                            and issue["status"] == "missing_front_door"
+                            for issue in audit.issues
+                        )
+                    )
+                    self.assertEqual(
+                        audit.postmortem["token_optimizer_status"],
+                        "not_checked",
+                    )
+                    self.assertEqual(
+                        audit.postmortem["token_optimizer_evidence"][
+                            "front_door_runtime_receipts"
+                        ],
+                        0,
+                    )
+
+    def test_front_door_token_decision_does_not_override_latest_actual_runtime_status(self):
+        produced = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        )
+        receipts = {
+            "micro": produced.to_micro_summary_dict(),
+            "full": produced.to_summary_dict(),
+        }
+        cases = {
+            "latest_blocked": (["used", "blocked"], "blocked"),
+            "latest_used": (["blocked", "used"], "used"),
+        }
+        for receipt_kind, receipt in receipts.items():
+            for label, (runtime_statuses, expected_status) in cases.items():
+                with self.subTest(receipt_kind=receipt_kind, label=label):
+                    front_door_call = self.front_door_call(
+                        summary_mode=(
+                            "summary" if receipt_kind == "full" else "micro-summary"
+                        )
+                    )
+                    events = [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect this module.",
+                            },
+                        },
+                        front_door_call,
+                        self.front_door_output(receipt),
+                    ]
+                    for index, status in enumerate(runtime_statuses):
+                        events.extend(self.runtime_optimizer_events(status, f"optimizer-{index}"))
+                    path = self.write_session(events)
+
+                    audit = analyze_session_skills(path)
+
+                    self.assertEqual(audit.postmortem["token_optimizer_status"], expected_status)
+                    self.assertEqual(
+                        audit.postmortem["token_gate"].get("decision_source"),
+                        "runtime_token_optimizer",
+                    )
+                    self.assertEqual(
+                        audit.postmortem["token_optimizer_evidence"]["latest_actual_runtime_status"],
+                        expected_status,
+                    )
+
+    def test_failed_runtime_optimizer_output_never_overrides_front_door_status(self):
+        receipt = self.producer_micro_receipt()
+        cases = {
+            "payload_status_failed": {"status": "failed"},
+            "payload_success_false": {"success": False},
+            "payload_nonzero_exit": {"exit_code": 2},
+            "text_nonzero_exit": {"output_prefix": "Exit code: 2\n"},
+            "json_success_false": {"json_success": False},
+        }
+        for label, mutation in cases.items():
+            with self.subTest(label=label):
+                call_id = f"failed-optimizer-{label}"
+                optimizer_events = self.runtime_optimizer_events("used", call_id)
+                output_payload = optimizer_events[1]["payload"]
+                if "status" in mutation:
+                    output_payload["status"] = mutation["status"]
+                if "success" in mutation:
+                    output_payload["success"] = mutation["success"]
+                if "exit_code" in mutation:
+                    output_payload["exit_code"] = mutation["exit_code"]
+                if "output_prefix" in mutation:
+                    output_payload["output"] = (
+                        mutation["output_prefix"] + output_payload["output"]
+                    )
+                if "json_success" in mutation:
+                    wrapped = json.loads(output_payload["output"])
+                    wrapped["success"] = mutation["json_success"]
+                    output_payload["output"] = json.dumps(wrapped)
+
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect this module.",
+                            },
+                        },
+                        self.front_door_call("failed-optimizer-front-door"),
+                        self.front_door_output(
+                            receipt,
+                            "failed-optimizer-front-door",
+                        ),
+                        *optimizer_events,
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_status"],
+                    "considered_not_needed",
+                )
+                self.assertEqual(
+                    audit.postmortem["token_gate"].get("decision_source"),
+                    "kh_front_door_runtime_receipt",
+                )
+                self.assertNotIn(
+                    "latest_actual_runtime_status",
+                    audit.postmortem["token_optimizer_evidence"],
+                )
+
+    def test_invalid_micro_front_door_packets_fail_closed(self):
+        valid = build_kh_front_door(
+            "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+
+        def changed(*path_and_value):
+            packet = json.loads(json.dumps(valid))
+            *keys, value = path_and_value
+            target = packet
+            for key in keys[:-1]:
+                target = target[key]
+            target[keys[-1]] = value
+            return packet
+
+        invalid_packets = {
+            "incomplete": {"m": "kh_fd_micro", "s": "ok", "r": {}, "g": {}},
+            "unsupported_version": changed("v", 2),
+            "empty_route": changed("r", "r", ""),
+            "invalid_route": changed("r", "r", "multi"),
+            "invalid_gate_status": changed("g", "s", "unknown"),
+            "non_boolean_execute": changed("g", "ok", 1),
+            "invalid_front_door_status": changed("s", "success"),
+            "invalid_token_status": changed("t", "s", "unknown"),
+            "invalid_goal_status": changed("ga", "s", "done"),
+        }
+        for label, packet in invalid_packets.items():
+            with self.subTest(label=label):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect this module.",
+                            },
+                        },
+                        self.front_door_call(),
+                        self.front_door_output(packet),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "missing_front_door"
+                        for issue in audit.issues
+                    )
+                )
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"]["front_door_runtime_receipts"],
+                    0,
+                )
+
+    def test_session_without_runtime_receipt_does_not_claim_token_gate_checked(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "1+1?"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "assistant", "content": "2"},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertEqual(audit.postmortem["token_optimizer_status"], "not_checked")
+        self.assertFalse(audit.postmortem["token_gate"]["checked"])
+
+    def test_micro_front_door_blocked_gate_is_audited(self):
+        receipt = self.producer_micro_receipt()
+        receipt["r"] = {"r": "single", "c": "kh"}
+        receipt["g"] = {"s": "preflight", "ok": False}
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Fix the audit implementation.",
+                    },
+                },
+                self.front_door_call("front-door-blocked-gate"),
+                self.front_door_output(receipt, "front-door-blocked-gate"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n session_skill_audit src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "front_door_execution_gate_bypassed"
+                for issue in audit.issues
+            )
+        )
+
+    def test_micro_front_door_next_skill_requires_same_turn_resolution(self):
+        receipt = self.producer_micro_receipt()
+        receipt["r"] = {"r": "single", "c": "kh"}
+        receipt["g"] = {"s": "preflight", "ok": False}
+        receipt["next"] = ["goal"]
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Fix the audit implementation.",
+                    },
+                },
+                self.front_door_call("front-door-next-skill"),
+                self.front_door_output(receipt, "front-door-next-skill"),
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "goal-state-harness"
+                and issue["status"] == "immediate_next_skill_not_applied"
+                for issue in audit.issues
+            )
+        )
+
+    def test_task_complete_resets_same_task_acknowledgement_reuse(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "Inspect this module."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "m": "kh_fd_micro",
+                                "v": 1,
+                                "s": "ok",
+                                "r": {"r": "single", "c": "kh"},
+                                "g": {"s": "ok", "ok": True},
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "yes"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "The follow-up answer is complete.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                and issue["trigger"].lower() == "yes"
+                for issue in audit.issues
+            )
+        )
+
+    def test_unfinished_task_reuses_only_pure_multilingual_acknowledgements(self):
+        receipt = self.producer_micro_receipt()
+        for acknowledgement in ["Thank you!", "감사합니다.", "ありがとう", "Sí"]:
+            with self.subTest(acknowledgement=acknowledgement):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect this module.",
+                            },
+                        },
+                        self.front_door_call("front-door-acknowledgement"),
+                        self.front_door_output(receipt, "front-door-acknowledgement"),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": acknowledgement,
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertFalse(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "missing_front_door"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_mixed_acknowledgement_and_new_work_starts_a_new_task_boundary(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "Inspect this module."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(
+                            {
+                                "m": "kh_fd_micro",
+                                "v": 1,
+                                "s": "ok",
+                                "r": {"r": "single", "c": "kh"},
+                                "g": {"s": "ok", "ok": True},
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Yes, thanks. Now inspect the other module.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n other_module src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
+    def test_unphased_assistant_answer_is_work_but_progress_commentary_is_not(self):
+        cases = {
+            "answer": ("The implementation is complete and the focused tests pass.", True),
+            "commentary": ("I will inspect the parser and then run the focused test.", False),
+        }
+        for label, (assistant_text, expected_issue) in cases.items():
+            with self.subTest(label=label):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Fix the audit implementation.",
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": assistant_text,
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+                found = any(
+                    issue["skill"] == "always-on-front-door"
+                    and issue["status"] == "missing_front_door"
+                    for issue in audit.issues
+                )
+
+                self.assertEqual(found, expected_issue)
+
+    def test_malformed_jsonl_task_boundary_emits_integrity_issue(self):
+        malformed_boundaries = {
+            "message_before_role": (
+                '{"type":"response_item","payload":{"type":"message",\n'
+            ),
+            "partial_user_role": (
+                '{"type":"response_item","payload":{"type":"message",'
+                '"role":"us\n'
+            ),
+            "user_message": (
+                '{"type":"response_item","payload":{"type":"message",'
+                '"role":"user","content":"new task"}\n'
+            ),
+            "partial_task_complete": (
+                '{"type":"event_msg","payload":{"type":"task_compl\n'
+            ),
+            "task_complete": (
+                '{"type":"event_msg","payload":{"type":"task_complete",'
+                '"last_agent_message":"done"}\n'
+            ),
+            "top_level_keys_reversed_user_message": (
+                '{"payload":{"content":"new task","role":"user","type":"message"},'
+                '"type":"response_item"\n'
+            ),
+            "top_level_keys_reversed_task_complete": (
+                '{"payload":{"last_agent_message":"done","type":"task_complete"},'
+                '"type":"event_msg"\n'
+            ),
+            "root_closed_user_message_with_trailing_comma": (
+                '{"payload":{"type":"message","role":"user"}},\n'
+            ),
+            "root_closed_task_complete_with_trailing_garbage": (
+                '{"payload":{"type":"task_complete"}} trailing\n'
+            ),
+        }
+        for label, malformed_line in malformed_boundaries.items():
+            with self.subTest(label=label):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect this module.",
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call_output",
+                                "output": json.dumps(
+                                    {
+                                        "m": "kh_fd_micro",
+                                        "v": 1,
+                                        "s": "ok",
+                                        "r": {"r": "single", "c": "kh"},
+                                        "g": {"s": "ok", "ok": True},
+                                    }
+                                ),
+                            },
+                        },
+                    ]
+                )
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(malformed_line)
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "session_jsonl_integrity_error"
+                        and issue["severity"] == "P0"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_malformed_jsonl_decodes_escaped_task_boundaries_conservatively(self):
+        malformed_boundaries = {
+            "unicode_user_role": (
+                r'{"type":"response_item","payload":{"type":"message",'
+                r'"role":"\u0075ser","content":"new task"}' + "\n"
+            ),
+            "unicode_role_key_and_value": (
+                r'{"type":"response_item","payload":{"type":"message",'
+                r'"ro\u006ce":"\u0075ser","content":"new task"}' + "\n"
+            ),
+            "unicode_task_complete_type": (
+                r'{"type":"event_msg","payload":{"type":"task\u005fcomplete",'
+                r'"last_agent_message":"done"}' + "\n"
+            ),
+        }
+        for label, malformed_line in malformed_boundaries.items():
+            with self.subTest(label=label):
+                path = self.write_session([])
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(malformed_line)
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "session_jsonl_integrity_error"
+                        and issue["severity"] == "P0"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_malformed_jsonl_escaped_boundary_near_misses_are_ignored(self):
+        malformed_controls = {
+            "unicode_assistant_role": (
+                r'{"type":"response_item","payload":{"type":"message",'
+                r'"role":"\u0061ssistant","content":"working"}' + "\n"
+            ),
+            "user_role_suffix": (
+                r'{"type":"response_item","payload":{"type":"message",'
+                r'"role":"\u0075sers","content":"working"}' + "\n"
+            ),
+            "task_complete_suffix": (
+                r'{"type":"event_msg","payload":{"type":"task\u005fcompleted",'
+                r'"last_agent_message":"done"}' + "\n"
+            ),
+            "boundary_words_only_in_content": (
+                r'{"type":"response_item","payload":{"type":"function_call",'
+                r'"content":"role=\u0075ser type=task\u005fcomplete"}' + "\n"
+            ),
+        }
+        for label, malformed_line in malformed_controls.items():
+            with self.subTest(label=label):
+                path = self.write_session([])
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(malformed_line)
+
+                audit = analyze_session_skills(path)
+
+                self.assertFalse(
+                    any(
+                        issue["status"] == "session_jsonl_integrity_error"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_payload_first_truncated_boundary_without_outer_type_emits_integrity_issue(self):
+        malformed_boundaries = {
+            "open_user_message_payload": (
+                '{"payload":{"content":"new task","role":"user","type":"message"\n'
+            ),
+            "open_task_complete_payload": (
+                '{"payload":{"last_agent_message":"done","type":"task_complete"\n'
+            ),
+            "closed_user_message_payload": (
+                '{"payload":{"content":"new task","type":"message","role":"user"}\n'
+            ),
+            "closed_task_complete_payload": (
+                '{"payload":{"type":"task_complete","last_agent_message":"done"}\n'
+            ),
+        }
+        for label, malformed_line in malformed_boundaries.items():
+            with self.subTest(label=label):
+                path = self.write_session([])
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(malformed_line)
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "session_jsonl_integrity_error"
+                        and issue["severity"] == "P0"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_random_malformed_non_session_text_does_not_emit_integrity_issue(self):
+        malformed_controls = {
+            "plain_text": 'not-json response_item message role=user\n',
+            "diagnostic_object": '{"type":"diagnostic","payload":{"type":"message","role":"user"\n',
+            "function_call": (
+                '{"type":"response_item","payload":{"type":"function_call",'
+                '"name":"shell_command"\n'
+            ),
+            "assistant_message": (
+                '{"type":"response_item","payload":{"type":"message",'
+                '"role":"assistant","content":"working"\n'
+            ),
+            "top_level_keys_reversed_function_call": (
+                '{"payload":{"name":"shell_command","type":"function_call"},'
+                '"type":"response_item"\n'
+            ),
+            "top_level_keys_reversed_assistant_message": (
+                '{"payload":{"content":"working","role":"assistant","type":"message"},'
+                '"type":"response_item"\n'
+            ),
+            "root_closed_assistant_message_with_trailing_comma": (
+                '{"payload":{"type":"message","role":"assistant"}},\n'
+            ),
+            "root_closed_function_call_with_trailing_garbage": (
+                '{"payload":{"type":"function_call","name":"shell_command"}} trailing\n'
+            ),
+        }
+        for label, malformed_line in malformed_controls.items():
+            with self.subTest(label=label):
+                path = self.write_session([])
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(malformed_line)
+
+                audit = analyze_session_skills(path)
+
+                self.assertFalse(
+                    any(
+                        issue["status"] == "session_jsonl_integrity_error"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_payload_first_truncated_non_boundary_without_outer_type_is_ignored(self):
+        malformed_controls = {
+            "open_assistant_message_payload": (
+                '{"payload":{"content":"working","role":"assistant","type":"message"\n'
+            ),
+            "closed_assistant_message_payload": (
+                '{"payload":{"content":"working","type":"message","role":"assistant"}\n'
+            ),
+            "function_call_payload": (
+                '{"payload":{"name":"shell_command","type":"function_call"\n'
+            ),
+            "progress_with_boundary_words_in_content": (
+                '{"payload":{"content":"user message then task_complete","type":"progress"\n'
+            ),
+        }
+        for label, malformed_line in malformed_controls.items():
+            with self.subTest(label=label):
+                path = self.write_session([])
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(malformed_line)
+
+                audit = analyze_session_skills(path)
+
+                self.assertFalse(
+                    any(
+                        issue["status"] == "session_jsonl_integrity_error"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_producer_micro_strict_blocked_exit_three_is_runtime_receipt(self):
+        receipt = build_kh_front_door(
+            "Implement a large cross-module software redesign with tests and review.",
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+        self.assertFalse(receipt["g"]["ok"])
+        self.assertTrue(receipt["auth"]["stop"])
+        self.assertIn("stop", receipt["act"])
+        self.assertIn("next", receipt["act"])
+
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Fix the session audit implementation.",
+                    },
+                },
+                self.front_door_call("micro-strict-blocked", "micro-summary"),
+                self.front_door_output(
+                    receipt,
+                    "micro-strict-blocked",
+                    exit_code=3,
+                ),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n session_skill_audit src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+        self.assertEqual(
+            audit.postmortem["token_optimizer_evidence"][
+                "front_door_runtime_receipts"
+            ],
+            1,
+        )
+
+    def test_front_door_call_before_request_boundary_cannot_satisfy_later_request(self):
+        receipt = self.producer_micro_receipt()
+        path = self.write_session(
+            [
+                self.front_door_call("pre-request-front-door"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Inspect the session audit module.",
+                    },
+                },
+                self.front_door_output(receipt, "pre-request-front-door"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n session_skill_audit src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+        self.assertEqual(
+            audit.postmortem["token_optimizer_evidence"][
+                "front_door_runtime_receipts"
+            ],
+            0,
+        )
+
+    def test_front_door_runtime_identity_rejects_untrusted_provenance_and_paths(self):
+        receipt = self.producer_micro_receipt()
+        calls = {
+            "untrusted_tool_namespace": {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "third_party.front_door",
+                    "call_id": "untrusted-tool-namespace",
+                    "input": {},
+                },
+            },
+            "script_basename_only": {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "shell_command",
+                    "call_id": "script-basename-only",
+                    "arguments": "python front_door.py --summary",
+                },
+            },
+            "lookalike_absolute_path": {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "shell_command",
+                    "call_id": "lookalike-absolute-path",
+                    "arguments": (
+                        "python C:\\temp\\not-kh\\skills\\always_on_front_door"
+                        "\\scripts\\front_door.py --summary"
+                    ),
+                },
+            },
+        }
+        for label, call in calls.items():
+            with self.subTest(label=label):
+                call_id = call["payload"]["call_id"]
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect the session audit module.",
+                            },
+                        },
+                        call,
+                        self.front_door_output(receipt, call_id),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "missing_front_door"
+                        for issue in audit.issues
+                    )
+                )
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"][
+                        "front_door_runtime_receipts"
+                    ],
+                    0,
+                )
+
+    def test_nested_runtime_optimizer_decisions_in_failed_wrappers_are_rejected(self):
+        front_door_receipt = self.producer_micro_receipt()
+        optimizer_result = json.loads(
+            self.runtime_optimizer_events("used", "nested-optimizer")[1]["payload"][
+                "output"
+            ]
+        )
+        failed_wrappers = {
+            "failed_status": {"status": "failed", "result": optimizer_result},
+            "false_success": {"success": False, "result": optimizer_result},
+            "nonzero_exit": {"exit_code": 2, "result": optimizer_result},
+        }
+        for label, wrapped in failed_wrappers.items():
+            with self.subTest(label=label):
+                optimizer_events = self.runtime_optimizer_events(
+                    "used",
+                    f"nested-optimizer-{label}",
+                )
+                optimizer_events[1]["payload"]["output"] = json.dumps(
+                    {"wrapper": wrapped}
+                )
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect the session audit module.",
+                            },
+                        },
+                        self.front_door_call("nested-optimizer-front-door"),
+                        self.front_door_output(
+                            front_door_receipt,
+                            "nested-optimizer-front-door",
+                        ),
+                        *optimizer_events,
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_status"],
+                    "considered_not_needed",
+                )
+                self.assertNotIn(
+                    "latest_actual_runtime_status",
+                    audit.postmortem["token_optimizer_evidence"],
+                )
+
+    def test_immediate_next_application_output_requires_correlated_runtime_call(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "plugin_route": {"route": "single", "controller": "kh"},
+            "execution_gate": {"status": "allowed", "can_execute": True},
+            "runtime_applied_skills": ["always-on-front-door"],
+            "selected_not_executed_skills": ["workflow-usability-harness"],
+            "immediate_next_skills": ["workflow-usability-harness"],
+        }
+        application_output = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "claimed-workflow-runtime",
+                "output": json.dumps(
+                    {
+                        "skill": "workflow-usability-harness",
+                        "status": "applied",
+                        "application_mode": "runtime",
+                        "evidence": ["session_start_context"],
+                    }
+                ),
+            },
+        }
+        cases = {
+            "no_call": [],
+            "unrelated_call": [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "claimed-workflow-runtime",
+                        "arguments": "python -c \"print('unrelated')\"",
+                    },
+                }
+            ],
+        }
+        for label, preceding_calls in cases.items():
+            with self.subTest(label=label):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call_output",
+                                "output": json.dumps(front_door_output),
+                            },
+                        },
+                        *preceding_calls,
+                        application_output,
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "task_complete",
+                                "last_agent_message": "Done.",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "workflow-usability-harness"
+                        and issue["status"] == "immediate_next_skill_not_applied"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_malformed_jsonl_duplicate_boundary_fields_fail_closed(self):
+        malformed_lines = {
+            "duplicate_event_type": (
+                '{"type":"response_item","type":"diagnostic",'
+                '"payload":{"type":"function_call"}\n'
+            ),
+            "duplicate_payload_type": (
+                '{"type":"response_item","payload":{"type":"message",'
+                '"type":"function_call","role":"assistant"\n'
+            ),
+            "duplicate_payload_role": (
+                '{"type":"response_item","payload":{"type":"message",'
+                '"role":"user","role":"assistant"\n'
+            ),
+        }
+        for label, malformed_line in malformed_lines.items():
+            with self.subTest(label=label):
+                path = self.write_session([])
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(malformed_line)
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "session_jsonl_integrity_error"
+                        and issue["severity"] == "P0"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_valid_jsonl_duplicate_boundary_fields_fail_closed(self):
+        valid_lines = {
+            "duplicate_event_type": (
+                '{"type":"response_item","type":"diagnostic",'
+                '"payload":{"type":"function_call"}}\n'
+            ),
+            "duplicate_event_payload": (
+                '{"type":"response_item",'
+                '"payload":{"type":"message","role":"user"},'
+                '"payload":{"type":"function_call"}}\n'
+            ),
+            "duplicate_payload_type": (
+                '{"type":"response_item","payload":{"type":"message",'
+                '"type":"function_call","role":"assistant"}}\n'
+            ),
+            "duplicate_payload_role": (
+                '{"type":"response_item","payload":{"type":"message",'
+                '"role":"user","role":"assistant"}}\n'
+            ),
+        }
+        for label, valid_line in valid_lines.items():
+            with self.subTest(label=label):
+                path = self.write_session([])
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(valid_line)
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "session_jsonl_integrity_error"
+                        and issue["severity"] == "P0"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_valid_jsonl_duplicate_non_boundary_metadata_is_accepted(self):
+        path = self.write_session([])
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                '{"type":"response_item","timestamp":"first",'
+                '"timestamp":"second","payload":{"type":"function_call",'
+                '"name":"noop","metadata":"first","metadata":"second"}}\n'
+            )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "session_jsonl_integrity_error"
+                for issue in audit.issues
+            )
+        )
+
+    def test_user_correction_supersedes_repeated_assistant_assumption(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "The export requires `retired_flag`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Correction: use `canonical_flag`, not `retired_flag`; "
+                            "the earlier requirement is invalid."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "I kept `retired_flag` because it is still required.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "The export is complete.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "invalidated_user_correction_repeated"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertIn("retired_flag", issue["invalidated_claims"])
+
+    def test_negated_reference_to_invalidated_assumption_is_not_repetition(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use `canonical_flag`, not `retired_flag`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "I removed `retired_flag` and retained `canonical_flag`.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "invalidated_user_correction_repeated"
+                for issue in audit.issues
+            )
+        )
+
+    def test_active_goal_correction_requires_correlated_implementation_and_fresh_verification(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Implement the canonical export contract.",
+                    },
+                },
+                self.front_door_call("goal-correction-front-door"),
+                self.front_door_output(
+                    self.producer_micro_receipt(),
+                    "goal-correction-front-door",
+                ),
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "objective": "Implement the canonical export contract",
+                            "status": "active",
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Correction: replace `draft_mode` with `final_mode`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "verification-before-correction",
+                        "arguments": "python -m unittest tests.test_export_contract",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verification-before-correction",
+                        "output": "Exit code: 0\nOK",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "objective": "Implement the canonical export contract",
+                            "status": "complete",
+                            "success_criteria": ["corrected contract"],
+                            "evidence_required": ["fresh tests"],
+                            "evidence": ["fresh tests"],
+                        },
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "corrective_feedback_unresolved"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertEqual(
+            set(issue["missing_evidence"]),
+            {"correlated_implementation", "fresh_verification"},
+        )
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                and "replace `draft_mode`" in issue.get("trigger", "")
+                for issue in audit.issues
+            )
+        )
+
+    def test_active_goal_correction_passes_with_ordered_runtime_receipts(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"objective": "Update export mode", "status": "active"},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Correction: replace `draft_mode` with `final_mode`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "implement-correction",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: export.py\n"
+                            "-MODE = 'draft_mode'\n+MODE = 'final_mode'\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "implement-correction",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "verify-correction",
+                        "arguments": "python -m unittest tests.test_export_contract",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-correction",
+                        "output": "Exit code: 0\nOK",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "scan-correction-residuals",
+                        "arguments": "rg -n draft_mode src tests",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "scan-correction-residuals",
+                        "output": "Exit code: 0\nNo matches found.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "objective": "Update export mode",
+                            "status": "complete",
+                            "success_criteria": ["corrected contract"],
+                            "evidence_required": ["fresh tests"],
+                            "evidence": ["fresh tests"],
+                        },
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "corrective_feedback_unresolved"
+                for issue in audit.issues
+            )
+        )
+
+    def test_correction_implementation_must_prove_replacement_direction(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {"objective": "Update export mode", "status": "active"},
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Correction: replace `draft_mode` with `final_mode`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "repeat-invalidated-direction",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: export.py\n"
+                            "+MODE = 'draft_mode'\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "repeat-invalidated-direction",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "verify-wrong-direction",
+                        "arguments": "python -m unittest tests.test_export_contract",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-wrong-direction",
+                        "output": "Exit code: 0\nOK",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "objective": "Update export mode",
+                            "status": "complete",
+                            "success_criteria": ["corrected contract"],
+                            "evidence_required": ["fresh tests"],
+                            "evidence": ["fresh tests"],
+                        },
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "corrective_feedback_unresolved"
+        )
+
+        self.assertIn("correlated_implementation", issue["missing_evidence"])
+
+    def test_authoritative_reference_must_be_read_before_behavior_is_introduced(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Treat `docs/runtime-contract.md` as the authoritative reference "
+                            "for constants and behavior."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "premature-contract-patch",
+                        "arguments": (
+                            "*** Begin Patch\n*** Add File: runtime.py\n"
+                            "+DEFAULT_WINDOW = 12\n+def choose_window():\n+    return DEFAULT_WINDOW\n"
+                            "*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "premature-contract-patch",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "late-reference-read",
+                        "arguments": "Get-Content docs/runtime-contract.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "late-reference-read",
+                        "output": "DEFAULT_WINDOW is defined by the reference.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "authoritative_reference_not_read_first"
+        )
+
+        self.assertEqual(issue["reference"], "docs/runtime-contract.md")
+
+    def test_correlated_authoritative_reference_read_allows_later_behavior(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use `docs/runtime-contract.md` as the source of truth.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "reference-read",
+                        "arguments": "Get-Content docs/runtime-contract.md",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "reference-read",
+                        "output": "DEFAULT_WINDOW=12",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "post-reference-patch",
+                        "arguments": (
+                            "*** Begin Patch\n*** Add File: runtime.py\n"
+                            "+DEFAULT_WINDOW = 12\n*** End Patch"
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "authoritative_reference_not_read_first"
+                for issue in audit.issues
+            )
+        )
+
+    def test_task_complete_is_blocked_when_fresh_residual_scan_finds_forbidden_field(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "The generated payload must not contain `retired_field`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "payload-update",
+                        "arguments": "*** Begin Patch\n*** Update File: payload.py\n+pass\n*** End Patch",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "payload-update",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "fresh-residual-scan",
+                        "arguments": "rg -n retired_field src tests",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "fresh-residual-scan",
+                        "output": "Exit code: 0\nsrc/payload.py:18: retired_field = value",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "forbidden_residuals_at_completion"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertEqual(issue["forbidden_patterns"], ["retired_field"])
+
+    def test_generic_not_found_text_does_not_hide_a_forbidden_residual(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "The runtime contract must not contain `obsolete_mode`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "mixed-residual-scan",
+                        "arguments": "rg -n obsolete_mode src tests",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "mixed-residual-scan",
+                        "output": (
+                            "Exit code: 0\n"
+                            "Generated documentation target not found.\n"
+                            "src/runtime_contract.py:24: obsolete_mode = True"
+                        ),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "forbidden_residuals_at_completion"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertEqual(issue["forbidden_patterns"], ["obsolete_mode"])
+
+    def test_inconclusive_residual_output_is_not_accepted_as_a_clean_scan(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "The generated manifest must not contain `deprecated_switch`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "inconclusive-residual-scan",
+                        "arguments": "rg -n deprecated_switch src tests",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "inconclusive-residual-scan",
+                        "output": "Exit code: 0\nSearch completed; inspect the report for details.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "missing_fresh_residual_scan_at_completion"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertEqual(issue["forbidden_patterns"], ["deprecated_switch"])
+
+    def test_task_complete_fails_closed_when_required_residual_scan_is_missing(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "The generated payload must not contain `retired_field`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "remove-forbidden-field",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: payload.py\n"
+                            "-    retired_field = value\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "remove-forbidden-field",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "missing_fresh_residual_scan_at_completion"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertEqual(issue["forbidden_patterns"], ["retired_field"])
+
+    def test_residual_scan_only_discharges_patterns_named_by_its_call(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "The payload must not contain `retired_field`. "
+                            "It must not contain `legacy_field`."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "partial-residual-scan",
+                        "arguments": "rg -n retired_field src tests",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "partial-residual-scan",
+                        "output": "Exit code: 0\nNo matches found.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "missing_fresh_residual_scan_at_completion"
+        )
+
+        self.assertEqual(issue["forbidden_patterns"], ["legacy_field"])
+
+    def test_fresh_residual_scan_with_no_matches_does_not_block_completion(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "The generated payload must not contain `retired_field`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "clean-residual-scan",
+                        "arguments": "rg -n retired_field src tests",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "clean-residual-scan",
+                        "output": "Exit code: 0\nNo matches found.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "forbidden_residuals_at_completion"
+                for issue in audit.issues
+            )
+        )
+
+    def test_aggregate_applied_status_with_empty_runtime_evidence_is_rejected(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": ["always-on-front-door", "workflow-usability-harness"],
+            "selected_not_executed_skills": [],
+            "skill_status_summary": {
+                "workflow-usability-harness": {
+                    "status": "applied",
+                    "runtime_evidence": [],
+                }
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertNotEqual(rows["workflow-usability-harness"]["status"], "applied")
+        self.assertTrue(
+            any(
+                issue["status"] == "aggregate_applied_without_runtime_evidence"
+                and issue["skill"] == "workflow-usability-harness"
+                for issue in audit.issues
+            )
+        )
+
+    def test_aggregate_applied_status_accepts_nonempty_runtime_evidence(self):
+        front_door_output = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": ["always-on-front-door", "workflow-usability-harness"],
+            "selected_not_executed_skills": [],
+            "skill_status_summary": {
+                "workflow-usability-harness": {
+                    "status": "applied",
+                    "runtime_evidence": [
+                        {
+                            "call_id": "workflow-runtime",
+                            "source": "apply_workflow_usability_runtime",
+                        }
+                    ],
+                }
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": json.dumps(front_door_output),
+                    },
+                }
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+
+        self.assertEqual(rows["workflow-usability-harness"]["status"], "applied")
+
+    def test_required_delegation_rejects_controller_self_waiver_without_runtime_receipts(self):
+        receipt = self.producer_micro_receipt()
+        receipt["cls"]["x"] = "role_dag"
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Delegate implementation and review to nested agents.",
+                    },
+                },
+                self.front_door_call("delegation-front-door"),
+                self.front_door_output(receipt, "delegation-front-door"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "inspect_runtime_capabilities",
+                        "call_id": "runtime-capabilities",
+                        "arguments": "{}",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "runtime-capabilities",
+                        "output": json.dumps(
+                            {"nested_agents": {"available": True, "provider": "host"}}
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "I waive delegation as controller because the files share state; "
+                            "subagent_strategy=single-controller."
+                        ),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "missing_required_delegation_receipt"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertTrue(issue["nested_agents_available"])
+        self.assertFalse(issue["user_approved_waiver"])
+
+    def test_required_delegation_rejects_unknown_availability_and_controller_silence(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Delegate implementation and review to nested agents.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "I will proceed as a single controller without checking "
+                            "nested-agent availability."
+                        ),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "missing_required_delegation_receipt"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertIsNone(issue["nested_agents_available"])
+        self.assertFalse(issue["availability_receipt"])
+        self.assertFalse(issue["user_approved_waiver"])
+
+    def test_required_delegation_passes_with_dispatch_and_fan_in_receipts(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use nested agents for implementation and review.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "inspect_runtime_capabilities",
+                        "call_id": "runtime-capabilities-pass",
+                        "arguments": "{}",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "runtime-capabilities-pass",
+                        "output": json.dumps({"nested_agents_available": True}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "multi_agent_v1.spawn_agent",
+                        "call_id": "dispatch-worker",
+                        "arguments": json.dumps({"role": "implementer", "task": "update module"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "dispatch-worker",
+                        "output": json.dumps({"agent_id": "worker-1", "status": "running"}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "multi_agent_v1.wait_agent",
+                        "call_id": "fan-in-worker",
+                        "arguments": json.dumps({"agent_ids": ["worker-1"]}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "fan-in-worker",
+                        "output": json.dumps(
+                            {
+                                "fan_in_complete": True,
+                                "results": [
+                                    {"agent_id": "worker-1", "status": "completed"}
+                                ],
+                            }
+                        ),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "missing_required_delegation_receipt"
+                for issue in audit.issues
+            )
+        )
+
+    def test_required_delegation_accepts_correlated_unavailable_receipt(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Delegate the review to a nested agent.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "inspect_runtime_capabilities",
+                        "call_id": "runtime-capabilities-unavailable",
+                        "arguments": "{}",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "runtime-capabilities-unavailable",
+                        "output": json.dumps({"nested_agents_available": False}),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "missing_required_delegation_receipt"
+                for issue in audit.issues
+            )
+        )
+
+    def test_required_delegation_accepts_later_user_approved_waiver(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Delegate the review to a nested agent.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "inspect_runtime_capabilities",
+                        "call_id": "runtime-capabilities-waiver",
+                        "arguments": "{}",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "runtime-capabilities-waiver",
+                        "output": json.dumps({"nested_agents_available": True}),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "For this run, proceed without delegation; I approve the "
+                            "single-controller waiver."
+                        ),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "missing_required_delegation_receipt"
                 for issue in audit.issues
             )
         )

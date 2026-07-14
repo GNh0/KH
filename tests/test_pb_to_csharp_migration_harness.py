@@ -1,13 +1,20 @@
+import hashlib
 import json
+import runpy
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest import mock
 
 from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.request_classifier import classify_request
+from src.skills import pb_to_csharp_migration as pb_migration
 from src.skills.pb_to_csharp_migration import (
     MigrationInputState,
+    build_author_tagged_style_profile_update,
+    build_migration_profile_update,
+    build_offline_pb_to_csharp_runtime_generation,
     build_pbl_export_strategy,
     build_csharp_grid_column_designer_plan,
     build_detail_form_layout_plan,
@@ -22,12 +29,14 @@ from src.skills.pb_to_csharp_migration import (
     extract_csharp_designer_control_specs,
     generate_devexpress_grid_xml,
     get_author_tagged_csharp_style_baseline,
+    load_packaged_migration_profile,
     normalize_author_tagged_program_key,
+    orchestrate_pb_migration_validation,
     resolve_author_tagged_style_evidence,
-    verify_migration_generated_csharp_style,
+    verify_migration_generated_csharp_style as _verify_migration_generated_csharp_style,
     verify_pb_migration_analysis_document,
-    verify_pb_migration_sp_generation_contract,
-    verify_pb_migration_sp_with_sql_formatting,
+    verify_pb_migration_sp_generation_contract as _verify_pb_migration_sp_generation_contract,
+    verify_pb_migration_sp_with_sql_formatting as _verify_pb_migration_sp_with_sql_formatting,
     resolve_csharp_grid_control_names,
     resolve_csharp_grid_column_prefix,
     resolve_csharp_control_stack,
@@ -35,23 +44,1149 @@ from src.skills.pb_to_csharp_migration import (
 from src.skills.uaf_skill_catalog import read_packaged_skill
 
 
-def sp_metadata_header(description="총괄조회 조회"):
+def sp_metadata_header(description="Synthetic procedure contract"):
     return f"""-- =============================================
--- AUTHOR:      근호
+-- AUTHOR:      <maintainer>
 -- CREATE DATE: 2026-06-15
 -- DESCRIPTION: {description}
 -- =============================================
 """
 
 
+def packaged_profile_payload(
+    *,
+    profile_id="pb-csharp-offline-generalized",
+    version="1.0",
+    csharp_required_patterns=None,
+    csharp_forbidden_patterns=None,
+    sql_allowed_procedure_patterns=None,
+    sql_forbidden_patterns=None,
+):
+    source = Path("skills/pb_to_csharp_migration_harness/references/packaged-style-contract.json")
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload["contract_id"] = profile_id
+    payload["contract_version"] = version
+    csharp_rules = payload["rules"]["csharp"]
+    sql_rules = payload["rules"]["sql"]
+    if csharp_required_patterns is not None:
+        csharp_rules["required_patterns"] = csharp_required_patterns
+    if csharp_forbidden_patterns is not None:
+        csharp_rules["forbidden_patterns"] = csharp_forbidden_patterns
+    if sql_allowed_procedure_patterns is not None:
+        sql_rules["allowed_procedure_patterns"] = sql_allowed_procedure_patterns
+    if sql_forbidden_patterns is not None:
+        sql_rules["forbidden_patterns"] = sql_forbidden_patterns
+    raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    return payload, "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def write_packaged_profile(directory, **kwargs):
+    payload, _ = packaged_profile_payload(**kwargs)
+    path = Path(directory) / "packaged-style-contract.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    profile_hash = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return path, profile_hash
+
+
+def loaded_test_profile(**kwargs):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        profile_path, profile_hash = write_packaged_profile(temp_dir, **kwargs)
+        with patch_runtime_profile_path(profile_path):
+            return load_packaged_migration_profile(
+                kwargs.get("profile_id", "pb-csharp-offline-generalized"),
+                kwargs.get("version", "1.0"),
+                profile_hash,
+            )
+
+
+def loaded_sp_test_profile():
+    return loaded_test_profile(
+        csharp_required_patterns=[],
+        sql_allowed_procedure_patterns=[r"^SP_[A-Z0-9_]+_(?:SELECT|SAVE)$"],
+    )
+
+
+def valid_csharp_contract_sources(form_class="InventoryBrowseForm", field_name="ENTITY_ID"):
+    code_behind = f'''
+    public partial class {form_class} : System.Windows.Forms.Form
+    {{
+        public {form_class}()
+        {{
+            InitializeComponent();
+        }}
+
+        protected void SearchCommand()
+        {{
+            CallSelectProcedure();
+        }}
+
+        private void CallSelectProcedure()
+        {{
+            this.grdList.DataSource = result;
+        }}
+    }}
+    '''
+    designer = f'''
+    partial class {form_class}
+    {{
+        private System.Windows.Forms.DataGridView grdList;
+        private System.Windows.Forms.DataGridViewTextBoxColumn colList_{field_name};
+
+        private void InitializeComponent()
+        {{
+            this.grdList = new System.Windows.Forms.DataGridView();
+            this.colList_{field_name} = new System.Windows.Forms.DataGridViewTextBoxColumn();
+            this.colList_{field_name}.Name = "colList_{field_name}";
+            this.colList_{field_name}.DataPropertyName = "{field_name}";
+            this.grdList.Columns.AddRange(this.colList_{field_name});
+        }}
+    }}
+    '''
+    return code_behind, designer
+
+
+def non_code_csharp_contract_sources():
+    comment_only = r'''
+    // public partial class InventoryBrowseForm : Form
+    // InitializeComponent(); CallSelectProcedure(); this.grdList.DataSource = result;
+    /*
+    partial class InventoryBrowseForm
+    {
+        private System.Windows.Forms.DataGridView grdList;
+        private void InitializeComponent()
+        {
+            this.grdList = new System.Windows.Forms.DataGridView();
+            this.grdList.BindingField = "ENTITY_ID";
+        }
+    }
+    */
+    '''
+    string_literal_only = r'''
+    var regular = "public partial class InventoryBrowseForm : Form { InitializeComponent(); CallSelectProcedure(); this.grdList.DataSource = result; }";
+    var escaped = "partial class InventoryBrowseForm { CallProc(\"fake\"); FieldName = value; }";
+    var verbatim = @"partial class InventoryBrowseForm { InitializeComponent(); CallViewQuery(); BindingField = ""ENTITY_ID""; }";
+    var interpolated = $"partial class InventoryBrowseForm {{ CallSaveProcedure(); DataSource = {value}; }}";
+    var interpolatedVerbatim = $@"partial class InventoryBrowseForm {{ InitializeComponent(); FieldName = ""{value}""; }}";
+    var alternateInterpolatedVerbatim = @$"partial class InventoryBrowseForm {{ CallProc(); BindingField = ""{value}""; }}";
+    char slash = '/';
+    char quote = '\'';
+    '''
+    return comment_only, string_literal_only
+
+
+def write_generalized_packaged_contract(directory, mutate=None):
+    source = Path("skills/pb_to_csharp_migration_harness/references/packaged-style-contract.json")
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if mutate is not None:
+        mutate(payload)
+    path = Path(directory) / "packaged-style-contract.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    profile_hash = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return path, payload, profile_hash
+
+
+def patch_runtime_profile_path(path):
+    return mock.patch.object(pb_migration, "PACKAGED_MIGRATION_PROFILE_PATH", Path(path))
+
+
+def verify_migration_generated_csharp_style(*args, **kwargs):
+    source = str(args[0] if args else kwargs.pop("source_text", ""))
+    requested_program = str(kwargs.get("program_key") or "TestBrowse")
+    expected_form = requested_program if requested_program.lower().endswith("form") else requested_program + "Form"
+    source = (
+        f"public partial class {expected_form} : System.Windows.Forms.Form {{\n"
+        f"public {expected_form}() {{ InitializeComponent(); }}\n"
+        "protected void SearchCommand() { CallSelectProcedure(); }\n"
+        "private void CallSelectProcedure() { this.grdList.DataSource = result; }\n"
+        f"{source}\n}}"
+    )
+    args = (source, *args[1:]) if args else (source,)
+    kwargs.setdefault("program_key", requested_program)
+    kwargs.setdefault(
+        "profile_evidence",
+        loaded_test_profile(csharp_required_patterns=[]),
+    )
+    return _verify_migration_generated_csharp_style(*args, **kwargs)
+
+
+def verify_pb_migration_sp_generation_contract(*args, **kwargs):
+    kwargs.setdefault("profile_evidence", loaded_sp_test_profile())
+    return _verify_pb_migration_sp_generation_contract(*args, **kwargs)
+
+
+def verify_pb_migration_sp_with_sql_formatting(*args, **kwargs):
+    kwargs.setdefault("profile_evidence", loaded_sp_test_profile())
+    return _verify_pb_migration_sp_with_sql_formatting(*args, **kwargs)
+
+
 class PbToCSharpMigrationHarnessTests(unittest.TestCase):
+    def test_runtime_loader_rejects_legacy_profile_catalog_shape(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            legacy_path = Path(temp_dir) / "legacy-profile-catalog.json"
+            legacy_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "profiles": [
+                            {
+                                "profile_id": "legacy-profile",
+                                "version": "1.0",
+                                "sanitized": True,
+                                "rules": {"csharp": {}, "sql": {}},
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            profile_hash = "sha256:" + hashlib.sha256(legacy_path.read_bytes()).hexdigest()
+            with patch_runtime_profile_path(legacy_path):
+                loaded = load_packaged_migration_profile(
+                    "legacy-profile",
+                    "1.0",
+                    profile_hash,
+                )
+
+        self.assertFalse(loaded.success)
+        self.assertIn(
+            "packaged_profile_contract_invalid",
+            {issue["code"] for issue in loaded.metadata["issues"]},
+        )
+
+    def test_plan_fails_closed_when_generalized_contract_is_missing_or_invalid(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_path = Path(temp_dir) / "missing-packaged-style-contract.json"
+            invalid_path, _, _ = write_generalized_packaged_contract(
+                temp_dir,
+                mutate=lambda payload: payload.pop("naming_grammar"),
+            )
+            with patch_runtime_profile_path(missing_path):
+                missing = build_pb_to_csharp_migration_plan("Migrate a browse form.")
+            with patch_runtime_profile_path(invalid_path):
+                invalid = build_pb_to_csharp_migration_plan("Migrate a browse form.")
+
+        self.assertFalse(missing.success)
+        self.assertFalse(invalid.success)
+        self.assertEqual("blocked", missing.metadata["packaged_style_resolution"]["status"])
+        self.assertEqual("blocked", invalid.metadata["packaged_style_resolution"]["status"])
+
+    def test_csharp_validator_requires_structure_and_requested_form_mapping(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, payload, profile_hash = write_generalized_packaged_contract(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                loaded = load_packaged_migration_profile(
+                    payload["contract_id"],
+                    payload["contract_version"],
+                    profile_hash,
+                )
+
+        empty = _verify_migration_generated_csharp_style(
+            "",
+            profile_evidence=loaded,
+            program_key="InventoryBrowse",
+        )
+        arbitrary = _verify_migration_generated_csharp_style(
+            "public class UnrelatedBrowseForm { protected void SearchCommand() {} }",
+            profile_evidence=loaded,
+            program_key="InventoryBrowse",
+        )
+        search_command_only = _verify_migration_generated_csharp_style(
+            "public partial class InventoryBrowseForm { protected void SearchCommand() {} }",
+            profile_evidence=loaded,
+            program_key="InventoryBrowse",
+        )
+        code_behind, designer = valid_csharp_contract_sources()
+        mapped = _verify_migration_generated_csharp_style(
+            code_behind,
+            designer_source_text=designer,
+            profile_evidence=loaded,
+            program_key="InventoryBrowse",
+            result_fields=["ENTITY_ID"],
+        )
+        result_mismatch = _verify_migration_generated_csharp_style(
+            code_behind,
+            designer_source_text=designer.replace("DataPropertyName", "FieldName"),
+            profile_evidence=loaded,
+            program_key="InventoryBrowse",
+            result_fields=["OTHER_ID"],
+        )
+
+        self.assertFalse(empty.success)
+        self.assertIn("generated_csharp_empty", {issue["code"] for issue in empty.metadata["issues"]})
+        self.assertFalse(arbitrary.success)
+        self.assertIn(
+            "generated_csharp_form_contract_mismatch",
+            {issue["code"] for issue in arbitrary.metadata["issues"]},
+        )
+        self.assertFalse(search_command_only.success)
+        self.assertEqual(
+            {"mapped_form_declaration", "designer_initialization", "migration_call_path", "ui_binding_or_result_mapping"},
+            set(search_command_only.metadata["profile_consumption"]["required_pattern_ids"]),
+        )
+        self.assertEqual(
+            {"mapped_form_declaration", "designer_initialization", "migration_call_path", "ui_binding_or_result_mapping"},
+            set(mapped.metadata["profile_consumption"]["matched_required_pattern_ids"]),
+        )
+        self.assertTrue(mapped.success, mapped.to_dict())
+        self.assertTrue(mapped.metadata["program_form_contract"]["mapped"])
+        self.assertEqual("passed", mapped.metadata["result_field_contract"]["status"])
+        self.assertFalse(result_mismatch.success)
+        self.assertIn(
+            "csharp_result_field_mapping_mismatch",
+            {issue["code"] for issue in result_mismatch.metadata["issues"]},
+        )
+        self.assertIn(
+            "csharp.required_patterns",
+            mapped.metadata["profile_consumption"]["applied_rule_groups"],
+        )
+
+    def test_csharp_validator_ignores_comment_and_literal_only_structural_evidence(self):
+        profile = loaded_test_profile()
+        comment_only, string_literal_only = non_code_csharp_contract_sources()
+        comment_result = _verify_migration_generated_csharp_style(
+            comment_only,
+            designer_source_text=comment_only,
+            profile_evidence=profile,
+            program_key="InventoryBrowse",
+            result_fields=["ENTITY_ID"],
+        )
+        literal_result = _verify_migration_generated_csharp_style(
+            string_literal_only,
+            designer_source_text=string_literal_only,
+            profile_evidence=profile,
+            program_key="InventoryBrowse",
+            result_fields=["ENTITY_ID"],
+        )
+        code_behind, designer = valid_csharp_contract_sources()
+        escaped_field = designer.replace(
+            'DataPropertyName = "ENTITY_ID"',
+            r'DataPropertyName = "\u0045NTITY_ID"',
+        )
+        verbatim_field = designer.replace(
+            'DataPropertyName = "ENTITY_ID"',
+            'DataPropertyName = @"ENTITY_ID"',
+        )
+        escaped_result = _verify_migration_generated_csharp_style(
+            code_behind,
+            designer_source_text=escaped_field,
+            profile_evidence=profile,
+            program_key="InventoryBrowse",
+            result_fields=["ENTITY_ID"],
+        )
+        verbatim_result = _verify_migration_generated_csharp_style(
+            code_behind,
+            designer_source_text=verbatim_field,
+            profile_evidence=profile,
+            program_key="InventoryBrowse",
+            result_fields=["ENTITY_ID"],
+        )
+
+        self.assertFalse(comment_result.success)
+        self.assertFalse(literal_result.success)
+        for result in (comment_result, literal_result):
+            self.assertEqual(
+                [],
+                result.metadata["profile_consumption"]["matched_required_pattern_ids"],
+            )
+            self.assertFalse(result.metadata["program_form_contract"]["mapped"])
+            self.assertEqual([], result.metadata["result_field_contract"]["mappings"])
+        self.assertTrue(escaped_result.success, escaped_result.to_dict())
+        self.assertTrue(verbatim_result.success, verbatim_result.to_dict())
+        self.assertEqual(
+            "ENTITY_ID",
+            escaped_result.metadata["result_field_contract"]["mappings"][0]["field_name"],
+        )
+        self.assertEqual(
+            "ENTITY_ID",
+            verbatim_result.metadata["result_field_contract"]["mappings"][0]["field_name"],
+        )
+
+    def test_csharp_validator_blocks_designer_owned_ui_in_code_behind_without_dynamic_evidence(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, payload, profile_hash = write_generalized_packaged_contract(
+                temp_dir,
+                mutate=lambda contract: contract["rules"]["csharp"].update(required_patterns=[]),
+            )
+            with patch_runtime_profile_path(profile_path):
+                loaded = load_packaged_migration_profile(
+                    payload["contract_id"],
+                    payload["contract_version"],
+                    profile_hash,
+                )
+
+        generated = r'''
+        public partial class InventoryBrowseForm
+        {
+            private System.Windows.Forms.TextBox txtCode;
+            protected void SearchCommand()
+            {
+                this.txtCode = new System.Windows.Forms.TextBox();
+                this.txtCode.Location = new System.Drawing.Point(10, 10);
+                this.txtCode.Name = "txtCode";
+                this.txtCode.TabIndex = 0;
+                this.txtCode.BindingField = "CODE";
+            }
+        }
+        '''
+        blocked = _verify_migration_generated_csharp_style(
+            generated,
+            profile_evidence=loaded,
+            program_key="InventoryBrowse",
+        )
+        allowed = _verify_migration_generated_csharp_style(
+            generated,
+            profile_evidence=loaded,
+            program_key="InventoryBrowse",
+            runtime_dynamic_ui_evidence={
+                "kind": "runtime_dynamic_ui",
+                "approved": True,
+                "reason": "The control is created from runtime metadata after the form is loaded.",
+                "members": ["txtCode"],
+            },
+        )
+
+        self.assertFalse(blocked.success)
+        self.assertIn(
+            "designer_owned_ui_in_code_behind",
+            {issue["code"] for issue in blocked.metadata["issues"]},
+        )
+        self.assertEqual(
+            {"binding", "construction", "declaration", "layout", "name", "tab_index"},
+            set(blocked.metadata["designer_owned_ui_contract"]["detected_categories"]),
+        )
+        self.assertFalse(allowed.success)
+        self.assertFalse(
+            allowed.metadata["designer_owned_ui_contract"]["runtime_dynamic_evidence_accepted"]
+        )
+
+        prose_only = _verify_migration_generated_csharp_style(
+            '''
+            public partial class InventoryBrowseForm
+            {
+                protected void SearchCommand()
+                {
+                    this.txtCode.Enabled = false;
+                }
+            }
+            ''',
+            profile_evidence=loaded,
+            program_key="InventoryBrowse",
+            runtime_dynamic_ui_evidence={
+                "kind": "runtime_dynamic_ui",
+                "approved": True,
+                "reason": "The source disables editing after a completed workflow transition.",
+                "source_evidence": {"kind": "event", "name": "workflow-completed"},
+                "verification": "The transition test verifies that the editor becomes disabled.",
+                "transitions": [{"member": "txtCode", "property": "Enabled"}],
+            },
+        )
+        runtime_state = _verify_migration_generated_csharp_style(
+            '''
+            public partial class InventoryBrowseForm
+            {
+                protected void SearchCommand()
+                {
+                    this.txtCode.Enabled = false;
+                }
+            }
+            ''',
+            profile_evidence=loaded,
+            program_key="InventoryBrowse",
+            runtime_dynamic_ui_evidence={
+                "kind": "runtime_dynamic_ui",
+                "approved": True,
+                "reason": "The source disables editing after a completed workflow transition.",
+                "source_evidence": {"kind": "event", "name": "workflow-completed"},
+                "verification": {
+                    "kind": "test",
+                    "status": "passed",
+                    "observed": True,
+                    "test": "InventoryBrowseRuntimeStateTests.editor_is_disabled_after_completion",
+                },
+                "transitions": [{"member": "txtCode", "property": "Enabled"}],
+            },
+        )
+        self.assertFalse(prose_only.success)
+        self.assertFalse(
+            prose_only.metadata["designer_owned_ui_contract"]["runtime_dynamic_evidence_accepted"]
+        )
+        self.assertTrue(runtime_state.success, runtime_state.to_dict())
+        self.assertTrue(
+            runtime_state.metadata["designer_owned_ui_contract"]["runtime_dynamic_evidence_accepted"]
+        )
+
+    def test_csharp_validator_covers_grid_repository_and_designer_property_families(self):
+        profile = loaded_test_profile()
+        generated = r'''
+        public partial class InventoryBrowseForm
+        {
+            protected void SearchCommand()
+            {
+                this.colRuntime_VALUE = new DevExpress.XtraGrid.Columns.GridColumn();
+                this.repRuntime = new DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit();
+                this.gvwRuntime.Columns.AddRange(new[] { this.colRuntime_VALUE });
+                this.colRuntime_VALUE.AppearanceHeader.Options.UseFont = true;
+                this.gvwRuntime.OptionsView.ShowGroupPanel = false;
+                this.colRuntime_VALUE.DisplayFormat.FormatString = "text";
+                this.colRuntime_VALUE.ColumnEdit = this.repRuntime;
+                this.pnlRuntime.Location = new System.Drawing.Point(1, 1);
+                this.pnlRuntime.Name = "pnlRuntime";
+                this.pnlRuntime.TabIndex = 1;
+                this.pnlRuntime.BindingField = "VALUE";
+            }
+        }
+        '''
+        blocked = _verify_migration_generated_csharp_style(
+            generated,
+            profile_evidence=profile,
+            program_key="InventoryBrowse",
+        )
+        allowed = _verify_migration_generated_csharp_style(
+            generated,
+            profile_evidence=profile,
+            program_key="InventoryBrowse",
+            runtime_dynamic_ui_evidence={
+                "kind": "runtime_dynamic_ui",
+                "approved": True,
+                "reason": "The grid and panel are materialized from a runtime metadata schema.",
+                "source_evidence": {"kind": "schema", "name": "runtime-grid"},
+                "verification": {
+                    "kind": "test",
+                    "status": "passed",
+                    "observed": True,
+                    "test": "RuntimeGridSchemaTests.materializes_supported_properties",
+                },
+                "transitions": [
+                    {"member": "gvwRuntime", "property": "OptionsView.ShowGroupPanel"},
+                ],
+            },
+        )
+
+        self.assertFalse(blocked.success)
+        self.assertTrue(
+            {
+                "appearance",
+                "binding",
+                "collection",
+                "construction",
+                "display_format",
+                "layout",
+                "name",
+                "options",
+                "repository",
+                "tab_index",
+            }.issubset(set(blocked.metadata["designer_owned_ui_contract"]["detected_categories"]))
+        )
+        self.assertFalse(allowed.success)
+        self.assertTrue(
+            allowed.metadata["designer_owned_ui_contract"]["runtime_dynamic_evidence_accepted"]
+        )
+
+    def test_csharp_validator_rejects_code_behind_only_static_ui_and_accepts_designer_split(self):
+        profile = loaded_test_profile(csharp_required_patterns=[])
+        code_behind_only = r'''
+        public partial class RecordsBrowseForm
+        {
+            private DevExpress.XtraGrid.GridControl grdBrowse;
+            private DevExpress.XtraGrid.Views.Grid.GridView gvwBrowse;
+            private DevExpress.XtraGrid.Columns.GridColumn colList_ENTITY_VALUE;
+            private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit repNumeric;
+
+            protected void SearchCommand()
+            {
+                this.grdBrowse = new DevExpress.XtraGrid.GridControl();
+                this.gvwBrowse = new DevExpress.XtraGrid.Views.Grid.GridView();
+                this.colList_ENTITY_VALUE = new DevExpress.XtraGrid.Columns.GridColumn();
+                this.repNumeric = new DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit();
+                this.grdBrowse.MainView = this.gvwBrowse;
+                this.grdBrowse.ViewCollection.AddRange(new[] { this.gvwBrowse });
+                this.gvwBrowse.Columns.AddRange(new[] { this.colList_ENTITY_VALUE });
+                this.colList_ENTITY_VALUE.Name = "colList_ENTITY_VALUE";
+                this.colList_ENTITY_VALUE.FieldName = "ENTITY_VALUE";
+                this.colList_ENTITY_VALUE.VisibleIndex = 0;
+                this.colList_ENTITY_VALUE.AppearanceHeader.Options.UseTextOptions = true;
+                this.colList_ENTITY_VALUE.AppearanceCell.Options.UseTextOptions = true;
+                this.colList_ENTITY_VALUE.ColumnEdit = this.repNumeric;
+                this.grdBrowse.Location = new System.Drawing.Point(8, 8);
+                this.grdBrowse.Size = new System.Drawing.Size(320, 180);
+                this.grdBrowse.Name = "grdBrowse";
+                this.grdBrowse.TabIndex = 0;
+                this.Controls.Add(this.grdBrowse);
+            }
+        }
+        '''
+        code_behind = r'''
+        public partial class RecordsBrowseForm
+        {
+            protected void SearchCommand()
+            {
+                this.grdBrowse.DataSource = result;
+            }
+
+            private void grdBrowse_DoubleClick(object sender, System.EventArgs e)
+            {
+                OpenSelectedRecord();
+            }
+        }
+        '''
+        designer = r'''
+        partial class RecordsBrowseForm
+        {
+            private DevExpress.XtraGrid.GridControl grdBrowse;
+            private DevExpress.XtraGrid.Views.Grid.GridView gvwBrowse;
+            private DevExpress.XtraGrid.Columns.GridColumn colList_ENTITY_VALUE;
+            private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit repNumeric;
+
+            private void InitializeComponent()
+            {
+                this.grdBrowse = new DevExpress.XtraGrid.GridControl();
+                this.gvwBrowse = new DevExpress.XtraGrid.Views.Grid.GridView();
+                this.colList_ENTITY_VALUE = new DevExpress.XtraGrid.Columns.GridColumn();
+                this.repNumeric = new DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit();
+                this.grdBrowse.MainView = this.gvwBrowse;
+                this.grdBrowse.ViewCollection.AddRange(new[] { this.gvwBrowse });
+                this.gvwBrowse.Columns.AddRange(new[] { this.colList_ENTITY_VALUE });
+                this.colList_ENTITY_VALUE.Name = "colList_ENTITY_VALUE";
+                this.colList_ENTITY_VALUE.FieldName = "ENTITY_VALUE";
+                this.colList_ENTITY_VALUE.VisibleIndex = 0;
+                this.colList_ENTITY_VALUE.AppearanceHeader.Options.UseTextOptions = true;
+                this.colList_ENTITY_VALUE.AppearanceCell.Options.UseTextOptions = true;
+                this.colList_ENTITY_VALUE.ColumnEdit = this.repNumeric;
+                this.grdBrowse.Location = new System.Drawing.Point(8, 8);
+                this.grdBrowse.Size = new System.Drawing.Size(320, 180);
+                this.grdBrowse.Name = "grdBrowse";
+                this.grdBrowse.TabIndex = 0;
+                this.Controls.Add(this.grdBrowse);
+            }
+        }
+        '''
+
+        blocked = _verify_migration_generated_csharp_style(
+            code_behind_only,
+            profile_evidence=profile,
+            program_key="RecordsBrowse",
+        )
+        split = _verify_migration_generated_csharp_style(
+            code_behind,
+            designer_source_text=designer,
+            profile_evidence=profile,
+            program_key="RecordsBrowse",
+        )
+
+        self.assertFalse(blocked.success)
+        self.assertIn(
+            "designer_owned_ui_in_code_behind",
+            {issue["code"] for issue in blocked.metadata["issues"]},
+        )
+        self.assertIn(
+            "declaration",
+            blocked.metadata["designer_owned_ui_contract"]["detected_categories"],
+        )
+        self.assertTrue(split.success, split.to_dict())
+        self.assertTrue(split.metadata["designer_owned_ui_contract"]["split_contract_validated"])
+        self.assertGreater(
+            split.metadata["designer_owned_ui_contract"]["designer_static_finding_count"],
+            0,
+        )
+
+    def test_normal_plan_does_not_consult_legacy_private_style_constants(self):
+        with (
+            mock.patch.object(pb_migration, "AUTHOR_TAGGED_CSHARP_STYLE_BASELINE", None),
+            mock.patch.object(pb_migration, "AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS", None),
+            mock.patch.object(pb_migration, "_discover_author_tagged_csharp_paths") as discover,
+            mock.patch.object(pb_migration, "build_migration_profile_update") as profile_update,
+        ):
+            result = build_pb_to_csharp_migration_plan(
+                "Plan a generalized inventory browse form.",
+                {"program_key": "InventoryBrowse"},
+            )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual("loaded", result.metadata["packaged_style_resolution"]["status"])
+        discover.assert_not_called()
+        profile_update.assert_not_called()
+
+    def test_packaged_profile_load_requires_exact_sanitized_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                loaded = load_packaged_migration_profile(
+                    "pb-csharp-offline-generalized",
+                    "1.0",
+                    profile_hash,
+                )
+                wrong_version = load_packaged_migration_profile(
+                    "pb-csharp-offline-generalized",
+                    "2.0.0",
+                    profile_hash,
+                )
+                wrong_hash = load_packaged_migration_profile(
+                    "pb-csharp-offline-generalized",
+                    "1.0",
+                    "sha256:" + "0" * 64,
+                )
+
+        self.assertTrue(loaded.success, loaded.to_dict())
+        self.assertEqual("loaded", loaded.metadata["status"])
+        self.assertTrue(loaded.metadata["profile_consumption"]["sanitized"])
+        self.assertEqual(profile_hash, loaded.metadata["profile_consumption"]["profile_hash"])
+        self.assertFalse(wrong_version.success)
+        self.assertIn("packaged_profile_version_mismatch", {issue["code"] for issue in wrong_version.metadata["issues"]})
+        self.assertFalse(wrong_hash.success)
+        self.assertIn("packaged_profile_hash_mismatch", {issue["code"] for issue in wrong_hash.metadata["issues"]})
+
+    def test_runtime_generation_uses_only_packaged_profile_and_never_walks_csharp_roots(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with (
+                patch_runtime_profile_path(profile_path),
+                mock.patch.object(pb_migration.os, "walk") as walk,
+                mock.patch.object(pb_migration, "_discover_author_tagged_csharp_paths") as discover,
+                mock.patch.object(pb_migration, "build_author_tagged_style_profile_update") as profile_update,
+                mock.patch.object(pb_migration, "build_migration_profile_update") as generic_profile_update,
+            ):
+                result = build_offline_pb_to_csharp_runtime_generation(
+                    "Generate generalized C# and SQL.",
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    csharp_root=r"C:\private\source",
+                )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual("offline_packaged_profile", result.metadata["runtime_mode"])
+        self.assertEqual([], result.metadata["external_sources_consulted"])
+        self.assertFalse(result.metadata["capabilities_invoked"]["db"])
+        self.assertFalse(result.metadata["capabilities_invoked"]["pbl"])
+        self.assertFalse(result.metadata["capabilities_invoked"]["orca"])
+        self.assertFalse(result.metadata["capabilities_invoked"]["pblscripter"])
+        walk.assert_not_called()
+        discover.assert_not_called()
+        profile_update.assert_not_called()
+        generic_profile_update.assert_not_called()
+
+    def test_live_csharp_relearning_is_explicit_profile_update_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "GENERALIZED.cs").write_text(
+                "public class GENERALIZED : GeneralizedScreenBase { private void SearchCommand() {} }",
+                encoding="utf-8",
+            )
+            (root / "GENERALIZED.Designer.cs").write_text(
+                'this.txtCODE.BindingField = "CODE";',
+                encoding="utf-8",
+            )
+
+            runtime = resolve_author_tagged_style_evidence(
+                "SP_GENERALIZED_SELECT",
+                csharp_root=str(root),
+            )
+            updated = build_migration_profile_update(
+                "SP_GENERALIZED_SELECT",
+                csharp_root=str(root),
+                profile_id="generalized-pb-csharp",
+                profile_version="1.1.0",
+            )
+
+        self.assertFalse(runtime.success)
+        self.assertEqual("explicit_profile_update_required", runtime.metadata["status"])
+        self.assertTrue(updated.success, updated.to_dict())
+        self.assertEqual("explicit_profile_update", updated.metadata["operation"])
+        self.assertEqual("candidate_only", updated.metadata["write_status"])
+
+    def test_csharp_validator_requires_and_applies_loaded_profile(self):
+        without_profile = _verify_migration_generated_csharp_style(
+            "public class Screen : GeneralizedScreenBase {}"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                loaded = load_packaged_migration_profile("pb-csharp-offline-generalized", "1.0", profile_hash)
+            alien = verify_migration_generated_csharp_style(
+                "public class Screen : GeneralizedScreenBase { AlienConvention bridge; }",
+                profile_evidence=loaded,
+                program_key="GENERALIZED",
+                primary_style_evidence_paths=[
+                    r"packaged\style\GENERALIZED.cs",
+                    r"packaged\style\GENERALIZED.Designer.cs",
+                ],
+                require_author_tagged_evidence=True,
+            )
+            matched = verify_migration_generated_csharp_style(
+                "public class Screen : GeneralizedScreenBase {}",
+                profile_evidence=loaded,
+            )
+
+        self.assertFalse(without_profile.success)
+        self.assertIn("packaged_profile_consumption_required", {issue["code"] for issue in without_profile.metadata["issues"]})
+        self.assertFalse(alien.success)
+        self.assertIn("profile_forbidden_csharp_pattern", {issue["code"] for issue in alien.metadata["issues"]})
+        self.assertTrue(matched.success, matched.to_dict())
+        self.assertTrue(matched.metadata["profile_consumption"]["consumed"])
+        self.assertIn("csharp.required_patterns", matched.metadata["profile_consumption"]["applied_rule_groups"])
+
+    def test_sp_validator_requires_profile_and_rejects_unmapped_or_temporary_table_sql(self):
+        mapped_sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        unmapped_sql = mapped_sql.replace("SP_GENERALIZED_SELECT", "LEGACY_GENERALIZED_SELECT")
+        temp_sql = mapped_sql.replace(
+            "SELECT @WORKTYPE AS WORKTYPE;",
+            "SELECT @WORKTYPE AS WORKTYPE INTO #TEMP;",
+        )
+        evidence = [
+            {
+                "kind": "pasted_sql",
+                "path": "packaged/style/generalized.sql",
+                "summary": "Generalized source SQL",
+            }
+        ]
+
+        without_profile = _verify_pb_migration_sp_generation_contract(mapped_sql, source_evidence=evidence)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                loaded = load_packaged_migration_profile("pb-csharp-offline-generalized", "1.0", profile_hash)
+            unmapped = verify_pb_migration_sp_generation_contract(
+                unmapped_sql,
+                source_evidence=evidence,
+                profile_evidence=loaded,
+            )
+            temporary = verify_pb_migration_sp_generation_contract(
+                temp_sql,
+                source_evidence=evidence,
+                profile_evidence=loaded,
+            )
+
+        self.assertFalse(without_profile.success)
+        self.assertIn("packaged_profile_consumption_required", {issue["code"] for issue in without_profile.metadata["issues"]})
+        self.assertFalse(unmapped.success)
+        self.assertIn("profile_unmapped_sp_output", {issue["code"] for issue in unmapped.metadata["issues"]})
+        self.assertFalse(temporary.success)
+        temporary_codes = {issue["code"] for issue in temporary.metadata["issues"]}
+        self.assertIn("profile_forbidden_sql_pattern", temporary_codes)
+        self.assertIn("temp_table_in_generated_sp", temporary_codes)
+        self.assertTrue(temporary.metadata["profile_consumption"]["consumed"])
+
+    def test_sp_validator_derives_procedure_identity_after_comment_stripping(self):
+        sql = """-- =============================================
+-- AUTHOR:      CREATE PROCEDURE DBO.SP_ALLOWED_SELECT
+-- CREATE DATE: 2026-06-15
+-- DESCRIPTION: ALTER PROCEDURE DBO.SP_ALLOWED_SELECT
+-- =============================================
+ALTER PROCEDURE DBO.SP_DISALLOWED_QUERY
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        profile = loaded_test_profile(
+            csharp_required_patterns=[],
+            sql_allowed_procedure_patterns=[r"^SP_ALLOWED_SELECT$"],
+        )
+        result = _verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[{"kind": "pasted_sql", "summary": "Disallowed procedure source SQL"}],
+            profile_evidence=profile,
+        )
+
+        self.assertEqual("SP_DISALLOWED_QUERY", pb_migration._extract_sp_procedure_name(sql))
+        self.assertFalse(result.success)
+        issue = next(
+            item for item in result.metadata["issues"] if item["code"] == "profile_unmapped_sp_output"
+        )
+        self.assertEqual("SP_DISALLOWED_QUERY", issue["procedure_name"])
+
+    def test_orchestrated_validation_is_ordered_and_fails_closed_on_profile_mismatch(self):
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        evidence = [{"kind": "pasted_sql", "summary": "Generalized source SQL"}]
+        csharp, designer = valid_csharp_contract_sources()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                passed = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=evidence,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                )
+                mismatched = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=evidence,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash="sha256:" + "0" * 64,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                )
+
+        self.assertTrue(passed.success, passed.to_dict())
+        self.assertEqual(
+            ["load-profile", "validate-csharp", "validate-sp", "formatting-evidence"],
+            passed.metadata["validation_contract"]["completed_stage_order"],
+        )
+        self.assertTrue(passed.metadata["validation_contract"]["completion_allowed"])
+        self.assertFalse(passed.metadata["validation_contract"]["database_execution_attempted"])
+        self.assertFalse(mismatched.success)
+        self.assertEqual(["load-profile"], mismatched.metadata["validation_contract"]["completed_stage_order"])
+        self.assertFalse(mismatched.metadata["validation_contract"]["profile_identity_match"])
+
+    def test_orchestrated_validation_rejects_non_code_csharp_evidence_and_accepts_real_code(self):
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        evidence = [{"kind": "pasted_sql", "summary": "Generalized source SQL"}]
+        comment_only, string_literal_only = non_code_csharp_contract_sources()
+        code_behind, designer = valid_csharp_contract_sources()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                comment_result = orchestrate_pb_migration_validation(
+                    csharp_source_text=comment_only,
+                    designer_source_text=comment_only,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=evidence,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                )
+                literal_result = orchestrate_pb_migration_validation(
+                    csharp_source_text=string_literal_only,
+                    designer_source_text=string_literal_only,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=evidence,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                )
+                real_result = orchestrate_pb_migration_validation(
+                    csharp_source_text=code_behind,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=evidence,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                )
+
+        for result in (comment_result, literal_result):
+            self.assertFalse(result.success)
+            self.assertEqual(
+                ["load-profile", "validate-csharp"],
+                result.metadata["validation_contract"]["completed_stage_order"],
+            )
+            self.assertEqual(
+                [],
+                result.metadata["evidence"]["csharp"]["profile_consumption"][
+                    "matched_required_pattern_ids"
+                ],
+            )
+        self.assertTrue(real_result.success, real_result.to_dict())
+
+    def test_orchestrated_validation_rejects_commented_allowed_sp_identity(self):
+        sql = """-- =============================================
+-- AUTHOR:      CREATE PROCEDURE DBO.SP_ALLOWED_SELECT
+-- CREATE DATE: 2026-06-15
+-- DESCRIPTION: ALTER PROCEDURE DBO.SP_ALLOWED_SELECT
+-- =============================================
+ALTER PROCEDURE DBO.SP_DISALLOWED_QUERY
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        csharp, designer = valid_csharp_contract_sources()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(
+                temp_dir,
+                sql_allowed_procedure_patterns=[r"^SP_ALLOWED_SELECT$"],
+            )
+            with patch_runtime_profile_path(profile_path):
+                result = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=[{"kind": "pasted_sql", "summary": "Disallowed procedure source SQL"}],
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                )
+
+        self.assertFalse(result.success)
+        self.assertEqual(
+            ["load-profile", "validate-csharp", "validate-sp"],
+            result.metadata["validation_contract"]["completed_stage_order"],
+        )
+        issue = next(
+            item
+            for item in result.metadata["evidence"]["sp"]["issues"]
+            if item["code"] == "profile_unmapped_sp_output"
+        )
+        self.assertEqual("SP_DISALLOWED_QUERY", issue["procedure_name"])
+
+    def test_orchestrated_validation_blocks_profile_forbidden_temp_before_formatting_or_db(self):
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE INTO #TEMP;
+END
+"""
+        csharp, designer = valid_csharp_contract_sources()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with (
+                patch_runtime_profile_path(profile_path),
+                mock.patch("src.skills.sql_formatting_style.verify_sql_formatting_style") as formatting,
+            ):
+                result = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=[{"kind": "pasted_sql", "summary": "Generalized source SQL"}],
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                )
+
+        self.assertFalse(result.success)
+        self.assertEqual(
+            ["load-profile", "validate-csharp", "validate-sp"],
+            result.metadata["validation_contract"]["completed_stage_order"],
+        )
+        self.assertFalse(result.metadata["validation_contract"]["database_execution_attempted"])
+        formatting.assert_not_called()
+
+    def test_orchestrated_validation_requires_and_validates_designer_companion(self):
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        csharp, designer = valid_csharp_contract_sources()
+        mismatched_designer = designer.replace("InventoryBrowseForm", "OtherBrowseForm")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                missing = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text="",
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=[{"kind": "pasted_sql", "summary": "Generalized source SQL"}],
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                )
+                mismatched = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=mismatched_designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=[{"kind": "pasted_sql", "summary": "Generalized source SQL"}],
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                )
+
+        self.assertFalse(missing.success)
+        self.assertEqual(
+            ["load-profile", "validate-csharp"],
+            missing.metadata["validation_contract"]["completed_stage_order"],
+        )
+        self.assertIn(
+            "designer_companion_required",
+            {issue["code"] for issue in missing.metadata["evidence"]["csharp"]["issues"]},
+        )
+        self.assertFalse(mismatched.success)
+        self.assertIn(
+            "designer_companion_class_mismatch",
+            {issue["code"] for issue in mismatched.metadata["evidence"]["csharp"]["issues"]},
+        )
+
     def test_packaged_skill_is_readable_and_standalone(self):
         content = read_packaged_skill("pb-to-csharp-migration-harness")
 
         self.assertIn("Packaged source: uaf_skill_folder", content)
         self.assertIn("External runtime dependency: false", content)
         self.assertIn("src.skills.pb_to_csharp_migration", content)
-        self.assertIn("DataWindowToXml", content)
+        self.assertIn("Normal generation is offline", content)
+
+    def test_demo_sql_is_verified_by_sp_contract_with_distinct_evidence(self):
+        script_path = Path("skills/pb_to_csharp_migration_harness/scripts/demo.py")
+        demo_module = runpy.run_path(str(script_path))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            payload = demo_module["_sanitized_offline_scenario"](
+                "pb-to-csharp-migration-harness",
+                output_dir,
+                Path.cwd(),
+            )
+            evidence = json.loads((output_dir / "offline_generation_evidence.json").read_text(encoding="utf-8"))
+            sql_artifact = next(
+                item for item in payload["artifacts"] if item["kind"] == "synthetic-select-procedure"
+            )
+            sql_text = Path(sql_artifact["path"]).read_text(encoding="utf-8")
+
+        self.assertEqual("passed", evidence["runtime_validation"]["sp_generation_contract"])
+        self.assertEqual([], evidence["runtime_validation"]["sp_issue_codes"])
+        self.assertIn("@WORKTYPE", sql_text)
+        self.assertRegex(sql_text, r"-- CREATE DATE: \d{4}-\d{2}-\d{2}")
+        self.assertIn("SP generation contract verified", sql_artifact["validation_evidence"])
+        self.assertIn("UTF-8 readable", sql_artifact["validation_evidence"])
 
     def test_migration_mode_does_not_require_local_tools(self):
         mode = classify_migration_mode(MigrationInputState())
@@ -207,31 +1342,43 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertEqual(winforms["selection"]["grid"]["provider"], "winforms")
         self.assertEqual(winforms["selection"]["grid"]["type"], "System.Windows.Forms.DataGridView")
 
-    def test_konelib_is_treated_as_target_project_inventory_not_global_baseline(self):
-        result = resolve_csharp_control_stack({"has_konelib": True, "has_devexpress": True})
+    def test_declared_wrapper_family_is_target_project_inventory_not_global_baseline(self):
+        wrapper_types = {
+            "grid": "Target.Ui.u_GridControl",
+            "date": "Target.Ui.u_DateEdit",
+            "spin": "Target.Ui.u_SpinEdit",
+            "button": "Target.Ui.u_ButtonEdit",
+            "combo": "Target.Ui.u_ComboBox",
+            "memo": "Target.Ui.u_MemoEdit",
+            "check": "Target.Ui.u_CheckEdit",
+            "tree": "Target.Ui.u_TreeList",
+        }
+        result = resolve_csharp_control_stack(
+            {
+                "target_project_controls": wrapper_types,
+                "has_devexpress": True,
+            }
+        )
 
         self.assertEqual(result["selection"]["grid"]["provider"], "target-project")
-        self.assertEqual(result["selection"]["grid"]["type"], "KoneLib.Controls.u_GridControl")
-        self.assertEqual(result["selection"]["date"]["type"], "KoneLib.Controls.u_DateEdit")
-        self.assertEqual(result["selection"]["spin"]["type"], "KoneLib.Controls.u_SpinEdit")
-        self.assertEqual(result["selection"]["button"]["type"], "KoneLib.Controls.u_ButtonEdit")
-        self.assertEqual(result["selection"]["combo"]["type"], "KoneLib.Controls.u_ComboBox")
-        self.assertEqual(result["selection"]["memo"]["type"], "KoneLib.Controls.u_MemoEdit")
-        self.assertEqual(result["selection"]["check"]["type"], "KoneLib.Controls.u_CheckEdit")
-        self.assertEqual(result["selection"]["tree"]["type"], "KoneLib.Controls.u_TreeList")
+        for logical_name, type_name in wrapper_types.items():
+            with self.subTest(logical_name=logical_name):
+                self.assertEqual(result["selection"][logical_name]["type"], type_name)
 
     def test_detail_form_layout_places_label_editor_pairs_with_binding_fields(self):
         result = build_detail_form_layout_plan(
             [
-                {"name": "ORDNUM", "caption": "수주번호", "editor_type": "text"},
+                {"name": "RECORD_ID", "caption": "수주번호", "editor_type": "text"},
                 {"name": "QTY", "caption": "수주수량", "editor_type": "number", "logical_name": "Qty"},
-                {"name": "ORDDT", "caption": "수주일자", "editor_type": "date"},
-                {"name": "CUSTCD", "caption": "고객코드", "editor_type": "button"},
-                {"name": "REMARK", "caption": "REMARK", "editor_type": "memo"},
-                {"name": "USEYN", "caption": "USEYN", "editor_type": "check"},
+                {"name": "EVENT_DATE", "caption": "수주일자", "editor_type": "date"},
+                {"name": "ENTITY_CODE", "caption": "고객코드", "editor_type": "button"},
+                {"name": "NOTES", "caption": "NOTES", "editor_type": "memo"},
+                {"name": "ENABLED_YN", "caption": "ENABLED_YN", "editor_type": "check"},
             ],
             columns=3,
             section_caption="기본 상세정보",
+            provider_contract={"provider": "konelib", "supports_binding_field": True},
+            result_fields=["RECORD_ID", "QTY", "EVENT_DATE", "ENTITY_CODE", "NOTES", "ENABLED_YN"],
         )
         payload = json.loads(result.stdout)
         fields = payload["fields"]
@@ -241,26 +1388,26 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertIn("do not copy PB pixel coordinates blindly", payload["layout_rule"])
         self.assertIn("BindingField", payload["binding_rule"])
         self.assertEqual(fields[0]["caption"], "수주번호")
-        self.assertEqual(fields[0]["field_name"], "ORDNUM")
-        self.assertEqual(fields[0]["csharp_label_name"], "lblORDNUM")
-        self.assertEqual(fields[0]["csharp_editor_name"], "txtORDNUM")
-        self.assertEqual(fields[0]["binding_code"], 'this.txtORDNUM.BindingField = "ORDNUM";')
+        self.assertEqual(fields[0]["field_name"], "RECORD_ID")
+        self.assertEqual(fields[0]["csharp_label_name"], "lblRECORD_ID")
+        self.assertEqual(fields[0]["csharp_editor_name"], "txtRECORD_ID")
+        self.assertEqual(fields[0]["binding_code"], 'this.txtRECORD_ID.BindingField = "RECORD_ID";')
         self.assertEqual(fields[1]["editor_type"], "SpinEdit")
         self.assertEqual(fields[1]["csharp_editor_name"], "SpinQTY")
         self.assertEqual(fields[1]["binding_code"], 'this.SpinQTY.BindingField = "QTY";')
         self.assertEqual(fields[2]["editor_type"], "DateEdit")
-        self.assertEqual(fields[2]["csharp_editor_name"], "ymdORDDT")
-        self.assertEqual(fields[2]["binding_code"], 'this.ymdORDDT.BindingField = "ORDDT";')
+        self.assertEqual(fields[2]["csharp_editor_name"], "ymdEVENT_DATE")
+        self.assertEqual(fields[2]["binding_code"], 'this.ymdEVENT_DATE.BindingField = "EVENT_DATE";')
         self.assertEqual(fields[3]["editor_type"], "ButtonEdit")
-        self.assertEqual(fields[3]["csharp_editor_name"], "btnCUSTCD")
+        self.assertEqual(fields[3]["csharp_editor_name"], "btnENTITY_CODE")
         self.assertEqual(fields[4]["editor_type"], "MemoEdit")
-        self.assertEqual(fields[4]["csharp_editor_name"], "memoREMARK")
+        self.assertEqual(fields[4]["csharp_editor_name"], "memoNOTES")
         self.assertEqual(fields[5]["editor_type"], "CheckEdit")
-        self.assertEqual(fields[5]["csharp_editor_name"], "ChkUSEYN")
+        self.assertEqual(fields[5]["csharp_editor_name"], "ChkENABLED_YN")
         self.assertEqual(fields[0]["tab_index"], 0)
-        self.assertEqual(fields[0]["tab_index_code"], "this.txtORDNUM.TabIndex = 0;")
+        self.assertEqual(fields[0]["tab_index_code"], "this.txtRECORD_ID.TabIndex = 0;")
         self.assertEqual(fields[5]["tab_index"], 5)
-        self.assertEqual(fields[5]["tab_index_code"], "this.ChkUSEYN.TabIndex = 5;")
+        self.assertEqual(fields[5]["tab_index_code"], "this.ChkENABLED_YN.TabIndex = 5;")
         self.assertEqual(fields[0]["row"], 0)
         self.assertEqual(fields[0]["column"], 0)
         self.assertEqual(fields[3]["row"], 1)
@@ -268,36 +1415,73 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertEqual(fields[0]["label_bounds"]["y"], fields[1]["label_bounds"]["y"])
         self.assertLess(fields[0]["editor_bounds"]["x"], fields[1]["label_bounds"]["x"])
 
+    def test_detail_form_layout_uses_provider_binding_contract_and_rejects_result_mismatch(self):
+        winforms = build_detail_form_layout_plan(
+            [{"name": "RECORD_ID", "editor_type": "text"}],
+            provider_contract={"provider": "winforms", "supports_binding_field": False},
+            result_fields=["RECORD_ID"],
+        )
+        explicit_wrapper = build_detail_form_layout_plan(
+            [{"name": "RECORD_ID", "editor_type": "text"}],
+            provider_contract={"provider": "winforms", "supports_binding_field": False},
+            binding_map={
+                "RECORD_ID": {
+                    "result_field": "RECORD_ID",
+                    "binding_property": "BindingField",
+                    "evidence": {"kind": "supplied_binding_map", "observed": True},
+                }
+            },
+            result_fields=["RECORD_ID"],
+        )
+        mismatch = build_detail_form_layout_plan(
+            [{"name": "RECORD_ID", "editor_type": "text"}],
+            provider_contract={"provider": "konelib", "supports_binding_field": True},
+            result_fields=["OTHER_FIELD"],
+        )
+
+        winforms_field = winforms.metadata["fields"][0]
+        self.assertTrue(winforms.success, winforms.to_dict())
+        self.assertEqual("DataBindings", winforms_field["binding_property"])
+        self.assertIn(".DataBindings.Add", winforms_field["binding_code"])
+        self.assertNotIn(".BindingField", winforms_field["binding_code"])
+        self.assertTrue(explicit_wrapper.success, explicit_wrapper.to_dict())
+        self.assertEqual("BindingField", explicit_wrapper.metadata["fields"][0]["binding_property"])
+        self.assertFalse(mismatch.success)
+        self.assertIn(
+            "binding_result_field_mismatch",
+            {issue["code"] for issue in mismatch.metadata["issues"]},
+        )
+
     def test_control_name_fallbacks_match_observed_csharp_prefixes(self):
-        self.assertEqual(build_csharp_control_name("TextEdit", field_name="ITEMNM"), "txtITEMNM")
-        self.assertEqual(build_csharp_control_name("ButtonEdit", field_name="CUSTCD"), "btnCUSTCD")
-        self.assertEqual(build_csharp_control_name("LookUpEdit", field_name="ITEMACNT"), "cboITEMACNT")
-        self.assertEqual(build_csharp_control_name("ComboBoxEdit", field_name="ITEMACNT"), "cboITEMACNT")
+        self.assertEqual(build_csharp_control_name("TextEdit", field_name="RECORD_NAME"), "txtRECORD_NAME")
+        self.assertEqual(build_csharp_control_name("ButtonEdit", field_name="ENTITY_CODE"), "btnENTITY_CODE")
+        self.assertEqual(build_csharp_control_name("LookUpEdit", field_name="RECORD_CATEGORY"), "cboRECORD_CATEGORY")
+        self.assertEqual(build_csharp_control_name("ComboBoxEdit", field_name="RECORD_CATEGORY"), "cboRECORD_CATEGORY")
         self.assertEqual(build_csharp_control_name("SpinEdit", field_name="QTY"), "SpinQTY")
-        self.assertEqual(build_csharp_control_name("DateEdit", field_name="ORDDT"), "ymdORDDT")
-        self.assertEqual(build_csharp_control_name("MemoEdit", field_name="REMARK"), "memoREMARK")
-        self.assertEqual(build_csharp_control_name("CheckEdit", field_name="USEYN"), "ChkUSEYN")
+        self.assertEqual(build_csharp_control_name("DateEdit", field_name="EVENT_DATE"), "ymdEVENT_DATE")
+        self.assertEqual(build_csharp_control_name("MemoEdit", field_name="NOTES"), "memoNOTES")
+        self.assertEqual(build_csharp_control_name("CheckEdit", field_name="ENABLED_YN"), "ChkENABLED_YN")
         self.assertEqual(build_csharp_control_name("PanelControl", logical_name="Detail"), "pnDetail")
         self.assertEqual(build_csharp_control_name("GroupControl", logical_name="Search"), "grpSearch")
         self.assertEqual(build_csharp_control_name("GridControl", logical_name="List"), "grdList")
         self.assertEqual(build_csharp_control_name("GridView", logical_name="List"), "gvwList")
-        self.assertEqual(build_csharp_control_name("TreeList", logical_name="BOM"), "treeListBOM")
+        self.assertEqual(build_csharp_control_name("TreeList", logical_name="TREE"), "treeListTREE")
         self.assertEqual(build_csharp_control_name("TabControl", logical_name="List"), "tabList")
 
     def test_extracts_datawindow_columns_and_generates_devexpress_xml(self):
         source = """
 datawindow(units=0)
-table(column=(type=char(20) dbname="sa110t.ordnum" name=ordnum)
-column=(type=char(30) dbname="sa110t.itemcd" name=itemcd))
+table(column=(type=char(20) dbname="zx900t.record_id" name=record_id)
+column=(type=char(30) dbname="zx900t.record_code" name=record_code))
 """
         columns = extract_datawindow_columns(source)
         xml_text = generate_devexpress_grid_xml(columns)
         root = ET.fromstring(xml_text)
 
-        self.assertEqual(columns, ["ORDNUM", "ITEMCD"])
+        self.assertEqual(columns, ["RECORD_ID", "RECORD_CODE"])
         self.assertEqual(root.tag, "XtraSerializer")
-        self.assertIn("<property name=\"FieldName\">ORDNUM</property>", xml_text)
-        self.assertIn("<property name=\"Name\">colList_ITEMCD</property>", xml_text)
+        self.assertIn("<property name=\"FieldName\">RECORD_ID</property>", xml_text)
+        self.assertIn("<property name=\"Name\">colList_RECORD_CODE</property>", xml_text)
         expected_grid_defaults = [
             "BestFitMaxRowCount",
             "PreviewLineCount",
@@ -332,49 +1516,49 @@ column=(type=char(30) dbname="sa110t.itemcd" name=itemcd))
     def test_extracts_visual_order_csharp_names_and_matched_captions(self):
         source = """
 datawindow(units=0)
-table(column=(type=char(10) updatewhereclause=no name=as_itemnm dbname="as_itemnm" )
- column=(type=char(10) updatewhereclause=no name=as_itemcd dbname="as_itemcd" )
+table(column=(type=char(10) updatewhereclause=no name=as_record_name dbname="as_record_name" )
+ column=(type=char(10) updatewhereclause=no name=as_record_code dbname="as_record_code" )
  )
-column(band=detail id=2 x="178" y="12" height="60" width="699" name=as_itemcd )
-column(band=detail id=1 x="1056" y="12" height="60" width="686" name=as_itemnm )
+column(band=detail id=2 x="178" y="12" height="60" width="699" name=as_record_code )
+column(band=detail id=1 x="1056" y="12" height="60" width="686" name=as_record_name )
 text(band=detail text="코드" x="18" y="12" height="60" width="133" name=t_1 )
 text(band=detail text="품명" x="901" y="12" height="60" width="133" name=as_item_t )
 """
         specs = extract_datawindow_column_specs(source)
         xml_text = generate_devexpress_grid_xml(specs)
 
-        self.assertEqual([spec.field_name for spec in specs], ["AS_ITEMCD", "AS_ITEMNM"])
+        self.assertEqual([spec.field_name for spec in specs], ["AS_RECORD_CODE", "AS_RECORD_NAME"])
         self.assertEqual([spec.caption for spec in specs], ["코드", "품명"])
-        self.assertEqual([spec.csharp_name for spec in specs], ["colList_AS_ITEMCD", "colList_AS_ITEMNM"])
+        self.assertEqual([spec.csharp_name for spec in specs], ["colList_AS_RECORD_CODE", "colList_AS_RECORD_NAME"])
         self.assertIn("<property name=\"Caption\">코드</property>", xml_text)
         self.assertIn("<property name=\"Caption\">품명</property>", xml_text)
-        self.assertIn("<property name=\"Name\">colList_AS_ITEMCD</property>", xml_text)
+        self.assertIn("<property name=\"Name\">colList_AS_RECORD_CODE</property>", xml_text)
 
     def test_matches_header_band_captions_to_detail_columns(self):
         source = """
 datawindow(units=0)
 header(height=80)
 detail(height=70)
-table(column=(type=char(10) name=itemcd dbname="itemcd" )
- column=(type=char(10) name=itemnm dbname="itemnm" ))
-text(band=header text="품목코드" x="100" y="8" height="40" width="220" name=t_itemcd )
-text(band=header text="품목명" x="340" y="8" height="40" width="260" name=t_itemnm )
-column(band=detail x="100" y="12" height="50" width="220" name=itemcd )
-column(band=detail x="340" y="12" height="50" width="260" name=itemnm )
+table(column=(type=char(10) name=record_code dbname="record_code" )
+ column=(type=char(10) name=record_name dbname="record_name" ))
+text(band=header text="품목코드" x="100" y="8" height="40" width="220" name=t_record_code )
+text(band=header text="품목명" x="340" y="8" height="40" width="260" name=t_record_name )
+column(band=detail x="100" y="12" height="50" width="220" name=record_code )
+column(band=detail x="340" y="12" height="50" width="260" name=record_name )
 """
         specs = extract_datawindow_column_specs(source)
 
-        self.assertEqual([spec.field_name for spec in specs], ["ITEMCD", "ITEMNM"])
+        self.assertEqual([spec.field_name for spec in specs], ["RECORD_CODE", "RECORD_NAME"])
         self.assertEqual([spec.caption for spec in specs], ["품목코드", "품목명"])
 
     def test_resolves_csharp_grid_column_prefix_variants(self):
         self.assertEqual(resolve_csharp_grid_column_prefix("list"), "colList_")
         self.assertEqual(resolve_csharp_grid_column_prefix("detail"), "colDetail_")
-        self.assertEqual(resolve_csharp_grid_column_prefix("table", table_name="SA110T"), "colSA110T_")
-        self.assertEqual(resolve_csharp_grid_column_prefix("purpose", purpose_name="POR"), "colPOR_")
-        self.assertEqual(resolve_csharp_grid_column_prefix("table", purpose_name="BOM"), "colBOM_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("table", table_name="ZX900T"), "colZX900T_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("purpose", purpose_name="BROWSE"), "colBROWSE_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("table", purpose_name="TREE"), "colTREE_")
         self.assertEqual(resolve_csharp_grid_column_prefix("colCustom_"), "colCustom_")
-        self.assertEqual(build_csharp_grid_column_name("itemcd", prefix="colDetail_"), "colDetail_ITEMCD")
+        self.assertEqual(build_csharp_grid_column_name("record_code", prefix="colDetail_"), "colDetail_RECORD_CODE")
 
     def test_resolves_csharp_grid_control_name_variants(self):
         self.assertEqual(
@@ -386,61 +1570,61 @@ column(band=detail x="340" y="12" height="50" width="260" name=itemnm )
             {"grid_control_name": "grdDetail", "grid_view_name": "gvwDetail"},
         )
         self.assertEqual(
-            resolve_csharp_grid_control_names("table", table_name="SA110T"),
-            {"grid_control_name": "grdSA110T", "grid_view_name": "gvwSA110T"},
+            resolve_csharp_grid_control_names("table", table_name="ZX900T"),
+            {"grid_control_name": "grdZX900T", "grid_view_name": "gvwZX900T"},
         )
         self.assertEqual(
-            resolve_csharp_grid_control_names("purpose", purpose_name="POR"),
-            {"grid_control_name": "grdPOR", "grid_view_name": "gvwPOR"},
+            resolve_csharp_grid_control_names("purpose", purpose_name="BROWSE"),
+            {"grid_control_name": "grdBROWSE", "grid_view_name": "gvwBROWSE"},
         )
         self.assertEqual(
-            resolve_csharp_grid_control_names("table", purpose_name="BOM"),
-            {"grid_control_name": "grdBOM", "grid_view_name": "gvwBOM"},
+            resolve_csharp_grid_control_names("table", purpose_name="TREE"),
+            {"grid_control_name": "grdTREE", "grid_view_name": "gvwTREE"},
         )
 
     def test_datawindow_layout_metadata_records_column_prefix_and_captions(self):
         source = """
 datawindow(units=0)
-column(band=detail x="100" y="10" height="50" width="200" name=itemcd )
-text(band=detail text="품목코드" x="10" y="10" height="50" width="80" name=t_itemcd )
+column(band=detail x="100" y="10" height="50" width="200" name=record_code )
+text(band=detail text="품목코드" x="10" y="10" height="50" width="80" name=t_record_code )
 """
-        result = build_datawindow_grid_layout(source, input_format="table", table_name="BA030T")
+        result = build_datawindow_grid_layout(source, input_format="table", table_name="ZX901T")
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(result.metadata["csharp_column_prefix"], "colBA030T_")
+        self.assertEqual(result.metadata["csharp_column_prefix"], "colZX901T_")
         self.assertEqual(
             result.metadata["csharp_grid_names"],
-            {"grid_control_name": "grdBA030T", "grid_view_name": "gvwBA030T"},
+            {"grid_control_name": "grdZX901T", "grid_view_name": "gvwZX901T"},
         )
-        self.assertEqual(result.metadata["column_specs"][0]["csharp_name"], "colBA030T_ITEMCD")
+        self.assertEqual(result.metadata["column_specs"][0]["csharp_name"], "colZX901T_RECORD_CODE")
         self.assertEqual(result.metadata["column_specs"][0]["caption"], "품목코드")
-        self.assertIn("<property name=\"Name\">gvwBA030T</property>", result.stdout)
-        self.assertIn("<property name=\"Name\">colBA030T_ITEMCD</property>", result.stdout)
+        self.assertIn("<property name=\"Name\">gvwZX901T</property>", result.stdout)
+        self.assertIn("<property name=\"Name\">colZX901T_RECORD_CODE</property>", result.stdout)
         self.assertIn("<property name=\"Caption\">품목코드</property>", result.stdout)
 
     def test_datawindow_layout_uses_purpose_name_when_table_name_is_ambiguous(self):
         source = """
 datawindow(units=0)
-column(band=detail x="100" y="10" height="50" width="200" name=porseq )
-text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t_porseq )
+column(band=detail x="100" y="10" height="50" width="200" name=sequence_id )
+text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_sequence_id )
 """
-        result = build_datawindow_grid_layout(source, input_format="purpose", purpose_name="POR")
+        result = build_datawindow_grid_layout(source, input_format="purpose", purpose_name="BROWSE")
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(result.metadata["csharp_column_prefix"], "colPOR_")
+        self.assertEqual(result.metadata["csharp_column_prefix"], "colBROWSE_")
         self.assertEqual(
             result.metadata["csharp_grid_names"],
-            {"grid_control_name": "grdPOR", "grid_view_name": "gvwPOR"},
+            {"grid_control_name": "grdBROWSE", "grid_view_name": "gvwBROWSE"},
         )
-        self.assertEqual(result.metadata["column_specs"][0]["csharp_name"], "colPOR_PORSEQ")
-        self.assertEqual(result.metadata["column_specs"][0]["caption"], "발주순번")
-        self.assertIn("<property name=\"Name\">gvwPOR</property>", result.stdout)
-        self.assertIn("<property name=\"Name\">colPOR_PORSEQ</property>", result.stdout)
-        self.assertIn("<property name=\"Caption\">발주순번</property>", result.stdout)
+        self.assertEqual(result.metadata["column_specs"][0]["csharp_name"], "colBROWSE_SEQUENCE_ID")
+        self.assertEqual(result.metadata["column_specs"][0]["caption"], "Sequence")
+        self.assertIn("<property name=\"Name\">gvwBROWSE</property>", result.stdout)
+        self.assertIn("<property name=\"Name\">colBROWSE_SEQUENCE_ID</property>", result.stdout)
+        self.assertIn("<property name=\"Caption\">Sequence</property>", result.stdout)
 
     def test_raw_converter_name_default_is_distinct_from_target_csharp_layout_name(self):
-        xml_text = generate_devexpress_grid_xml(["ITEMCD"])
-        layout = build_datawindow_grid_layout("column(band=detail x=\"1\" y=\"1\" width=\"10\" height=\"10\" name=itemcd )")
+        xml_text = generate_devexpress_grid_xml(["RECORD_CODE"])
+        layout = build_datawindow_grid_layout("column(band=detail x=\"1\" y=\"1\" width=\"10\" height=\"10\" name=record_code )")
 
         self.assertIn("<property name=\"Name\">gridView1</property>", xml_text)
         self.assertEqual(layout.metadata["csharp_grid_names"]["grid_view_name"], "gvwList")
@@ -459,37 +1643,37 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
     def test_extracts_csharp_designer_control_properties_from_target_style(self):
         designer_source = '''
             this.grpSearch = new DevExpress.XtraEditors.GroupControl();
-            this.radGUBUN = new KoneLib.Controls.u_RadioButton();
-            this.txtGIJUN = new KoneLib.Controls.u_TextEdit();
-            this.btnCUSTCD = new KoneLib.Controls.u_ButtonEdit();
-            this.lblGijun = new DevExpress.XtraEditors.LabelControl();
+            this.radMODE_CODE = new KoneLib.Controls.u_RadioButton();
+            this.txtInputValue = new KoneLib.Controls.u_TextEdit();
+            this.btnENTITY_CODE = new KoneLib.Controls.u_ButtonEdit();
+            this.lblInputValue = new DevExpress.XtraEditors.LabelControl();
             this.grdList = new KoneLib.Controls.u_GridControl();
             this.gvwList = new DevExpress.XtraGrid.Views.Grid.GridView();
             this.colList_AMTTOT = new DevExpress.XtraGrid.Columns.GridColumn();
             this.Controls.Add(this.grpSearch);
-            this.grpSearch.Controls.Add(this.radGUBUN);
-            this.grpSearch.Controls.Add(this.txtGIJUN);
-            this.grpSearch.Controls.Add(this.btnCUSTCD);
-            this.radGUBUN._isAllowBlank = true;
-            this.radGUBUN._isPKValue = false;
-            this.radGUBUN.BindingField = "GUBUN";
-            this.radGUBUN.EditValue = "T";
-            this.radGUBUN.EnterMoveNextControl = true;
-            this.radGUBUN.Location = new System.Drawing.Point(733, 31);
-            this.radGUBUN.Properties.Items.AddRange(new DevExpress.XtraEditors.Controls.RadioGroupItem[] {
+            this.grpSearch.Controls.Add(this.radMODE_CODE);
+            this.grpSearch.Controls.Add(this.txtInputValue);
+            this.grpSearch.Controls.Add(this.btnENTITY_CODE);
+            this.radMODE_CODE._isAllowBlank = true;
+            this.radMODE_CODE._isPKValue = false;
+            this.radMODE_CODE.BindingField = "MODE_CODE";
+            this.radMODE_CODE.EditValue = "T";
+            this.radMODE_CODE.EnterMoveNextControl = true;
+            this.radMODE_CODE.Location = new System.Drawing.Point(733, 31);
+            this.radMODE_CODE.Properties.Items.AddRange(new DevExpress.XtraEditors.Controls.RadioGroupItem[] {
             new DevExpress.XtraEditors.Controls.RadioGroupItem("T", "전체"),
             new DevExpress.XtraEditors.Controls.RadioGroupItem("A", "출고")});
-            this.radGUBUN.Size = new System.Drawing.Size(260, 23);
-            this.radGUBUN.TabIndex = 7;
-            this.txtGIJUN._isAllowBlank = false;
-            this.txtGIJUN.BindingField = "GIJUN";
-            this.txtGIJUN.MaximumSize = new System.Drawing.Size(65535, 23);
-            this.txtGIJUN.MinimumSize = new System.Drawing.Size(0, 23);
-            this.txtGIJUN.Properties.AutoHeight = false;
-            this.txtGIJUN.Properties.Mask.EditMask = "0000";
-            this.txtGIJUN.Properties.Mask.MaskType = DevExpress.XtraEditors.Mask.MaskType.Simple;
-            this.btnCUSTCD.BindingField = "CUSTCD";
-            this.btnCUSTCD.Properties.Buttons.AddRange(new DevExpress.XtraEditors.Controls.EditorButton[] {
+            this.radMODE_CODE.Size = new System.Drawing.Size(260, 23);
+            this.radMODE_CODE.TabIndex = 7;
+            this.txtInputValue._isAllowBlank = false;
+            this.txtInputValue.BindingField = "INPUT_VALUE";
+            this.txtInputValue.MaximumSize = new System.Drawing.Size(65535, 23);
+            this.txtInputValue.MinimumSize = new System.Drawing.Size(0, 23);
+            this.txtInputValue.Properties.AutoHeight = false;
+            this.txtInputValue.Properties.Mask.EditMask = "0000";
+            this.txtInputValue.Properties.Mask.MaskType = DevExpress.XtraEditors.Mask.MaskType.Simple;
+            this.btnENTITY_CODE.BindingField = "ENTITY_CODE";
+            this.btnENTITY_CODE.Properties.Buttons.AddRange(new DevExpress.XtraEditors.Controls.EditorButton[] {
             new DevExpress.XtraEditors.Controls.EditorButton(DevExpress.XtraEditors.Controls.ButtonPredefines.Search)});
             this.grdList.MainView = this.gvwList;
             this.grdList.ViewCollection.AddRange(new DevExpress.XtraGrid.Views.Base.BaseView[] {
@@ -500,10 +1684,10 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
             this.gvwList.Name = "gvwList";
             this.colList_AMTTOT.FieldName = "AMTTOT";
             private DevExpress.XtraEditors.GroupControl grpSearch;
-            private KoneLib.Controls.u_RadioButton radGUBUN;
-            private KoneLib.Controls.u_TextEdit txtGIJUN;
-            private KoneLib.Controls.u_ButtonEdit btnCUSTCD;
-            private DevExpress.XtraEditors.LabelControl lblGijun;
+            private KoneLib.Controls.u_RadioButton radMODE_CODE;
+            private KoneLib.Controls.u_TextEdit txtInputValue;
+            private KoneLib.Controls.u_ButtonEdit btnENTITY_CODE;
+            private DevExpress.XtraEditors.LabelControl lblInputValue;
             private KoneLib.Controls.u_GridControl grdList;
             private DevExpress.XtraGrid.Views.Grid.GridView gvwList;
             private DevExpress.XtraGrid.Columns.GridColumn colList_AMTTOT;
@@ -514,28 +1698,28 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         controls = {item["name"]: item for item in payload["controls"]}
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(controls["radGUBUN"]["type_name"], "KoneLib.Controls.u_RadioButton")
-        self.assertEqual(controls["radGUBUN"]["binding_field"], "GUBUN")
-        self.assertEqual(controls["radGUBUN"]["properties"]["_isAllowBlank"], True)
-        self.assertEqual(controls["radGUBUN"]["properties"]["_isPKValue"], False)
-        self.assertEqual(controls["radGUBUN"]["properties"]["EditValue"], "T")
-        self.assertEqual(controls["radGUBUN"]["properties"]["EnterMoveNextControl"], True)
-        self.assertEqual(controls["radGUBUN"]["location"], {"x": 733, "y": 31})
-        self.assertEqual(controls["radGUBUN"]["size"], {"width": 260, "height": 23})
-        self.assertEqual(controls["radGUBUN"]["tab_index"], 7)
-        self.assertIn("Properties.Items.AddRange", controls["radGUBUN"]["collection_calls"])
-        self.assertEqual(controls["txtGIJUN"]["binding_field"], "GIJUN")
-        self.assertEqual(controls["txtGIJUN"]["properties"]["Properties.AutoHeight"], False)
-        self.assertEqual(controls["txtGIJUN"]["properties"]["Properties.Mask.EditMask"], "0000")
-        self.assertEqual(controls["txtGIJUN"]["properties"]["MaximumSize"], {"width": 65535, "height": 23})
-        self.assertIn("Properties.Buttons.AddRange", controls["btnCUSTCD"]["collection_calls"])
-        self.assertEqual(controls["btnCUSTCD"]["parent_name"], "grpSearch")
+        self.assertEqual(controls["radMODE_CODE"]["type_name"], "KoneLib.Controls.u_RadioButton")
+        self.assertEqual(controls["radMODE_CODE"]["binding_field"], "MODE_CODE")
+        self.assertEqual(controls["radMODE_CODE"]["properties"]["_isAllowBlank"], True)
+        self.assertEqual(controls["radMODE_CODE"]["properties"]["_isPKValue"], False)
+        self.assertEqual(controls["radMODE_CODE"]["properties"]["EditValue"], "T")
+        self.assertEqual(controls["radMODE_CODE"]["properties"]["EnterMoveNextControl"], True)
+        self.assertEqual(controls["radMODE_CODE"]["location"], {"x": 733, "y": 31})
+        self.assertEqual(controls["radMODE_CODE"]["size"], {"width": 260, "height": 23})
+        self.assertEqual(controls["radMODE_CODE"]["tab_index"], 7)
+        self.assertIn("Properties.Items.AddRange", controls["radMODE_CODE"]["collection_calls"])
+        self.assertEqual(controls["txtInputValue"]["binding_field"], "INPUT_VALUE")
+        self.assertEqual(controls["txtInputValue"]["properties"]["Properties.AutoHeight"], False)
+        self.assertEqual(controls["txtInputValue"]["properties"]["Properties.Mask.EditMask"], "0000")
+        self.assertEqual(controls["txtInputValue"]["properties"]["MaximumSize"], {"width": 65535, "height": 23})
+        self.assertIn("Properties.Buttons.AddRange", controls["btnENTITY_CODE"]["collection_calls"])
+        self.assertEqual(controls["btnENTITY_CODE"]["parent_name"], "grpSearch")
         self.assertEqual(controls["grpSearch"]["parent_name"], "this")
-        self.assertEqual(controls["grpSearch"]["children"], ["radGUBUN", "txtGIJUN", "btnCUSTCD"])
+        self.assertEqual(controls["grpSearch"]["children"], ["radMODE_CODE", "txtInputValue", "btnENTITY_CODE"])
         self.assertEqual(payload["grid_columns_present"], True)
         self.assertEqual(payload["grid_column_count"], 1)
         self.assertEqual(payload["grid_columns"][0]["name"], "colList_AMTTOT")
-        self.assertEqual(controls["lblGijun"]["caption"], "")
+        self.assertEqual(controls["lblInputValue"]["caption"], "")
         self.assertEqual(controls["grdList"]["properties"]["MainView"], "this.gvwList")
         self.assertIn("ViewCollection.AddRange", controls["grdList"]["collection_calls"])
         self.assertEqual(controls["gvwList"]["properties"]["GridControl"], "this.grdList")
@@ -543,24 +1727,24 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
     def test_csharp_designer_string_values_preserve_korean_text(self):
         result = extract_csharp_designer_control_specs(
             '''
-            this.lblGijun = new DevExpress.XtraEditors.LabelControl();
-            this.lblGijun.Text = "기준년도";
-            this.lblGijun.Name = "lblGijun";
+            this.lblInputValue = new DevExpress.XtraEditors.LabelControl();
+            this.lblInputValue.Text = "기준년도";
+            this.lblInputValue.Name = "lblInputValue";
             '''
         )
         controls = {item["name"]: item for item in json.loads(result.stdout)["controls"]}
 
-        self.assertEqual(controls["lblGijun"]["caption"], "기준년도")
-        self.assertEqual(controls["lblGijun"]["properties"]["Text"], "기준년도")
+        self.assertEqual(controls["lblInputValue"]["caption"], "기준년도")
+        self.assertEqual(controls["lblInputValue"]["properties"]["Text"], "기준년도")
 
     def test_generated_csharp_style_blocks_runtime_columns_add_even_with_designer_members(self):
         generated = '''
-        private DevExpress.XtraGrid.Columns.GridColumn colList_CUSTNM;
-        this.colList_CUSTNM = new DevExpress.XtraGrid.Columns.GridColumn();
+        private DevExpress.XtraGrid.Columns.GridColumn colList_DISPLAY_NAME;
+        this.colList_DISPLAY_NAME = new DevExpress.XtraGrid.Columns.GridColumn();
         this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
-        this.colList_CUSTNM});
+        this.colList_DISPLAY_NAME});
         DevExpress.XtraGrid.Columns.GridColumn runtimeColumn = new DevExpress.XtraGrid.Columns.GridColumn();
-        runtimeColumn.FieldName = "ITEMCD";
+        runtimeColumn.FieldName = "RECORD_CODE";
         this.gvwList.Columns.Add(runtimeColumn);
         '''
 
@@ -639,7 +1823,11 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         this.colList_AMTTOT.ColumnEdit = this.rpsSpinAmt;
         '''
 
-        result = verify_migration_generated_csharp_style(generated)
+        result = verify_migration_generated_csharp_style(
+            generated,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            source_role="designer",
+        )
 
         self.assertTrue(result.success, result.metadata["issues"])
 
@@ -664,7 +1852,7 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         generated = '''
         private void SetGridColumns()
         {
-            AddGridColumn(gvwList, "CUSTNM", "고객", 160, true, false);
+            AddGridColumn(gvwList, "DISPLAY_NAME", "고객", 160, true, false);
         }
         private GridColumn AddGridColumn(GridView view, string fieldName, string caption, int width, bool visible, bool numeric)
         {
@@ -740,9 +1928,9 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("generated_get_column_text_helper_detected", issue_codes)
         self.assertIn("generated_set_visible_index_helper_detected", issue_codes)
 
-    def test_generated_csharp_style_blocks_sa900100_followup_generated_helpers(self):
+    def test_generated_csharp_style_blocks_zx123456_followup_generated_helpers(self):
         generated = '''
-        private void SA900100_Load(object sender, EventArgs e)
+        private void ZX123456_Load(object sender, EventArgs e)
         {
             SetDefaultSearchValues();
             ApplyListColumnLayout();
@@ -754,14 +1942,14 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
             return true;
         }
 
-        private string GetBasisYear()
+        private string GetDerivedYear()
         {
-            return ymdGIJUN.Text.Trim();
+            return ymdInput.Text.Trim();
         }
 
-        private string GetCustomerLike()
+        private string GetEntityCodeLike()
         {
-            return btnCUSTCD.Text.Trim() + "%";
+            return btnENTITY_CODE.Text.Trim() + "%";
         }
 
         private void SetDefaultSearchValues(bool force = false)
@@ -776,9 +1964,9 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
             }
         }
 
-        private void BtnCUSTCD_ButtonClick(object sender, DevExpress.XtraEditors.Controls.ButtonPressedEventArgs e)
+        private void BtnENTITY_CODE_ButtonClick(object sender, DevExpress.XtraEditors.Controls.ButtonPressedEventArgs e)
         {
-            PopCustFrm pop = new PopCustFrm();
+            EntityLookupDialog pop = new EntityLookupDialog();
             DialogResult di = pop.ShowDialog();
             if (di == DialogResult.Yes || di == DialogResult.OK)
             {
@@ -799,145 +1987,115 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("popcust_dialogresult_yes_or_ok_detected", issue_codes)
         self.assertIn("mojibake_korean_literal_detected", issue_codes)
 
-    def test_author_tagged_csharp_style_baseline_has_real_analysis_counts(self):
+    def test_legacy_baseline_api_returns_a_detached_generalized_recipe_without_corpus_metrics(self):
         baseline = get_author_tagged_csharp_style_baseline()
+        second = get_author_tagged_csharp_style_baseline()
 
-        self.assertEqual(62, baseline["sp_count"])
-        self.assertEqual(41, baseline["normalized_program_key_count"])
-        self.assertEqual(37, baseline["primary_csharp_baseline_files_analyzed"])
-        self.assertEqual(37, baseline["designer_files_analyzed"])
-        self.assertIn("SA900100", baseline["baseline_exclusions"])
-        self.assertEqual(31, baseline["primary_csharp_pattern_counts"]["CallSelectProcedure"]["files"])
-        self.assertEqual(27, baseline["primary_csharp_pattern_counts"]["GetFocusedDataRow"]["files"])
-        self.assertEqual(35, baseline["designer_pattern_counts"]["u_GridControl"]["files"])
-        self.assertEqual(34, baseline["designer_pattern_counts"]["explicit_GridColumn_fields"]["files"])
-        self.assertEqual(27, baseline["designer_pattern_counts"]["RepositoryItemSpinEdit"]["files"])
-        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["DBNull_ternary_row_value"])
-        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["radio_Convert_ToString_local"])
-        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["CallSelectProcedure_inline_wildcard_argument"])
-        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["CSharp_like_wildcard_shaping"])
-        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["DateEdit_null_SetToDay_default"])
-        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["DateEdit_year_or_now_parameter_shaping"])
-        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["generated_date_boundary_DateTime_block"])
-        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["direct_grid_datasource_null_reset"])
-        self.assertEqual(0, baseline["zero_hit_generated_patterns"]["CallDetailQuery_generated_method"])
-        recipe = baseline["positive_generation_recipe"]
-        self.assertIn("same-program primary C# file", recipe["source_priority"])
-        self.assertEqual("FrmDevBase", recipe["screen_base"]["normal_screen"])
-        self.assertIn("prefer the matched source's CallSelectProcedure or CallViewQuery shape", recipe["select_flow"])
-        self.assertIn("use RepositoryItemSpinEdit through ColumnEdit for numeric grid columns instead of DisplayFormat-only output", recipe["designer_flow"])
+        self.assertIsInstance(baseline, dict)
+        self.assertEqual("packaged_sanitized_profile", baseline["source"])
+        self.assertIn("positive_generation_recipe", baseline)
+        for removed_metric in (
+            "sp_count",
+            "normalized_program_key_count",
+            "primary_csharp_baseline_files_analyzed",
+            "designer_files_analyzed",
+            "primary_csharp_pattern_counts",
+            "designer_pattern_counts",
+            "zero_hit_generated_patterns",
+        ):
+            with self.subTest(removed_metric=removed_metric):
+                self.assertNotIn(removed_metric, baseline)
+        baseline["mutated_by_test"] = True
+        self.assertNotIn("mutated_by_test", second)
 
     def test_author_tagged_program_style_profiles_are_packaged(self):
-        profile_path = Path("skills/pb_to_csharp_migration_harness/references/author-tagged-program-style-profiles.json")
+        profile_path = Path("skills/pb_to_csharp_migration_harness/references/packaged-style-contract.json")
         payload = json.loads(profile_path.read_text(encoding="utf-8"))
 
-        self.assertEqual(37, payload["program_count"])
-        self.assertIn("SA800100", payload["profiles"])
-        sa800100 = payload["profiles"]["SA800100"]
-        self.assertEqual("FrmDevBase", sa800100["base_class"])
-        self.assertIn("CallSelectProcedure", sa800100["select_methods"])
-        self.assertIn("sp_SA800100_SELECT", {item["procedure"] for item in sa800100["sp_calls"]})
-        self.assertIn("@WORKTYPE", sa800100["db_parameters"])
-        self.assertTrue(sa800100["style_flags"]["has_columns_addrange"])
+        profile_hash = "sha256:" + hashlib.sha256(profile_path.read_bytes()).hexdigest()
+        loaded = load_packaged_migration_profile(
+            payload["contract_id"],
+            payload["contract_version"],
+            profile_hash,
+        )
+
+        self.assertEqual("packaged-only", payload["normal_generation"]["profile_source"])
+        self.assertFalse(payload["normal_generation"]["external_discovery_allowed"])
+        self.assertTrue(loaded.success, loaded.to_dict())
+        self.assertEqual(profile_hash, loaded.metadata["profile_consumption"]["profile_hash"])
 
     def test_author_tagged_style_evidence_resolves_sp_to_program_key(self):
-        self.assertEqual("SA800100", normalize_author_tagged_program_key("dbo.sp_SA800100_SELECT"))
-        self.assertEqual("MA100100_POP", normalize_author_tagged_program_key("[dbo].[sp_MA100100_POP_SELECT]"))
-
-        resolved = resolve_author_tagged_style_evidence("sp_SA800100_SELECT")
-        self.assertTrue(resolved.success, resolved.to_dict())
-        self.assertEqual("SA800100", resolved.metadata["program_key"])
-        self.assertIn("SA800100.cs", resolved.metadata["primary_style_evidence_paths"][0])
-
-        excluded = resolve_author_tagged_style_evidence("SP_SA900100_SELECT")
-        self.assertFalse(excluded.success)
-        self.assertEqual("excluded", excluded.metadata["status"])
-        self.assertIn("repair target", excluded.metadata["exclusion_reason"])
-
-    def test_author_tagged_style_evidence_discovers_same_program_files_under_root(self):
+        self.assertEqual("GENERALIZED", normalize_author_tagged_program_key("DBO.SP_GENERALIZED_SELECT"))
         with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            screen_dir = root / "20.영업(SA)" / "Konesystem.SA02"
-            screen_dir.mkdir(parents=True)
-            (screen_dir / "SA800100.cs").write_text(
-                """
-                public partial class SA800100 : FrmDevBase
-                {
-                    protected override void SearchCommand(object sender, EventArgs e) {}
-                    private DataSet CallSelectProcedure()
-                    {
-                        return dbClient.GetDataSetFromSP("sp_SA800100_SELECT"
-                            , new DbParameter("@WORKTYPE", "LIST"));
-                    }
-                }
-                """,
-                encoding="utf-8",
-            )
-            (screen_dir / "SA800100.Designer.cs").write_text(
-                """
-                private DevExpress.XtraGrid.Columns.GridColumn colList_ITEMCD;
-                this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
-                    this.colList_ITEMCD});
-                this.colList_ITEMCD.BindingField = "ITEMCD";
-                this.colList_ITEMCD.AppearanceHeader.Options.UseFont = true;
-                this.colList_ITEMCD.AppearanceHeader.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.Center;
-                this.colList_ITEMCD.AppearanceCell.Options.UseFont = true;
-                """,
-                encoding="utf-8",
-            )
-
-            resolved = resolve_author_tagged_style_evidence("sp_SA800100_SELECT", csharp_root=str(root))
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                resolved = resolve_author_tagged_style_evidence(
+                    "SP_GENERALIZED_SELECT",
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                )
 
         self.assertTrue(resolved.success, resolved.to_dict())
-        self.assertTrue(all(resolved.metadata["path_exists"]))
-        self.assertEqual("FrmDevBase", resolved.metadata["style_profile"]["base_class"])
-        self.assertIn("SearchCommand", resolved.metadata["style_profile"]["command_handlers"])
-        self.assertIn("@WORKTYPE", resolved.metadata["style_profile"]["db_parameters"])
+        self.assertEqual("GENERALIZED", resolved.metadata["program_key"])
+        self.assertEqual([], resolved.metadata["primary_style_evidence_paths"])
+        self.assertFalse(resolved.metadata["path_evidence_accepted"])
+
+    def test_runtime_style_resolution_does_not_discover_same_program_files_under_root(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            resolved = resolve_author_tagged_style_evidence(
+                "SP_GENERALIZED_SELECT",
+                csharp_root=temp_dir,
+            )
+
+        self.assertFalse(resolved.success)
+        self.assertEqual("explicit_profile_update_required", resolved.metadata["status"])
 
     def test_author_tagged_style_evidence_blocks_stale_root_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            resolved = resolve_author_tagged_style_evidence("sp_SA800100_SELECT", csharp_root=temp_dir)
+            resolved = resolve_author_tagged_style_evidence("SP_GENERALIZED_SELECT", csharp_root=temp_dir)
 
         self.assertFalse(resolved.success)
-        self.assertEqual("stale_or_missing", resolved.metadata["status"])
-        self.assertGreaterEqual(len(resolved.metadata["missing_style_evidence_paths"]), 1)
+        self.assertEqual("explicit_profile_update_required", resolved.metadata["status"])
 
     def test_author_tagged_style_evidence_uses_bundled_program_profile_without_live_root(self):
-        resolved = resolve_author_tagged_style_evidence("sp_SA800100_SELECT")
+        missing_identity = resolve_author_tagged_style_evidence("SP_GENERALIZED_SELECT")
 
-        self.assertTrue(resolved.success, resolved.to_dict())
-        self.assertEqual("SA800100", resolved.metadata["program_key"])
-        profile = resolved.metadata["style_profile"]
-        self.assertEqual("FrmDevBase", profile["base_class"])
-        self.assertIn("SA800100_SearchCommand", profile["method_names"])
-        self.assertIn("@WORKTYPE", profile["db_parameters"])
+        self.assertFalse(missing_identity.success)
+        self.assertEqual("blocked", missing_identity.metadata["status"])
         self.assertIn(
-            {"client_method": "GetDataSetFromSP", "procedure": "sp_SA800100_SELECT"},
-            profile["sp_calls"],
+            "packaged_profile_identity_required",
+            {issue["code"] for issue in missing_identity.metadata["issues"]},
         )
 
-    def test_build_plan_dict_state_preserves_author_tagged_fields(self):
-        result = build_pb_to_csharp_migration_plan(
-            "Migrate SA800100 using C_KONE110 style.",
-            {
-                "target_style": "C_KONE110",
-                "procedure_name": "sp_SA800100_SELECT",
-                "has_sp_style_reference": True,
-            },
-        )
+    def test_build_plan_dict_state_preserves_generalized_profile_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                result = build_pb_to_csharp_migration_plan(
+                    "Migrate a generalized screen with the packaged style.",
+                    {
+                        "target_style": "generalized",
+                        "procedure_name": "SP_GENERALIZED_SELECT",
+                        "has_sp_style_reference": True,
+                        "profile_id": "pb-csharp-offline-generalized",
+                        "profile_version": "1.0",
+                        "profile_hash": profile_hash,
+                    },
+                )
 
         self.assertTrue(result.success, result.to_dict())
-        resolution = result.metadata["author_tagged_style_resolution"]
-        self.assertEqual("SA800100", resolution["program_key"])
-        self.assertEqual("matched", resolution["status"])
-        self.assertEqual("FrmDevBase", resolution["style_profile"]["base_class"])
+        resolution = result.metadata["packaged_style_resolution"]
+        self.assertEqual("GENERALIZED", resolution["program_key"])
+        self.assertEqual("loaded", resolution["status"])
+        self.assertTrue(resolution["profile_consumption"]["profile_hash_verified"])
 
     def test_migration_analysis_document_quality_blocks_short_log_level_summary(self):
         shallow = """
         # PB migration notes
 
         ## Objective
-        Migrate PR100200 to C#.
+        Migrate ZX234567 to C#.
 
         ## Implementation
         Add a button and create a stored procedure.
@@ -964,24 +2122,24 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_migration_analysis_document_quality_accepts_minimum_handoff_depth(self):
         document = """
-        # PR100200 PB-to-C# migration analysis
+        # ZX234567 PB-to-C# migration analysis
 
         ## 1. Objective and target operator
-        Objective: migrate the PowerBuilder production outsourcing workflow into a C# WinForms screen.
-        Target operator: production planner who selects rows, chooses outsourcing items, and saves the result.
+        Objective: migrate the PowerBuilder production detail workflow into a C# WinForms screen.
+        Target operator: production planner who selects rows, chooses detail items, and saves the result.
 
         ## 2. PB source evidence
-        Source evidence: prod_003.pbl, prod_302_a.sru, linked SRW popup, and SRD DataWindow objects.
+        Source evidence: prod_003.pbl, synthetic_source_a.sru, linked SRW popup, and SRD DataWindow objects.
         The PB source trace records clicked event behavior, Retrieve arguments, DataWindow fields, and source gaps.
 
         ```powerscript
-        // PB clicked event source evidence from prod_302_a.sru
+        // PB clicked event source evidence from synthetic_source_a.sru
         dw_main.AcceptText()
         if dw_main.GetRow() <= 0 then return
         ```
 
         ## 3. User workflow
-        User workflow: select a production order row, click outsourcing, open popup, choose item, confirm save,
+        User workflow: select a production order row, click detail, open popup, choose item, confirm save,
         refresh list, and verify the result in the grid.
 
         ## 4. C# implementation scope
@@ -990,22 +2148,22 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
         ```csharp
         // target C# evidence
-        dbClient.GetDataSetFromSP("sp_PR100200_SELECT", new DbParameter("@WORKTYPE", "LIST"));
+        dbClient.GetDataSetFromSP("sp_ZX234567_SELECT", new DbParameter("@WORKTYPE", "LIST"));
         ```
 
         ## 5. Event and call flow
-        Event/call flow: button click handler -> selected row validation -> duplicate outsourcing validation
+        Event/call flow: button click handler -> selected row validation -> duplicate detail validation
         -> popup call -> save confirmation -> SP SAVE call -> grid refresh.
 
         ## 6. DB and SP mapping
-        DB/SP mapping: SELECT branch returns target row data, SAVE branch performs INSERT into SA130T and UPDATE PR110T.
+        DB/SP mapping: SELECT branch returns target row data, SAVE branch performs INSERT into SYNTHETIC_TARGET and UPDATE SYNTHETIC_SOURCE.
         @WORKTYPE distinguishes LIST, DETAIL, and SAVE semantics. No source-unbacked schema-only fallback is allowed.
 
         ```sql
-        INSERT INTO SA130T (ORGDIV, ORDNUM, ORDSEQ)
-        SELECT A.ORGDIV, A.ORDNUM, A.ORDSEQ
-          FROM PR110T A
-         WHERE A.ORGDIV = @ORGDIV;
+        INSERT INTO SYNTHETIC_TARGET (SCOPE_CODE, RECORD_ID, RECORD_SEQUENCE)
+        SELECT A.SCOPE_CODE, A.RECORD_ID, A.RECORD_SEQUENCE
+          FROM SYNTHETIC_SOURCE A
+         WHERE A.SCOPE_CODE = @SCOPE_CODE;
         ```
 
         ## 7. Transaction and error handling
@@ -1013,7 +2171,7 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         RAISERROR message is used for duplicate or completed-process conflicts.
 
         ```sql
-        IF EXISTS (SELECT 1 FROM SA130T WHERE ORGDIV = @ORGDIV)
+        IF EXISTS (SELECT 1 FROM SYNTHETIC_TARGET WHERE SCOPE_CODE = @SCOPE_CODE)
             RAISERROR('Already processed.', 16, 1);
         ```
 
@@ -1022,15 +2180,15 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         add save SP branch, update Designer grid columns, then verify build and manual flow.
 
         ## 9. Constraints and business rules
-        Required business rules: preserve ORDNUM + ORDSEQ key, do not save with ORDNUM alone,
+        Required business rules: preserve RECORD_ID + RECORD_SEQUENCE key, do not save with RECORD_ID alone,
         do not invent C# wildcard shaping, and keep source Korean literals unchanged.
 
         ## 10. Manual test scenarios
-        Verification plan: normal save, popup cancel, duplicate outsourcing row, completed process conflict,
+        Verification plan: normal save, popup cancel, duplicate detail row, completed process conflict,
         grid refresh, SP rollback check, and C# build check.
 
         ```text
-        manual test case: choose one valid row, select popup item, save, verify SA130T insert and PR110T update.
+        manual test case: choose one valid row, select popup item, save, verify SYNTHETIC_TARGET insert and SYNTHETIC_SOURCE update.
         ```
 
         ## 11. LLM implementation handoff
@@ -1044,12 +2202,12 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         ### Target file plan
         | artifact | target file / class / procedure | implementation task | done criteria |
         | --- | --- | --- | --- |
-        | C# screen | PR100200.cs | add button handler and CallProc path | build succeeds |
-        | Designer | PR100200.Designer.cs | add explicit GridColumn members | BindingField and Caption match |
-        | SQL procedure | sp_PR100200_SAVE procedure | add SAVE @WORKTYPE branch | SP contract passes review |
+        | C# screen | ZX234567.cs | add button handler and CallProc path | build succeeds |
+        | Designer | ZX234567.Designer.cs | add explicit GridColumn members | BindingField and Caption match |
+        | SQL procedure | sp_ZX234567_SAVE procedure | add SAVE @WORKTYPE branch | SP contract passes review |
 
         ### User directive and approved scope
-        User directive: migrate the confirmed PB outsourcing workflow and preserve the current target style.
+        User directive: migrate the confirmed PB detail workflow and preserve the current target style.
         Approved scope: C# handler, Designer columns, and SAVE branch only. Out-of-scope findings such as
         unrelated SQL cleanup, library upgrades, or inferred UI convenience logic are proposal-only and do not
         implement without explicit approval.
@@ -1057,38 +2215,38 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         ### PB event to C# event mapping
         | PB event | C# method / handler | validation | output |
         | --- | --- | --- | --- |
-        | clicked | btnOutsourcing_Click handler | selected row and duplicate check | popup save call |
+        | clicked | btnOpenDetail_Click handler | selected row and duplicate check | popup save call |
 
         ### DataWindow field mapping
         | DataWindow | PB column / field | C# control / GridColumn | BindingField | Caption |
         | --- | --- | --- | --- | --- |
-        | dw_main | ORDNUM | colList_ORDNUM GridColumn | ORDNUM | Order No |
-        | dw_main | ITEMCD | btnITEMCD control | ITEMCD | Item |
+        | dw_main | RECORD_ID | colList_RECORD_ID GridColumn | RECORD_ID | Order No |
+        | dw_main | RECORD_CODE | btnRECORD_CODE control | RECORD_CODE | Item |
 
         ### Control layout and binding plan
         | control | type | BindingField | TabIndex | note |
         | --- | --- | --- | --- | --- |
-        | lblITEMCD | LabelControl |  | 0 | item label |
-        | btnITEMCD | ButtonEdit | ITEMCD | 1 | target control |
+        | lblRECORD_CODE | LabelControl |  | 0 | item label |
+        | btnRECORD_CODE | ButtonEdit | RECORD_CODE | 1 | target control |
         | gvwList | GridView |  | 10 | list view |
 
         ### SP contract matrix
         | SP contract | @WORKTYPE | parameter | result column | DML |
         | --- | --- | --- | --- | --- |
-        | sp_PR100200_SAVE | SAVE | @ORGDIV, @XML | ORDNUM, ORDSEQ | INSERT SA130T / UPDATE PR110T |
+        | sp_ZX234567_SAVE | SAVE | @SCOPE_CODE, @XML | RECORD_ID, RECORD_SEQUENCE | INSERT SYNTHETIC_TARGET / UPDATE SYNTHETIC_SOURCE |
 
         ### Style profile contract
-        Author-tagged style profile: use program key PR100200. If unmapped, use fallback program PR300100
+        Packaged style profile: use program key ZX234567. If unmapped, use fallback program ZX345678
         with source hash and Designer hash evidence before applying style patterns.
 
         ### Implementation task list
-        1. implementation task: update PR100200.cs handler; acceptance: selected row validation is preserved.
-        2. implementation task: update PR100200.Designer.cs grid columns; done criteria: explicit AddRange columns exist.
+        1. implementation task: update ZX234567.cs handler; acceptance: selected row validation is preserved.
+        2. implementation task: update ZX234567.Designer.cs grid columns; done criteria: explicit AddRange columns exist.
         3. implementation task: update SQL SAVE branch; acceptance: transaction and RAISERROR behavior match.
 
         ### Verification contract
         manual test: save one valid row. expected UI: grid refresh shows the saved row.
-        expected DB: SA130T insert and PR110T update exist. build and rollback checks must pass.
+        expected DB: SYNTHETIC_TARGET insert and SYNTHETIC_SOURCE update exist. build and rollback checks must pass.
 
         ### Confirmed / inferred / blocked split
         confirmed: PB clicked event and DataWindow columns. inferred: popup captions when SRD text is absent.
@@ -1107,39 +2265,39 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_migration_analysis_document_quality_blocks_missing_user_scope_contract(self):
         document = """
-        # PR100200 PB-to-C# migration analysis
+        # ZX234567 PB-to-C# migration analysis
 
-        Objective: migrate the PowerBuilder production outsourcing workflow for the target operator.
-        PB source evidence: prod_302_a.sru, prod_302_a.srw, DataWindow dw_main, PBL and SRD export.
+        Objective: migrate the PowerBuilder production detail workflow for the target operator.
+        PB source evidence: synthetic_source_a.sru, synthetic_source_a.srw, DataWindow dw_main, PBL and SRD export.
         User workflow: button click, selected row validation, popup, save, grid refresh.
         Target C# implementation scope: WinForms, DevExpress GridColumn members, BindingField assignments,
         DbParameter-based CallProc, CallViewQuery, Designer.cs changes, and procedure work.
         Event and call flow: PB event mapping to C# handler with click validation and popup result handling.
         DB/SP mapping: SELECT, SAVE, INSERT, UPDATE, DELETE, @WORKTYPE, transaction, RAISERROR.
         Implementation order: analyze PB, update C#, update Designer, update SP, run verification.
-        Constraints and business rules: preserve ORDNUM and ORDSEQ, Korean literals, comments, and row contracts.
+        Constraints and business rules: preserve RECORD_ID and RECORD_SEQUENCE, Korean literals, comments, and row contracts.
         Manual test scenarios: build verification, manual UI verification, rollback verification, expected DB result.
         LLM implementation handoff: analysis agent passes this handoff to developer agent with no hidden context.
 
         ```csharp
-        dbClient.GetDataSetFromSP("sp_PR100200_SELECT", new DbParameter("@WORKTYPE", "LIST"));
+        dbClient.GetDataSetFromSP("sp_ZX234567_SELECT", new DbParameter("@WORKTYPE", "LIST"));
         ```
 
         ```sql
-        INSERT INTO SA130T (ORGDIV, ORDNUM, ORDSEQ)
-        SELECT A.ORGDIV, A.ORDNUM, A.ORDSEQ
-          FROM PR110T A
-         WHERE A.ORGDIV = @ORGDIV;
+        INSERT INTO SYNTHETIC_TARGET (SCOPE_CODE, RECORD_ID, RECORD_SEQUENCE)
+        SELECT A.SCOPE_CODE, A.RECORD_ID, A.RECORD_SEQUENCE
+          FROM SYNTHETIC_SOURCE A
+         WHERE A.SCOPE_CODE = @SCOPE_CODE;
         ```
 
         ## Cross-agent development specification
         Analysis agent and developer agent must use this development handoff.
-        target file plan: PR100200.cs, PR100200.Designer.cs, sp_PR100200_SAVE procedure.
+        target file plan: ZX234567.cs, ZX234567.Designer.cs, sp_ZX234567_SAVE procedure.
         PB event to C# method mapping: clicked event -> btnSave_Click handler.
-        DataWindow field mapping: DataWindow column ORDNUM -> GridColumn colList_ORDNUM, BindingField ORDNUM, Caption.
+        DataWindow field mapping: DataWindow column RECORD_ID -> GridColumn colList_RECORD_ID, BindingField RECORD_ID, Caption.
         control layout binding plan: control, TabIndex, BindingField, LabelControl, GridView.
         SP contract matrix: @WORKTYPE, parameter, result column, DML, procedure contract.
-        style profile contract: author-tagged program key PR100200, fallback program, source hash.
+        style profile contract: packaged style program key ZX234567, fallback program, source hash.
         implementation task list: implementation task, task list, done criteria, acceptance.
         verification contract: manual test, expected UI, expected DB, build, rollback.
         confirmed: PB clicked event. inferred: popup caption. blocked: missing DB schema.
@@ -1160,40 +2318,40 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_migration_analysis_document_quality_blocks_thin_user_scope_keyword(self):
         document = """
-        # PR100200 PB-to-C# migration analysis
+        # ZX234567 PB-to-C# migration analysis
 
-        Objective: migrate the PowerBuilder production outsourcing workflow for the target operator.
-        PB source evidence: prod_302_a.sru, prod_302_a.srw, DataWindow dw_main, PBL and SRD export.
+        Objective: migrate the PowerBuilder production detail workflow for the target operator.
+        PB source evidence: synthetic_source_a.sru, synthetic_source_a.srw, DataWindow dw_main, PBL and SRD export.
         User workflow: button click, selected row validation, popup, save, grid refresh.
         Target C# implementation scope: WinForms, DevExpress GridColumn members, BindingField assignments,
         DbParameter-based CallProc, CallViewQuery, Designer.cs changes, and procedure work.
         Event and call flow: PB event mapping to C# handler with click validation and popup result handling.
         DB/SP mapping: SELECT, SAVE, INSERT, UPDATE, DELETE, @WORKTYPE, transaction, RAISERROR.
         Implementation order: analyze PB, update C#, update Designer, update SP, run verification.
-        Constraints and business rules: preserve ORDNUM and ORDSEQ, Korean literals, comments, and row contracts.
+        Constraints and business rules: preserve RECORD_ID and RECORD_SEQUENCE, Korean literals, comments, and row contracts.
         Manual test scenarios: build verification, manual UI verification, rollback verification, expected DB result.
         LLM implementation handoff: analysis agent passes this handoff to developer agent with no hidden context.
 
         ```csharp
-        dbClient.GetDataSetFromSP("sp_PR100200_SELECT", new DbParameter("@WORKTYPE", "LIST"));
+        dbClient.GetDataSetFromSP("sp_ZX234567_SELECT", new DbParameter("@WORKTYPE", "LIST"));
         ```
 
         ```sql
-        INSERT INTO SA130T (ORGDIV, ORDNUM, ORDSEQ)
-        SELECT A.ORGDIV, A.ORDNUM, A.ORDSEQ
-          FROM PR110T A
-         WHERE A.ORGDIV = @ORGDIV;
+        INSERT INTO SYNTHETIC_TARGET (SCOPE_CODE, RECORD_ID, RECORD_SEQUENCE)
+        SELECT A.SCOPE_CODE, A.RECORD_ID, A.RECORD_SEQUENCE
+          FROM SYNTHETIC_SOURCE A
+         WHERE A.SCOPE_CODE = @SCOPE_CODE;
         ```
 
         ## Cross-agent development specification
         Analysis agent and developer agent must use this development handoff.
-        target file plan: PR100200.cs, PR100200.Designer.cs, sp_PR100200_SAVE procedure.
+        target file plan: ZX234567.cs, ZX234567.Designer.cs, sp_ZX234567_SAVE procedure.
         approved scope: approved scope exists.
         PB event to C# method mapping: clicked event -> btnSave_Click handler.
-        DataWindow field mapping: DataWindow column ORDNUM -> GridColumn colList_ORDNUM, BindingField ORDNUM, Caption.
+        DataWindow field mapping: DataWindow column RECORD_ID -> GridColumn colList_RECORD_ID, BindingField RECORD_ID, Caption.
         control layout binding plan: control, TabIndex, BindingField, LabelControl, GridView.
         SP contract matrix: @WORKTYPE, parameter, result column, DML, procedure contract.
-        style profile contract: author-tagged program key PR100200, fallback program, source hash.
+        style profile contract: packaged style program key ZX234567, fallback program, source hash.
         implementation task list: implementation task, task list, done criteria, acceptance.
         verification contract: manual test, expected UI, expected DB, build, rollback.
         confirmed: PB clicked event. inferred: popup caption. blocked: missing DB schema.
@@ -1208,34 +2366,35 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertFalse(details["proposal_only_boundary"])
 
     def test_generated_csharp_style_requires_author_tagged_evidence_when_enabled(self):
-        missing = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");',
-            program_key="SA800100",
+        missing = _verify_migration_generated_csharp_style(
+            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT");',
+            program_key="ReferenceScreen",
             require_author_tagged_evidence=True,
         )
         self.assertFalse(missing.success)
         self.assertIn("author_tagged_style_evidence_required", {issue["code"] for issue in missing.metadata["issues"]})
 
         present = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
-            program_key="SA800100",
+            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="ReferenceScreen",
             primary_style_evidence_paths=[
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+                r"packaged\style\ReferenceScreen.cs",
+                r"packaged\style\ReferenceScreen.Designer.cs",
             ],
             require_author_tagged_evidence=True,
         )
         self.assertTrue(present.success, present.to_dict())
-        self.assertEqual("SA800100", present.metadata["expected_style_program_key"])
+        self.assertEqual("REFERENCESCREEN", present.metadata["expected_style_program_key"])
         self.assertIn("author_tagged_generation_recipe", present.metadata)
 
     def test_generated_csharp_style_blocks_wrong_author_tagged_evidence_path(self):
         result = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
-            program_key="SA800100",
+            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+            program_key="ReferenceScreen",
             primary_style_evidence_paths=[
-                r"Programs\60.??(DE)\Konesystem.DE01\DE000600.cs",
-                r"Programs\60.??(DE)\Konesystem.DE01\DE000600.Designer.cs",
+                r"packaged\other\UNRELATED_SCREEN.cs",
+                r"packaged\other\UNRELATED_SCREEN.Designer.cs",
             ],
             require_author_tagged_evidence=True,
         )
@@ -1245,11 +2404,11 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_generated_csharp_style_rejects_same_filename_without_module_tail(self):
         result = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
-            program_key="SA800100",
+            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+            program_key="ReferenceScreen",
             primary_style_evidence_paths=[
-                r"C:\tmp\SA800100.cs",
-                r"C:\tmp\SA800100.Designer.cs",
+                r"C:\tmp\ReferenceScreen.cs",
+                r"C:\tmp\ReferenceScreen.Designer.cs",
             ],
             require_author_tagged_evidence=True,
         )
@@ -1259,11 +2418,11 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_generated_csharp_style_requires_fallback_for_excluded_author_target(self):
         missing_fallback = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("SP_SA900100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
-            program_key="SA900100",
+            'return dbClient.GetDataSetFromSP("SP_MIGRATION_TARGET_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+            program_key="MigrationTarget",
             primary_style_evidence_paths=[
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+                r"packaged\style\ReferenceScreen.cs",
+                r"packaged\style\ReferenceScreen.Designer.cs",
             ],
             require_author_tagged_evidence=True,
         )
@@ -1271,12 +2430,13 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("author_tagged_fallback_program_key_required", {issue["code"] for issue in missing_fallback.metadata["issues"]})
 
         with_fallback = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("SP_SA900100_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
-            program_key="SA900100",
-            fallback_program_key="SA800100",
+            'return dbClient.GetDataSetFromSP("SP_MIGRATION_TARGET_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="MigrationTarget",
+            fallback_program_key="ReferenceScreen",
             primary_style_evidence_paths=[
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+                r"packaged\style\ReferenceScreen.cs",
+                r"packaged\style\ReferenceScreen.Designer.cs",
             ],
             require_author_tagged_evidence=True,
         )
@@ -1284,11 +2444,11 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_generated_csharp_style_blocks_bare_sp_call_under_author_tagged_mode(self):
         result = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("sp_SA800100_SELECT");',
-            program_key="SA800100",
+            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT");',
+            program_key="ReferenceScreen",
             primary_style_evidence_paths=[
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+                r"packaged\style\ReferenceScreen.cs",
+                r"packaged\style\ReferenceScreen.Designer.cs",
             ],
             require_author_tagged_evidence=True,
         )
@@ -1298,11 +2458,11 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_generated_csharp_style_blocks_bare_exec_sp_calls_under_author_tagged_mode(self):
         result = verify_migration_generated_csharp_style(
-            'dbClient.ExecSP("sp_SA800100_SAVE");',
-            program_key="SA800100",
+            'dbClient.ExecSP("SP_REFERENCE_SCREEN_SAVE");',
+            program_key="ReferenceScreen",
             primary_style_evidence_paths=[
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.cs",
-                r"Programs\20.??(SA)\Konesystem.SA02\SA800100.Designer.cs",
+                r"packaged\style\ReferenceScreen.cs",
+                r"packaged\style\ReferenceScreen.Designer.cs",
             ],
             require_author_tagged_evidence=True,
         )
@@ -1335,19 +2495,19 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         private void CallDetailQuery()
         {
             DataRow dr = gvwList.GetFocusedDataRow();
-            string custcd = dr["CUSTCD"] == DBNull.Value ? string.Empty : dr["CUSTCD"].ToString().Trim();
-            string itemcd = dr["PRNTITEMCD"] == DBNull.Value ? string.Empty : dr["PRNTITEMCD"].ToString().Trim();
-            itemcd = string.IsNullOrEmpty(itemcd) ? "%" : itemcd + "%";
-            DataSet ds = CallSelectProcedure(SelectType.DETAIL, custcd, itemcd);
+            string entityCode = dr["ENTITY_CODE"] == DBNull.Value ? string.Empty : dr["ENTITY_CODE"].ToString().Trim();
+            string record_code = dr["PARENT_RECORD_CODE"] == DBNull.Value ? string.Empty : dr["PARENT_RECORD_CODE"].ToString().Trim();
+            record_code = string.IsNullOrEmpty(record_code) ? "%" : record_code + "%";
+            DataSet ds = CallSelectProcedure(SelectType.DETAIL, entityCode, record_code);
         }
 
-        private DataSet CallSelectProcedure(SelectType _selectType, string _custcd = null, string _itemcd = null)
+        private DataSet CallSelectProcedure(SelectType _selectType, string _entityCode = null, string _record_code = null)
         {
-            string gubun = Convert.ToString(radGUBUN.EditValue);
-            string gb = Convert.ToString(radGB.EditValue);
-            string custcd = btnCUSTCD.EditValue == null ? string.Empty : btnCUSTCD.EditValue.ToString().Trim();
-            string itemcd = _selectType == SelectType.DETAIL ? (_itemcd ?? "%") : "%";
-            return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");
+            string modeCode = Convert.ToString(radMODE_CODE.EditValue);
+            string optionCode = Convert.ToString(radOptionCode.EditValue);
+            string entityCode = btnENTITY_CODE.EditValue == null ? string.Empty : btnENTITY_CODE.EditValue.ToString().Trim();
+            string record_code = _selectType == SelectType.DETAIL ? (_record_code ?? "%") : "%";
+            return dbClient.GetDataSetFromSP("sp_ZX123456_SELECT");
         }
         '''
 
@@ -1362,29 +2522,29 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertIn("generated_buttonedit_null_stringempty_ternary_detected", issue_codes)
         self.assertIn("generated_radio_convert_tostring_local_detected", issue_codes)
 
-    def test_generated_csharp_style_blocks_sa900100_leftover_generated_patterns(self):
+    def test_generated_csharp_style_blocks_zx123456_leftover_generated_patterns(self):
         generated = '''
-        private void SA900100_SearchCommand(object sender, SearchCommandEventArgs e)
+        private void ZX123456_SearchCommand(object sender, SearchCommandEventArgs e)
         {
-            if (ymdGIJUN.EditValue == null)
-                ymdGIJUN.SetToDay(0);
+            if (ymdInput.EditValue == null)
+                ymdInput.SetToDay(0);
 
-            DataSet ds = CallSelectProcedure(SelectType.LIST, btnCUSTCD.Text + "%", "%");
+            DataSet ds = CallSelectProcedure(SelectType.LIST, btnENTITY_CODE.Text + "%", "%");
         }
 
         private void CallDetailQuery()
         {
             DataRow dr = gvwList.GetFocusedDataRow();
-            DataSet ds = CallSelectProcedure(SelectType.DETAIL, dr["CUSTCD"].ToString(), dr["PRNTITEMCD"].ToString() + "%");
+            DataSet ds = CallSelectProcedure(SelectType.DETAIL, dr["ENTITY_CODE"].ToString(), dr["PARENT_RECORD_CODE"].ToString() + "%");
         }
 
-        private DataSet CallSelectProcedure(SelectType _selectType, string _custcd, string _itemcd)
+        private DataSet CallSelectProcedure(SelectType _selectType, string _entityCode, string _record_code)
         {
-            DateTime lastdt = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1).AddDays(-1);
-            if (ymdGIJUN.DateTime.Year != lastdt.Year)
-                lastdt = new DateTime(ymdGIJUN.DateTime.Year - 1, 12, 31);
+            DateTime boundaryDate = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1).AddDays(-1);
+            if (ymdInput.DateTime.Year != boundaryDate.Year)
+                boundaryDate = new DateTime(ymdInput.DateTime.Year - 1, 12, 31);
 
-            return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");
+            return dbClient.GetDataSetFromSP("sp_ZX123456_SELECT");
         }
         '''
 
@@ -1409,7 +2569,7 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
                 return;
             }
 
-            DataSet ds = CallSelectProcedure(SelectType.DETAIL, dr["CUSTCD"].ToString(), dr["PRNTITEMCD"].ToString());
+            DataSet ds = CallSelectProcedure(SelectType.DETAIL, dr["ENTITY_CODE"].ToString(), dr["PARENT_RECORD_CODE"].ToString());
             grdDetail.DataSource = ds.Tables[0];
         }
         '''
@@ -1421,32 +2581,32 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_generated_csharp_style_blocks_csharp_sp_parameter_shaping(self):
         generated = '''
-        private DataSet CallSelectProcedure(SelectType _selectType, string _custcd, string _itemcd)
+        private DataSet CallSelectProcedure(SelectType _selectType, string _entityCode, string _record_code)
         {
-            DateTime basdt = DateTime.Now.AddDays(1 - DateTime.Now.Day).AddDays(-1);
-            string custcd = _custcd;
-            string itemcd = _itemcd;
-            string lastdt = basdt.ToString("yyyyMMdd");
+            DateTime inputDate = DateTime.Now.AddDays(1 - DateTime.Now.Day).AddDays(-1);
+            string entityCode = _entityCode;
+            string record_code = _record_code;
+            string boundaryDate = inputDate.ToString("yyyyMMdd");
 
-            if (ymdGIJUN.DateTime.Year != basdt.Year)
-                lastdt = (ymdGIJUN.DateTime.Year - 1).ToString("0000") + "1231";
+            if (ymdInput.DateTime.Year != inputDate.Year)
+                boundaryDate = (ymdInput.DateTime.Year - 1).ToString("0000") + "1231";
 
             if (_selectType == SelectType.LIST)
             {
-                custcd = btnCUSTCD.Text;
-                if (string.IsNullOrEmpty(custcd))
-                    custcd = "%";
+                entityCode = btnENTITY_CODE.Text;
+                if (string.IsNullOrEmpty(entityCode))
+                    entityCode = "%";
                 else
-                    custcd = custcd + "%";
+                    entityCode = entityCode + "%";
 
-                itemcd = "%";
+                record_code = "%";
             }
             else if (_selectType == SelectType.DETAIL)
             {
-                itemcd = itemcd + "%";
+                record_code = record_code + "%";
             }
 
-            return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");
+            return dbClient.GetDataSetFromSP("sp_ZX123456_SELECT");
         }
         '''
 
@@ -1460,16 +2620,16 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_generated_csharp_style_blocks_dateedit_split_date_parameters(self):
         generated = '''
-        return dbClient.GetDataSetFromSP("sp_SA900100_SELECT"
+        return dbClient.GetDataSetFromSP("sp_ZX123456_SELECT"
                 , new DbParameter("@WORKTYPE", _selectType.ToString())
-                , new DbParameter("@ORGDIV", userInfo.Orgdiv)
-                , new DbParameter("@CUSTCD", _custcd)
-                , new DbParameter("@YYYY", ymdGIJUN.DateTime.Year.ToString())
-                , new DbParameter("@MM", DateTime.Now.Month.ToString("00"))
-                , new DbParameter("@BASYYYY", DateTime.Now.Year.ToString())
-                , new DbParameter("@GUBUN", radGUBUN.EditValue)
-                , new DbParameter("@GB", radGB.EditValue)
-                , new DbParameter("@ITEMCD", _itemcd)
+                , new DbParameter("@SCOPE_CODE", userInfo.ScopeCode)
+                , new DbParameter("@ENTITY_CODE", _entityCode)
+                , new DbParameter("@DERIVED_YEAR", ymdInput.DateTime.Year.ToString())
+                , new DbParameter("@DERIVED_MONTH", DateTime.Now.Month.ToString("00"))
+                , new DbParameter("@BASE_YEAR", DateTime.Now.Year.ToString())
+                , new DbParameter("@MODE_CODE", radMODE_CODE.EditValue)
+                , new DbParameter("@OPTION_CODE", radOptionCode.EditValue)
+                , new DbParameter("@RECORD_CODE", _record_code)
                 );
         '''
 
@@ -1498,18 +2658,18 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         generated = '''
         private class SearchParams
         {
-            public string CUSTCD { get; set; }
+            public string ENTITY_CODE { get; set; }
         }
 
-        private DataSet CallSelectProcedure(SelectType _selectType, string _custcd = "", string _itemcd = "%")
+        private DataSet CallSelectProcedure(SelectType _selectType, string _entityCode = "", string _record_code = "%")
         {
             DataRow dr = gvwList.GetFocusedDataRow();
-            string custcd = Convert.IsDBNull(dr["CUSTCD"]) ? string.Empty : dr["CUSTCD"].ToString();
-            string itemcd = dr.IsNull("ITEMCD") ? string.Empty : dr["ITEMCD"].ToString();
+            string entityCode = Convert.IsDBNull(dr["ENTITY_CODE"]) ? string.Empty : dr["ENTITY_CODE"].ToString();
+            string record_code = dr.IsNull("RECORD_CODE") ? string.Empty : dr["RECORD_CODE"].ToString();
             object qty = gvwList.GetFocusedRowCellValue("QTY") == DBNull.Value ? 0 : gvwList.GetFocusedRowCellValue("QTY");
-            if (dr["ORDNUM"] is DBNull)
+            if (dr["RECORD_ID"] is DBNull)
                 return null;
-            return dbClient.GetDataSetFromSP("sp_SA900100_SELECT");
+            return dbClient.GetDataSetFromSP("sp_ZX123456_SELECT");
         }
         '''
 
@@ -1526,8 +2686,8 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
     def test_generated_csharp_style_blocks_name_text_field_as_dateedit(self):
         generated = '''
-        private KoneLib.Controls.u_DateEdit txtCUSTNM;
-        this.txtCUSTNM = new KoneLib.Controls.u_DateEdit();
+        private KoneLib.Controls.u_DateEdit txtDISPLAY_NAME;
+        this.txtDISPLAY_NAME = new KoneLib.Controls.u_DateEdit();
         '''
 
         result = verify_migration_generated_csharp_style(generated)
@@ -1539,18 +2699,19 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
     def test_grid_column_designer_plan_uses_explicit_target_column_names(self):
         result = build_csharp_grid_column_designer_plan(
             [
-                {"field_name": "CUSTNM", "caption": "고객", "width": 160},
+                {"field_name": "DISPLAY_NAME", "caption": "고객", "width": 160},
                 {"field_name": "AMTTOT", "caption": "합계", "width": 120},
                 {"field_name": "PRICE", "caption": "단가", "width": 100},
             ],
             input_format="list",
+            result_fields=["DISPLAY_NAME", "AMTTOT", "PRICE"],
         )
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertIn("private DevExpress.XtraGrid.Columns.GridColumn colList_CUSTNM;", result.stdout)
+        self.assertIn("private DevExpress.XtraGrid.Columns.GridColumn colList_DISPLAY_NAME;", result.stdout)
         self.assertIn("this.gvwList.Columns.AddRange", result.stdout)
-        self.assertIn('this.colList_CUSTNM.FieldName = "CUSTNM";', result.stdout)
-        self.assertIn('this.colList_CUSTNM.Name = "colList_CUSTNM";', result.stdout)
+        self.assertIn('this.colList_DISPLAY_NAME.FieldName = "DISPLAY_NAME";', result.stdout)
+        self.assertIn('this.colList_DISPLAY_NAME.Name = "colList_DISPLAY_NAME";', result.stdout)
         self.assertIn("private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit rpsSpinAmt;", result.stdout)
         self.assertIn("this.grdList.RepositoryItems.AddRange", result.stdout)
         self.assertIn("this.colList_AMTTOT.ColumnEdit = this.rpsSpinAmt;", result.stdout)
@@ -1559,6 +2720,37 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
         self.assertNotIn("AddGridColumn", result.stdout)
         self.assertNotIn("Columns.AddField", result.stdout)
 
+    def test_grid_column_designer_plan_prefers_data_type_over_field_name_tokens(self):
+        result = build_csharp_grid_column_designer_plan(
+            [
+                {"field_name": "TOTAL_TEXT", "data_type": "string"},
+                {"field_name": "QUANTITY", "data_type": "decimal(18, 3)"},
+            ],
+            input_format="list",
+            result_fields=["TOTAL_TEXT", "QUANTITY"],
+        )
+
+        repositories = result.metadata["numeric_repository_by_column"]
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("colList_TOTAL_TEXT", repositories)
+        self.assertIn("colList_QUANTITY", repositories)
+        self.assertNotIn("this.colList_TOTAL_TEXT.ColumnEdit", result.stdout)
+        self.assertIn("this.colList_QUANTITY.ColumnEdit", result.stdout)
+        self.assertEqual("string", result.metadata["columns"][0]["data_type"])
+        self.assertEqual("decimal(18, 3)", result.metadata["columns"][1]["data_type"])
+
+    def test_grid_column_designer_plan_fails_fieldname_result_field_mismatch(self):
+        result = build_csharp_grid_column_designer_plan(
+            [{"field_name": "ENTITY_ID", "data_type": "string"}],
+            result_fields=["OTHER_ID"],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "grid_field_result_mismatch",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
     def test_sp_generation_contract_blocks_missing_sql_or_unbacked_full_sp(self):
         missing = verify_pb_migration_sp_generation_contract("")
         self.assertFalse(missing.success)
@@ -1566,13 +2758,13 @@ text(band=detail text="발주순번" x="10" y="10" height="50" width="80" name=t
 
         unbacked = verify_pb_migration_sp_generation_contract(
             """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT 1 AS CUSTNM
+        SELECT 1 AS DISPLAY_NAME
     END
 END
 """,
@@ -1584,13 +2776,13 @@ END
 
         bool_flag = verify_pb_migration_sp_generation_contract(
             """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT 1 AS CUSTNM
+        SELECT 1 AS DISPLAY_NAME
     END
 END
 """,
@@ -1601,13 +2793,13 @@ END
 
         no_header = verify_pb_migration_sp_generation_contract(
             """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT 1 AS CUSTNM
+        SELECT 1 AS DISPLAY_NAME
     END
 END
 """,
@@ -1668,13 +2860,13 @@ END
         allowed = verify_pb_migration_sp_generation_contract(
             sp_metadata_header()
             + """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT 1 AS CUSTNM
+        SELECT 1 AS DISPLAY_NAME
     END
 END
 """,
@@ -1684,13 +2876,13 @@ END
 
         fake_existing_sp = verify_pb_migration_sp_generation_contract(
             """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT 1 AS CUSTNM
+        SELECT 1 AS DISPLAY_NAME
     END
 END
 """,
@@ -1704,13 +2896,13 @@ END
 
         fake_existing_sp_summary = verify_pb_migration_sp_generation_contract(
             """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT 1 AS CUSTNM
+        SELECT 1 AS DISPLAY_NAME
     END
 END
 """,
@@ -1725,17 +2917,17 @@ END
         object_only_verified_sp = verify_pb_migration_sp_generation_contract(
             sp_metadata_header()
             + """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT 1 AS CUSTNM
+        SELECT 1 AS DISPLAY_NAME
     END
 END
 """,
-            source_evidence={"kind": "existing_sp", "object": "sp_SA900100_SELECT", "verified": True},
+            source_evidence={"kind": "existing_sp", "object": "sp_ZX123456_SELECT", "verified": True},
         )
         self.assertFalse(object_only_verified_sp.success)
         self.assertIn(
@@ -1746,19 +2938,19 @@ END
         excerpt_only_existing_sp = verify_pb_migration_sp_generation_contract(
             sp_metadata_header()
             + """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT 1 AS CUSTNM
+        SELECT 1 AS DISPLAY_NAME
     END
 END
 """,
             source_evidence={
                 "kind": "existing_sp",
-                "object": "sp_SA900100_SELECT",
+                "object": "sp_ZX123456_SELECT",
                 "verified": True,
                 "definition_excerpt": "SELECT 1",
             },
@@ -1772,19 +2964,19 @@ END
         verified_existing_sp = verify_pb_migration_sp_generation_contract(
             sp_metadata_header()
             + """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT 1 AS CUSTNM
+        SELECT 1 AS DISPLAY_NAME
     END
 END
 """,
             source_evidence={
                 "kind": "existing_sp",
-                "object": "sp_SA900100_SELECT",
+                "object": "sp_ZX123456_SELECT",
                 "verified": True,
                 "definition_hash": "954465F0F0D81341EF6527FC33A7B4CE916E4A86DAE4810E86A1301242609376",
             },
@@ -1793,7 +2985,7 @@ END
 
         cte = verify_pb_migration_sp_generation_contract(
             """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
@@ -1810,8 +3002,8 @@ END
             (
                 "IN",
                 """
-              WHERE A.ORDNUM IN (
-                                  SELECT T.ORDNUM
+              WHERE A.RECORD_ID IN (
+                                  SELECT T.RECORD_ID
                                   FROM @TMP T
                                  )
 """,
@@ -1822,15 +3014,15 @@ END
               WHERE EXISTS (
                             SELECT 1
                             FROM @TMP T
-                            WHERE T.ORDNUM = A.ORDNUM
+                            WHERE T.RECORD_ID = A.RECORD_ID
                            )
 """,
             ),
             (
                 "SCALAR",
                 """
-              WHERE A.ORDSEQ = (
-                                SELECT MAX(T.ORDSEQ)
+              WHERE A.RECORD_SEQUENCE = (
+                                SELECT MAX(T.RECORD_SEQUENCE)
                                 FROM @TMP T
                                )
 """,
@@ -1840,14 +3032,14 @@ END
                 if_exists_where_subquery = verify_pb_migration_sp_generation_contract(
                     sp_metadata_header()
                     + f"""
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SAVE]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SAVE]
       @WORKTYPE    VARCHAR(20) = NULL
-    , @ORGDIV      VARCHAR(2)  = NULL
+    , @SCOPE_CODE      VARCHAR(2)  = NULL
 AS
 BEGIN
     IF EXISTS (
               SELECT 1
-              FROM SA100T A
+              FROM SYNTHETIC_RECORDS A
 {predicate.rstrip()}
               )
     BEGIN
@@ -1856,7 +3048,7 @@ BEGIN
     END
 END
 """,
-                    source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_2.srd"},
+                    source_evidence={"kind": "pb_srd_sql", "path": "synthetic_detail.srd"},
                 )
                 self.assertFalse(if_exists_where_subquery.success)
                 self.assertIn(
@@ -1867,15 +3059,15 @@ END
         if_exists_simple_where = verify_pb_migration_sp_generation_contract(
             sp_metadata_header()
             + """
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SAVE]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SAVE]
       @WORKTYPE    VARCHAR(20) = NULL
-    , @ORGDIV      VARCHAR(2)  = NULL
+    , @SCOPE_CODE      VARCHAR(2)  = NULL
 AS
 BEGIN
     IF EXISTS (
               SELECT 1
-              FROM SA100T A
-              WHERE A.ORDNUM = @ORGDIV
+              FROM SYNTHETIC_RECORDS A
+              WHERE A.RECORD_ID = @SCOPE_CODE
               )
     BEGIN
         RAISERROR('Already processed.', 16, 1);
@@ -1883,7 +3075,7 @@ BEGIN
     END
 END
 """,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_2.srd"},
+            source_evidence={"kind": "pb_srd_sql", "path": "synthetic_detail.srd"},
         )
         self.assertNotIn(
             "if_exists_where_subquery_in_generated_sp",
@@ -1892,16 +3084,16 @@ END
 
         schema_fallback = verify_pb_migration_sp_generation_contract(
             """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     SELECT TOP 0
-           CAST('' AS VARCHAR(20)) AS ORDNUM
+           CAST('' AS VARCHAR(20)) AS RECORD_ID
          , CAST(0 AS DECIMAL(18, 4)) AS QTY;
 END
 """,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_2.srd"},
+            source_evidence={"kind": "pb_srd_sql", "path": "synthetic_detail.srd"},
         )
         self.assertFalse(schema_fallback.success)
         self.assertIn(
@@ -1911,16 +3103,16 @@ END
 
         schema_fallback_convert = verify_pb_migration_sp_generation_contract(
             """
-CREATE OR ALTER PROCEDURE [dbo].[sp_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
     @WORKTYPE VARCHAR(20)
 AS
 BEGIN
     SELECT TOP (0)
-           CONVERT(VARCHAR(20), '') AS ORDNUM
+           CONVERT(VARCHAR(20), '') AS RECORD_ID
          , TRY_CONVERT(DECIMAL(18, 4), 0) AS QTY;
 END
 """,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_2.srd"},
+            source_evidence={"kind": "pb_srd_sql", "path": "synthetic_detail.srd"},
         )
         self.assertFalse(schema_fallback_convert.success)
         self.assertIn(
@@ -1930,35 +3122,35 @@ END
 
     def test_sp_generation_contract_blocks_generated_parameter_defaults_and_normalization(self):
         generated = sp_metadata_header() + """
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE VARCHAR(20) = ''
-    , @ORGDIV   VARCHAR(2)  = ''
-    , @CUSTCD   VARCHAR(20) = '%'
-    , @GUBUN    VARCHAR(1)  = 'T'
-    , @GB       VARCHAR(1)  = '1'
-    , @ITEMCD   VARCHAR(30) = '%'
+    , @SCOPE_CODE   VARCHAR(2)  = ''
+    , @ENTITY_CODE   VARCHAR(20) = '%'
+    , @MODE_CODE    VARCHAR(1)  = 'T'
+    , @OPTION_CODE       VARCHAR(1)  = '1'
+    , @RECORD_CODE   VARCHAR(30) = '%'
 AS
 BEGIN
     SET NOCOUNT ON;
 
     SET @WORKTYPE = ISNULL(@WORKTYPE, '');
-    SET @CUSTCD = (CASE WHEN ISNULL(@CUSTCD, '') = '' THEN '%' ELSE @CUSTCD END);
-    SELECT @ITEMCD = COALESCE(@ITEMCD, '%');
-    SET @GUBUN = NULLIF(@GUBUN, '');
-    IF ISNULL(@GB, '') = ''
-        SET @GB = '1';
-    SET @CUSTCD = LTRIM(RTRIM(@CUSTCD));
+    SET @ENTITY_CODE = (CASE WHEN ISNULL(@ENTITY_CODE, '') = '' THEN '%' ELSE @ENTITY_CODE END);
+    SELECT @RECORD_CODE = COALESCE(@RECORD_CODE, '%');
+    SET @MODE_CODE = NULLIF(@MODE_CODE, '');
+    IF ISNULL(@OPTION_CODE, '') = ''
+        SET @OPTION_CODE = '1';
+    SET @ENTITY_CODE = LTRIM(RTRIM(@ENTITY_CODE));
 
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT A.CUSTNM
-        FROM BA020T A;
+        SELECT A.DISPLAY_NAME
+        FROM ZX902T A;
     END
 END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "existing_sp", "object": "sp_SA900100_SELECT", "verified": True},
+            source_evidence={"kind": "existing_sp", "object": "sp_ZX123456_SELECT", "verified": True},
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -1976,51 +3168,51 @@ END
 
     def test_sp_generation_contract_blocks_derived_date_helper_parameters_and_if_defaults(self):
         generated = sp_metadata_header() + """
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE VARCHAR(20)
-    , @ORGDIV   VARCHAR(2)
-    , @GIJUNDT  VARCHAR(8)
-    , @YYYY     VARCHAR(4)
-    , @MM       VARCHAR(2)
-    , @BASYYYY  VARCHAR(4)
-    , @LASTDT   VARCHAR(8)
+    , @SCOPE_CODE   VARCHAR(2)
+    , @INPUT_DATE  VARCHAR(8)
+    , @DERIVED_YEAR     VARCHAR(4)
+    , @DERIVED_MONTH       VARCHAR(2)
+    , @BASE_YEAR  VARCHAR(4)
+    , @BOUNDARY_DATE   VARCHAR(8)
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    IF ISNULL(@GIJUNDT, '') <> ''
+    IF ISNULL(@INPUT_DATE, '') <> ''
     BEGIN
-        SET @YYYY = LEFT(@GIJUNDT, 4);
-        SET @MM = SUBSTRING(@GIJUNDT, 5, 2);
+        SET @DERIVED_YEAR = LEFT(@INPUT_DATE, 4);
+        SET @DERIVED_MONTH = SUBSTRING(@INPUT_DATE, 5, 2);
     END;
 
-    IF ISNULL(@YYYY, '') = ''
-        SET @YYYY = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+    IF ISNULL(@DERIVED_YEAR, '') = ''
+        SET @DERIVED_YEAR = CONVERT(VARCHAR(4), YEAR(GETDATE()));
 
-    IF ISNULL(@MM, '') = ''
-        SET @MM = RIGHT('0' + CONVERT(VARCHAR(2), MONTH(GETDATE())), 2);
+    IF ISNULL(@DERIVED_MONTH, '') = ''
+        SET @DERIVED_MONTH = RIGHT('0' + CONVERT(VARCHAR(2), MONTH(GETDATE())), 2);
 
-    IF ISNULL(@BASYYYY, '') = ''
-        SET @BASYYYY = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+    IF ISNULL(@BASE_YEAR, '') = ''
+        SET @BASE_YEAR = CONVERT(VARCHAR(4), YEAR(GETDATE()));
 
-    IF ISNULL(@LASTDT, '') = ''
+    IF ISNULL(@BOUNDARY_DATE, '') = ''
     BEGIN
-        SET @LASTDT = CONVERT(VARCHAR(8), DATEADD(DAY, -DAY(GETDATE()), GETDATE()), 112);
+        SET @BOUNDARY_DATE = CONVERT(VARCHAR(8), DATEADD(DAY, -DAY(GETDATE()), GETDATE()), 112);
 
-        IF @YYYY <> LEFT(@LASTDT, 4)
-            SET @LASTDT = CONVERT(VARCHAR(4), CONVERT(INT, @YYYY) - 1) + '1231';
+        IF @DERIVED_YEAR <> LEFT(@BOUNDARY_DATE, 4)
+            SET @BOUNDARY_DATE = CONVERT(VARCHAR(4), CONVERT(INT, @DERIVED_YEAR) - 1) + '1231';
     END;
 
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT A.CUSTNM
-        FROM BA020T A;
+        SELECT A.DISPLAY_NAME
+        FROM ZX902T A;
     END
 END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -2031,34 +3223,34 @@ END
 
     def test_sp_generation_contract_allows_local_declared_date_helpers_without_if_defaults(self):
         generated = sp_metadata_header() + """
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE VARCHAR(20)
-    , @ORGDIV   VARCHAR(2)
-    , @GIJUNDT  VARCHAR(8)
+    , @SCOPE_CODE   VARCHAR(2)
+    , @INPUT_DATE  VARCHAR(8)
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    DECLARE @YYYY    VARCHAR(4)
-          , @MM      VARCHAR(2)
-          , @BASYYYY VARCHAR(4)
-          , @LASTDT  VARCHAR(8);
+    DECLARE @DERIVED_YEAR    VARCHAR(4)
+          , @DERIVED_MONTH      VARCHAR(2)
+          , @BASE_YEAR VARCHAR(4)
+          , @BOUNDARY_DATE  VARCHAR(8);
 
-    SET @YYYY = LEFT(@GIJUNDT, 4);
-    SET @MM = SUBSTRING(@GIJUNDT, 5, 2);
-    SET @BASYYYY = CONVERT(VARCHAR(4), YEAR(GETDATE()));
-    SET @LASTDT = CONVERT(VARCHAR(8), DATEADD(DAY, -DAY(GETDATE()), GETDATE()), 112);
+    SET @DERIVED_YEAR = LEFT(@INPUT_DATE, 4);
+    SET @DERIVED_MONTH = SUBSTRING(@INPUT_DATE, 5, 2);
+    SET @BASE_YEAR = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+    SET @BOUNDARY_DATE = CONVERT(VARCHAR(8), DATEADD(DAY, -DAY(GETDATE()), GETDATE()), 112);
 
     IF @WORKTYPE = 'LIST'
     BEGIN
-        SELECT A.CUSTNM
-        FROM BA020T A;
+        SELECT A.DISPLAY_NAME
+        FROM ZX902T A;
     END
 END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -2069,20 +3261,20 @@ END
 
     def test_sp_generation_contract_blocks_alter_procedure_derived_helper_parameters(self):
         generated = sp_metadata_header() + """
-ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE VARCHAR(20)
-    , @ORGDIV   VARCHAR(2)
-    , @GIJUNDT  VARCHAR(8)
-    , @YYYY     VARCHAR(4)
+    , @SCOPE_CODE   VARCHAR(2)
+    , @INPUT_DATE  VARCHAR(8)
+    , @DERIVED_YEAR     VARCHAR(4)
 AS
 BEGIN
-    SELECT A.CUSTNM
-    FROM BA020T A;
+    SELECT A.DISPLAY_NAME
+    FROM ZX902T A;
 END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -2091,24 +3283,24 @@ END
 
     def test_sp_generation_contract_blocks_parenthesized_date_isnull_defaults(self):
         generated = sp_metadata_header() + """
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE VARCHAR(20)
-    , @ORGDIV   VARCHAR(2)
-    , @GIJUNDT  VARCHAR(8)
+    , @SCOPE_CODE   VARCHAR(2)
+    , @INPUT_DATE  VARCHAR(8)
 AS
 BEGIN
-    DECLARE @YYYY VARCHAR(4);
+    DECLARE @DERIVED_YEAR VARCHAR(4);
 
-    IF (ISNULL(@GIJUNDT, '') = '')
-        SET @YYYY = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+    IF (ISNULL(@INPUT_DATE, '') = '')
+        SET @DERIVED_YEAR = CONVERT(VARCHAR(4), YEAR(GETDATE()));
 
-    SELECT A.CUSTNM
-    FROM BA020T A;
+    SELECT A.DISPLAY_NAME
+    FROM ZX902T A;
 END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -2118,24 +3310,24 @@ END
 
     def test_sp_generation_contract_blocks_direct_if_wrapped_date_set(self):
         generated = sp_metadata_header() + """
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE VARCHAR(20)
-    , @ORGDIV   VARCHAR(2)
-    , @GIJUNDT  VARCHAR(8)
+    , @SCOPE_CODE   VARCHAR(2)
+    , @INPUT_DATE  VARCHAR(8)
 AS
 BEGIN
-    DECLARE @YYYY VARCHAR(4);
+    DECLARE @DERIVED_YEAR VARCHAR(4);
 
-    IF @GIJUNDT <> ''
-        SET @YYYY = CONVERT(VARCHAR(4), @GIJUNDT);
+    IF @INPUT_DATE <> ''
+        SET @DERIVED_YEAR = CONVERT(VARCHAR(4), @INPUT_DATE);
 
-    SELECT A.CUSTNM
-    FROM BA020T A;
+    SELECT A.DISPLAY_NAME
+    FROM ZX902T A;
 END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -2144,25 +3336,25 @@ END
 
     def test_sp_generation_contract_blocks_non_caller_helper_parameters_when_csharp_params_known(self):
         generated = sp_metadata_header() + """
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE VARCHAR(20)
-    , @ORGDIV   VARCHAR(2)
-    , @GIJUNDT  VARCHAR(8)
+    , @SCOPE_CODE   VARCHAR(2)
+    , @INPUT_DATE  VARCHAR(8)
     , @ROWCNT   INT
 AS
 BEGIN
-    SELECT A.CUSTNM
-    FROM BA020T A;
+    SELECT A.DISPLAY_NAME
+    FROM ZX902T A;
 END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
             source_evidence=[
-                {"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+                {"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
                 {
                     "kind": "csharp_call",
-                    "path": "SA900100.cs",
-                    "db_parameters": ["@WORKTYPE", "@ORGDIV", "@GIJUNDT"],
+                    "path": "ZX123456.cs",
+                    "db_parameters": ["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"],
                 },
             ],
         )
@@ -2173,28 +3365,28 @@ END
 
     def test_sp_generation_contract_blocks_non_caller_parameters_with_broader_sql_types(self):
         generated = sp_metadata_header() + """
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE VARCHAR(20)
-    , @ORGDIV   VARCHAR(2)
-    , @GIJUNDT  VARCHAR(8)
+    , @SCOPE_CODE   VARCHAR(2)
+    , @INPUT_DATE  VARCHAR(8)
     , @ROWNUM   INTEGER
     , @ROWGUID  UNIQUEIDENTIFIER
     , @FILEBIN  VARBINARY(MAX)
     , @RUNTIME  DATETIME2
 AS
 BEGIN
-    SELECT A.CUSTNM
-    FROM BA020T A;
+    SELECT A.DISPLAY_NAME
+    FROM ZX902T A;
 END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
             source_evidence=[
-                {"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+                {"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
                 {
                     "kind": "csharp_call",
-                    "path": "SA900100.cs",
-                    "db_parameters": ["@WORKTYPE", "@ORGDIV", "@GIJUNDT"],
+                    "path": "ZX123456.cs",
+                    "db_parameters": ["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"],
                 },
             ],
         )
@@ -2212,28 +3404,28 @@ END
 
     def test_sp_generation_contract_allows_parameters_matching_csharp_call_evidence(self):
         generated = sp_metadata_header() + """
-CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE VARCHAR(20)
-    , @ORGDIV   VARCHAR(2)
-    , @GIJUNDT  VARCHAR(8)
+    , @SCOPE_CODE   VARCHAR(2)
+    , @INPUT_DATE  VARCHAR(8)
 AS
 BEGIN
     DECLARE @ROWCNT INT;
 
     SET @ROWCNT = 0;
 
-    SELECT A.CUSTNM
-    FROM BA020T A;
+    SELECT A.DISPLAY_NAME
+    FROM ZX902T A;
 END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
             source_evidence=[
-                {"kind": "pb_srd_sql", "path": "d_sa900100.srd", "summary": "retrieve SQL"},
+                {"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
                 {
                     "kind": "csharp_call",
-                    "path": "SA900100.cs",
-                    "db_parameters": ["@WORKTYPE", "@ORGDIV", "@GIJUNDT"],
+                    "path": "ZX123456.cs",
+                    "db_parameters": ["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"],
                 },
             ],
         )
@@ -2243,14 +3435,14 @@ END
         self.assertNotIn("non_caller_procedure_parameter_detected", issue_codes)
 
     def test_composed_sp_and_sql_formatting_verifier_requires_both_gates(self):
-        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_SA900100_SELECT]
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
       @WORKTYPE    VARCHAR(20) = NULL
-    , @ORGDIV      VARCHAR(2)  = NULL
+    , @SCOPE_CODE      VARCHAR(2)  = NULL
 AS
 BEGIN
-    SELECT A.ORDNUM
-    FROM SA100T A
-    WHERE A.ORGDIV = @ORGDIV;
+    SELECT A.RECORD_ID
+    FROM SYNTHETIC_RECORDS A
+    WHERE A.SCOPE_CODE = @SCOPE_CODE;
 END
 """
         result = verify_pb_migration_sp_with_sql_formatting(

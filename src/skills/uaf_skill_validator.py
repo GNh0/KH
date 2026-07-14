@@ -127,7 +127,7 @@ def parse_skill_frontmatter(content: str) -> Optional[Dict[str, str]]:
     return metadata
 
 
-def _validate_skill_file(skills_dir: str, folder_name: str, skill_path: str) -> SkillValidationResult:
+def validate_skill_file(skills_dir: str, folder_name: str, skill_path: str) -> SkillValidationResult:
     relative_path = _relative_skill_path(skills_dir, skill_path)
 
     with open(skill_path, "r", encoding="utf-8") as handle:
@@ -220,7 +220,7 @@ def validate_skill_folders(skills_dir: str = PACKAGED_SKILLS_DIR) -> SkillCatalo
         if not os.path.isdir(folder_path) or not os.path.isfile(skill_path):
             continue
 
-        result = _validate_skill_file(skills_dir, folder_name, skill_path)
+        result = validate_skill_file(skills_dir, folder_name, skill_path)
         results.append(result)
         if result.name:
             name_to_results.setdefault(result.name, []).append(result)

@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
+SUPPORTED_MARKETPLACE_REF = "main"
+SUPPORTED_PLUGIN_SOURCE_REF = "codex-runtime"
+MARKETPLACE_DESCRIPTOR_SPARSE_PATH = ".agents/plugins"
+DIRECT_CODEX_RUNTIME_MARKETPLACE_INSTALL_SUPPORTED = False
+
+
 @dataclass(frozen=True)
 class MarketplaceConfig:
     path: str
@@ -140,21 +146,24 @@ def audit_kh_plugin_install(
     elif config.encoding_warnings:
         findings.append("Codex config.toml contains possible encoding damage or replacement characters.")
         actions.append("Review config.toml encoding and repair damaged text before editing marketplace settings.")
-    elif config.ref == "main" and descriptor.source_ref:
-        notes.append(
-            "Marketplace config ref is the marketplace descriptor layer; plugin source ref comes from marketplace.json."
-        )
-    elif config.ref and descriptor.source_ref and config.ref != descriptor.source_ref:
-        notes.append(
-            "Marketplace config ref differs from plugin source ref. This can be valid when main hosts the marketplace descriptor."
-        )
 
     if not descriptor.exists:
         findings.append("Repository marketplace descriptor was not found.")
         actions.append("Check .agents/plugins/marketplace.json before publishing the marketplace.")
-    elif descriptor.source_ref != "codex-runtime":
-        findings.append(f"Plugin source ref is {descriptor.source_ref or '<empty>'}, expected codex-runtime.")
-        actions.append("Set .agents/plugins/marketplace.json plugin source ref to codex-runtime if that is the intended runtime branch.")
+
+    config_is_usable = (
+        config.exists
+        and config.parse_status != "invalid"
+        and not config.encoding_warnings
+    )
+    if config_is_usable:
+        topology_findings, topology_actions, topology_notes = _audit_marketplace_topology(
+            config,
+            descriptor,
+        )
+        findings.extend(topology_findings)
+        actions.extend(topology_actions)
+        notes.extend(topology_notes)
 
     if not caches:
         findings.append("No installed KH UAF cache was found under Codex plugin cache.")
@@ -188,22 +197,7 @@ def audit_kh_plugin_install(
     if caches:
         actions.append("Verify the active session skill list points at the latest installed cache path, not only the filesystem cache.")
 
-    status = "ok"
-    if any(
-        marker in finding
-        for finding in findings
-        for marker in [
-            "behind source version",
-            "No installed",
-            "not found",
-            "not valid TOML",
-            "encoding damage",
-            "replacement characters",
-        ]
-    ):
-        status = "attention_required"
-    if caches and release_identity.get("status") != "ok":
-        status = "attention_required"
+    status = "attention_required" if findings else "ok"
 
     return KhPluginInstallAudit(
         status=status,
@@ -224,6 +218,88 @@ def audit_kh_plugin_install(
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _audit_marketplace_topology(
+    config: MarketplaceConfig,
+    descriptor: MarketplacePluginSource,
+) -> tuple[List[str], List[str], List[str]]:
+    findings: List[str] = []
+    actions: List[str] = []
+    notes: List[str] = []
+
+    if not config.source.strip():
+        findings.append("Marketplace config source is empty; it must identify the wrapper repository.")
+        actions.append("Set the marketplace source to the repository that hosts .agents/plugins/marketplace.json.")
+
+    if config.ref != SUPPORTED_MARKETPLACE_REF:
+        direct_install_note = (
+            " Direct codex-runtime marketplace installs are not supported by the documented product topology."
+            if not DIRECT_CODEX_RUNTIME_MARKETPLACE_INSTALL_SUPPORTED
+            else ""
+        )
+        findings.append(
+            f"Marketplace config ref is {config.ref or '<empty>'}; supported marketplace wrapper ref is "
+            f"{SUPPORTED_MARKETPLACE_REF}.{direct_install_note}"
+        )
+        actions.append(
+            f"Set the user marketplace ref to {SUPPORTED_MARKETPLACE_REF}; the descriptor selects the runtime branch."
+        )
+
+    normalized_sparse_paths = {
+        _normalize_sparse_path(path) for path in config.sparse_paths if str(path).strip()
+    }
+    if MARKETPLACE_DESCRIPTOR_SPARSE_PATH not in normalized_sparse_paths:
+        findings.append(
+            "Marketplace config sparse paths do not include .agents/plugins, so the main wrapper descriptor is not selected."
+        )
+        actions.append("Add .agents/plugins to the user marketplace sparse_paths setting.")
+
+    if descriptor.exists:
+        if not descriptor.plugin_name:
+            findings.append("Marketplace descriptor does not contain the kh-uaf plugin entry.")
+            actions.append("Add the kh-uaf plugin entry to .agents/plugins/marketplace.json.")
+        if not descriptor.source_url.strip():
+            findings.append("Plugin source URL is empty in the marketplace descriptor.")
+            actions.append("Set the kh-uaf plugin source URL to the wrapper repository source.")
+        if descriptor.source_ref != SUPPORTED_PLUGIN_SOURCE_REF:
+            findings.append(
+                f"Plugin source ref is {descriptor.source_ref or '<empty>'}, expected {SUPPORTED_PLUGIN_SOURCE_REF}."
+            )
+            actions.append(
+                f"Set .agents/plugins/marketplace.json plugin source ref to {SUPPORTED_PLUGIN_SOURCE_REF}."
+            )
+        if (
+            config.source.strip()
+            and descriptor.source_url.strip()
+            and _normalize_repository_source(config.source)
+            != _normalize_repository_source(descriptor.source_url)
+        ):
+            findings.append(
+                "Marketplace config and plugin descriptor repository sources differ; the main wrapper must route within the same repository."
+            )
+            actions.append("Align the marketplace config source and plugin descriptor source URL.")
+
+    if not findings and descriptor.exists:
+        notes.append(
+            "Supported descriptor layer topology is active: the user marketplace tracks main and marketplace.json routes kh-uaf to codex-runtime."
+        )
+
+    return findings, actions, notes
+
+
+def _normalize_sparse_path(value: str) -> str:
+    normalized = str(value).strip().replace("\\", "/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.rstrip("/")
+
+
+def _normalize_repository_source(value: str) -> str:
+    normalized = str(value).strip().replace("\\", "/").rstrip("/")
+    if normalized.lower().endswith(".git"):
+        normalized = normalized[:-4]
+    return normalized
 
 
 def _canonical_release_identity(source_root: Path, cache_root: Path) -> Dict[str, Any]:

@@ -213,6 +213,7 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
             self.assertIn(expected, packets)
 
         self.assertIn("development progress state", plugin["description"])
+        self.assertIn("role-based task command packets", plugin["description"])
         self.assertIn("Development Progress", plugin["interface"]["capabilities"])
         self.assertIn("workflow-usability-harness", selected)
         self.assertIn("subagent-review-pipeline", selected)

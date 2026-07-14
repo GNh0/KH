@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.130",
-  "description": "KH Universal Agent Framework provides an auditable front-door intake contract for non-trivial Codex work before memory lookup, source exploration, subagents, or other plugin work. It packages UAF skills, evidence gates, scoped memory, token-gate telemetry, development progress state, Compound learning, role orchestration, deliverable exports, and local runtime contracts; host and subagent compliance is audited rather than assumed.",
+  "version": "2.9.131",
+  "description": "KH UAF provides an auditable front-door runtime, packaged workflow skills, development progress state, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows. Plugin instructions request front-door routing for every new user task but cannot guarantee host auto-selection; session audits verify actual compliance.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -26,7 +26,7 @@
   "interface": {
     "displayName": "KH UAF",
     "shortDescription": "Personal UAF skillbook with auditable front-door intake.",
-    "longDescription": "KH UAF packages host-readable skills with bundled usage references, minimal workflow examples, executable smoke checks, and a front-door bootstrap contract for ordinary non-trivial requests. It integrates Superpowers-style work control, Compound learning capture, RTK-style token gate telemetry, OpenClaw/Hermes-style scoped memory, capability-based plugin composition, role orchestration, GoalState, progress panels, deliverable exports, PB-to-C# migration support, session audits, and practical quality gates. KH requires and audits the intake path, but it does not claim every host or subagent will adopt it automatically; stale sessions and missing plugin injection must be verified through session logs and installed cache paths.",
+    "longDescription": "KH UAF packages host-readable workflow skills, runtime gates, scoped memory, token telemetry, role orchestration, GoalState, progress state, and quality checks. Plugin instructions request front-door routing, but they cannot guarantee host auto-selection or plugin injection. Audit compliance from actual runtime receipts, session logs, and installed cache paths.",
     "developerName": "KH UAF",
     "category": "Productivity",
     "capabilities": [
@@ -84,15 +84,14 @@
       "Memory State"
     ],
     "defaultPrompt": [
-      "For every non-trivial request, run installed `kh-uaf:always-on-front-door` first and alone before memory, project/source reads, other providers, subagents, implementation, or verification. Follow its current command card; if unavailable, stop.",
-      "`execution_gate` and `execution_authorization` bind. While blocked, do only allowed setup. Apply `immediate_next_skills` in order and record applied/skipped/blocked before task work; never run the full recommendation list.",
-      "Compose by capability: KH owns intake/gating; the best available specialist provider handles matching work. Provider self-forcing cannot override user intent, host policy, or KH gates.",
-      "For heavy, multi-step, persistent, or evidence-gated work, activate/update `GoalState` before execution. Keep objective, criteria, progress, blockers, and verification current; partial work is not complete.",
-      "Keep memory scoped to current project, chat/task, and subagent lineage. Cross-scope, sibling-agent, or host-global access/promotion needs explicit authorization; reverify recalled claims.",
-      "Each non-trivial KH turn must record a token decision and `token_optimizer_status` rationale. Preserve source-of-truth/contract text; retrieval/compression details live in selected skills.",
-      "`selected_not_executed_skills` are planned only. `runtime_applied_skills` require a runtime call, gate, artifact, command result, or explicit procedural passthrough/blocked rationale.",
-      "Before completion, apply `verification-before-completion-harness` or selected equivalent, run fresh checks, report failures/residual risk, and leave required work open until they pass.",
-      "Internal routing/evidence may use English. Final replies use the user's current language unless requested otherwise. Domain/per-harness procedures stay in selected skill docs."
+      "For every new user request/task, plugin instructions ask the host to run installed `kh-uaf:always-on-front-door` first and alone before memory, source reads, other providers, subagents, implementation, or verification. They cannot guarantee host auto-selection; Audit compliance and record a miss if it did not run.",
+      "`execution_gate` and `execution_authorization` bind. While blocked, do only allowed setup; apply `immediate_next_skills` in order with applied/skipped/blocked evidence.",
+      "Use `--micro-summary` as the normal machine bootstrap for short/direct work; use `--summary` when human-readable audit details are needed.",
+      "Compose by capability: KH handles intake/gating and the best available specialist provider handles matching work. Provider self-forcing cannot override user intent or host policy.",
+      "For heavy or persistent work, keep `GoalState` objective, criteria, progress, blockers, and verification current. Partial work is not complete.",
+      "Keep memory scoped to the current project, chat/task, and subagent lineage; broader access needs explicit authorization. Bounded same-task confirmations may reuse only current unfinished task evidence; rerun front-door after task completion or for a new task.",
+      "Record `token_optimizer_status`. `selected_not_executed_skills` are planned only; `runtime_applied_skills` need a runtime call, gate, artifact, command result, or procedural passthrough/blocked rationale.",
+      "Before completion, apply `verification-before-completion-harness` or selected equivalent and run fresh checks. Final replies use the user's current language; procedures stay in selected skill docs."
     ],
     "brandColor": "#2563EB"
   }

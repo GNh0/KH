@@ -18,6 +18,10 @@ from src.orchestration.skill_application import (
 )
 from src.skills.token_optimizer import compare_token_usage
 from src.skills.uaf_skill_catalog import collect_packaged_skills
+from src.skills.uaf_skill_validator import (
+    parse_skill_frontmatter,
+    validate_skill_file,
+)
 from src.skills.sql_formatting_provider import (
     inspect_host_sql_formatting_provider,
     packaged_sql_formatting_provider,
@@ -32,6 +36,15 @@ FRONT_DOOR_SKILLS = [
     "skill-catalog",
     "token-optimizer",
 ]
+
+CODEX_COMPATIBLE_HOSTS = {
+    "codex",
+    "codex-cli",
+    "codex-desktop",
+    "openai-codex",
+}
+MICRO_SKILL_METADATA_FILE_LIMIT = 256
+MICRO_SKILL_FRONTMATTER_CHAR_LIMIT = 16_384
 
 
 @dataclass(frozen=True)
@@ -281,6 +294,7 @@ def build_kh_front_door(
     host_skill_paths: Sequence[str] | None = None,
     prefer_cache: bool = False,
     request_context: Dict[str, Any] | None = None,
+    micro: bool = False,
 ) -> KhFrontDoorResult:
     """Run KH intake before any source exploration or implementation work."""
     repo_root = _repo_root()
@@ -291,7 +305,7 @@ def build_kh_front_door(
     warnings = _warnings_from_path_checks(host_path_checks)
 
     catalog_summary: Dict[str, Any] = {}
-    if skill_source.exists:
+    if skill_source.exists and not micro:
         catalog = collect_packaged_skills(skill_source.skills_dir)
         validation = dict(catalog.get("validation", {}) or {})
         validation_results = validation.get("results", []) or []
@@ -326,8 +340,17 @@ def build_kh_front_door(
             version=skill_source.version,
             reason=skill_source.reason,
         )
-    else:
+    elif not skill_source.exists:
         warnings.append("No packaged KH skills directory was found.")
+    else:
+        catalog_summary = {
+            "mode": "micro_skipped",
+            "valid": None,
+            "validation_skipped": False,
+            "full_catalog_enumeration_skipped": True,
+            "reason": "Micro routing skips full packaged-skill discovery and validates only core and selected packaged skills.",
+            "skill_integrity": {},
+        }
 
     context = _merge_front_door_context(
         request_context,
@@ -349,10 +372,38 @@ def build_kh_front_door(
     provider_snapshot = (
         list(providers)
         if providers is not None
-        else _default_providers(host, skill_source.skills_dir)
+        else _default_providers(
+            host,
+            skill_source.skills_dir,
+            include_host_local=not micro,
+            include_canonical_host_sql=micro,
+        )
     )
     plugin_route = compose_plugin_route(prompt, providers=provider_snapshot, context=context).to_dict()
     recommended_skills = _recommended_skills(classification, plugin_route)
+    if micro and skill_source.exists:
+        targeted_names = _micro_packaged_skill_names(recommended_skills, plugin_route)
+        targeted_integrity = _targeted_packaged_skill_integrity(
+            skill_source.skills_dir,
+            targeted_names,
+        )
+        invalid_skills = sorted(
+            name for name, health in targeted_integrity.items() if not health["valid"]
+        )
+        catalog_summary.update(
+            {
+                "valid": not invalid_skills,
+                "invalid_count": len(invalid_skills),
+                "invalid_skills": invalid_skills,
+                "targeted_validation": True,
+                "targeted_skills": targeted_names,
+                "skill_integrity": targeted_integrity,
+            }
+        )
+        if invalid_skills:
+            warnings.append(
+                "Targeted packaged-skill validation reported invalid core or selected skill contracts."
+            )
     skill_statuses = _front_door_skill_statuses(
         recommended_skills,
         classification,
@@ -642,6 +693,9 @@ def _normalize_active_resume_goal_context(context: Dict[str, Any]) -> Dict[str, 
 def _default_providers(
     host: str,
     packaged_skills_dir: str | os.PathLike[str] | None = None,
+    *,
+    include_host_local: bool = True,
+    include_canonical_host_sql: bool = False,
 ) -> List[Dict[str, Any]]:
     providers = [
         {
@@ -662,11 +716,247 @@ def _default_providers(
             "metadata": {"host": host, "source": "kh_front_door"},
         }
     ]
-    providers.extend(_host_local_skill_providers(host))
+    if include_host_local:
+        providers.extend(_host_local_skill_providers(host))
+    elif (
+        include_canonical_host_sql
+        and _is_codex_compatible_host(host)
+    ):
+        canonical_provider = _canonical_host_sql_formatting_provider(host)
+        if canonical_provider is not None:
+            providers.append(canonical_provider)
     providers.append(
         packaged_sql_formatting_provider(packaged_skills_dir, host=host)
     )
     return providers
+
+
+def _is_codex_compatible_host(host: str) -> bool:
+    normalized = re.sub(r"[\s_]+", "-", str(host or "").strip().lower())
+    return normalized in CODEX_COMPATIBLE_HOSTS
+
+
+def _canonical_host_sql_formatting_provider(host: str) -> Dict[str, Any] | None:
+    if not _is_codex_compatible_host(host):
+        return None
+    codex_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex")))
+    skill_file = codex_home / "skills" / "sql-formatting" / "SKILL.md"
+    if not skill_file.is_file():
+        return None
+    return _host_local_skill_provider(host, skill_file)
+
+
+def _micro_packaged_skill_names(
+    recommended_skills: Sequence[str],
+    plugin_route: Dict[str, Any],
+) -> List[str]:
+    selected_roles = [plugin_route.get("controller", {}) or {}]
+    selected_roles.extend(plugin_route.get("assistants", []) or [])
+    nonpackaged_provider_ids = {
+        str(role.get("provider_id") or "")
+        for role in selected_roles
+        if isinstance(role, dict)
+        and role.get("capability") == "sql_formatting"
+        and (role.get("metadata", {}) or {}).get("source") != "packaged-kh-skill"
+    }
+    return _dedupe(
+        skill
+        for skill in recommended_skills
+        if skill in FRONT_DOOR_SKILLS or skill not in nonpackaged_provider_ids
+    )
+
+
+def _bounded_selected_skill_files(
+    root: Path,
+    skill_names: Sequence[str],
+) -> tuple[Dict[str, List[Path]], List[Dict[str, Any]]]:
+    selected_names = set(skill_names)
+    candidates = {name: [] for name in skill_names}
+    scan_issues: List[Dict[str, Any]] = []
+    files_scanned = 0
+
+    try:
+        skill_dirs = root.iterdir()
+        for skill_dir in skill_dirs:
+            skill_file = skill_dir / "SKILL.md"
+            try:
+                is_skill_file = skill_dir.is_dir() and skill_file.is_file()
+            except OSError as exc:
+                scan_issues.append(
+                    {
+                        "code": f"selected_skill_metadata_scan_unreadable:{type(exc).__name__}",
+                        "message": "Micro metadata scan could not inspect a packaged skill path.",
+                        "relative_path": skill_dir.name,
+                        "severity": "error",
+                    }
+                )
+                continue
+            if not is_skill_file:
+                continue
+            if files_scanned >= MICRO_SKILL_METADATA_FILE_LIMIT:
+                scan_issues.append(
+                    {
+                        "code": "selected_skill_metadata_scan_limit_exceeded",
+                        "message": (
+                            "Micro metadata scan reached its packaged-skill file limit; "
+                            "selected-name uniqueness could not be proven."
+                        ),
+                        "relative_path": ".",
+                        "severity": "error",
+                    }
+                )
+                break
+
+            files_scanned += 1
+            metadata, read_issue = _read_bounded_skill_frontmatter(skill_file)
+            if read_issue:
+                scan_issues.append(
+                    {
+                        "code": read_issue,
+                        "message": "Micro metadata scan could not read bounded skill frontmatter.",
+                        "relative_path": str(skill_file.relative_to(root)).replace("\\", "/"),
+                        "severity": "error",
+                    }
+                )
+                continue
+
+            metadata_name = str((metadata or {}).get("name") or "").strip()
+            folder_name = skill_dir.name.replace("_", "-")
+            selected_name = (
+                metadata_name
+                if metadata_name in selected_names
+                else folder_name if folder_name in selected_names else ""
+            )
+            if selected_name:
+                candidates[selected_name].append(skill_file)
+    except OSError as exc:
+        scan_issues.append(
+            {
+                "code": f"selected_skill_metadata_scan_unreadable:{type(exc).__name__}",
+                "message": "Micro metadata scan could not enumerate packaged skills.",
+                "relative_path": ".",
+                "severity": "error",
+            }
+        )
+
+    for paths in candidates.values():
+        paths.sort(key=lambda path: str(path.relative_to(root)).replace("\\", "/"))
+    return candidates, scan_issues
+
+
+def _read_bounded_skill_frontmatter(
+    skill_file: Path,
+) -> tuple[Dict[str, str] | None, str]:
+    lines: List[str] = []
+    chars_read = 0
+    try:
+        with skill_file.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle):
+                chars_read += len(line)
+                if chars_read > MICRO_SKILL_FRONTMATTER_CHAR_LIMIT:
+                    return None, "selected_skill_frontmatter_limit_exceeded"
+                lines.append(line)
+                if line_number == 0 and line.strip() != "---":
+                    return None, ""
+                if line_number > 0 and line.strip() == "---":
+                    content = "".join(lines).replace("\r\n", "\n")
+                    return parse_skill_frontmatter(content), ""
+    except (OSError, UnicodeError) as exc:
+        return None, f"selected_skill_frontmatter_unreadable:{type(exc).__name__}"
+    return None, ""
+
+
+def _targeted_packaged_skill_integrity(
+    skills_dir: str | os.PathLike[str],
+    skill_names: Sequence[str],
+) -> Dict[str, Dict[str, Any]]:
+    root = Path(skills_dir)
+    integrity: Dict[str, Dict[str, Any]] = {}
+    selected_files, scan_issues = _bounded_selected_skill_files(root, skill_names)
+    for skill_name in skill_names:
+        if scan_issues:
+            integrity[skill_name] = {
+                "valid": False,
+                "issues": [
+                    {**issue, "skill_name": skill_name}
+                    for issue in scan_issues
+                ],
+            }
+            continue
+        skill_files = selected_files.get(skill_name, [])
+        if not skill_files:
+            folder_name = skill_name.replace("-", "_")
+            integrity[skill_name] = {
+                "valid": False,
+                "issues": [
+                    {
+                        "code": "missing_selected_skill",
+                        "skill_name": skill_name,
+                        "relative_path": f"{folder_name}/SKILL.md",
+                        "severity": "error",
+                    }
+                ],
+            }
+            continue
+        if len(skill_files) > 1:
+            relative_paths = [
+                str(skill_file.relative_to(root)).replace("\\", "/")
+                for skill_file in skill_files
+            ]
+            integrity[skill_name] = {
+                "valid": False,
+                "issues": [
+                    {
+                        "code": "duplicate_name",
+                        "message": (
+                            f"Skill name '{skill_name}' appears in multiple candidate folders."
+                        ),
+                        "skill_name": skill_name,
+                        "relative_path": relative_paths[0],
+                        "candidate_paths": relative_paths,
+                        "severity": "error",
+                    }
+                ],
+            }
+            continue
+
+        skill_file = skill_files[0]
+
+        try:
+            result = validate_skill_file(
+                str(root),
+                skill_file.parent.name,
+                str(skill_file),
+            )
+        except (OSError, UnicodeError) as exc:
+            integrity[skill_name] = {
+                "valid": False,
+                "issues": [
+                    {
+                        "code": f"unreadable_selected_skill:{type(exc).__name__}",
+                        "skill_name": skill_name,
+                        "relative_path": str(skill_file.relative_to(root)).replace("\\", "/"),
+                        "severity": "error",
+                    }
+                ],
+            }
+            continue
+
+        issues = [issue.to_dict() for issue in result.issues]
+        if result.name != skill_name:
+            issues.append(
+                {
+                    "code": "selected_skill_name_mismatch",
+                    "skill_name": skill_name,
+                    "relative_path": result.relative_path,
+                    "severity": "error",
+                }
+            )
+        integrity[skill_name] = {
+            "valid": result.valid and result.name == skill_name,
+            "issues": issues,
+        }
+    return integrity
 
 
 def _host_local_skill_providers(host: str) -> List[Dict[str, Any]]:
@@ -682,34 +972,38 @@ def _host_local_skill_providers(host: str) -> List[Dict[str, Any]]:
         skill_file = skill_dir / "SKILL.md"
         if not skill_file.is_file():
             continue
-        manifest = _read_host_skill_manifest(skill_file)
-        skill_name = str(manifest.get("name") or skill_dir.name).strip()
-        description = str(manifest.get("description") or "").strip()
-        capabilities = _host_skill_capabilities(skill_name, description)
-        if not capabilities:
-            continue
-        inspection = inspect_host_sql_formatting_provider(skill_file)
-        display_name = skill_name or skill_dir.name
-        aliases = _host_skill_aliases(skill_name, display_name, capabilities)
-        providers.append(
-            {
-                "provider_id": skill_name.lower().replace("_", "-"),
-                "display_name": display_name,
-                "aliases": aliases,
-                "capabilities": capabilities,
-                "status": inspection.status,
-                "metadata": {
-                    "host": host,
-                    "source": "host-local-skill",
-                    "path": str(skill_file),
-                    "availability": inspection.availability,
-                    "compatibility": inspection.compatibility,
-                    "compatibility_issues": list(inspection.issues),
-                    "provider_precedence": 10,
-                },
-            }
-        )
+        provider = _host_local_skill_provider(host, skill_file)
+        if provider is not None:
+            providers.append(provider)
     return providers
+
+
+def _host_local_skill_provider(host: str, skill_file: Path) -> Dict[str, Any] | None:
+    manifest = _read_host_skill_manifest(skill_file)
+    skill_name = str(manifest.get("name") or skill_file.parent.name).strip()
+    description = str(manifest.get("description") or "").strip()
+    capabilities = _host_skill_capabilities(skill_name, description)
+    if not capabilities:
+        return None
+    inspection = inspect_host_sql_formatting_provider(skill_file)
+    display_name = skill_name or skill_file.parent.name
+    aliases = _host_skill_aliases(skill_name, display_name, capabilities)
+    return {
+        "provider_id": skill_name.lower().replace("_", "-"),
+        "display_name": display_name,
+        "aliases": aliases,
+        "capabilities": capabilities,
+        "status": inspection.status,
+        "metadata": {
+            "host": host,
+            "source": "host-local-skill",
+            "path": str(skill_file),
+            "availability": inspection.availability,
+            "compatibility": inspection.compatibility,
+            "compatibility_issues": list(inspection.issues),
+            "provider_precedence": 10,
+        },
+    }
 
 
 def _read_host_skill_manifest(skill_file: Path) -> Dict[str, str]:
@@ -875,7 +1169,7 @@ def _front_door_skill_statuses(
             statuses[skill] = _status(
                 "applied",
                 "runtime",
-                "always-on-front-door forced KH intake before any other non-trivial skill or plugin.",
+                "Current invocation executed KH intake; ordering requires session audit evidence.",
                 ["kh_front_door", "classification", "plugin_route", "runtime_applied_skills"],
             )
         elif skill == "automatic-intake-harness":
@@ -900,13 +1194,21 @@ def _front_door_skill_statuses(
                 ["classification"],
             )
         elif skill == "skill-catalog":
-            statuses[skill] = _status(
-                "applied" if skill_source.exists else "blocked",
-                "runtime" if skill_source.exists else "blocked",
-                "Resolved packaged KH skills from the current repository or plugin cache.",
-                ["skill_source", "catalog_summary"],
-                blocked_reason="" if skill_source.exists else "missing_packaged_skills",
-            )
+            if (catalog_summary or {}).get("mode") == "micro_skipped":
+                statuses[skill] = _status(
+                    "skipped_with_rationale",
+                    "considered",
+                    "Micro routing skips skill-catalog runtime application and broad packaged-skill discovery.",
+                    ["skill_source", "catalog_summary"],
+                )
+            else:
+                statuses[skill] = _status(
+                    "applied" if skill_source.exists else "blocked",
+                    "runtime" if skill_source.exists else "blocked",
+                    "Resolved packaged KH skills from the current repository or plugin cache.",
+                    ["skill_source", "catalog_summary"],
+                    blocked_reason="" if skill_source.exists else "missing_packaged_skills",
+                )
         elif skill == "goal-state-harness" and goal_activation.get("status") == "executed":
             statuses[skill] = _status(
                 "applied",
@@ -953,6 +1255,12 @@ def _mark_immediate_next_skill_statuses(
     updated = {name: dict(status) for name, status in statuses.items()}
     for skill in immediate_next_skills:
         if skill not in updated:
+            continue
+        current_status = updated[skill]
+        if (
+            current_status.get("status") == "blocked"
+            or current_status.get("blocked_reason") == "invalid_packaged_skill"
+        ):
             continue
         updated[skill] = _status(
             "pending_immediate_execution",
@@ -2355,6 +2663,7 @@ def main() -> int:
         host_skill_paths=args.host_skill_path,
         prefer_cache=args.prefer_cache,
         request_context=request_context,
+        micro=args.micro_summary,
     )
     if sum(1 for flag in (args.summary, args.micro_summary, args.verbose_summary) if flag) > 1:
         raise SystemExit("choose only one of --summary, --micro-summary, or --verbose-summary")

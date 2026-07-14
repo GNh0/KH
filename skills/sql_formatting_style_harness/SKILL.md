@@ -35,24 +35,32 @@ Use this harness after selecting the host-local `sql-formatting` contract or the
 | `formatting_preservation.status` | `verified`, `changed`, `not_evaluated` | Complete ordered token-stream comparison. |
 | `style_lint.status` | `passed`, `blocked` | Presentation-only contract checks. |
 | `alias_role_plan_validation.status` | `not_needed`, `required`, `verified`, `conflict` | Complete per-scope alias evidence. |
-| `semantic_refactor_evidence.scalar_function_refactor.status` | `not_requested`, `blocked`, `not_proven`, `mechanically_valid` | Separate scalar refactor state; mechanically valid is not release ready. |
-| `semantic_checks.status` | `not_proven` | Deterministic checks and correlated provenance do not prove database equivalence. |
+| `semantic_refactor_evidence.scalar_function_refactor.status` | `not_requested`, `blocked`, `not_proven`, `mechanically_valid`, `verified` | Separate scalar refactor state; only an authenticated `verified` result is release ready. |
+| `semantic_checks.status` | `not_proven`, `proven` | `proven` requires an independently authenticated runtime comparison bound to the exact contract. |
 | `release_readiness.status` | `ready`, `pending`, `blocked` | Top-level completion gate. Refactors remain pending until semantic execution is proven and authenticated. |
 
 ## Alias Plan
 
 - No alias change: state is `not_needed`.
 - Alias change without a complete plan: block.
+- Every changed scope requires exactly one first `main` role; all-support plans block.
 - Main role: `A`, then `A1`, `A2`, and so on.
 - Singleton non-main roles: sequential `B`, `C`, `D`, and so on.
 - Multi-member non-main roles: number from the first member, for example `B1`, `B2`.
 - Every changed scope must be present. Every declaration and changed reference must be covered. Cross-scope members, skipped role letters, missing aliases, and vague/empty basis references block.
+- Scope-aware binding applies to nested/correlated queries and to `UPDATE ... FROM`, joined `DELETE`, and `MERGE`; an outer rename never owns a reference shadowed by an inner declaration.
 
 ## Scalar Refactor Boundary
 
 Formatting always retains scalar calls. A separate conversion may proceed only when structured evidence identifies an authoritative function definition, proves a pure deterministic lookup, records exact source table/keys/filters/return/null behavior, proves zero-or-one cardinality and unmatched-row behavior, and explains why the join is preferable. Calculation, aggregation, security filtering, dynamic behavior, ambiguity, or unavailable source blocks conversion.
 
 Complete structured evidence remains `not_proven`. A DB/result-comparison artifact correlated to both original and formatted SHA-256 values records `external_correlation=provenance_correlated`; Python validates completeness and correlation only and does not upgrade semantic status. Caller-supplied or otherwise unauthenticated evidence may reach `status=mechanically_valid` with `release_readiness.status=pending`, but it must return `success=false` and a non-zero exit code. Only a runtime execution receipt independently validated outside caller-supplied metadata may set both semantic proof and execution authentication needed for release readiness.
+
+The authenticated path uses the Python API's host-supplied `runtime_receipt_authenticator(payload, signature)` callback. The signed receipt must bind the original/formatted SQL hashes, authoritative function-definition hash, computed equivalence-contract hash, comparison artifact, database identity, execution timestamp, and a positive comparison count. The callback is a host trust boundary and must never be constructed from fields inside `scalar_function_refactor`.
+
+## INSERT Layout Contract
+
+For mappings with eight or more items, canonical non-comment expression text of at most 72 characters remains horizontally grouped. Expressions of 73 or more characters may use vertical fallback. At most one short singleton line is allowed as a row remainder; additional short singleton mappings block. The exact thresholds and measurement name are emitted as `style_lint.insert_select_layout_contract`.
 
 ## Progressive Disclosure
 

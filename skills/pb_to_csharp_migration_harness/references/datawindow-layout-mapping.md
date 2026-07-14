@@ -1,65 +1,58 @@
 # DataWindow Layout Mapping
 
-This reference captures the packaged DataWindow-to-grid behavior. DevExpress XML is the deterministic converter output, but generated C# controls must still follow the target-project/custom -> DevExpress -> WinForms fallback order.
+Use this reference with directly supplied SRD text, a user-provided field list, or a described DataWindow contract. Normal generation does not search for DataWindow files.
 
-## DataWindowToXml-compatible rule
+## Column Extraction
 
-The known converter is a narrow SRD column helper:
+- Preserve supplied field names and source order.
+- When visual column positions are present in supplied text, order by vertical then horizontal position.
+- Match a nearby supplied text label to its field when the relationship is unambiguous.
+- Otherwise use the field name as the caption and record the fallback.
+- Keep computed fields distinct from stored fields.
+- Record retrieve arguments, updateability, edit masks, dropdowns, protection, and validation only when supplied.
 
-- read `.srd`, `.sru`, or `.txt` as UTF-8 or EUC-KR;
-- split on `column=(...)`;
-- read `name=...`;
-- prefer visual `column(...)` entries when present so column order follows the DataWindow layout (`y`, then `x`) instead of blindly trusting `table(column=...)` declaration order;
-- match nearby `text(...)` controls to each visual column when possible and use the matched DataWindow caption;
-- fall back to the uppercase field name as the caption when no safe caption match exists;
-- uppercase the column name;
-- generate DevExpress `XtraSerializer` GridView XML as a portable column layout artifact;
-- use `FieldName=<COLUMN>`, `Caption=<MATCHED_PB_CAPTION_OR_COLUMN>`, and `Name=<C# column name>`;
-- target C# column names follow the existing Designer style: `colList_<COLUMN>` for list/main grids, `colDetail_<COLUMN>` for detail grids, `col<TABLE>_<COLUMN>` when the active screen/table convention uses the source table name, such as `colSA110T_ORDNUM`, or `col<PURPOSE>_<COLUMN>` when table naming is ambiguous and the grid is organized by a business purpose such as `POR`, `BOM`, `ITEM`, or `REQ`;
-- target grid control/view names follow the same convention: `grdList/gvwList`, `grdDetail/gvwDetail`, `grd<TABLE>/gvw<TABLE>`, or `grd<PURPOSE>/gvw<PURPOSE>`, such as `grdSA110T/gvwSA110T` or `grdBOM/gvwBOM`;
-- default prefix is `colList_`, but generated code must switch to `colDetail_`, `col<TABLE>_`, or `col<PURPOSE>_` when the target screen/input format proves that convention;
-- raw DataWindowToXml-style XML helper default GridView name is `gridView1` when no target C# naming context is supplied;
-- KH target layout generation should pass the resolved C# view name such as `gvwList`, `gvwDetail`, `gvwSA110T`, or `gvwBOM`;
-- set header and cell font to `Tahoma, 9pt`;
-- set header alignment center;
-- set `Visible=true`, `VisibleIndex=index`;
-- set top-level GridView serializer defaults from the attached `DataWindowToXml.html`: `BestFitMaxRowCount=-1`, `PreviewLineCount=-1`, `HorzScrollStep=3`, `FocusRectStyle=CellFocus`, `ScrollStyle=LiveVertScroll, LiveHorzScroll`, `PreviewIndent=-1`, empty `GroupPanelText`, empty `PreviewFieldName`, empty `VertScrollTipFieldName`, `LevelIndent=-1`, `GroupFooterShowMode=VisibleIfExpanded`, empty `NewItemRowText`, `SynchronizeClones=true`, `BorderStyle=Default`, empty `ViewCaption`, `DetailHeight=350`, target view `Name`, `DetailTabHeaderLocation=Top`, and `ActiveFilterEnabled=true`;
-- set `OptionsView.ShowViewCaption=false`, `OptionsView.EnableAppearanceEvenRow=true`, `OptionsView.ShowGroupPanel=false`, `OptionsView.ColumnAutoWidth=false`, `OptionsView.ShowFooter=true`, and `OptionsView.ShowAutoFilterRow=true`;
-- when generating C# Designer code instead of XML, apply the same safe `OptionsView` defaults to the target GridView so the group panel is hidden and the filter/footer/even-row behavior matches the converter.
-- when target Designer code exists, inspect it first with `extract_csharp_designer_control_specs`; preserve actual `u_GridControl`, `GridView`, `MainView`, `ViewCollection`, `GridControl`, and container `Controls.Add` evidence before adding or changing columns.
-- generated C# grid columns should be explicit Designer-level `GridColumn` members registered with `Columns.AddRange`, using `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>` names. Do not default to runtime `AddGridColumn`, `Columns.AddField`, or `view.Name + "_" + fieldName` helper generation.
+## Grid Mapping
 
-Use `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`, `resolve_csharp_grid_column_prefix`, `resolve_csharp_grid_control_names`, `build_csharp_grid_column_name`, and `generate_devexpress_grid_xml` for deterministic generation.
+Use the selected control provider from the packaged style contract.
 
-## What it does not do
+- Grid/view names: `grd<Role>` and `gvw<Role>`.
+- Column names: `col<Role>_<FIELD>`.
+- `FieldName`: exact supplied result field.
+- `Caption`: supplied caption or documented fallback.
+- `VisibleIndex`: supplied visual order.
+- Explicit Designer members and `Columns.AddRange` are required.
+- Numeric, lookup, button, and boolean fields use the matching repository convention.
+- Repository initialization and registration precede `ColumnEdit` assignment.
 
-The narrow converter does not map:
+For DevExpress-compatible output, default to a hidden group panel, visible auto-filter row, visible footer, disabled auto-width, even-row appearance, and centered headers when the API supports them. For KoneLib, keep the corresponding wrapper behavior. For WinForms, express unsupported repository behavior through cell/editor configuration and record the substitution.
 
-- PB x/y/w/h coordinate geometry;
-- band/header/detail/footer layout;
-- text labels that cannot be matched by position;
-- computed fields;
-- DDDW/dropdowns;
-- edit masks;
-- protection/read-only rules;
-- tab order;
-- colors, borders, and conditional formatting;
-- retrieve SQL;
-- update metadata;
-- multi-grid or nested layouts.
-- target C# Designer-only custom flags such as `BindingField`, `_isAllowBlank`, `EnterMoveNextControl`, `Properties.*`, or project-specific grid setup unless target Designer code is inspected separately.
+## Detail Mapping
 
-When those matter, keep them as migration tasks and ask for SRD/source/screenshot evidence or a target C# layout decision.
+Arrange label/editor pairs in stable rows and columns:
 
-## Layout decision rules
+1. Preserve supplied field order.
+2. Select editor kind from supplied metadata; otherwise use text.
+3. Name the control from the packaged grammar.
+4. Set `BindingField` when supported or record an explicit binding map.
+5. Assign `TabIndex` left-to-right, top-to-bottom.
+6. Keep required/read-only/null/edit-mask behavior only when supplied.
 
-- Grid screens: use SRD columns to create grid columns, then apply target-project control naming and binding. If no target grid wrapper exists, use DevExpress GridControl/GridView; if DevExpress is absent, use WinForms DataGridView.
-- Detail entry screens: derive fields, captions, editor type hints, and validation from DataWindow metadata or user-described behavior, but choose controls from the target form style using the same fallback order. Use SA100100-style clean alignment: label/editor pairs in fixed rows and columns, consistent label width, editor width, row height, and column gap. Do not copy PB x/y coordinates blindly unless the user asks for exact visual parity.
-- Detail editor names should follow the active target project first. Packaged fallback names are field-based: `txtITEMNM` for text, `btnITEMCD` for lookup/button editors, `cboITEMACNT` for lookup/combo, `SpinQTY` for SpinEdit, `ymdORDDT` for DateEdit, `ChkUSEYN` for boolean fields, and `memoREMARK` for memo fields. Every generated editor must carry the source field name, a `BindingField = "<FIELD>"` assignment, and a left-to-right/top-to-bottom `TabIndex`.
-- Container names should also follow target evidence first. Packaged fallbacks are `pnDetail` or `pnMaster` for panels, `grpSearch`/`grpDetail`/`grpList` for groups, `grdList/gvwList` for list grids, `treeListBOM` for new TreeList fallbacks, and `tabList` for tabs.
-- Reports/print forms: use the existing report designer, output PDF, screenshot, or printed form as the visual contract when available.
-- Complex layouts: produce a wireframe or mapping table first. Do not pretend the XML helper is full layout migration.
+Do not copy PB coordinates blindly. Exact geometry requires supplied visual evidence and explicit fidelity scope.
 
-## Naming rule
+## Unsupported Claims
 
-Grid columns should preserve uppercase field names and use the configured prefix for control `Name`. If the target screen already has a prefix convention, use that convention. Otherwise use `colList_`. Common column conventions are `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, and `col<PURPOSE>_<COLUMN>`. Common grid conventions are `grdList/gvwList`, `grdDetail/gvwDetail`, `grd<TABLE>/gvw<TABLE>`, and `grd<PURPOSE>/gvw<PURPOSE>`.
+A field mapping alone does not prove:
+
+- band/header/detail/footer geometry;
+- computed-expression behavior;
+- dropdown data sources;
+- edit masks, protection, or conditional formatting;
+- retrieve SQL or update metadata;
+- nested layouts, reports, or print fidelity;
+- target custom-control flags.
+
+List missing semantics as blocked or deferred. Do not infer them from a field name.
+
+## Evidence
+
+Record field, caption source, order source, editor/repository choice, generated control and column names, binding/result field, unsupported semantics, selected provider, and fallback reason.

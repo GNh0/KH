@@ -17,7 +17,7 @@ The user did not mention KH, UAF, plugins, skills, harnesses, routing, or orches
 ## Expected evidence
 
 - `front_door_status = ok`
-- `runtime_applied_skills` includes `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog`.
+- `runtime_applied_skills` includes `automatic-intake-harness`, `plugin-composition-policy`, and `request-complexity-router`. It includes `skill-catalog` only when full catalog discovery ran; micro mode records targeted validation without claiming catalog execution.
 - `selected_not_executed_skills` includes implementation and verification follow-ups until they produce their own evidence.
 - The final report distinguishes applied, selected, skipped, blocked, and residual-risk states.
 - `execution_level = python-module`
@@ -40,7 +40,7 @@ The user did not mention KH, UAF, plugins, skills, harnesses, routing, or orches
 
 ## Done criteria
 
-The user can give an ordinary task, the host runs intake automatically, and the audit can prove that skill usage was not fabricated.
+The user can give an ordinary task without naming KH. Plugin instructions request intake, and the audit proves whether the host actually invoked it or records a bootstrap miss; manifest text alone is never treated as automatic execution evidence.
 
 ## Runtime binding
 

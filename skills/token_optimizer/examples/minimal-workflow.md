@@ -2,7 +2,7 @@
 
 ## Scenario
 
-A host agent receives a non-trivial KH-routed task. The token gate must run even if no compression is ultimately applied; actual optimization is used only when content can be safely reduced without losing required facts.
+A host agent receives a KH-routed request. The token gate must run even if the request is light/direct and no compression is ultimately applied; actual optimization is used only when content can be safely reduced without losing required facts.
 
 The agent must decide whether `token-optimizer` applies, run or apply it according to its execution level, and leave auditable evidence.
 

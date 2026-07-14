@@ -92,7 +92,7 @@ Reviewer/LLM judgment establishes roles. Python checks only completeness and con
 }
 ```
 
-The plan must exactly cover every declaration in every changed scope. It cannot omit aliases, mix scopes, skip role letters, start a multi-member family unnumbered, or use empty/vague basis references. If aliases do not change, the state is `not_needed` and a plan is not normative.
+The plan must exactly cover every declaration in every changed scope. Each changed scope has exactly one first `main` role (`A`, then `A1...`) before support roles (`B/C/D` or `B1/B2...`). It cannot use an all-support plan, omit aliases, mix scopes, skip role letters, start a multi-member family unnumbered, or use empty/vague basis references. Scope-aware binding covers nested/correlated `SELECT`, `UPDATE ... FROM`, joined `DELETE`, and `MERGE`; shadowed inner references do not belong to an outer rename. If aliases do not change, the state is `not_needed` and a plan is not normative.
 
 ### Scalar-Function Refactor
 
@@ -159,6 +159,27 @@ A host-trusted artifact correlated to the exact SQL pair can establish `external
 Python validates field completeness and hash correlation. Trust, function analysis, database authority, semantic equivalence, and preference remain external responsibilities. Because this mapping is caller-supplied, matching hashes can produce `status=mechanically_valid` but cannot authenticate execution. The resulting refactor must report `release_readiness.status=pending`, `success=false`, and a non-zero exit code.
 
 No field nested inside `scalar_function_refactor` can self-authenticate. Only a runtime execution receipt independently validated by a trusted runtime and bound to the exact SQL hashes may establish `execution_authentication=authenticated`; semantic execution must also establish `semantic_checks.status=proven`. Until both conditions hold, refactor release readiness fails pending closed.
+
+The release-ready path is available only through the Python API. Pass a host-owned `runtime_receipt_authenticator(payload: bytes, signature: str) -> bool`; do not construct this callback from caller evidence. The receipt retains the correlation fields above and additionally requires `receipt_id`, `database_identity`, `executed_at`, positive integer `comparison_count`, `function_definition_sha256`, `equivalence_contract_sha256`, and `signature`.
+
+The signed `payload` is UTF-8 canonical JSON of `trusted_external_verification` with `signature` removed, keys sorted, `ensure_ascii=False`, and separators `(',', ':')`. The equivalence-contract SHA-256 uses the same JSON encoding over:
+
+```json
+{
+  "version": "1",
+  "function": {
+    "name": "<function.name>",
+    "definition_sha256": "<function.definition_sha256>"
+  },
+  "analysis": "<the complete structured analysis object>"
+}
+```
+
+The harness first validates SQL correlation, authoritative definition artifacts, mechanical call-to-join boundaries, and both definition/contract bindings. It then invokes the external authenticator. Only an exact `True` result produces `status=verified`, `semantic_status=proven`, `execution_authentication=authenticated`, and release readiness `ready`. Missing callbacks remain pending; missing, mismatched, rejected, or tampered receipts fail closed.
+
+### INSERT/SELECT Layout
+
+For eight or more target/value mappings, the verifier measures each source expression as canonical non-comment token text joined with one space. Expressions up to 72 characters must remain horizontally grouped by physical start line; at most one short singleton is allowed as a group remainder. Expressions of 73 characters or more have a declared vertical fallback and may start on their own lines. The emitted `style_lint.insert_select_layout_contract` records these thresholds and the measurement name.
 
 ### Session Audit Binding
 

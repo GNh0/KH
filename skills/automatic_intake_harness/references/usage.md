@@ -1,6 +1,6 @@
 # Automatic Intake Harness Usage Reference
 
-Use this reference when a host, plugin manifest, or root guide must decide whether KH should run before ordinary work. The core rule is simple: non-trivial work should get intake even when the user does not know KH vocabulary.
+Use this reference when a host, plugin manifest, or root guide must request KH intake before a new user request. The host cannot guarantee plugin auto-selection, so actual compliance requires a runtime receipt or session audit. The user never needs to know KH vocabulary.
 
 ## When to use
 
@@ -14,7 +14,7 @@ Apply this skill before acting on requests that involve:
 - preserving goal state, memory, snapshots, handoffs, or progress state
 - destructive, security, legal, financial, medical, privacy, or other high-risk decisions
 
-Do not apply heavy workflow machinery for simple direct questions, short explanations, translations, or tiny one-off text transforms. The intake step may still classify these as direct answers.
+Do not apply heavy workflow machinery for simple direct questions, short explanations, translations, or tiny one-off text transforms. The intake step still runs when selected and classifies these as direct exits.
 
 Persistent directive: if the user previously asked the assistant to actively, always, by default, or continuously use KH/UAF skills or harnesses in this conversation or project, carry `kh_active_directive=active` into later work-bearing turns. The later request does not need to repeat KH, UAF, skill, or harness names.
 
@@ -75,7 +75,7 @@ A valid use records:
 
 Another agent should be able to audit a finished session and answer:
 
-- Did the user need to know internal KH names? The answer should be no for non-trivial work.
+- Did the user need to know internal KH names? The answer should be no for every routed request.
 - What actually ran before source exploration?
 - Which skills were only selected, and which produced runtime evidence?
 - Were logs, tests, documents, and high-risk actions routed to the appropriate follow-up checks?

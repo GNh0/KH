@@ -2,56 +2,76 @@
 
 Use this checklist before handoff or completion.
 
-## Required sections
+## Scope And Profile
 
-- Objective and target operator.
-- Migration mode and evidence strength.
-- Migration analysis plus development specification `.md` handoff quality: at least the 019f178e PR100200/PROD_302_A composition quality, with objective/operator, PB source evidence, user workflow, C# scope, event/call flow, DB/SP mapping, transaction/error behavior, implementation order, constraints/business rules, manual tests, LLM handoff, target file/procedure plan, user directive and approved scope, PB-event-to-C# mapping, DataWindow/control/BindingField mapping, SP contract matrix, style-profile/fallback basis, implementation task breakdown, verification contract, and confirmed/inferred/blocked/proposal-only split covered well enough for a separate developer agent to implement. Record `verify_pb_migration_analysis_document` status before C# generation. Do not use raw line count, heading count, or code-block count as quality gates.
-- PBL export provider and PB version strategy: selected provider, provider order, PB version, ORCA/runtime confidence, runtime lookup requirement, blocked export conditions, and source-parity confidence.
-- PB source trace summary.
-- DataWindow field/layout mapping.
-- Target Designer extraction summary when `.Designer.cs` or pasted Designer exists: control types, parent/child containment, `BindingField`, project flags, `Properties.*`, bounds, captions, `TabIndex`, grid/view links, collection calls, and explicit absent GridColumn evidence.
-- Detail form label/editor layout, source field names, target control names, `BindingField` assignments, and left-to-right/top-to-bottom `TabIndex` assignments when the migrated screen has input controls.
-- Control naming evidence for generated controls: `txt`, `btn`, `cbo`, `Spin`, `ymd`, `Chk`, `memo`, `lbl`, `pn`, `grp`, `grd/gvw`, `treeList`, and `tab` prefixes, with target-project existing names taking precedence.
-- Grid column generation evidence: explicit `GridColumn` declarations, `Columns.AddRange`, `FieldName`, `Caption`, `Name`, `VisibleIndex`, and `RepositoryItemSpinEdit` `ColumnEdit` evidence for numeric columns, or a blocked reason. Do not accept default `AddGridColumn`/`Columns.AddField` helper output unless local target evidence proves that style.
-- Target C# implementation plan.
-- User directive and approved scope: exact requested work, approved edits, explicitly excluded changes, proposal-only findings, and items requiring further user approval.
-- Author-tagged per-program style profile when C_KONE110/KH style applies: matched program key, source/designer hashes, method path, SP calls, parameters, grid/view names, BindingField samples, repository controls, and fallback program key if the active target is excluded.
-- Target C# control fallback map.
-- SELECT/SAVE SP plan.
-- SP generation evidence: source SQL/PB/DB evidence or approved inferred-draft marker, `@WORKTYPE` branch contract, CTE/#temp/MERGE/NOT EXISTS/IF-EXISTS-WHERE-subquery scan, and SQL formatting verifier status.
-- SP parameter/local-variable evidence: procedure parameters are caller/C# inputs only; derived helper/calculation values such as year/month/base-date values are local `DECLARE` variables assigned with `SET`; when caller `DbParameter` evidence exists, the generated SP signature contains no extra parameters outside that caller set.
-- SQL formatting/verifier status.
-- Traceability from PB behavior to C# method and SP branch.
-- Verification plan.
-- Blocked items and missing evidence.
+- Exact user directive and approved outputs are recorded.
+- Excluded and proposal-only changes are visible.
+- Evidence mode is recorded.
+- `packaged-style-contract.md` is the only normal-generation style profile.
+- Contract identifier/version and selected screen, method, provider, and procedure families are recorded.
+- The maintenance-only profile-update workflow did not run.
+- Source text has `token_optimizer_status=passthrough`.
 
-## Completion criteria
+## Analysis And Mapping
 
-- No claim of full PB parity without exported or pasted source evidence.
-- No claim of full PB parity from ORCA/PblScripter availability alone when PB version/runtime has not been confirmed.
-- Missing PblScripter does not block the workflow when direct ORCA, pre-exported source, pasted source, described behavior, or bundled baseline can still be used with lower confidence.
-- No claim of DB semantic equivalence without DB-backed check.
-- No claim of layout fidelity without visual/layout source.
-- No claim of correct Designer style without property extraction or explicit fallback assumptions.
-- No generated C# implementation from a short log-level analysis. The analysis `.md` handoff must pass the implementation-readiness quality gate or the implementation remains blocked.
-- No cross-agent implementation from an analysis-only narrative. If the developer agent would need hidden chat context or would need to re-infer PB behavior, the handoff remains blocked.
-- No implementation of agent-discovered proposal-only findings without explicit user approval. The latest user instruction, pasted source, named path, screenshot, and verified artifact remain the scope authority.
-- No generated runtime grid-column helper when the target style requires Designer `GridColumn` members and `col*_<FIELD>` names.
-- No completed SELECT/SAVE SP claim from only C# parameters or grid columns. Use blocked contract or clearly labeled inferred draft when PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, or DB evidence is absent.
-- No SP-internal helper/calculation values exposed as generated procedure parameters; no derived helper values such as `@YYYY`, `@MM`, `@BASYYYY`, or `@LASTDT` exposed as generated procedure parameters.
-- No generated `IF ISNULL(...)` guard/default block around date derivation. Use local `DECLARE` and `SET` for internal variables.
-- Detail form controls are aligned as readable label/editor pairs instead of blindly copying PB coordinates unless exact visual parity was explicitly requested.
-- No generated user-facing files outside the exact requested target path.
-- No hidden use of global memory as a substitute for current artifacts.
-- Token optimizer status is recorded.
-- SQL formatter and verifier roles are separated.
-- Project-specific controls are not hard-coded from a sample project. The selected control provider is target-project/custom, DevExpress, or WinForms with a reason.
-- Existing DevExpress/KoneLib references are not upgraded, re-targeted, or replaced with latest-version examples.
-- Remaining assumptions are visible.
+- Confirmed, inferred, blocked, and proposal-only facts are separate.
+- Event/action to C# method mapping is complete.
+- Field to editor/`BindingField`/grid/result mapping is complete.
+- Caller value to SP parameter mapping is complete and ordered.
+- Derived values are listed as SP locals, not caller parameters.
+- SAVE row states, payload shape, write order, transaction, error, and logging behavior are documented.
+- A separate developer can implement without hidden chat context.
 
-## User-facing output
+## C# And Designer
 
-For normal work, return the deliverable or migration plan in the user's language. Keep internal KH evidence out of the final answer unless the user asks for a skill/harness audit.
+- Supplied identifiers and APIs are preserved.
+- Missing identifiers use only packaged naming grammars.
+- One query path and one save path are used.
+- Provider fallback follows target wrapper, KoneLib, DevExpress, then WinForms from declared evidence.
+- No dependency was added, upgraded, or retargeted.
+- Designer members, initialization, containment, collections, bounds/layout, and `TabIndex` are explicit.
+- Static control construction, layout, naming, binding fields, grid/repository wiring, `Appearance`, `Options`, and design properties are in `.Designer.cs` by default.
+- Code-behind contains runtime behavior, event-handler implementations, validation, procedure calls, result binding, and evidence-backed dynamic state only.
+- Every static UI assignment in code-behind has explicit source evidence, a runtime reason, and a targeted verification result; otherwise completion is blocked.
+- Grid columns are explicit and registered with `Columns.AddRange`.
+- `FieldName` matches the SP result field.
+- Repository editors are registered before `ColumnEdit` assignment.
+- Numeric fields use numeric editor behavior, not formatting alone.
 
-- Do not add source-unbacked `SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...)` schema-only fallback blocks to generated migration procedures; return from known branches or report a blocked contract instead.
+## Stored Procedures
+
+- Complete output has supplied result/write evidence or explicit inferred-draft approval.
+- Metadata placeholders are resolved from the request or remain visibly unresolved.
+- Every SP parameter exists in the caller matrix or has a documented external caller.
+- Internal calculations and derived dates are local variables.
+- Raw search/date values cross the caller boundary.
+- Supplied predicates, literals, comments, calculations, result order, and write behavior are preserved.
+- Formatting verification and semantic-equivalence claims are separate.
+- Offline generation does not claim database parity.
+
+## Forbidden Pattern Gate
+
+- No private packaged paths, identities, database names, concrete source identifiers, hashes, snapshot counts, or fingerprints.
+- No normal-generation style discovery or profile refresh.
+- No invented context DTOs, broad value helpers, or parallel call paths.
+- No inline C# wildcard shaping or hidden query-path date defaults.
+- No SP parameters outside the caller matrix.
+- No runtime fixed-column factories or loops.
+- No unapproved Designer-owned static UI setup in code-behind.
+- No source-unbacked empty result schema or completed SP claim.
+- No unapproved dependency upgrade or semantic SQL rewrite.
+
+## Verification
+
+- Migration analysis verifier status is recorded when available.
+- C# style verifier status is recorded when C# is generated.
+- Per-file Designer ownership scan and any dynamic-state exception evidence are recorded.
+- SP generation verifier status is recorded when SQL is generated.
+- SQL formatter/verifier status is recorded separately.
+- Build/syntax/manual checks and exact commands are recorded.
+- Unsupported PB parity, UI fidelity, and DB equivalence claims remain blocked.
+- Residual risks and next required evidence are explicit.
+
+## User-Facing Output
+
+Return the artifact or migration plan in the user's language. Keep internal KH routing details out of the final response unless an audit is requested.

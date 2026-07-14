@@ -1,136 +1,135 @@
 # PB To C# Migration Harness Usage
 
-Use this harness for requests involving PB, PBL, PBD, ORCA, PblScripter, SRU, SRW, SRD, DataWindow, DataWindowToXml, GWERP, C# migration, project-specific controls, DevExpress grid/layout migration, WinForms fallback screens, or SELECT/SAVE stored-procedure migration.
+Use this harness to plan, generate, or review offline migration output for PowerBuilder behavior, DataWindow fields, C# WinForms/DevExpress/KoneLib screens, Designer code, and SQL Server SELECT/SAVE procedures.
 
-Use it even when the local toolchain is absent. The packaged references are the fallback baseline. Local PBL exports, source trees, converter HTML, C# examples, and live DB access increase confidence but are not required just to start the workflow.
+## Runtime Boundary
 
-Do not use this harness as the SQL formatter. SQL formatting belongs to the host-local `sql-formatting` skill; this harness composes with it and verifies migration-specific constraints.
+Normal generation uses `packaged-style-contract.md` and `packaged-style-contract.json` as its only style profile. It may use source text or screenshots supplied directly by the user as behavior evidence. It does not discover style from the machine or refresh the packaged profile.
+
+The maintenance-only `profile-update-workflow.md` never runs during normal generation. Invoke it only for an explicit packaged-profile update request.
+
+Do not use this harness as the SQL formatter. Compose with host-local `sql-formatting`, then use the SQL style verifier when proof is required.
 
 ## When to use
 
-Use this harness when the user asks to analyze, plan, migrate, review, or implement PowerBuilder screens, PBL/PBD exports, SRU/SRW/SRD/DataWindow assets, DataWindowToXml-compatible layouts, target C# WinForms/DevExpress screens, project-specific control mapping, or SQL Server SELECT/SAVE stored procedures as part of a PB-to-C# migration flow.
-
-Do not use it for generic SQL formatting alone, generic C# cleanup with no PB migration context, or claims of project-specific style without current target evidence or packaged reference evidence.
+Use this harness when a request needs an offline PB-to-C# plan, C#/Designer generation, DataWindow mapping, or SELECT/SAVE procedure drafting and review. Use the packaged contract for output shape, and use only behavior evidence supplied in the current request.
 
 ## Inputs to collect
 
-- Objective: screen, program, report, save flow, query, popup, or DataWindow being migrated.
-- Available source evidence: PBL, exported `.sru`, `.srw`, `.srd`, `.srm`, pasted PB text, screenshots, existing C# screen, verified existing SP definition evidence, feature spec, or DB access.
-- PBL export provider: PblScripter/wrapper, direct ORCA, pre-exported files, pasted source, described behavior, or bundled baseline.
-- PB version/runtime evidence: PB 7.0, PB 12.5, unknown, matching ORCA/runtime path, or blocked runtime/license state.
-- Migration mode: `standalone`, `described-behavior`, `pasted-source`, `partial-reference`, or `full-reference`.
-- PB flow: object name, parent window/user object, event path, `OpenWithParm`, `Retrieve`, `Update`, DataWindow `dataobject`, and linked SQL.
-- DataWindow fields: column names, update table, retrieve arguments, display labels, computed fields, DDDW/dropdown dependencies, edit masks, protection, tab order, and layout constraints.
-- Target C# context: project, namespace, form base class, existing controls, custom control libraries, DevExpress references, Designer snippets, and existing method names.
-- SP context: SELECT/SAVE procedure name, `@WORKTYPE` branches, XML/table variable usage, transaction/error/logging rules, and host-local SQL formatting expectation.
-- Identifier resolution scope: exact program/object/DataWindow/table/procedure/control names, expected source roots, allowed fallback roots, and no-hit/ambiguous-hit handling.
-- Evidence limits: missing tool, missing source, ORCA failure, license failure, stale path, no live DB, or formatting-only boundary.
-- Execution level: `hybrid-harness`.
-- Implementation targets:
-  - `src.skills.pb_to_csharp_migration.MigrationInputState`
-  - `src.skills.pb_to_csharp_migration.build_pbl_export_strategy`
-  - `src.skills.pb_to_csharp_migration.classify_migration_mode`
-  - `src.skills.pb_to_csharp_migration.build_pb_to_csharp_migration_plan`
-  - `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`
-  - `src.skills.pb_to_csharp_migration.extract_csharp_designer_control_specs`
-  - `src.skills.pb_to_csharp_migration.build_csharp_grid_column_designer_plan`
-  - `src.skills.pb_to_csharp_migration.build_detail_form_layout_plan`
-  - `src.skills.pb_to_csharp_migration.resolve_csharp_control_stack`
-  - `src.skills.pb_to_csharp_migration.verify_migration_generated_csharp_style`
-  - `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_generation_contract`
+- Exact user directive, requested outputs, target files, and excluded work.
+- Behavior description or directly supplied PB/C#/Designer/DataWindow/SQL text.
+- Supplied dependency declaration: target wrappers, KoneLib, DevExpress, or WinForms only.
+- Screen family: browse, master-detail, detail-entry, or popup.
+- Field order, captions, editor hints, validation, and row-state behavior.
+- Caller values and parameter order.
+- SELECT result fields or SAVE write/payload contract.
+- Error, transaction, logging, and popup-return expectations.
+- Evidence limitations and explicitly approved inferred-draft boundaries.
+
+Mark PB, C#, Designer, and SQL source as `token_optimizer_status=passthrough`.
 
 ## Execution pattern
 
-1. Read `SKILL.md` and this usage reference first.
-2. Run or emulate `build_pb_to_csharp_migration_plan(objective, state)` so the run has a concrete `HarnessResult` and migration mode.
-3. Select only the reference files needed for the current slice:
-   - PBL export and ORCA problems: `pbl-export-process.md`.
-   - PB event/source tracing: `powerbuilder-source-analysis.md`.
-   - DataWindow grid/layout: `datawindow-layout-mapping.md`.
-   - Target C# implementation style: `ty-csharp-style.md` as a packaged sample/baseline, overridden by current target-project evidence.
-   - Stored procedure drafting/review: `kh-sp-style.md`.
-   - C_KONE110/KH/Geunho/Jang-Geunho style: `author-tagged-style-baseline.md`, which contains the analyzed `author-tagged SP -> program key -> matching C# screen source` dataset and generated-pattern violations found from that baseline.
-   - C_KONE110/KH per-program profile: `author-tagged-program-style-profiles.json`, which stores the portable 37-program C#/Designer profile. Use it to choose method names, SP calls, DbParameter order, grid/view names, BindingField samples, repository controls, hashes, and fallback evidence without re-reading the original source tree.
-   - SQL formatter/verifier composition: `sql-formatting-bridge.md`.
-   - Completion/handoff: `migration-output-checklist.md`.
-4. Resolve exact identifiers before broad filtering: program key, PB object, linked DataWindow, target C# class/Designer, table/procedure names, grid/view/control names, and caller `DbParameter` set. Use count/scope-first searches and read only needed fields/paths. Record no-hit, partial-hit, ambiguous-hit, stale-path, and fallback decisions instead of substituting sibling trees silently.
-5. Lock the user directive and approved scope before implementation. The latest user instruction, pasted current code, pasted SQL, screenshot, named path, and verified artifact override generic migration preferences. Put agent-discovered extra fixes in `proposal-only` unless the user explicitly approves them. Do not treat missing implementation detail as permission to redesign the requested flow.
-6. If a PBL/tool/source exists, inspect the real artifact first and keep exports outside the PB source tree. If not, use `described-behavior` when the user explained the old screen/workflow, or `standalone` when even that behavior is not known. State which claims cannot be proven.
-7. Choose the PBL export provider through `build_pbl_export_strategy` or the same policy manually:
-   - PblScripter or equivalent wrapper first.
-   - Direct ORCA when the wrapper is missing.
-   - Pre-exported `.sru/.srw/.srd/.srm` when export tooling is absent.
-   - Pasted source.
-   - Described behavior.
-   - Bundled reference baseline.
-8. For direct ORCA and PblScripter, use the same evidence sequence: list PBL objects, export the named object, then export linked DataWindows. The difference is only the caller/wrapper. Match the runtime to the PBL lineage: PB 7.0 with PB 7.0 ORCA/runtime, PB 12.5 with PB 12.5 ORCA/runtime. If the version is unknown, list/probe only and mark full source parity blocked until confirmed.
-9. Before C# generation, write a substantial migration analysis plus development specification `.md` handoff and verify it with `verify_pb_migration_analysis_document`. The 019f178e PR100200/PROD_302_A document is the minimum accepted composition-quality floor, not a line-count target. A short log, rough bullet list, or shallow objective/scope note is blocked because it does not let a separate developer agent migrate PB behavior from documented evidence. The handoff must stand alone when analysis and development are assigned to different subagents and must include the exact user directive, approved scope, excluded changes, proposal-only findings, and explicit approval required before implementing inferred extras.
-10. For DataWindow column conversion, call `extract_datawindow_column_specs`, `resolve_csharp_grid_column_prefix`, `resolve_csharp_grid_control_names`, and `generate_devexpress_grid_xml` or follow the same rule manually. This reproduces the packaged DataWindowToXml-compatible behavior, including visual column order, matched PB captions, C# column names like `colList_<COLUMN>`, `colDetail_<COLUMN>`, `col<TABLE>_<COLUMN>`, or `col<PURPOSE>_<COLUMN>`, grid names like `grdList/gvwList`, `grdDetail/gvwDetail`, `grd<TABLE>/gvw<TABLE>`, or `grd<PURPOSE>/gvw<PURPOSE>`, and the attached converter's GridView defaults. When table naming is ambiguous, use the business purpose suffix such as `POR`, `BOM`, `ITEM`, or `REQ`. When generating C# Designer code, call or mirror `build_datawindow_gridview_designer_defaults` so `ShowGroupPanel=false`, `EnableAppearanceEvenRow=true`, `ColumnAutoWidth=false`, `ShowFooter=true`, and `ShowAutoFilterRow=true` are not lost.
-11. If target C# Designer code is available, call `extract_csharp_designer_control_specs` before drafting or reviewing generated C#. Preserve target evidence for control type, parent/child containment, `BindingField`, `_isAllowBlank`, `_isPKValue`, `EnterMoveNextControl`, `EditValue`, `Properties.*`, `Location`, `Size`, `Dock`, `Margin`, `MinimumSize`, `MaximumSize`, `Text`, `Caption`, `TabIndex`, `MainView`, `ViewCollection`, `GridControl`, and collection `AddRange` calls. If a Designer has no explicit GridColumn declarations, record `grid_columns=[]` instead of inventing hidden evidence.
-12. For detail-entry screens, call `build_detail_form_layout_plan` or follow the same rule manually. Arrange LabelControl plus TextEdit, SpinEdit, ButtonEdit, DateEdit, LookUpEdit, CheckEdit, RadioGroup, or MemoEdit pairs in clean SA100100-style rows and columns. Keep source order and captions, but do not copy PB coordinates blindly. Prefer existing target-project control names when known; otherwise use target-style names such as `txtITEMNM`, `btnITEMCD`, `cboITEMACNT`, `SpinQTY`, `ymdORDDT`, `ChkUSEYN`, or `memoREMARK`. Every editor must record the source field name, `BindingField = "<FIELD>"`, and left-to-right/top-to-bottom `TabIndex` assignment.
-13. For grid column C# output, call `build_csharp_grid_column_designer_plan` and then `verify_migration_generated_csharp_style`. Generated columns should be explicit `GridColumn` members with `Columns.AddRange` and names such as `colList_CUSTNM` or `colDetail_ORDNUM`; numeric AMT/QTY/UNP/WGT columns must use a `RepositoryItemSpinEdit` assigned through `ColumnEdit`, not `GridColumn.DisplayFormat` as the primary formatting path. Do not generate default `AddGridColumn`, `Columns.AddField`, `view.Name + "_" + fieldName`, or numeric `DisplayFormat`-only helpers unless the current target screen already proves that as its local style.
-14. For C# work, resolve the control stack first: target-project/custom controls -> DevExpress controls -> WinForms basic controls. Preserve the current screen flow rather than adding a separate parallel helper. Reuse existing `CallViewQuery` and `CallProc` paths whenever they already match the target procedure. Use the target project's existing DevExpress/KoneLib references and API surface. Do not add, upgrade, or retarget DevExpress packages from current online/latest examples unless the user explicitly asks for a library upgrade.
-15. For C_KONE110/KH-style C# work, consult `author-tagged-style-baseline.md` before generating or reviewing code. Use same-program matched C# evidence first, and do not use generic same-project code as the style source when matched evidence exists. Do not generate internal DTO/context flows such as `RetrieveContext`, generic `GetEditValue`/`GetColumnText` helpers, runtime grid-column helpers, `DBNull.Value ?` row wrappers, `_selectType == SelectType.DETAIL ?` routing, `?? "%"` wildcard coalescing, `btn*.EditValue == null ? string.Empty`, `Convert.ToString(rad*.EditValue)` locals, or `txt*NM` date edits unless current target evidence proves that exact local pattern. Also consult `author-tagged-program-style-profiles.json`; aggregate counts are only a gate, while the per-program profile is the generation guide. If the active program is excluded or unmapped, record the fallback program key and why it is valid.
-16. For SQL work, keep original SQL uncompressed, apply host-local `sql-formatting`, and run `sql-formatting-style-harness` verification when proof is required. For generated migration SELECT/SAVE procedures, call `verify_pb_migration_sp_generation_contract` first; full SP output needs PB/DataWindow SQL, verified existing SP definition evidence, pasted SQL, DB schema, or an explicit user-approved inferred-draft marker. For C_KONE110/KH-style SP generation, include the standard `AUTHOR` / `CREATE DATE` / `DESCRIPTION` metadata comment block immediately above `CREATE/ALTER PROCEDURE`; keep procedure parameters limited to values actually sent by C#/caller; put helper/calculation values in local `DECLARE` variables; and do not add generated literal parameter defaults, up-front `SET @PARAM = ISNULL/CASE` normalization blocks, helper date parameters such as `@YYYY`, `@MM`, `@BASYYYY`, or `@LASTDT`, `IF ISNULL(...)` date defaulting blocks, direct `IF @GIJUNDT <> '' SET @YYYY = ...` date helper blocks, or nested `WHERE` subqueries inside `IF EXISTS` guard blocks without verified target SP evidence.
-17. Mark token optimizer as `passthrough` for PB/C#/SQL source text. Use optimization only for noisy command output or subagent transcripts where required facts are preserved.
-18. Before completion, produce the migration checklist and name blocked evidence. Do not claim PB parity, DB semantic equivalence, UI layout fidelity, or completed SP semantics without the matching evidence.
+1. Run KH intake and apply its immediate gates.
+2. Record one evidence mode: `described-behavior`, `pasted-source`, `mixed-input`, or `contract-only`.
+3. Run `build_pb_to_csharp_migration_plan` when available, or produce its objective/mode/evidence/blocker fields manually.
+4. Read `packaged-style-contract.md` and select the screen, method, control-provider, and procedure families.
+5. Preserve user-supplied identifiers. For missing identifiers, use only the contract's placeholder grammars.
+6. Build these mappings before code:
+   - action/event to C# method;
+   - field to editor, `BindingField`, grid column, and result field;
+   - caller source to SP parameter;
+   - derived value to SP local variable;
+   - row state to payload and SAVE branch.
+7. For supplied SRD/DataWindow fields, apply `datawindow-layout-mapping.md` without claiming unsupported visual parity.
+8. Generate C# and Designer output in the selected family. Use one query path and one save path.
+   - Write control construction and static design properties to `.Designer.cs` by default.
+   - Keep code-behind limited to runtime behavior, event handlers, data binding, and evidence-backed dynamic state changes.
+9. Generate a complete SP only from a supplied result/write contract or explicit inferred-draft approval.
+10. Run migration C#/SP verifiers when available and compose SQL formatting through `sql-formatting-bridge.md`.
+11. Complete `migration-output-checklist.md` and report blocked assumptions.
+
+## C# Generation
+
+- Preserve supplied namespace, class, base class, method, event, and instance names.
+- Otherwise apply `<Feature><Mode>Form`, command/event handlers, and field/role control grammars from the packaged contract.
+- Keep caller parameter declarations adjacent to the procedure call.
+- Keep browse, focused-row detail, validation, binding, serialization, and post-save refresh steps visible.
+- Do not add context DTOs, generic value accessors, broad normalization helpers, or parallel call paths.
+- Do not shape SQL wildcards or derive helper dates in C#.
+
+## Provider Selection
+
+Use only declared dependency evidence:
+
+1. Supplied target wrapper.
+2. KoneLib.
+3. DevExpress.
+4. WinForms.
+
+Do not inspect local references during normal generation. Do not add or upgrade packages. When no dependency is declared, use WinForms and record the fallback.
+
+## Designer And DataWindow Mapping
+
+- Preserve supplied control types, properties, bounds, containment, collection calls, `BindingField`, `FieldName`, and `TabIndex`.
+- Use stable label/editor rows and columns for contract-only detail forms.
+- Declare grid columns explicitly and register them with `Columns.AddRange`.
+- Keep `FieldName` identical to the documented result field.
+- Register repository editors before assigning `ColumnEdit`.
+- Use numeric, lookup, button, and boolean repositories according to the packaged contract.
+- Record unsupported DataWindow layout, computed, dropdown, protection, and update semantics as blocked or deferred.
+
+## Designer ownership
+
+- `.Designer.cs` owns static control/component fields, construction, parent containment, collection registration, names, layout, `TabIndex`, binding fields, explicit grid columns, repositories, `ColumnEdit`, `Appearance`, `Options`, and other design-time assignments by default.
+- Code-behind owns behavior, event-handler implementations, validation, procedure calls, runtime data binding, and state transitions that occur while the form is running.
+- Treat a static property assignment in code-behind as a failure unless supplied source or an explicit behavior contract proves it is dynamic.
+- For an approved dynamic exception, record the source evidence, runtime reason, changed property, triggering state, and targeted verification.
+- Scan both generated files separately and report file ownership evidence; a combined snippet is not enough to prove the boundary.
+
+## Stored Procedure Generation
+
+- Build the caller-parameter matrix first. No generated SP parameter may exist outside it unless a separate external caller is documented.
+- Use local `DECLARE` variables for derived and calculation values.
+- Keep raw search/date inputs at the caller boundary; SQL owns wildcard and date derivation.
+- Preserve supplied branch values, predicates, literals, comments, result order, writes, and transaction behavior.
+- Mark schema-dependent relationships and semantic equivalence as unproven offline.
+- Do not invent a complete body from only control names, parameter names, or expected columns.
 
 ## Evidence to produce
 
-- `HarnessResult` from `build_pb_to_csharp_migration_plan` or `build_datawindow_grid_layout`.
-- `mode`: `standalone`, `described-behavior`, `pasted-source`, `partial-reference`, or `full-reference`.
-- `pbl_export_strategy`: provider, provider priority, PB version, version policy, operations, blocked conditions, runtime lookup requirement, and source-parity confidence.
-- `strong_evidence` and `weak_evidence` explaining what was actually available.
-- Confirmed vs inferred behavior map when no PB source exists but user-described workflow is available.
-- Migration analysis plus development specification `.md` quality result: required section coverage, evidence-anchor coverage, development-spec coverage, cross-agent developer handoff readiness, telemetry counts for review only, and blocked reason when the handoff is not implementation-ready.
-- User directive and approved scope contract: exact requested work, approved implementation scope, excluded changes, proposal-only findings, and explicit approval requirements for inferred extras.
-- PB trace summary: object names, source files, event flow, DataWindows, retrieve/update/save paths, and gaps.
-- Identifier resolution summary: exact matches, no-hits, partial hits, ambiguous hits, stale paths, fallback roots, and why the chosen source is valid.
-- DataWindow mapping: extracted columns, matched captions, generated C# column/grid names, generated grid XML shape, unsupported visual/layout features, and fallback status.
-- Detail form layout: label/editor rows and columns, source field names, selected editor types, control names, `BindingField` assignment snippets, and left-to-right/top-to-bottom `TabIndex` snippets.
-- Target Designer extraction: actual control types, properties, containment, bounds, grid/view links, collection calls, and explicit missing-grid-column evidence when columns were absent from Designer.
-- Grid column Designer plan: explicit `GridColumn` declarations, `Columns.AddRange`, `FieldName`, `Caption`, `Name`, `VisibleIndex`, `RepositoryItemSpinEdit` `ColumnEdit` mappings for numeric columns, and any style violations blocked by `verify_migration_generated_csharp_style`.
-- Target C# control fallback map: selected provider for each logical control, target-project/custom matches, DevExpress fallback, WinForms fallback, and reason.
-- Target C# plan: target class, existing method path, controls, XML serialization rule, and result-binding expectations.
-- Author-tagged style baseline summary when applicable: 62 SPs, 41 program keys, 37 primary C# files, 37 Designer files, current generated target exclusions, SP-only/non-screen exceptions, C# frequency checks, Designer frequency checks, and zero-hit generated patterns blocked.
-- Author-tagged per-program profile summary when applicable: profile file version, matched program key, source/designer hashes, base class, command/select/focused-row method names, SP calls, DbParameter names, grids/views, BindingField samples, repository controls, and fallback program key for excluded targets.
-- SP plan: SELECT/SAVE procedures, XML/table variable shape, transaction boundary, logging, duplicate checks, and formatting verification.
-- SP generation contract: source evidence or inferred-draft marker, `@WORKTYPE` branch contract, forbidden CTE/#temp/MERGE/NOT EXISTS/IF-EXISTS-WHERE-subquery scan, and the separate SQL formatting verifier result.
-- SP parameter/local-variable contract: procedure parameters are caller/C# inputs only; SP-internal helper/calculation values use local `DECLARE` plus `SET`; matched caller `DbParameter` evidence bounds the generated SP signature.
-- SQL verifier status and semantic limits.
-- `token_optimizer_status` with `passthrough` reason for source-of-truth text or before/after stats when noisy output was compressed.
-- `actual_runtime_path`: module, script, verifier, or procedural path that produced the evidence.
-
-## Cross-agent development handoff contract
-
-When analysis and implementation are handled by different agents, the analysis output must be the developer agent's complete input. It must not depend on hidden chat context, memory from the analysis agent, or a second round of PB behavior inference. Before implementation, require:
-
-- target file/procedure plan: C# source, Designer file, SQL procedure, generated artifact, and intended edit/action for each;
-- user directive and approved scope: exact requested work, excluded changes, proposal-only findings, and explicit approval required before implementing inferred extras;
-- PB event to C# method mapping: PB event, target handler/method, validation, output side effect;
-- DataWindow/control mapping: DataWindow name, PB field/column, C# control or GridColumn, `BindingField`, caption, repository/control type, and `TabIndex` where relevant;
-- SP contract matrix: procedure name, `@WORKTYPE`, caller parameters, result columns, DML targets, transaction/error behavior, and blocked assumptions;
-- style profile contract: matched program key, author-tagged profile or fallback program, source/Designer evidence, and forbidden generated patterns;
-- implementation task breakdown: ordered tasks by file/method/procedure with done criteria and acceptance evidence;
-- verification contract: build/manual UI/DB checks, expected UI result, expected DB result, rollback/error test, and residual risk;
-- confirmed/inferred/blocked split: facts proven by PB/C#/SP evidence, assumptions inferred from descriptions, and items blocked until more evidence is available.
+- Contract identifier/version and selected style families.
+- User directive and approved scope.
+- Confirmed/inferred/blocked/proposal-only ledger.
+- Event/method, field/control/grid/result, caller-parameter, and local-variable maps.
+- Designer/grid/repository plan.
+- Designer ownership inventory, code-behind static UI scan, and any approved dynamic-state exceptions.
+- SP result/write/transaction/error plan.
+- Forbidden-pattern scan and verifier results.
+- Manual tests and residual risk.
+- Cross-agent handoff with no hidden chat dependency.
 
 ## Failure handling
 
-- Missing PblScripter: use direct ORCA when available. If neither wrapper nor ORCA is available, continue with pre-exported source, pasted-source, described-behavior, or standalone mode; ask for exported source only if correctness depends on PB event flow.
-- Unknown PB version with ORCA/PblScripter: treat the provider as available for list/probe only. Do not claim full source parity until PB version and matching runtime are confirmed.
-- ORCA runtime failure: distinguish missing runtime path, bad library, incompatible PBL version, and license/SySAM failure. Do not claim the PBL is invalid until that is known.
-- Binary-only evidence: treat strings as weak evidence; they can reveal names or SQL fragments, not full event or save semantics.
-- Missing DataWindowToXml: use the packaged DataWindow column-to-grid rules or ask for SRD text.
-- Missing target C# samples: use `ty-csharp-style.md` as a generic packaged baseline and mark style confidence lower. Do not claim the target project uses TY/KoneLib unless current artifacts prove it.
-- Missing target dependency references: do not infer the latest DevExpress API. Use bundled profile patterns only where the target references are unknown, and mark dependency/version confidence lower.
-- Missing target Designer properties: do not guess project-specific flags or grid column declarations. Generate a fallback plan and label the missing properties as assumptions.
-- Missing live DB: do not claim schema, scalar-function equivalence, execution plan, or semantic parity.
-- SQL formatter unavailable: keep SQL untouched except for explicitly requested minimal cleanup and state that formatting proof is blocked.
-- Existing SP evidence unavailable: do not present full generated SELECT/SAVE bodies as complete unless the user explicitly accepts an inferred draft.
-- Generated SP helper failure: block procedure parameters that are not sent by the matched C# caller; block `@YYYY`, `@MM`, `@BASYYYY`, or `@LASTDT` procedure parameters, `IF ISNULL(...)` date defaulting blocks, and direct `IF @GIJUNDT <> '' SET @YYYY = ...` helper blocks; use raw caller inputs plus local `DECLARE` and `SET` when derived values are needed.
-- Target project is not C_KONE110/KH: do not apply the author-tagged C_KONE110/KH profile as a hard requirement. Use it only as a named sample/fallback with lower confidence.
+- Missing behavior evidence: generate a contract-level plan or request the exact missing behavior; do not discover local source.
+- Missing dependency evidence: use WinForms fallback and mark provider confidence lower.
+- Missing layout evidence: generate a stable layout plan, not a fidelity claim.
+- Missing result/write contract: block the complete SP or label it as an explicitly approved inferred draft.
+- SQL formatter unavailable: preserve SQL text and report formatting verification blocked.
+- Verifier unavailable: perform the packaged checklist and state that deterministic verification did not run.
+- Static UI found in code-behind: block completion and move it to `.Designer.cs`, unless the evidence ledger proves and tests a runtime state change.
 
 ## Quality bar
 
-A valid PB-to-C# migration harness run must prove the selected export/provider path, the PB version/runtime confidence, the actual source evidence level, the target C# control/style basis, the SQL formatting verifier boundary, and the blocked assumptions. It must not claim PB parity, UI layout fidelity, C# style fidelity, or completed SELECT/SAVE semantics unless the matching source, Designer, SP, or DB evidence is present.
+A valid run is self-contained and offline. It records the packaged contract version, selected families, behavior evidence, mappings, caller/SP boundary, Designer/grid rules, file ownership scan, forbidden-pattern result, and unsupported claims. Static UI configuration is in `.Designer.cs` by default; code-behind contains only runtime behavior, events, data binding, and justified dynamic state. The generated output must not depend on private examples, local discovery, or hidden prior context.
+
+## Runtime binding
+
+- Execution level: `python-module`
+- Implementation targets:
+  - `src.skills.pb_to_csharp_migration.build_pb_to_csharp_migration_plan`
+  - `src.skills.pb_to_csharp_migration.load_packaged_migration_profile`
+  - `src.skills.pb_to_csharp_migration.verify_migration_generated_csharp_style`
+  - `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_generation_contract`
+- Actual runtime path: from the repository root, run `python -m skills.pb_to_csharp_migration_harness.scripts.demo --output-dir <tmp>` for the packaged offline scenario, or call the listed Python targets with the exact packaged contract identity during a real migration.
+- Completion rule: withhold completion when structural validation, source evidence, caller/SP mapping, or offline verification remains blocked.

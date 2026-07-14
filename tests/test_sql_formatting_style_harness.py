@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import subprocess
 import sys
@@ -9,6 +10,7 @@ from unittest.mock import patch
 
 from src.orchestration.kh_front_door import build_kh_front_door
 from src.skills.sql_formatting_style import (
+    _extract_insert_select_statements,
     build_powerbuilder_sql_validation_plan,
     extract_powerbuilder_sql_fragments,
     resolve_style_contract_source,
@@ -1880,6 +1882,57 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             },
         }
 
+    @staticmethod
+    def _equivalence_contract_sha256(evidence):
+        contract = {
+            "version": "1",
+            "function": {
+                "name": evidence["function"]["name"],
+                "definition_sha256": evidence["function"]["definition_sha256"],
+            },
+            "analysis": evidence["analysis"],
+        }
+        payload = json.dumps(
+            contract,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    @staticmethod
+    def _runtime_receipt_payload(receipt):
+        unsigned = {key: value for key, value in receipt.items() if key != "signature"}
+        return json.dumps(
+            unsigned,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+    @classmethod
+    def _signed_refactor_evidence(cls, original: str, formatted: str, key: bytes):
+        evidence = cls._complete_refactor_evidence(original, formatted, correlated=True)
+        evidence["function"]["definition_source_kind"] = "mcp"
+        evidence["function"]["definition_source_ref"] = "mcp://sqlserver/DBO.F_LOOKUP_NAME"
+        receipt = evidence["trusted_external_verification"]
+        receipt.update(
+            {
+                "receipt_id": "db-runtime-receipt-17",
+                "database_identity": "sqlserver://ERP-QA",
+                "executed_at": "2026-07-14T10:30:00Z",
+                "comparison_count": 4,
+                "function_definition_sha256": evidence["function"]["definition_sha256"],
+                "equivalence_contract_sha256": cls._equivalence_contract_sha256(evidence),
+            }
+        )
+        receipt["signature"] = hmac.new(
+            key,
+            cls._runtime_receipt_payload(receipt),
+            hashlib.sha256,
+        ).hexdigest()
+        return evidence
+
     def test_full_token_stream_blocks_semantic_mutations_in_every_statement_family(self):
         mutations = {
             "select_order": (
@@ -2008,6 +2061,367 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         self.assertTrue(result.success, result.to_dict())
         self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
         self.assertEqual(result.metadata["formatting_preservation"]["status"], "verified")
+
+    def test_outer_alias_rename_cannot_capture_shadowed_correlated_references(self):
+        original = (
+            "SELECT X.ID\n"
+            "FROM PARENT_TABLE X\n"
+            "WHERE EXISTS (\n"
+            "              SELECT 1\n"
+            "              FROM CHILD_TABLE A\n"
+            "              WHERE X.ID = X.ID\n"
+            "             );\n"
+        )
+        captured = (
+            "SELECT A.ID\n"
+            "FROM PARENT_TABLE A\n"
+            "WHERE EXISTS (\n"
+            "              SELECT 1\n"
+            "              FROM CHILD_TABLE A\n"
+            "              WHERE A.ID = A.ID\n"
+            "             );\n"
+        )
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": ["review://SQL-50/parent-role"],
+                    "roles": [
+                        {
+                            "name": "parent",
+                            "kind": "main",
+                            "members": [
+                                {
+                                    "source": "PARENT_TABLE",
+                                    "original_alias": "X",
+                                    "alias": "A",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result = verify_sql_formatting_style(original, captured, alias_role_plan=plan)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
+        self.assertEqual(result.metadata["formatting_preservation"]["status"], "changed")
+        self.assertIn("token_stream_changed", _issue_codes(result))
+
+    def test_correlated_outer_alias_rename_passes_when_inner_binding_does_not_shadow(self):
+        original = (
+            "SELECT X.ID\n"
+            "FROM PARENT_TABLE X\n"
+            "WHERE EXISTS (\n"
+            "              SELECT 1\n"
+            "              FROM CHILD_TABLE Y\n"
+            "              WHERE Y.PARENT_ID = X.ID\n"
+            "             );\n"
+        )
+        formatted = original.replace("X.ID", "A.ID").replace("PARENT_TABLE X", "PARENT_TABLE A")
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": ["review://SQL-51/correlated-parent-role"],
+                    "roles": [
+                        {
+                            "name": "parent",
+                            "kind": "main",
+                            "members": [
+                                {
+                                    "source": "PARENT_TABLE",
+                                    "original_alias": "X",
+                                    "alias": "A",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+
+        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_alias_plan_rejects_all_support_roles_without_exactly_one_main(self):
+        formatted = (
+            "SELECT B.ORDER_NO\n"
+            "     , C.CUSTOMER_NAME\n"
+            "FROM ORDER_HEADER B\n"
+            "        LEFT OUTER JOIN CUSTOMER C\n"
+            "                     ON B.CUSTOMER_ID = C.CUSTOMER_ID;\n"
+        )
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": ["review://SQL-52/all-support-is-invalid"],
+                    "roles": [
+                        {
+                            "name": "order",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "ORDER_HEADER",
+                                    "original_alias": "ORDER_HEADER",
+                                    "alias": "B",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "customer",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "CUSTOMER",
+                                    "original_alias": "CUSTOMER",
+                                    "alias": "C",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+
+        result = verify_sql_formatting_style(self.ALIAS_ORIGINAL, formatted, alias_role_plan=plan)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("alias_main_role_required", _issue_codes(result))
+
+    def test_alias_plans_support_update_delete_and_merge_rewrites(self):
+        cases = {
+            "update_from": (
+                "UPDATE X\n"
+                "SET X.STATUS = Y.STATUS\n"
+                "FROM DBO.ORDER_HEADER AS X\n"
+                "        LEFT OUTER JOIN DBO.STATUS_SOURCE AS Y\n"
+                "                     ON X.ID = Y.ID;\n",
+                "UPDATE A\n"
+                "SET A.STATUS = B.STATUS\n"
+                "FROM DBO.ORDER_HEADER AS A\n"
+                "        LEFT OUTER JOIN DBO.STATUS_SOURCE AS B\n"
+                "                     ON A.ID = B.ID;\n",
+            ),
+            "joined_delete": (
+                "DELETE X\n"
+                "FROM DBO.ORDER_HEADER AS X\n"
+                "        INNER JOIN DBO.STATUS_SOURCE AS Y\n"
+                "                     ON X.ID = Y.ID\n"
+                "WHERE Y.STATUS = 'D';\n",
+                "DELETE A\n"
+                "FROM DBO.ORDER_HEADER AS A\n"
+                "        INNER JOIN DBO.STATUS_SOURCE AS B\n"
+                "                     ON A.ID = B.ID\n"
+                "WHERE B.STATUS = 'D';\n",
+            ),
+            "joined_delete_with_optional_from": (
+                "DELETE FROM X\n"
+                "FROM DBO.ORDER_HEADER AS X\n"
+                "        INNER JOIN DBO.STATUS_SOURCE AS Y\n"
+                "                     ON X.ID = Y.ID\n"
+                "WHERE Y.STATUS = 'D';\n",
+                "DELETE FROM A\n"
+                "FROM DBO.ORDER_HEADER AS A\n"
+                "        INNER JOIN DBO.STATUS_SOURCE AS B\n"
+                "                     ON A.ID = B.ID\n"
+                "WHERE B.STATUS = 'D';\n",
+            ),
+            "merge": (
+                "MERGE INTO DBO.ORDER_HEADER AS X\n"
+                "USING DBO.STATUS_SOURCE AS Y\n"
+                "ON X.ID = Y.ID\n"
+                "WHEN MATCHED THEN UPDATE SET X.STATUS = Y.STATUS;\n",
+                "MERGE INTO DBO.ORDER_HEADER AS A\n"
+                "USING DBO.STATUS_SOURCE AS B\n"
+                "ON A.ID = B.ID\n"
+                "WHEN MATCHED THEN UPDATE SET A.STATUS = B.STATUS;\n",
+            ),
+        }
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": ["review://SQL-53/dml-role-plan"],
+                    "roles": [
+                        {
+                            "name": "order",
+                            "kind": "main",
+                            "members": [
+                                {
+                                    "source": "DBO.ORDER_HEADER",
+                                    "original_alias": "X",
+                                    "alias": "A",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "status",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "DBO.STATUS_SOURCE",
+                                    "original_alias": "Y",
+                                    "alias": "B",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        for label, (original, formatted) in cases.items():
+            with self.subTest(label=label):
+                result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+                self.assertTrue(result.success, result.to_dict())
+                self.assertEqual(
+                    result.metadata["alias_role_plan_validation"]["status"],
+                    "verified",
+                )
+
+    def test_alias_plans_support_top_modifiers_for_dml_targets(self):
+        cases = {
+            "update": (
+                "UPDATE TOP (10) X\n"
+                "SET X.STATUS = Y.STATUS\n"
+                "FROM DBO.ORDER_HEADER AS X\n"
+                "        LEFT OUTER JOIN DBO.STATUS_SOURCE AS Y\n"
+                "                     ON X.ID = Y.ID;\n",
+                "UPDATE TOP (10) A\n"
+                "SET A.STATUS = B.STATUS\n"
+                "FROM DBO.ORDER_HEADER AS A\n"
+                "        LEFT OUTER JOIN DBO.STATUS_SOURCE AS B\n"
+                "                     ON A.ID = B.ID;\n",
+            ),
+            "delete": (
+                "DELETE TOP (5) X\n"
+                "FROM DBO.ORDER_HEADER AS X\n"
+                "        INNER JOIN DBO.STATUS_SOURCE AS Y\n"
+                "                     ON X.ID = Y.ID;\n",
+                "DELETE TOP (5) A\n"
+                "FROM DBO.ORDER_HEADER AS A\n"
+                "        INNER JOIN DBO.STATUS_SOURCE AS B\n"
+                "                     ON A.ID = B.ID;\n",
+            ),
+            "delete_percent_with_from": (
+                "DELETE TOP (25) PERCENT FROM X\n"
+                "FROM DBO.ORDER_HEADER AS X\n"
+                "        INNER JOIN DBO.STATUS_SOURCE AS Y\n"
+                "                     ON X.ID = Y.ID;\n",
+                "DELETE TOP (25) PERCENT FROM A\n"
+                "FROM DBO.ORDER_HEADER AS A\n"
+                "        INNER JOIN DBO.STATUS_SOURCE AS B\n"
+                "                     ON A.ID = B.ID;\n",
+            ),
+            "merge": (
+                "MERGE TOP (20) PERCENT INTO DBO.ORDER_HEADER AS X\n"
+                "USING DBO.STATUS_SOURCE AS Y\n"
+                "ON X.ID = Y.ID\n"
+                "WHEN MATCHED THEN UPDATE SET X.STATUS = Y.STATUS;\n",
+                "MERGE TOP (20) PERCENT INTO DBO.ORDER_HEADER AS A\n"
+                "USING DBO.STATUS_SOURCE AS B\n"
+                "ON A.ID = B.ID\n"
+                "WHEN MATCHED THEN UPDATE SET A.STATUS = B.STATUS;\n",
+            ),
+        }
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": ["review://SQL-55/dml-top-role-plan"],
+                    "roles": [
+                        {
+                            "name": "order",
+                            "kind": "main",
+                            "members": [
+                                {
+                                    "source": "DBO.ORDER_HEADER",
+                                    "original_alias": "X",
+                                    "alias": "A",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "status",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "DBO.STATUS_SOURCE",
+                                    "original_alias": "Y",
+                                    "alias": "B",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+        for label, (original, formatted) in cases.items():
+            with self.subTest(label=label):
+                result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+                self.assertTrue(result.success, result.to_dict())
+                self.assertEqual(
+                    result.metadata["alias_role_plan_validation"]["status"],
+                    "verified",
+                )
+
+    def test_dml_alias_plan_does_not_hide_an_unconverted_reference(self):
+        original = (
+            "UPDATE X\n"
+            "SET X.STATUS = Y.STATUS\n"
+            "FROM DBO.ORDER_HEADER AS X\n"
+            "        LEFT OUTER JOIN DBO.STATUS_SOURCE AS Y\n"
+            "                     ON X.ID = Y.ID;\n"
+        )
+        formatted = (
+            "UPDATE A\n"
+            "SET A.STATUS = Y.STATUS\n"
+            "FROM DBO.ORDER_HEADER AS A\n"
+            "        LEFT OUTER JOIN DBO.STATUS_SOURCE AS B\n"
+            "                     ON A.ID = B.ID;\n"
+        )
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": ["review://SQL-54/update-role-plan"],
+                    "roles": [
+                        {
+                            "name": "order",
+                            "kind": "main",
+                            "members": [
+                                {
+                                    "source": "DBO.ORDER_HEADER",
+                                    "original_alias": "X",
+                                    "alias": "A",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "status",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "DBO.STATUS_SOURCE",
+                                    "original_alias": "Y",
+                                    "alias": "B",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+
+        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
+        self.assertIn("token_stream_changed", _issue_codes(result))
 
     def test_alias_plan_does_not_rewrite_multipart_server_schema_qualifiers(self):
         original = "SELECT X.ID, X.DBO.T.C FROM ORDERS X;\n"
@@ -2437,6 +2851,458 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         ]
         self.assertEqual(definition_state["evidence_status"], "incomplete")
         self.assertIn("scalar_refactor_evidence_incomplete", _issue_codes(definition_mismatched))
+
+    def test_authenticated_scalar_refactor_receipt_reaches_release_ready(self):
+        original = "SELECT DBO.F_LOOKUP_NAME(A.CODE) AS CODE_NAME FROM T A;\n"
+        formatted = (
+            "SELECT B.CODE_NAME AS CODE_NAME\n"
+            "FROM T A\n"
+            "        LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
+            "                     ON B.CODE = A.CODE;\n"
+        )
+        key = b"sql-style-runtime-test-key"
+        evidence = self._signed_refactor_evidence(original, formatted, key)
+
+        def authenticate(payload, signature):
+            expected = hmac.new(key, payload, hashlib.sha256).hexdigest()
+            return hmac.compare_digest(expected, signature)
+
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            operation="refactor",
+            scalar_function_refactor=evidence,
+            runtime_receipt_authenticator=authenticate,
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.exit_code, 0)
+        refactor = result.metadata["semantic_refactor_evidence"]["scalar_function_refactor"]
+        self.assertEqual(refactor["status"], "verified")
+        self.assertEqual(refactor["semantic_status"], "proven")
+        self.assertEqual(refactor["execution_authentication"], "authenticated")
+        self.assertEqual(result.metadata["release_readiness"]["status"], "ready")
+
+    def test_scalar_refactor_receipt_fails_closed_without_authenticator_or_definition_binding(self):
+        original = "SELECT DBO.F_LOOKUP_NAME(A.CODE) AS CODE_NAME FROM T A;\n"
+        formatted = (
+            "SELECT B.CODE_NAME AS CODE_NAME\n"
+            "FROM T A\n"
+            "        LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
+            "                     ON B.CODE = A.CODE;\n"
+        )
+        key = b"sql-style-runtime-test-key"
+        evidence = self._signed_refactor_evidence(original, formatted, key)
+        unsigned = verify_sql_formatting_style(
+            original,
+            formatted,
+            operation="refactor",
+            scalar_function_refactor=evidence,
+        )
+
+        def authenticate(payload, signature):
+            expected = hmac.new(key, payload, hashlib.sha256).hexdigest()
+            return hmac.compare_digest(expected, signature)
+
+        tampered = json.loads(json.dumps(evidence))
+        tampered["trusted_external_verification"]["equivalence_contract_sha256"] = "f" * 64
+        rejected = verify_sql_formatting_style(
+            original,
+            formatted,
+            operation="refactor",
+            scalar_function_refactor=tampered,
+            runtime_receipt_authenticator=authenticate,
+        )
+        missing_definition = json.loads(json.dumps(evidence))
+        missing_definition["function"]["definition_source_ref"] = ""
+        missing = verify_sql_formatting_style(
+            original,
+            formatted,
+            operation="refactor",
+            scalar_function_refactor=missing_definition,
+            runtime_receipt_authenticator=authenticate,
+        )
+
+        self.assertFalse(unsigned.success, unsigned.to_dict())
+        unsigned_refactor = unsigned.metadata["semantic_refactor_evidence"][
+            "scalar_function_refactor"
+        ]
+        self.assertEqual(unsigned_refactor["execution_authentication"], "not_authenticated")
+        self.assertEqual(unsigned.metadata["release_readiness"]["status"], "pending")
+        self.assertFalse(rejected.success, rejected.to_dict())
+        self.assertIn("scalar_refactor_runtime_receipt_invalid", _issue_codes(rejected))
+        self.assertFalse(missing.success, missing.to_dict())
+        self.assertIn("scalar_refactor_evidence_incomplete", _issue_codes(missing))
+
+    def test_scalar_refactor_rejects_text_and_malformed_collection_fields(self):
+        original = "SELECT DBO.F_LOOKUP_NAME(A.CODE) AS CODE_NAME FROM T A;\n"
+        formatted = (
+            "SELECT B.CODE_NAME AS CODE_NAME\n"
+            "FROM T A\n"
+            "        LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
+            "                     ON B.CODE = A.CODE;\n"
+        )
+        template = self._complete_refactor_evidence(original, formatted, correlated=True)
+        valid_mapping = template["analysis"]["key_mappings"][0]
+        valid_artifact = template["artifacts"][0]
+        cases = [
+            ("key_mappings_text", "analysis", "key_mappings", "mapping", "analysis.key_mappings"),
+            ("filters_bytes", "analysis", "filters", b"A.ACTIVE = 1", "analysis.filters"),
+            ("disqualifiers_text", "analysis", "disqualifiers", "none", "analysis.disqualifiers"),
+            ("artifacts_bytes", "root", "artifacts", b"artifact", "artifacts"),
+            (
+                "key_mappings_bad_item",
+                "analysis",
+                "key_mappings",
+                [valid_mapping, 7],
+                "analysis.key_mappings[1]",
+            ),
+            ("filters_bad_item", "analysis", "filters", [7], "analysis.filters[0]"),
+            (
+                "disqualifiers_bad_item",
+                "analysis",
+                "disqualifiers",
+                [{}],
+                "analysis.disqualifiers[0]",
+            ),
+            (
+                "artifacts_bad_item",
+                "root",
+                "artifacts",
+                [valid_artifact, "invalid"],
+                "artifacts[1]",
+            ),
+        ]
+        for label, section, field, value, expected in cases:
+            with self.subTest(label=label):
+                evidence = self._complete_refactor_evidence(
+                    original,
+                    formatted,
+                    correlated=True,
+                )
+                target = evidence if section == "root" else evidence[section]
+                target[field] = value
+                result = verify_sql_formatting_style(
+                    original,
+                    formatted,
+                    operation="refactor",
+                    scalar_function_refactor=evidence,
+                )
+
+                self.assertFalse(result.success, result.to_dict())
+                refactor = result.metadata["semantic_refactor_evidence"][
+                    "scalar_function_refactor"
+                ]
+                self.assertEqual(refactor["evidence_status"], "incomplete")
+                self.assertIn(expected, refactor["missing_fields"])
+                self.assertIn("scalar_refactor_evidence_incomplete", _issue_codes(result))
+
+    def test_scalar_refactor_rejects_non_string_text_evidence_fields(self):
+        original = "SELECT DBO.F_LOOKUP_NAME(A.CODE) AS CODE_NAME FROM T A;\n"
+        formatted = (
+            "SELECT B.CODE_NAME AS CODE_NAME\n"
+            "FROM T A\n"
+            "        LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
+            "                     ON B.CODE = A.CODE;\n"
+        )
+        cases = [
+            ("function", "name", b"DBO.F_LOOKUP_NAME", "function.name"),
+            ("function", "definition_source_ref", 7, "function.definition_source_ref"),
+            ("analysis", "null_behavior", b"returns_null_when_no_match", "analysis.null_behavior"),
+            ("analysis", "preferred_reason", {"reason": "reviewed"}, "analysis.preferred_reason"),
+        ]
+        for section, field, value, expected in cases:
+            with self.subTest(field=expected):
+                evidence = self._complete_refactor_evidence(
+                    original,
+                    formatted,
+                    correlated=True,
+                )
+                evidence[section][field] = value
+                result = verify_sql_formatting_style(
+                    original,
+                    formatted,
+                    operation="refactor",
+                    scalar_function_refactor=evidence,
+                )
+
+                refactor = result.metadata["semantic_refactor_evidence"][
+                    "scalar_function_refactor"
+                ]
+                self.assertFalse(result.success, result.to_dict())
+                self.assertEqual(refactor["evidence_status"], "incomplete")
+                self.assertIn(expected, refactor["missing_fields"])
+                self.assertIn("scalar_refactor_evidence_incomplete", _issue_codes(result))
+
+    def test_scalar_refactor_rejects_non_string_mapping_and_artifact_fields(self):
+        original = "SELECT DBO.F_LOOKUP_NAME(A.CODE) AS CODE_NAME FROM T A;\n"
+        formatted = (
+            "SELECT B.CODE_NAME AS CODE_NAME\n"
+            "FROM T A\n"
+            "        LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
+            "                     ON B.CODE = A.CODE;\n"
+        )
+        cases = [
+            ("mapping", "parameter", 7, "analysis.key_mappings[0].parameter"),
+            ("mapping", "join_expression", b"B.CODE = A.CODE", "analysis.key_mappings[0].join_expression"),
+            ("artifact", "artifact_id", 7, "artifacts.function_definition.artifact_id"),
+        ]
+        for section, field, value, expected in cases:
+            with self.subTest(field=expected):
+                evidence = self._complete_refactor_evidence(
+                    original,
+                    formatted,
+                    correlated=True,
+                )
+                target = (
+                    evidence["analysis"]["key_mappings"][0]
+                    if section == "mapping"
+                    else evidence["artifacts"][0]
+                )
+                target[field] = value
+                result = verify_sql_formatting_style(
+                    original,
+                    formatted,
+                    operation="refactor",
+                    scalar_function_refactor=evidence,
+                )
+
+                refactor = result.metadata["semantic_refactor_evidence"][
+                    "scalar_function_refactor"
+                ]
+                self.assertFalse(result.success, result.to_dict())
+                self.assertEqual(refactor["evidence_status"], "incomplete")
+                self.assertIn(expected, refactor["missing_fields"])
+                self.assertIn("scalar_refactor_evidence_incomplete", _issue_codes(result))
+
+    def test_scalar_refactor_rejects_non_string_correlation_fields(self):
+        original = "SELECT DBO.F_LOOKUP_NAME(A.CODE) AS CODE_NAME FROM T A;\n"
+        formatted = (
+            "SELECT B.CODE_NAME AS CODE_NAME\n"
+            "FROM T A\n"
+            "        LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
+            "                     ON B.CODE = A.CODE;\n"
+        )
+        evidence = self._complete_refactor_evidence(original, formatted, correlated=True)
+        evidence["trusted_external_verification"]["provider"] = 7
+
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            operation="refactor",
+            scalar_function_refactor=evidence,
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("scalar_refactor_semantics_not_proven", _issue_codes(result))
+        refactor = result.metadata["semantic_refactor_evidence"]["scalar_function_refactor"]
+        self.assertEqual(refactor["external_correlation"], "not_proven")
+
+    def test_scalar_refactor_rejects_non_string_runtime_receipt_fields(self):
+        original = "SELECT DBO.F_LOOKUP_NAME(A.CODE) AS CODE_NAME FROM T A;\n"
+        formatted = (
+            "SELECT B.CODE_NAME AS CODE_NAME\n"
+            "FROM T A\n"
+            "        LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
+            "                     ON B.CODE = A.CODE;\n"
+        )
+        key = b"sql-style-runtime-test-key"
+        evidence = self._signed_refactor_evidence(original, formatted, key)
+        receipt = evidence["trusted_external_verification"]
+        receipt["receipt_id"] = 7
+        receipt["signature"] = hmac.new(
+            key,
+            self._runtime_receipt_payload(receipt),
+            hashlib.sha256,
+        ).hexdigest()
+
+        def authenticate(payload, signature):
+            expected = hmac.new(key, payload, hashlib.sha256).hexdigest()
+            return hmac.compare_digest(expected, signature)
+
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            operation="refactor",
+            scalar_function_refactor=evidence,
+            runtime_receipt_authenticator=authenticate,
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("scalar_refactor_runtime_receipt_invalid", _issue_codes(result))
+
+    def test_insert_layout_checks_constant_select_without_from(self):
+        sql = (
+            "INSERT INTO TARGET_TABLE\n"
+            "(\n"
+            "      COL1, COL2, COL3, COL4\n"
+            "    , COL5, COL6, COL7, COL8\n"
+            ")\n"
+            "SELECT 1\n"
+            "     , 2\n"
+            "     , 3\n"
+            "     , 4\n"
+            "     , 5\n"
+            "     , 6\n"
+            "     , 7\n"
+            "     , 8;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("insert_select_short_expressions_verticalized", _issue_codes(result))
+
+    def test_insert_values_does_not_capture_a_later_select_statement(self):
+        sql = (
+            "INSERT INTO TARGET_TABLE\n"
+            "(\n"
+            "      COL1\n"
+            "    , COL2\n"
+            "    , COL3\n"
+            "    , COL4\n"
+            "    , COL5\n"
+            "    , COL6\n"
+            "    , COL7\n"
+            "    , COL8\n"
+            ")\n"
+            "VALUES (1, 2, 3, 4, 5, 6, 7, 8);\n"
+            "SELECT A.ID FROM SOURCE_TABLE A;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_insert_exec_does_not_capture_a_later_select_without_semicolon(self):
+        sql = (
+            "INSERT INTO TARGET_TABLE\n"
+            "(\n"
+            "      COL1, COL2, COL3, COL4\n"
+            "    , COL5, COL6, COL7, COL8\n"
+            ")\n"
+            "EXEC DBO.SP_LOAD_TARGET\n"
+            "SELECT A.COL1\n"
+            "     , A.COL2\n"
+            "     , A.COL3\n"
+            "     , A.COL4\n"
+            "     , A.COL5\n"
+            "     , A.COL6\n"
+            "     , A.COL7\n"
+            "     , A.COL8\n"
+            "FROM SOURCE_TABLE A;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_insert_extraction_stops_at_go_batch_separator(self):
+        sql = (
+            "INSERT INTO TARGET_TABLE\n"
+            "(\n"
+            "      COL1, COL2, COL3, COL4\n"
+            "    , COL5, COL6, COL7, COL8\n"
+            ")\n"
+            "EXEC DBO.SP_LOAD_TARGET\n"
+            "GO\n"
+            "SELECT A.COL1\n"
+            "     , A.COL2\n"
+            "     , A.COL3\n"
+            "     , A.COL4\n"
+            "     , A.COL5\n"
+            "     , A.COL6\n"
+            "     , A.COL7\n"
+            "     , A.COL8\n"
+            "FROM SOURCE_TABLE A;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_constant_insert_select_stops_before_next_top_level_statement(self):
+        sql = (
+            "INSERT INTO TARGET_TABLE\n"
+            "(\n"
+            "      COL1, COL2, COL3, COL4\n"
+            "    , COL5, COL6, COL7, COL8\n"
+            ")\n"
+            "SELECT 1, 2, 3, 4\n"
+            "     , 5, 6, 7, 8\n"
+            "SELECT A.COL1\n"
+            "     , A.COL2\n"
+            "     , A.COL3\n"
+            "     , A.COL4\n"
+            "     , A.COL5\n"
+            "     , A.COL6\n"
+            "     , A.COL7\n"
+            "     , A.COL8\n"
+            "FROM SOURCE_TABLE A;\n"
+        )
+
+        statements = _extract_insert_select_statements(sql)
+        constant_insert = sql[: sql.index("SELECT A.COL1")]
+        result = verify_sql_formatting_style(constant_insert, constant_insert)
+
+        self.assertEqual(len(statements), 1)
+        self.assertEqual(
+            statements[0]["select_block"].strip(),
+            "SELECT 1, 2, 3, 4\n     , 5, 6, 7, 8",
+        )
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_insert_layout_allows_vertical_fallback_for_measurably_long_expressions(self):
+        long_values = [
+            (
+                f"A.EXTREMELY_LONG_SOURCE_COLUMN_{index} "
+                f"+ A.SECOND_EXTREMELY_LONG_SOURCE_COLUMN_{index} "
+                f"+ A.THIRD_EXTREMELY_LONG_SOURCE_COLUMN_{index}"
+            )
+            for index in range(1, 9)
+        ]
+        sql = (
+            "INSERT INTO TARGET_TABLE\n"
+            "(\n"
+            "      COL1, COL2, COL3, COL4\n"
+            "    , COL5, COL6, COL7, COL8\n"
+            ")\n"
+            "SELECT "
+            + long_values[0]
+            + "\n"
+            + "".join(f"     , {value}\n" for value in long_values[1:])
+            + "FROM SOURCE_TABLE A;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+        contract = result.metadata["style_lint"]["insert_select_layout_contract"]
+        self.assertEqual(contract["vertical_fallback_min_expression_length"], 73)
+        self.assertEqual(contract["horizontal_expression_max_length"], 72)
+
+    def test_insert_layout_rejects_short_vertical_mappings_next_to_one_long_expression(self):
+        sql = (
+            "INSERT INTO TARGET_TABLE\n"
+            "(\n"
+            "      COL1, COL2, COL3, COL4\n"
+            "    , COL5, COL6, COL7, COL8\n"
+            ")\n"
+            "SELECT COALESCE(A.EXTREMELY_LONG_SOURCE_COLUMN, A.ANOTHER_EXTREMELY_LONG_SOURCE_COLUMN)\n"
+            "     , A.COL2\n"
+            "     , A.COL3\n"
+            "     , A.COL4\n"
+            "     , A.COL5\n"
+            "     , A.COL6\n"
+            "     , A.COL7\n"
+            "     , A.COL8\n"
+            "FROM SOURCE_TABLE A;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("insert_select_short_expressions_verticalized", _issue_codes(result))
 
     def test_redesign_metadata_separates_four_independent_gates(self):
         result = verify_sql_formatting_style("SELECT 1;", "SELECT 1;")

@@ -4,11 +4,11 @@ This reference expands the portable operating contract for `token-optimizer`. Re
 
 ## When to use
 
-Use as a decision gate for every non-trivial KH-routed turn after `always-on-front-door` has run. Actual compression is still quality-gated: use it only for large or compressible command output, transcripts, logs, or code where required facts can be preserved.
+Use as a decision gate for every KH-routed turn after `always-on-front-door` has run. Actual compression is still quality-gated: use it only for large or compressible command output, transcripts, logs, or code where required facts can be preserved.
 
-Context summary: This skill is the UAF context budget gate. It must produce an explicit used, considered_not_needed, passthrough, or blocked decision for non-trivial KH work. It prevents token exhaustion during large development, debugging, review, QA, subagent, command-validation, or code-reading loops.
+Context summary: This skill is the UAF context budget gate. It must produce an explicit used, considered_not_needed, passthrough, or blocked decision for each KH-routed turn. It prevents token exhaustion during large development, debugging, review, QA, subagent, command-validation, or code-reading loops.
 
-Do not claim compression only because the skill is available. The decision gate is always executed for non-trivial KH work, but compression is applied only when it preserves required facts. State whether the skill was used, considered_not_needed, passthrough, or blocked.
+Do not claim compression only because the skill is available. The decision gate is always executed for KH-routed work, but compression is applied only when it preserves required facts. State whether the skill was used, considered_not_needed, passthrough, or blocked.
 
 Quality rule: token savings must never hide source-of-truth details and must never reduce answer quality. Treat `optimize_context_content` as the universal entrypoint for large or uncertain content, but allow it to return passthrough. For SQL, stored procedures, license headers, security comments, business rules, exact contract prose, or ordinary text that cannot be safely classified as compressible output, use passthrough and record why compression was skipped.
 
@@ -41,8 +41,8 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 ## Execution pattern
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
-2. Read this reference before performing non-trivial work with `token-optimizer`.
-3. For every non-trivial KH turn, decide the `token_optimizer_status` before the first broad file read, long-running command, implementation, or subagent dispatch.
+2. Read this reference before applying `token-optimizer` to real work.
+3. For every KH-routed turn, decide the `token_optimizer_status` before the first broad file read, long-running command, implementation, or subagent dispatch.
 4. For broad retrieval, call `build_retrieval_budget_plan(...)` before running the retrieval. Require count/scope first, sample before full read, required fields/selectors, explicit limits, and output-file handling for large results.
 5. Prefer `optimize_context_content` as the default entrypoint. It passes through contract-sensitive text, source code, and general prose, and only invokes known command-family filters for logs with verifiable required facts. Direct `minify_code` remains an explicit caller utility, not automatic compression.
 6. Keep agent/subagent transcripts and general prose as passthrough unless a separate caller contract supplies and verifies every required fact. `summarize_agent_transcript` is explicit utility behavior, not automatic workflow compression.

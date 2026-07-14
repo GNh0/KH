@@ -1,0 +1,309 @@
+{
+  "schema_version": 2,
+  "contract_id": "pb-csharp-offline-generalized",
+  "contract_version": "1.0",
+  "normal_generation": {
+    "profile_source": "packaged-only",
+    "external_discovery_allowed": false,
+    "source_text_policy": "passthrough",
+    "profile_update_workflow": "profile-update-workflow.md",
+    "profile_update_runs_during_normal_generation": false
+  },
+  "rules": {
+    "csharp": {
+      "required_patterns": [
+        {
+          "id": "mapped_form_declaration",
+          "pattern": "\\bpartial\\s+class\\s+[A-Za-z_][A-Za-z0-9_]*Form\\s*:\\s*(?:Form|[A-Za-z_][A-Za-z0-9_.<>]*(?:Form|Base))\\b"
+        },
+        {
+          "id": "designer_initialization",
+          "pattern": "\\bInitializeComponent\\s*\\("
+        },
+        {
+          "id": "migration_call_path",
+          "pattern": "\\b(?:CallSelectProcedure|CallViewQuery|CallSaveProcedure|CallProc)\\s*\\("
+        },
+        {
+          "id": "ui_binding_or_result_mapping",
+          "pattern": "\\b(?:DataSource|BindingField|FieldName)\\s*="
+        }
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "alien_convention",
+          "pattern": "\\bAlienConvention\\b"
+        },
+        {
+          "id": "invented_request_context_dto",
+          "pattern": "\\bclass\\s+[A-Za-z_][A-Za-z0-9_]*(?:Context|Request|Criteria)\\b"
+        },
+        {
+          "id": "runtime_grid_column_factory",
+          "pattern": "\\bAddGridColumn\\s*\\(|\\.Columns\\.AddField\\s*\\("
+        },
+        {
+          "id": "inline_wildcard_shaping",
+          "pattern": "(?:\\+\\s*\"%\"|\\?\\?\\s*\"%\")"
+        }
+      ],
+      "evidence_requirements": [
+        "all required structural pattern identifiers are reported",
+        "the mapped form declaration and designer initialization are present",
+        "one packaged migration call path is present",
+        "one UI binding or result mapping is present",
+        "empty source and unrelated class text are rejected"
+      ]
+    },
+    "sql": {
+      "allowed_procedure_patterns": [
+        "^USP_[A-Z][A-Z0-9_]*_(?:SELECT|SAVE|SELECT_SAVE)$"
+      ],
+      "forbidden_patterns": [
+        {
+          "id": "temporary_table",
+          "pattern": "#[A-Za-z][A-Za-z0-9_]*"
+        },
+        {
+          "id": "merge",
+          "pattern": "\\bMERGE\\b"
+        },
+        {
+          "id": "not_exists",
+          "pattern": "\\bNOT\\s+EXISTS\\b"
+        }
+      ]
+    }
+  },
+  "designer_ownership": {
+    "default_owner": ".Designer.cs",
+    "designer_file_owns": [
+      "control and component field declarations",
+      "control and repository construction",
+      "static parent containment and collection registration",
+      "static Name TabIndex Location Size Dock and Anchor assignments",
+      "static BindingField FieldName Caption Text and VisibleIndex assignments",
+      "explicit grid columns and Columns.AddRange registration",
+      "repository registration and ColumnEdit assignments",
+      "static Appearance and Options assignments",
+      "other static design-time properties"
+    ],
+    "code_behind_owns": [
+      "runtime behavior and command logic",
+      "event handler implementations",
+      "procedure calls and validation",
+      "runtime result and data binding",
+      "evidence-backed dynamic state changes"
+    ],
+    "code_behind_static_ui_patterns": [
+      {
+        "id": "control_creation_outside_designer",
+        "pattern": "\\bthis\\.[A-Za-z_][A-Za-z0-9_]*\\s*=\\s*new\\s+[A-Za-z_][A-Za-z0-9_.<>]*\\s*\\("
+      },
+      {
+        "id": "static_property_outside_designer",
+        "pattern": "\\bthis\\.[A-Za-z_][A-Za-z0-9_]*\\.(?:Name|TabIndex|Location|Size|Dock|Anchor|BindingField|FieldName|VisibleIndex|Caption|Text)\\s*="
+      },
+      {
+        "id": "grid_or_repository_registration_outside_designer",
+        "pattern": "\\bthis\\.[A-Za-z_][A-Za-z0-9_]*\\.(?:Columns|RepositoryItems)\\.AddRange\\s*\\("
+      },
+      {
+        "id": "column_repository_assignment_outside_designer",
+        "pattern": "\\bthis\\.[A-Za-z_][A-Za-z0-9_]*\\.ColumnEdit\\s*="
+      },
+      {
+        "id": "appearance_or_options_outside_designer",
+        "pattern": "\\bthis\\.[A-Za-z_][A-Za-z0-9_]*\\.(?:Appearance|Options)[A-Za-z0-9_.]*\\s*="
+      }
+    ],
+    "dynamic_state_exception": {
+      "default": "blocked",
+      "requires": [
+        "supplied source or explicit behavior evidence",
+        "documented runtime reason",
+        "targeted verification for the state transition"
+      ]
+    },
+    "evidence_requirements": [
+      "generated static UI assignments are inventoried by target file",
+      "Designer-owned assignments appear only in the generated Designer file by default",
+      "code-behind contains runtime behavior events data binding and approved dynamic state only",
+      "every dynamic-state exception records evidence reason and verification",
+      "misplaced static UI configuration blocks completion"
+    ]
+  },
+  "style_families": {
+    "screens": [
+      "browse",
+      "master-detail",
+      "detail-entry",
+      "popup"
+    ],
+    "methods": [
+      "command",
+      "event"
+    ],
+    "procedures": [
+      "select",
+      "save",
+      "select-save"
+    ]
+  },
+  "naming_grammar": {
+    "form": "<Feature><Mode>Form",
+    "load_handler": "<FormClass>_Load",
+    "query_method": [
+      "CallSelectProcedure",
+      "CallViewQuery"
+    ],
+    "save_method": [
+      "CallSaveProcedure",
+      "CallProc"
+    ],
+    "focus_handler": "gvw<Role>_FocusedRowChanged",
+    "controls": {
+      "text": "txt<Field>",
+      "button_lookup": "btn<Field>",
+      "combo_lookup": "cbo<Field>",
+      "numeric": "spn<Field>",
+      "date": "dt<Field>",
+      "boolean": "chk<Field>",
+      "memo": "memo<Field>",
+      "label": "lbl<Field>",
+      "panel": "pnl<Role>",
+      "group": "grp<Role>",
+      "grid": "grd<Role>",
+      "view": "gvw<Role>"
+    },
+    "grid_column": "col<Role>_<FIELD>",
+    "repositories": {
+      "button": "repButton<Field>",
+      "lookup": "repLookup<Field>",
+      "numeric": "repSpin<Field>",
+      "boolean": "repCheck<Field>"
+    },
+    "procedure": "[dbo].[usp_<Feature>_<Operation>]",
+    "procedure_parameter": "@<CALLER_VALUE>",
+    "procedure_local": "@Local<DerivedValue>"
+  },
+  "event_method_shapes": {
+    "command_handlers": [
+      "SearchCommand",
+      "SaveCommand",
+      "ClearCommand",
+      "DeleteCommand"
+    ],
+    "select": [
+      "keep caller parameters adjacent to the call",
+      "keep list and detail branches explicit",
+      "return when a required focused row is absent",
+      "bind each result table to one documented UI role"
+    ],
+    "save": [
+      "validate before serialization",
+      "serialize only documented row states",
+      "call one save path",
+      "refresh only after success"
+    ]
+  },
+  "control_fallback_order": [
+    "target-wrapper",
+    "konelib",
+    "devexpress",
+    "winforms"
+  ],
+  "designer_properties": [
+    "Name",
+    "BindingField",
+    "TabIndex",
+    "Location",
+    "Size",
+    "Dock",
+    "Anchor",
+    "Text",
+    "Caption",
+    "EditValue",
+    "Properties.*",
+    "MainView",
+    "ViewCollection",
+    "GridControl",
+    "Controls.Add",
+    "Columns.AddRange"
+  ],
+  "grid_repository_conventions": {
+    "explicit_grid_columns": true,
+    "register_with_columns_addrange": true,
+    "field_name_matches_result": true,
+    "register_repository_before_column_edit": true,
+    "numeric_uses_repository_editor": true,
+    "lookup_uses_supplied_value_display_members": true,
+    "button_uses_explicit_event": true,
+    "boolean_uses_check_repository_when_supported": true
+  },
+  "caller_parameter_rules": [
+    "every procedure parameter has a caller source or documented external caller",
+    "caller and procedure parameter order stay synchronized",
+    "internal and derived values are local procedure variables",
+    "raw search and date values cross the caller boundary",
+    "result fields match C# bindings and grid FieldName values"
+  ],
+  "stored_procedure_rules": {
+    "metadata_fields": [
+      "AUTHOR",
+      "CREATE DATE",
+      "DESCRIPTION"
+    ],
+    "set_nocount": true,
+    "parameter_layout": "leading-comma",
+    "select_column_layout": "leading-comma",
+    "outer_alias_grammar": [
+      "A",
+      "A1",
+      "B",
+      "C"
+    ],
+    "derived_alias_grammar": [
+      "T",
+      "T1",
+      "TA1"
+    ],
+    "complete_body_requires": [
+      "supplied source SQL",
+      "supplied current procedure",
+      "supplied schema or result/write contract",
+      "explicit inferred-draft approval"
+    ]
+  },
+  "forbidden_patterns": [
+    "private packaged identifiers or fingerprints",
+    "normal-generation discovery or profile refresh",
+    "invented request or context DTOs",
+    "parallel query or save helpers",
+    "inline C# wildcard shaping",
+    "hidden query-path date defaults",
+    "derived procedure helper parameters",
+    "procedure parameters outside the caller matrix",
+    "runtime grid-column factories",
+    "fixed-column runtime loops",
+    "numeric DisplayFormat-only behavior",
+    "source-unbacked result schemas",
+    "unapproved dependency upgrades or semantic SQL rewrites"
+  ],
+  "evidence_requirements": [
+    "contract id and version",
+    "selected style families and fallback reasons",
+    "user directive and approved scope",
+    "confirmed inferred blocked and proposal-only ledger",
+    "event-to-method mapping",
+    "field control grid and result mapping",
+    "caller-parameter and local-variable matrices",
+    "Designer and repository plan",
+    "Designer ownership inventory and code-behind static UI scan",
+    "procedure result write transaction and error contract",
+    "forbidden-pattern scan",
+    "verification results and residual blockers",
+    "required C# structural pattern match or missing-pattern evidence",
+    "token_optimizer_status passthrough"
+  ]
+}
