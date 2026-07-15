@@ -43,10 +43,12 @@ Use this harness after selecting the host-local `sql-formatting` contract or the
 
 - No alias change: state is `not_needed`.
 - Alias change without a complete plan: block.
-- Every changed scope requires exactly one first `main` role; all-support plans block.
-- Main role: `A`, then `A1`, `A2`, and so on.
-- Singleton non-main roles: sequential `B`, `C`, `D`, and so on.
-- Multi-member non-main roles: number from the first member, for example `B1`, `B2`.
+- In every parsed scope, reject declaration aliases `A1`, `A2`, and later numbered `A` aliases even when source and candidate aliases are unchanged. Numbered non-main families such as `B1`/`B2` remain valid.
+- Every changed scope requires exactly one first `main` role containing exactly one source; all-support and multi-source main plans block.
+- The one main source is `A`. Generated `A1`, `A2`, and later main aliases are invalid.
+- Each subsequent distinct business-role family advances sequentially through `B`, `C`, `D`, and so on.
+- A singleton non-main family uses its letter without a suffix. Multiple siblings in one non-main family use suffixes from the first member, for example `B1`, `B2`; the next distinct family is `C`.
+- Family grouping comes from structured `reviewer_approved_business_role` evidence, not table identity, repetition, or source order alone. Each evidence object must name a controlled reviewer artifact URI using `review`, `spec`, `ticket`, or `design`, set `reviewer_approved=true`, and exactly cover the declared role names. The compatibility form is limited to `review://<review-id>/<declared-role-names>-roles`.
 - Every changed scope must be present. Every declaration and changed reference must be covered. Cross-scope members, skipped role letters, missing aliases, and vague/empty basis references block.
 - Scope-aware binding applies to nested/correlated queries and to `UPDATE ... FROM`, joined `DELETE`, and `MERGE`; an outer rename never owns a reference shadowed by an inner declaration.
 

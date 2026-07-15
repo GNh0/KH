@@ -39,6 +39,17 @@ def _issue_codes(result) -> set[str]:
     return codes
 
 
+def _approved_role_basis(source: str, *role_names: str) -> list[dict[str, object]]:
+    return [
+        {
+            "kind": "reviewer_approved_business_role",
+            "source": source,
+            "reviewer_approved": True,
+            "role_names": list(role_names),
+        }
+    ]
+
+
 class SqlFormattingStyleHarnessTests(unittest.TestCase):
     def test_verifier_passes_preserved_c_kone110_style_sql(self):
         original = (
@@ -663,15 +674,15 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             "      ORGDIV                  , ORDNUM                  , ORDSEQ                  , PORSEQ\n"
             "    , PRNTITEMCD              , SPECNUM                 , CHLDITEMCD              , CHLDITEMNM\n"
             ")\n"
-            "SELECT @ORGDIV                , A4.ORDNUM               , A4.ORDSEQ\n"
-            "     , ISNULL(A4.MAXPORSEQ, 0)\n"
+            "SELECT @ORGDIV                , A.ORDNUM                , A.ORDSEQ\n"
+            "     , ISNULL(A.MAXPORSEQ, 0)\n"
             "       + ROW_NUMBER() OVER (\n"
-            "                            PARTITION BY A4.ORDNUM, A4.ORDSEQ\n"
-            "                            ORDER BY A4.SEQ\n"
+            "                            PARTITION BY A.ORDNUM, A.ORDSEQ\n"
+            "                            ORDER BY A.SEQ\n"
             "                           )\n"
-            "     , A4.PRNTITEMCD          , A4.SPECNUM              , A4.CHLDITEMCD           , A4.CHLDITEMNM\n"
-            "FROM SA130T A4\n"
-            "WHERE A4.ORGDIV = @ORGDIV;\n"
+            "     , A.PRNTITEMCD           , A.SPECNUM               , A.CHLDITEMCD            , A.CHLDITEMNM\n"
+            "FROM SA130T A\n"
+            "WHERE A.ORGDIV = @ORGDIV;\n"
         )
 
         result = verify_sql_formatting_style(grouped, grouped)
@@ -1504,7 +1515,11 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-44/order-and-customer-roles"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-44/order-and-customer-roles",
+                        "order",
+                        "customer",
+                    ),
                     "roles": [
                         {
                             "name": "order",
@@ -1614,14 +1629,14 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
     def test_alias_role_plan_is_not_needed_when_sql_aliases_are_unchanged(self):
         sql = (
             "SELECT A.ORDNUM\n"
-            "     , A1.ORDSEQ\n"
-            "     , B.CUSTNM\n"
+            "     , B.ORDSEQ\n"
+            "     , C.CUSTNM\n"
             "FROM SA100T A\n"
-            "        LEFT OUTER JOIN SA110T A1\n"
-            "                     ON A.ORDNUM = A1.ORDNUM\n"
+            "        LEFT OUTER JOIN SA110T B\n"
+            "                     ON A.ORDNUM = B.ORDNUM\n"
             "\n"
-            "        LEFT OUTER JOIN BA020T B\n"
-            "                     ON A.CUSTCD = B.CUSTCD;\n"
+            "        LEFT OUTER JOIN BA020T C\n"
+            "                     ON A.CUSTCD = C.CUSTCD;\n"
         )
         plan = {
             "roles": [
@@ -1630,12 +1645,15 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
                     "kind": "main",
                     "members": [
                         {"source": "SA100T", "alias": "A"},
-                        {"source": "SA110T", "alias": "A1"},
                     ],
                 },
                 {
+                    "name": "order_detail",
+                    "members": [{"source": "SA110T", "alias": "B"}],
+                },
+                {
                     "name": "customer",
-                    "members": [{"source": "BA020T", "alias": "B"}],
+                    "members": [{"source": "BA020T", "alias": "C"}],
                 },
             ]
         }
@@ -1802,13 +1820,63 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         "                     ON A.CUSTOMER_ID = B.CUSTOMER_ID;\n"
     )
 
+    BLIND_ROLE_ORIGINAL = (
+        "SELECT H.ORDER_ID\n"
+        "     , L1.ITEM_ID AS PRIMARY_ITEM_ID\n"
+        "     , L2.ITEM_ID AS SECONDARY_ITEM_ID\n"
+        "     , S.STATUS_NAME\n"
+        "FROM SALES_ORDER H\n"
+        "        LEFT OUTER JOIN SALES_ORDER_LINE L1\n"
+        "                     ON H.ORDER_ID = L1.ORDER_ID\n"
+        "                     AND L1.LINE_KIND = 'PRIMARY'\n"
+        "        LEFT OUTER JOIN SALES_ORDER_LINE L2\n"
+        "                     ON H.ORDER_ID = L2.ORDER_ID\n"
+        "                     AND L2.LINE_KIND = 'SECONDARY'\n"
+        "        LEFT OUTER JOIN STATUS_CODE S\n"
+        "                     ON S.STATUS_CODE = H.STATUS_CODE;\n"
+    )
+    BLIND_ROLE_WRONG = (
+        "SELECT A.ORDER_ID\n"
+        "     , A1.ITEM_ID AS PRIMARY_ITEM_ID\n"
+        "     , A2.ITEM_ID AS SECONDARY_ITEM_ID\n"
+        "     , B.STATUS_NAME\n"
+        "FROM SALES_ORDER A\n"
+        "        LEFT OUTER JOIN SALES_ORDER_LINE A1\n"
+        "                     ON A.ORDER_ID = A1.ORDER_ID\n"
+        "                     AND A1.LINE_KIND = 'PRIMARY'\n"
+        "        LEFT OUTER JOIN SALES_ORDER_LINE A2\n"
+        "                     ON A.ORDER_ID = A2.ORDER_ID\n"
+        "                     AND A2.LINE_KIND = 'SECONDARY'\n"
+        "        LEFT OUTER JOIN STATUS_CODE B\n"
+        "                     ON B.STATUS_CODE = A.STATUS_CODE;\n"
+    )
+    BLIND_ROLE_REQUIRED = (
+        "SELECT A.ORDER_ID\n"
+        "     , B1.ITEM_ID AS PRIMARY_ITEM_ID\n"
+        "     , B2.ITEM_ID AS SECONDARY_ITEM_ID\n"
+        "     , C.STATUS_NAME\n"
+        "FROM SALES_ORDER A\n"
+        "        LEFT OUTER JOIN SALES_ORDER_LINE B1\n"
+        "                     ON A.ORDER_ID = B1.ORDER_ID\n"
+        "                     AND B1.LINE_KIND = 'PRIMARY'\n"
+        "        LEFT OUTER JOIN SALES_ORDER_LINE B2\n"
+        "                     ON A.ORDER_ID = B2.ORDER_ID\n"
+        "                     AND B2.LINE_KIND = 'SECONDARY'\n"
+        "        LEFT OUTER JOIN STATUS_CODE C\n"
+        "                     ON C.STATUS_CODE = A.STATUS_CODE;\n"
+    )
+
     @staticmethod
     def _complete_alias_plan():
         return {
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-42/order-and-customer-roles"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-42/order-and-customer-roles",
+                        "order",
+                        "customer",
+                    ),
                     "roles": [
                         {
                             "name": "order",
@@ -1833,6 +1901,65 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
                             ],
                         },
                     ],
+                }
+            ]
+        }
+
+    @staticmethod
+    def _blind_role_plan(*, main_line_family: bool = False, status_alias: str = "C"):
+        header = {
+            "source": "SALES_ORDER",
+            "original_alias": "H",
+            "alias": "A",
+        }
+        lines = [
+            {
+                "source": "SALES_ORDER_LINE",
+                "original_alias": "L1",
+                "alias": "A1" if main_line_family else "B1",
+            },
+            {
+                "source": "SALES_ORDER_LINE",
+                "original_alias": "L2",
+                "alias": "A2" if main_line_family else "B2",
+            },
+        ]
+        status = {
+            "source": "STATUS_CODE",
+            "original_alias": "S",
+            "alias": "B" if main_line_family else status_alias,
+        }
+        roles = [
+            {
+                "name": "sales_order",
+                "kind": "main",
+                "members": [header, *lines] if main_line_family else [header],
+            }
+        ]
+        if not main_line_family:
+            roles.append(
+                {
+                    "name": "sales_order_lines",
+                    "kind": "support",
+                    "members": lines,
+                }
+            )
+        roles.append(
+            {
+                "name": "status_code",
+                "kind": "support",
+                "members": [status],
+            }
+        )
+        return {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-ROLE-FAMILY/sales-order-line-and-status-roles",
+                        *(role["name"] for role in roles),
+                    ),
+                    "roles": roles,
                 }
             ]
         }
@@ -2085,7 +2212,10 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-50/parent-role"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-50/parent-role",
+                        "parent",
+                    ),
                     "roles": [
                         {
                             "name": "parent",
@@ -2125,7 +2255,10 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-51/correlated-parent-role"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-51/correlated-parent-role",
+                        "parent",
+                    ),
                     "roles": [
                         {
                             "name": "parent",
@@ -2159,7 +2292,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-52/all-support-is-invalid"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-52/all-support-is-invalid",
+                        "order",
+                        "customer",
+                    ),
                     "roles": [
                         {
                             "name": "order",
@@ -2246,7 +2383,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-53/dml-role-plan"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-53/dml-role-plan",
+                        "order",
+                        "status",
+                    ),
                     "roles": [
                         {
                             "name": "order",
@@ -2332,7 +2473,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-55/dml-top-role-plan"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-55/dml-top-role-plan",
+                        "order",
+                        "status",
+                    ),
                     "roles": [
                         {
                             "name": "order",
@@ -2388,7 +2533,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-54/update-role-plan"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-54/update-role-plan",
+                        "order",
+                        "status",
+                    ),
                     "roles": [
                         {
                             "name": "order",
@@ -2430,7 +2579,10 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-46/order-alias-only"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-46/order-alias-only",
+                        "order",
+                    ),
                     "roles": [
                         {
                             "name": "order",
@@ -2466,7 +2618,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-47/apply-source-aliases"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-47/apply-source-aliases",
+                        "main",
+                        "split_values",
+                    ),
                     "roles": [
                         {
                             "name": "main",
@@ -2517,7 +2673,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
         self.assertIn("token_stream_changed", _issue_codes(result))
 
-    def test_alias_plan_enforces_main_and_multi_member_cardinality_names(self):
+    def test_alias_plan_rejects_main_role_cardinality_above_one(self):
         original = (
             "SELECT ORDER_HEADER.ID, ORDER_DETAIL.SEQ, LOOKUP_ONE.NAME, LOOKUP_TWO.NAME\n"
             "FROM ORDER_HEADER\n"
@@ -2542,7 +2698,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-45/order-and-lookup-role-families"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-45/order-and-lookup-role-families",
+                        "order",
+                        "lookup",
+                    ),
                     "roles": [
                         {
                             "name": "order",
@@ -2565,15 +2725,73 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             ]
         }
 
-        verified = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
-        invalid = json.loads(json.dumps(plan))
-        invalid["scopes"][0]["roles"][1]["members"][0]["alias"] = "B"
-        invalid["scopes"][0]["roles"][1]["members"][1]["alias"] = "B1"
-        blocked = verify_sql_formatting_style(original, formatted, alias_role_plan=invalid)
+        blocked = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
 
-        self.assertTrue(verified.success, verified.to_dict())
         self.assertFalse(blocked.success, blocked.to_dict())
-        self.assertIn("alias_role_letters_not_sequential", _issue_codes(blocked))
+        self.assertIn("alias_main_role_cardinality_invalid", _issue_codes(blocked))
+
+    def test_explicit_h_l1_l2_s_to_wrong_a_a1_a2_b_is_rejected(self):
+        result = verify_sql_formatting_style(
+            self.BLIND_ROLE_ORIGINAL,
+            self.BLIND_ROLE_WRONG,
+            alias_role_plan=self._blind_role_plan(main_line_family=True),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(result.metadata["release_readiness"]["status"], "blocked")
+        self.assertIn("alias_main_role_cardinality_invalid", _issue_codes(result))
+        self.assertIn("alias_main_family_numbered_invalid", _issue_codes(result))
+
+    def test_explicit_h_l1_l2_s_to_a_b1_b2_c_is_preserved_and_ready(self):
+        result = verify_sql_formatting_style(
+            self.BLIND_ROLE_ORIGINAL,
+            self.BLIND_ROLE_REQUIRED,
+            alias_role_plan=self._blind_role_plan(),
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["release_readiness"]["status"], "ready")
+        self.assertEqual(result.metadata["formatting_preservation"]["status"], "verified")
+        self.assertEqual(
+            result.metadata["formatted_sha256"],
+            hashlib.sha256(self.BLIND_ROLE_REQUIRED.encode("utf-8")).hexdigest(),
+        )
+        self.assertRegex(result.metadata["verification_id"], r"^[0-9a-f]{64}$")
+
+    def test_alias_plan_sequences_b_siblings_before_c_family(self):
+        accepted = verify_sql_formatting_style(
+            self.BLIND_ROLE_ORIGINAL,
+            self.BLIND_ROLE_REQUIRED,
+            alias_role_plan=self._blind_role_plan(),
+        )
+        skipped_output = self.BLIND_ROLE_REQUIRED.replace("C.STATUS_NAME", "D.STATUS_NAME").replace(
+            "STATUS_CODE C", "STATUS_CODE D"
+        ).replace("ON C.STATUS_CODE", "ON D.STATUS_CODE")
+        skipped = verify_sql_formatting_style(
+            self.BLIND_ROLE_ORIGINAL,
+            skipped_output,
+            alias_role_plan=self._blind_role_plan(status_alias="D"),
+        )
+
+        self.assertTrue(accepted.success, accepted.to_dict())
+        self.assertFalse(skipped.success, skipped.to_dict())
+        self.assertIn("alias_role_letters_not_sequential", _issue_codes(skipped))
+
+    def test_incomplete_outer_alias_plan_cannot_claim_ready(self):
+        plan = self._blind_role_plan()
+        plan["scopes"][0]["roles"].pop()
+
+        result = verify_sql_formatting_style(
+            self.BLIND_ROLE_ORIGINAL,
+            self.BLIND_ROLE_REQUIRED,
+            alias_role_plan=plan,
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(json.loads(result.stdout)["status"], "blocked")
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "conflict")
+        self.assertEqual(result.metadata["release_readiness"]["status"], "blocked")
+        self.assertIn("alias_plan_incomplete", _issue_codes(result))
 
     def test_alias_plan_rejects_missing_aliases_skipped_letters_and_empty_basis(self):
         missing_alias = self._complete_alias_plan()
@@ -2600,6 +2818,65 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
                 self.assertFalse(result.success, result.to_dict())
                 self.assertIn(expected_code, _issue_codes(result))
 
+    def test_alias_plan_rejects_unstructured_or_non_role_basis_evidence(self):
+        invalid_basis_values = {
+            "identity_only_review_uri": ["review://SQL-42/repeated-table-identity-roles"],
+            "literal_identity_probe": ["repeated table identity only"],
+            "unstructured_source": [
+                {
+                    "kind": "reviewer_approved_business_role",
+                    "source": "repeated table identity only",
+                    "reviewer_approved": True,
+                    "role_names": ["order", "customer"],
+                }
+            ],
+            "table_identity_source_scheme": [
+                {
+                    "kind": "reviewer_approved_business_role",
+                    "source": "table://SALES_ORDER/repeated-identity",
+                    "reviewer_approved": True,
+                    "role_names": ["order", "customer"],
+                }
+            ],
+            "wrong_kind": [
+                {
+                    "kind": "table_identity",
+                    "source": "review://SQL-42/order-and-customer-roles",
+                    "reviewer_approved": True,
+                    "role_names": ["order", "customer"],
+                }
+            ],
+            "not_approved": [
+                {
+                    "kind": "reviewer_approved_business_role",
+                    "source": "review://SQL-42/order-and-customer-roles",
+                    "reviewer_approved": False,
+                    "role_names": ["order", "customer"],
+                }
+            ],
+            "incomplete_role_coverage": [
+                {
+                    "kind": "reviewer_approved_business_role",
+                    "source": "review://SQL-42/order-and-customer-roles",
+                    "reviewer_approved": True,
+                    "role_names": ["order"],
+                }
+            ],
+        }
+        for label, basis in invalid_basis_values.items():
+            with self.subTest(label=label):
+                plan = self._complete_alias_plan()
+                plan["scopes"][0]["basis_references"] = basis
+
+                result = verify_sql_formatting_style(
+                    self.ALIAS_ORIGINAL,
+                    self.ALIAS_FORMATTED,
+                    alias_role_plan=plan,
+                )
+
+                self.assertFalse(result.success, result.to_dict())
+                self.assertIn("alias_basis_required", _issue_codes(result))
+
     def test_alias_plan_rejects_cross_scope_membership(self):
         original = (
             "SELECT ORDER_HEADER.ORDER_NO FROM ORDER_HEADER;\n"
@@ -2613,7 +2890,10 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "scopes": [
                 {
                     "scope_id": "scope_1",
-                    "basis_references": ["review://SQL-43/two-independent-statements"],
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-43/two-independent-statements",
+                        "mixed",
+                    ),
                     "roles": [
                         {
                             "name": "mixed",
@@ -2632,6 +2912,87 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
 
         self.assertFalse(result.success, result.to_dict())
         self.assertIn("alias_cross_scope_mixing", _issue_codes(result))
+
+    def test_unchanged_numbered_main_family_aliases_fail_in_every_statement_scope(self):
+        cases = {
+            "outer_select": (
+                "SELECT A.ID\n"
+                "     , A1.VALUE AS PRIMARY_VALUE\n"
+                "     , A2.VALUE AS SECONDARY_VALUE\n"
+                "FROM HEADER_TABLE A\n"
+                "        LEFT OUTER JOIN DETAIL_TABLE A1\n"
+                "                     ON A.ID = A1.ID\n"
+                "        LEFT OUTER JOIN DETAIL_TABLE A2\n"
+                "                     ON A.ID = A2.ID;\n"
+            ),
+            "nested_select": (
+                "SELECT A.ID\n"
+                "FROM HEADER_TABLE A\n"
+                "WHERE EXISTS (\n"
+                "             SELECT A1.ID\n"
+                "             FROM DETAIL_TABLE A1\n"
+                "                    LEFT OUTER JOIN DETAIL_TABLE A2\n"
+                "                                 ON A1.ID = A2.ID\n"
+                "             WHERE A1.ID = A.ID\n"
+                "            );\n"
+            ),
+            "update_from": (
+                "UPDATE A1\n"
+                "SET A1.VALUE = A2.VALUE\n"
+                "FROM HEADER_TABLE A1\n"
+                "        INNER JOIN SOURCE_TABLE A2\n"
+                "                ON A1.ID = A2.ID;\n"
+            ),
+            "joined_delete": (
+                "DELETE A1\n"
+                "FROM HEADER_TABLE A1\n"
+                "        INNER JOIN SOURCE_TABLE A2\n"
+                "                ON A1.ID = A2.ID;\n"
+            ),
+            "merge": (
+                "MERGE INTO HEADER_TABLE A1\n"
+                "USING SOURCE_TABLE A2\n"
+                "ON A1.ID = A2.ID\n"
+                "WHEN MATCHED THEN\n"
+                "    UPDATE SET A1.VALUE = A2.VALUE;\n"
+            ),
+        }
+        for label, sql in cases.items():
+            with self.subTest(label=label):
+                result = verify_sql_formatting_style(sql, sql)
+
+                self.assertFalse(result.success, result.to_dict())
+                self.assertEqual(
+                    result.metadata["alias_role_plan_validation"]["status"],
+                    "conflict",
+                )
+                self.assertIn("alias_main_family_numbered_invalid", _issue_codes(result))
+
+    def test_unchanged_numbered_non_main_family_aliases_remain_valid(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B1.VALUE AS PRIMARY_VALUE\n"
+            "     , B2.VALUE AS SECONDARY_VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_TABLE B1\n"
+            "                     ON A.ID = B1.ID\n"
+            "        LEFT OUTER JOIN DETAIL_TABLE B2\n"
+            "                     ON A.ID = B2.ID;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "not_needed")
+        self.assertNotIn("alias_main_family_numbered_invalid", _issue_codes(result))
+
+    def test_physical_table_named_a1_is_not_misclassified_as_an_alias(self):
+        sql = "SELECT A1.ID FROM A1;\n"
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("alias_main_family_numbered_invalid", _issue_codes(result))
 
     def test_unchanged_aliases_need_no_role_plan(self):
         sql = "SELECT A.ID FROM T A;\n"

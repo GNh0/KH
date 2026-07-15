@@ -37,6 +37,18 @@ _CLAUSE_WORDS = {
     "WITH",
 }
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
+_NUMBERED_MAIN_ALIAS_PATTERN = re.compile(r"^A[0-9]+$")
+_ALIAS_BASIS_SOURCE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^\s]+$")
+_ALIAS_BASIS_SOURCE_SCHEMES = frozenset({"design", "review", "spec", "ticket"})
+_ALIAS_BASIS_EVIDENCE_CONTRACT = {
+    "kind": "reviewer_approved_business_role",
+    "required_fields": ["kind", "source", "reviewer_approved", "role_names"],
+    "source_format": "controlled_artifact_uri",
+    "allowed_source_schemes": sorted(_ALIAS_BASIS_SOURCE_SCHEMES),
+    "reviewer_approved": True,
+    "role_coverage": "exact_declared_role_names",
+    "legacy_compact_source_format": "review://<review-id>/<declared-role-names>-roles",
+}
 _INSERT_SELECT_LAYOUT_CONTRACT = {
     "wide_mapping_min_items": 8,
     "horizontal_expression_max_length": 72,
@@ -1207,17 +1219,36 @@ def _validate_alias_role_plan(
     changes: Sequence[_AliasChange],
     plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None,
 ) -> Tuple[Dict[str, Any], List[SqlFormattingIssue], bool]:
+    main_alias_conflicts = _numbered_main_alias_conflicts(formatted_scopes)
+    main_alias_issues = (
+        [
+            SqlFormattingIssue(
+                code="alias_main_family_numbered_invalid",
+                severity="error",
+                message="The main alias family contains a numbered alias; each scope permits only A.",
+                evidence=main_alias_conflicts[:16],
+                check_kind="alias_role_plan",
+            )
+        ]
+        if main_alias_conflicts
+        else []
+    )
     if not changes:
         return (
             {
-                "status": "not_needed",
-                "reason": "no_alias_changed",
+                "status": "conflict" if main_alias_issues else "not_needed",
+                "reason": (
+                    "numbered_main_family_alias_present"
+                    if main_alias_issues
+                    else "no_alias_changed"
+                ),
                 "plan_provided": plan is not None,
                 "verified_scopes": [],
-                "conflicts": [],
+                "conflicts": main_alias_conflicts,
+                "basis_evidence_contract": dict(_ALIAS_BASIS_EVIDENCE_CONTRACT),
             },
-            [],
-            True,
+            main_alias_issues,
+            not main_alias_issues,
         )
     if plan is None:
         issue = SqlFormattingIssue(
@@ -1229,13 +1260,18 @@ def _validate_alias_role_plan(
         )
         return (
             {
-                "status": "required",
-                "reason": "alias_changed_without_plan",
+                "status": "conflict" if main_alias_issues else "required",
+                "reason": (
+                    "numbered_main_family_alias_present_and_plan_missing"
+                    if main_alias_issues
+                    else "alias_changed_without_plan"
+                ),
                 "plan_provided": False,
                 "verified_scopes": [],
-                "conflicts": issue.evidence,
+                "conflicts": [*main_alias_conflicts, *issue.evidence],
+                "basis_evidence_contract": dict(_ALIAS_BASIS_EVIDENCE_CONTRACT),
             },
-            [issue],
+            [*main_alias_issues, issue],
             False,
         )
 
@@ -1244,8 +1280,10 @@ def _validate_alias_role_plan(
         raw_scopes = plan.get("scopes")
     else:
         raw_scopes = plan
-    conflicts: List[str] = []
-    issue_codes: set[str] = set()
+    conflicts: List[str] = list(main_alias_conflicts)
+    issue_codes: set[str] = (
+        {"alias_main_family_numbered_invalid"} if main_alias_conflicts else set()
+    )
     if not isinstance(raw_scopes, Sequence) or isinstance(raw_scopes, (str, bytes)):
         raw_scopes = []
         conflicts.append("alias_role_plan.scopes must be a sequence")
@@ -1273,16 +1311,32 @@ def _validate_alias_role_plan(
             conflicts.append(f"scope {scope_id!r} has no alias changes")
             issue_codes.add("alias_plan_incomplete")
             continue
-        basis = raw_scope.get("basis_references", [])
-        if not _has_concrete_basis_references(basis):
-            conflicts.append(f"scope {scope_id!r} needs non-empty concrete basis_references")
-            issue_codes.add("alias_basis_required")
-
         roles = raw_scope.get("roles", [])
         if not isinstance(roles, Sequence) or isinstance(roles, (str, bytes)) or not roles:
             conflicts.append(f"scope {scope_id!r} needs roles")
             issue_codes.add("alias_plan_incomplete")
             continue
+        role_names = [
+            str(role.get("name", "")).strip()
+            for role in roles
+            if isinstance(role, Mapping)
+        ]
+        normalized_role_names = [name.lower() for name in role_names if name]
+        if (
+            len(role_names) != len(roles)
+            or len(normalized_role_names) != len(roles)
+            or len(set(normalized_role_names)) != len(normalized_role_names)
+        ):
+            conflicts.append(f"scope {scope_id!r} roles require unique non-empty names")
+            issue_codes.add("alias_plan_incomplete")
+        basis_conflicts = _business_role_basis_conflicts(
+            raw_scope.get("basis_references", []),
+            normalized_role_names,
+            scope_id,
+        )
+        if basis_conflicts:
+            conflicts.extend(basis_conflicts)
+            issue_codes.add("alias_basis_required")
         main_role_indexes = [
             index
             for index, role in enumerate(roles)
@@ -1326,7 +1380,13 @@ def _validate_alias_role_plan(
             kind = str(role.get("kind", "support")).strip().lower()
             aliases = [item[2] for item in normalized_members]
             if kind == "main":
-                expected = ["A", *[f"A{index}" for index in range(1, len(aliases))]]
+                expected = ["A"]
+                if len(aliases) != 1:
+                    conflicts.append(
+                        f"scope {scope_id!r} main role must contain exactly one source; "
+                        f"found cardinality={len(aliases)}"
+                    )
+                    issue_codes.add("alias_main_role_cardinality_invalid")
                 if role_index != 0 or aliases != expected:
                     conflicts.append(f"scope {scope_id!r} main role aliases {aliases} must be {expected}")
                     issue_codes.add("alias_main_role_invalid")
@@ -1386,10 +1446,21 @@ def _validate_alias_role_plan(
             "plan_provided": True,
             "verified_scopes": verified_scopes,
             "conflicts": conflicts,
+            "basis_evidence_contract": dict(_ALIAS_BASIS_EVIDENCE_CONTRACT),
         },
         issues,
         not issues,
     )
+
+
+def _numbered_main_alias_conflicts(scopes: Sequence[_SqlScope]) -> List[str]:
+    return [
+        f"{scope.scope_id}:{declaration.source} uses invalid main-family alias {declaration.effective_alias}"
+        for scope in scopes
+        for declaration in scope.declarations
+        if declaration.alias_start is not None
+        and _NUMBERED_MAIN_ALIAS_PATTERN.fullmatch(declaration.effective_alias)
+    ]
 
 
 def _expected_alias_members(
@@ -2533,14 +2604,90 @@ def _alias_change_dict(value: _AliasChange) -> Dict[str, str]:
     }
 
 
-def _has_concrete_basis_references(value: Any) -> bool:
+def _business_role_basis_conflicts(
+    value: Any,
+    required_role_names: Sequence[str],
+    scope_id: str,
+) -> List[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or not value:
+        return [
+            f"scope {scope_id!r} needs structured reviewer-approved business-role basis evidence"
+        ]
+
+    conflicts: List[str] = []
+    covered_roles: set[str] = set()
+    for index, reference in enumerate(value, start=1):
+        label = f"scope {scope_id!r} basis_references[{index}]"
+        if isinstance(reference, str):
+            if _is_legacy_business_role_basis(reference, required_role_names):
+                covered_roles.update(required_role_names)
+            else:
+                conflicts.append(
+                    f"{label} legacy form must be review://<review-id>/<declared-role-names>-roles"
+                )
+            continue
+        if not isinstance(reference, Mapping):
+            conflicts.append(f"{label} must be an object")
+            continue
+        if str(reference.get("kind", "")).strip() != _ALIAS_BASIS_EVIDENCE_CONTRACT["kind"]:
+            conflicts.append(
+                f"{label}.kind must be {_ALIAS_BASIS_EVIDENCE_CONTRACT['kind']!r}"
+            )
+        source = str(reference.get("source", "")).strip()
+        source_scheme = source.split("://", 1)[0].lower() if "://" in source else ""
+        if (
+            not _ALIAS_BASIS_SOURCE_PATTERN.fullmatch(source)
+            or source_scheme not in _ALIAS_BASIS_SOURCE_SCHEMES
+        ):
+            conflicts.append(
+                f"{label}.source must use a controlled reviewer artifact URI scheme "
+                f"from {sorted(_ALIAS_BASIS_SOURCE_SCHEMES)!r}"
+            )
+        if reference.get("reviewer_approved") is not True:
+            conflicts.append(f"{label}.reviewer_approved must be true")
+        role_names = reference.get("role_names", [])
+        if (
+            not isinstance(role_names, Sequence)
+            or isinstance(role_names, (str, bytes))
+            or not role_names
+        ):
+            conflicts.append(f"{label}.role_names must be a non-empty sequence")
+            continue
+        normalized = [str(name).strip().lower() for name in role_names]
+        if any(not name for name in normalized) or len(set(normalized)) != len(normalized):
+            conflicts.append(f"{label}.role_names must contain unique non-empty names")
+            continue
+        covered_roles.update(normalized)
+
+    required = set(required_role_names)
+    if covered_roles != required:
+        conflicts.append(
+            f"scope {scope_id!r} basis role coverage must exactly match declared roles: "
+            f"missing={sorted(required - covered_roles)!r}, extra={sorted(covered_roles - required)!r}"
+        )
+    return conflicts
+
+
+def _is_legacy_business_role_basis(
+    value: str,
+    required_role_names: Sequence[str],
+) -> bool:
+    source = value.strip()
+    if not _ALIAS_BASIS_SOURCE_PATTERN.fullmatch(source) or not source.lower().startswith("review://"):
         return False
-    references = [str(item).strip() for item in value]
-    if any(not item for item in references):
+    location = source.split("://", 1)[1]
+    if "/" not in location:
         return False
-    vague = {"reviewed", "same role", "business role", "looks related", "n/a"}
-    return all(len(item) >= 8 and item.lower() not in vague for item in references)
+    review_id, role_path = location.split("/", 1)
+    if not review_id or not role_path:
+        return False
+    tokens = set(filter(None, re.split(r"[^a-z0-9]+", role_path.lower())))
+    if not ({"role", "roles"} & tokens):
+        return False
+    return all(
+        set(filter(None, re.split(r"[^a-z0-9]+", role_name.lower()))) <= tokens
+        for role_name in required_role_names
+    )
 
 
 def _next_code_token(tokens: Sequence[_SqlToken], start: int, end: int) -> int | None:

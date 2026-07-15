@@ -22,6 +22,7 @@ REQUIRED_SKILL_MARKERS = (
     "sql_formatting_style_harness/references/style-contract.md",
     "does not implement a headless Python formatter",
     "src.skills.sql_formatting_style.verify_sql_formatting_style",
+    "Complete per-changed-scope alias plan required when aliases change.",
 )
 HOST_DIVERGENCE_PATTERNS = (
     re.compile(r"\b(?:may|can|should|must|will)\s+(?:change|rewrite)\s+(?:query\s+)?(?:behavior|logic|semantics)\b"),
@@ -327,6 +328,7 @@ def packaged_sql_formatting_provider(
             "execution_actor": "host-llm",
             "headless_python_formatter": False,
             "verification_provider": "sql-formatting-style-harness",
+            "alias_plan_requirement": "complete_per_changed_scope_when_aliases_change",
         },
     }
 

@@ -146,6 +146,14 @@ Join `BA011T` with `MAINCD`, `SUBCD`, and `USEYN`, then select `SUBNM`.
         self.assertTrue(evidence["packaged-kh-skill"]["available"])
         self.assertTrue(evidence["packaged-kh-skill"]["compatible"])
         self.assertTrue(evidence["packaged-kh-skill"]["selected"])
+        self.assertEqual(
+            controller["metadata"]["verification_provider"],
+            "sql-formatting-style-harness",
+        )
+        self.assertEqual(
+            controller["metadata"]["alias_plan_requirement"],
+            "complete_per_changed_scope_when_aliases_change",
+        )
 
     def test_host_provider_rejects_current_host_local_concrete_contract(self):
         with tempfile.TemporaryDirectory() as tmp:

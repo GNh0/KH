@@ -12,6 +12,7 @@ The provider applies only to formatting-preserving work. Requests for query opti
 - User constraints, including formatting-only boundaries and encoding requirements.
 - Provider provenance selected by front-door routing.
 - The canonical contract at `skills/sql_formatting_style_harness/references/style-contract.md`.
+- A complete per-changed-scope semantic/business-role plan when packaged normalization changes aliases.
 - A writable candidate destination when file output is requested.
 - The verifier entrypoint `src.skills.sql_formatting_style.verify_sql_formatting_style`.
 
@@ -30,9 +31,10 @@ The provider applies only to formatting-preserving work. Requests for query opti
 2. Record that the execution actor is the host LLM. The package does not contain a full headless formatter.
 3. Read the exact source and canonical generic contract. Do not create a local contract copy.
 4. Generate one candidate through the host LLM while preserving SQL behavior-sensitive tokens.
-5. Record whether the candidate came from a live host LLM or a static demo fixture. Never blur those provenance states.
-6. Pass original and candidate to the verifier.
-7. Release the candidate only when verifier success is true; otherwise preserve the source and report the exact issue codes.
+5. If aliases changed, record a complete plan for every changed scope and declaration. Role-family membership must be reviewer-approved semantic input, not an inference from repeated table names or source order.
+6. Record whether the candidate came from a live host LLM or a static demo fixture. Never blur those provenance states.
+7. Pass original, candidate, and any required alias plan to the verifier.
+8. Release the candidate only when verifier success is true; otherwise preserve the source and report the exact issue codes.
 
 For a file-based check, the verifier can run as `python -m src.skills.sql_formatting_style --original <source.sql> --formatted <candidate.sql>`.
 
@@ -43,6 +45,7 @@ For a file-based check, the verifier can run as `python -m src.skills.sql_format
 - `headless_python_formatter=false`.
 - Original and candidate hashes or paths.
 - Canonical contract path.
+- Complete per-changed-scope alias plan when aliases changed, with `alias_role_plan_validation.status=verified`.
 - Verifier success, exit code, issue codes, and verification id.
 - A blocked provider status when discovery reports missing or corrupt.
 
@@ -53,6 +56,7 @@ The runnable demo uses a bundled static candidate fixture. It truthfully records
 - If the host-local provider is missing or corrupt, continue only when the packaged provider inspection is compatible.
 - If the packaged provider or canonical contract is missing/corrupt, block formatting and do not select a provider.
 - If verification fails, do not repair silently in a loop; report the first token/style evidence and require a revised host candidate.
+- If packaged normalization changes aliases in any scope without a complete plan, block readiness and retain the source.
 - If the request exceeds formatting, separate the change and obtain the evidence required by the canonical contract.
 
 ## Quality bar

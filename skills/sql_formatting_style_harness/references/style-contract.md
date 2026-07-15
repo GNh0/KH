@@ -27,19 +27,22 @@ Any CTE/temp-table introduction, scalar-to-join conversion, optional-token addit
 
 ## Alias Roles
 
-Business grouping is reviewer/LLM judgment supported by concrete source references. Python does not infer roles from table names or repetition.
+Business grouping is reviewer/LLM judgment supported by concrete source references. Python does not infer roles from table names, repeated object names, or source order.
 
-- Main role: `A`, `A1`, `A2`, ...
-- Singleton non-main roles: `B`, `C`, `D`, ...
-- Multi-member non-main roles: `B1`, `B2`, ... from the first member.
+- Each scope has exactly one main source, and it is `A`. Main aliases `A1`, `A2`, and later are invalid.
+- Each subsequent distinct business-role family advances through `B`, `C`, `D`, and so on.
+- A singleton non-main family uses its bare letter.
+- Multiple sibling sources in one non-main family use suffixes from the first member, such as `B1`, `B2`; the next distinct family then advances to `C`.
 - Role letters are sequential; do not skip a family.
 - `T`, `T1`, and related families are reserved for derived-query internals.
 - A plan is per scope and covers every declaration/reference affected by an alias change.
+- Numbered main-family declaration aliases (`A1`, `A2`, and later) are invalid in every parsed scope even when aliases are unchanged. Numbered non-main families such as `B1`/`B2` are valid.
+- Every changed scope supplies one or more structured basis objects with `kind="reviewer_approved_business_role"`, a controlled reviewer artifact URI `source` using the `review`, `spec`, `ticket`, or `design` scheme, literal `reviewer_approved=true`, and `role_names` that exactly cover the scope's declared role names. The only compatibility form is `review://<review-id>/<declared-role-names>-roles`, whose URI scheme and role path explicitly declare reviewer-approved business-role evidence. Other strings and identity/order URI schemes do not satisfy this evidence contract.
 - If evidence is missing, retain existing aliases. Never guess a role.
 
 ### Non-Normative Example
 
-If reviewed caller/source evidence says `ORDER_HEADER` is the driver and two detail sources are one order role, the plan may use `A` for the driver and `A1`/`A2` for those details. The object names themselves do not establish that grouping.
+If reviewed caller/source evidence says `SALES_ORDER` is the driver, two `SALES_ORDER_LINE` sources are sibling line roles, and `STATUS_CODE` is a distinct status role, the aliases are `A`, `B1`, `B2`, and `C`. The repeated `SALES_ORDER_LINE` object name does not establish sibling membership by itself; that grouping comes from the reviewed business-role evidence.
 
 ## Stored Procedures
 

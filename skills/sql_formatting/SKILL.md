@@ -33,8 +33,9 @@ This provider is a dependency-free, host-readable procedure. It does not impleme
 2. Read `skills/sql_formatting_style_harness/references/style-contract.md`; do not copy or fork its rules into this provider.
 3. Record provider provenance and `execution_actor=host-llm`.
 4. Have the host LLM produce one formatted candidate without semantic changes.
-5. Run `src.skills.sql_formatting_style.verify_sql_formatting_style` against source and candidate.
-6. Return the candidate only when verification passes. Otherwise return blocked evidence and keep the source authoritative.
+5. Complete per-changed-scope alias plan required when aliases change. Bind every changed scope and declaration to declared, reviewer-approved semantic/business-role evidence before verification.
+6. Run `src.skills.sql_formatting_style.verify_sql_formatting_style` against source and candidate.
+7. Return the candidate only when verification passes. Otherwise return blocked evidence and keep the source authoritative.
 
 ## Required outputs
 
@@ -42,6 +43,7 @@ This provider is a dependency-free, host-readable procedure. It does not impleme
 - Formatted candidate with `execution_actor=host-llm`.
 - Provider provenance: host-local or packaged KH fallback.
 - Canonical contract path.
+- Complete per-changed-scope alias plan when packaged normalization changes aliases.
 - Verifier result from `src.skills.sql_formatting_style.verify_sql_formatting_style`.
 - Explicit blocked reason when no compatible provider exists or verification fails.
 
@@ -52,6 +54,7 @@ This provider is a dependency-free, host-readable procedure. It does not impleme
 - Do not add a second style contract under this skill.
 - Do not silently fall back to manual style rules when provider discovery fails.
 - Do not emit a candidate when provider selection is missing or corrupt.
+- Do not claim readiness for any changed scope with a missing or incomplete alias plan.
 
 ## UAF implementation targets
 

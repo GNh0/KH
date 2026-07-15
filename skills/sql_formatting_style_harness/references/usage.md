@@ -62,7 +62,14 @@ Reviewer/LLM judgment establishes roles. Python checks only completeness and con
   "scopes": [
     {
       "scope_id": "scope_1",
-      "basis_references": ["review://SQL-42/order-and-customer-roles"],
+      "basis_references": [
+        {
+          "kind": "reviewer_approved_business_role",
+          "source": "review://SQL-42/order-and-customer-roles",
+          "reviewer_approved": true,
+          "role_names": ["order", "customer"]
+        }
+      ],
       "roles": [
         {
           "name": "order",
@@ -92,7 +99,11 @@ Reviewer/LLM judgment establishes roles. Python checks only completeness and con
 }
 ```
 
-The plan must exactly cover every declaration in every changed scope. Each changed scope has exactly one first `main` role (`A`, then `A1...`) before support roles (`B/C/D` or `B1/B2...`). It cannot use an all-support plan, omit aliases, mix scopes, skip role letters, start a multi-member family unnumbered, or use empty/vague basis references. Scope-aware binding covers nested/correlated `SELECT`, `UPDATE ... FROM`, joined `DELETE`, and `MERGE`; shadowed inner references do not belong to an outer rename. If aliases do not change, the state is `not_needed` and a plan is not normative.
+The plan must exactly cover every declaration in every changed scope. Each changed scope has exactly one first `main` role with exactly one source, and that source is `A`; numbered main aliases such as `A1` and `A2` are invalid in every parsed scope even when aliases are unchanged. Subsequent distinct semantic/business-role families advance through `B`, `C`, `D`, and so on. A singleton non-main family uses the bare letter, while siblings in the same non-main family use suffixes from the first member (`B1`, `B2`), after which the next distinct family is `C`.
+
+Each changed scope's `basis_references` is a non-empty array of objects with the required evidence fields shown above: `kind="reviewer_approved_business_role"`, a controlled reviewer artifact URI `source` using `review`, `spec`, `ticket`, or `design`, literal `reviewer_approved=true`, and non-empty unique `role_names`. Across the objects, `role_names` must exactly cover the names in `roles`; missing and extra names block. For API compatibility, one compact string shape is also accepted: `review://<review-id>/<declared-role-names>-roles`. Its `review` scheme declares reviewer approval and its final path must contain every declared role name plus `role` or `roles`. No other string shape is accepted. Table identity, repeated table identity (including the literal probe `repeated table identity only`), and source order do not qualify. Python validates this declaration and coverage but cannot authenticate the reviewer or infer the business semantics.
+
+The plan cannot use an all-support or multi-source main plan, omit aliases, mix scopes, skip role letters, or start a multi-member non-main family unnumbered. Scope-aware binding covers nested/correlated `SELECT`, `UPDATE ... FROM`, joined `DELETE`, and `MERGE`; shadowed inner references do not belong to an outer rename. If aliases do not change and no numbered main-family declaration is present, the state is `not_needed` and a plan is not normative.
 
 ### Scalar-Function Refactor
 
