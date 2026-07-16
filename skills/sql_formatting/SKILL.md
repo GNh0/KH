@@ -32,7 +32,7 @@ This provider is a dependency-free, host-readable procedure. It does not impleme
 1. Preserve the exact source SQL, encoding, literals, comments, and caller constraints.
 2. Read `skills/sql_formatting_style_harness/references/style-contract.md`; do not copy or fork its rules into this provider.
 3. Record provider provenance and `execution_actor=host-llm`.
-4. Have the host LLM produce one formatted candidate without semantic changes.
+4. Have the host LLM produce one formatted candidate without semantic changes. Preserve source/surrounding `JOIN` layout and apply the canonical query-list width policy; do not copy indentation from generated output as authority.
 5. Complete per-changed-scope alias plan required when aliases change. Bind every changed scope and declaration to declared, reviewer-approved semantic/business-role evidence before verification.
 6. Run `src.skills.sql_formatting_style.verify_sql_formatting_style` against source and candidate.
 7. Return the candidate only when verification passes. Otherwise return blocked evidence and keep the source authoritative.

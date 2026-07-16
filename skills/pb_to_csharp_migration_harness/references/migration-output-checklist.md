@@ -43,6 +43,8 @@ Use this checklist before handoff or completion.
 - XML and C# Designer `VisibleIndex` values are one-based and match source/`Columns.AddRange` order exactly.
 - GridControl/GridView names and wiring match list, detail, or explicit table/purpose role conventions; XML `gridView1` was not copied.
 - `FieldName` matches the SP result field.
+- Evidence-backed composite business keys retain every raw key result field, emit the dedicated display alias, preserve component order, bind the visible grid `FieldName` to the display field, and hide raw identity columns unless source/UI evidence requires visibility.
+- A supplied display alias/caption is preserved; otherwise the established ordered business-key components use the packaged `<BASE>S` default. The display expression uses direct `+ '-' + FORMAT(..., '##0')` composition without unrequested `CASE`, `ISNULL`, `CONCAT`, casts, or null/type rewrites.
 - Repository editors are registered before `ColumnEdit` assignment.
 - Numeric fields use numeric editor behavior, not formatting alone.
 

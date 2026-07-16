@@ -11,6 +11,8 @@ from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.request_classifier import classify_request
 from src.skills import pb_to_csharp_migration as pb_migration
 from src.skills.pb_to_csharp_migration import (
+    CompositeBusinessKeyDisplayObservation,
+    CompositeBusinessKeyDisplaySpec,
     MigrationInputState,
     build_author_tagged_style_profile_update,
     build_migration_profile_update,
@@ -20,6 +22,7 @@ from src.skills.pb_to_csharp_migration import (
     build_detail_form_layout_plan,
     build_csharp_control_name,
     build_csharp_grid_column_name,
+    build_composite_business_key_display_plan,
     build_datawindow_grid_layout,
     build_datawindow_gridview_designer_defaults,
     build_pb_to_csharp_migration_plan,
@@ -29,6 +32,7 @@ from src.skills.pb_to_csharp_migration import (
     extract_csharp_designer_control_specs,
     generate_devexpress_grid_xml,
     verify_devexpress_grid_xml_contract,
+    verify_composite_business_key_display_contract,
     get_author_tagged_csharp_style_baseline,
     load_packaged_migration_profile,
     normalize_author_tagged_program_key,
@@ -315,6 +319,115 @@ def verify_pb_migration_sp_with_sql_formatting(*args, **kwargs):
 
 
 class PbToCSharpMigrationHarnessTests(unittest.TestCase):
+    def _composite_display_spec(self, **overrides):
+        values = {
+            "base_field": "ORDNUM",
+            "sequence_fields": ["ORDSEQ"],
+            "evidence_kind": "user-supplied-contract",
+            "evidence_refs": ["user example: ordered business-key components"],
+            "display_field": "ORDNUMS",
+            "display_caption": "Order number",
+            "base_type_family": "character",
+            "sequence_type_family": "numeric",
+            "sequence_format": "##0",
+        }
+        values.update(overrides)
+        return CompositeBusinessKeyDisplaySpec(**values)
+
+    def test_sa110t_composite_display_key_retains_raw_fields_and_binds_display(self):
+        spec = self._composite_display_spec()
+        plan = build_composite_business_key_display_plan(spec)
+        observation = CompositeBusinessKeyDisplayObservation(
+            result_fields=["ORDNUM", "ORDSEQ", "ORDNUMS"],
+            display_expression="ORDNUM + '-' + FORMAT(ORDSEQ, '##0')",
+            display_alias="ORDNUMS",
+            component_order=["ORDNUM", "ORDSEQ"],
+            visible_grid_field="ORDNUMS",
+            hidden_raw_fields=["ORDNUM", "ORDSEQ"],
+            grid_caption="Order number",
+        )
+
+        verified = verify_composite_business_key_display_contract(spec, observation)
+
+        self.assertTrue(plan.success, plan.to_dict())
+        self.assertEqual(["ORDNUM", "ORDSEQ"], plan.metadata["plan"]["raw_result_fields"])
+        self.assertEqual("ORDNUMS", plan.metadata["plan"]["visible_grid_field"])
+        self.assertEqual(
+            "ORDNUM + '-' + FORMAT(ORDSEQ, '##0')",
+            plan.metadata["plan"]["display_expression"],
+        )
+        self.assertTrue(verified.success, verified.to_dict())
+
+    def test_sa130t_composite_display_key_includes_all_sequences_in_key_order(self):
+        spec = self._composite_display_spec(sequence_fields=["ORDSEQ", "PORSEQ"])
+        plan = build_composite_business_key_display_plan(spec)
+        verified = verify_composite_business_key_display_contract(
+            spec,
+            {
+                "result_fields": ["ORDNUM", "ORDSEQ", "PORSEQ", "ORDNUMS"],
+                "display_expression": (
+                    "ORDNUM + '-' + FORMAT(ORDSEQ, '##0') + '-' + FORMAT(PORSEQ, '##0')"
+                ),
+                "display_alias": "ORDNUMS",
+                "component_order": ["ORDNUM", "ORDSEQ", "PORSEQ"],
+                "visible_grid_field": "ORDNUMS",
+                "hidden_raw_fields": ["ORDNUM", "ORDSEQ", "PORSEQ"],
+                "grid_caption": "Order number",
+            },
+        )
+
+        self.assertTrue(plan.success, plan.to_dict())
+        self.assertEqual(
+            "ORDNUM + '-' + FORMAT(ORDSEQ, '##0') + '-' + FORMAT(PORSEQ, '##0')",
+            plan.metadata["plan"]["display_expression"],
+        )
+        self.assertTrue(verified.success, verified.to_dict())
+
+    def test_composite_display_key_requires_authoritative_evidence_and_derives_default_alias(self):
+        missing_evidence = build_composite_business_key_display_plan(
+            self._composite_display_spec(evidence_kind="", evidence_refs=[])
+        )
+        missing_alias = build_composite_business_key_display_plan(
+            self._composite_display_spec(display_field="")
+        )
+        approved_default = build_composite_business_key_display_plan(
+            self._composite_display_spec(display_field="")
+        )
+
+        self.assertFalse(missing_evidence.success)
+        self.assertIn(
+            "composite_display_key_evidence_required",
+            {item["code"] for item in missing_evidence.metadata["issues"]},
+        )
+        self.assertTrue(missing_alias.success, missing_alias.to_dict())
+        self.assertEqual("ORDNUMS", missing_alias.metadata["plan"]["display_result_field"])
+        self.assertTrue(approved_default.success, approved_default.to_dict())
+        self.assertEqual("ORDNUMS", approved_default.metadata["plan"]["display_result_field"])
+
+    def test_composite_display_key_verifier_rejects_missing_raw_alias_and_wrong_order(self):
+        spec = self._composite_display_spec(sequence_fields=["ORDSEQ", "PORSEQ"])
+        common = {
+            "result_fields": ["ORDNUM", "PORSEQ", "WRONG_ALIAS"],
+            "display_expression": (
+                "ORDNUM + '-' + FORMAT(ORDSEQ, '##0') + '-' + FORMAT(PORSEQ, '##0')"
+            ),
+            "display_alias": "WRONG_ALIAS",
+            "component_order": ["ORDNUM", "PORSEQ", "ORDSEQ"],
+            "visible_grid_field": "WRONG_ALIAS",
+            "hidden_raw_fields": ["ORDNUM", "ORDSEQ", "PORSEQ"],
+            "grid_caption": "Order number",
+        }
+
+        result = verify_composite_business_key_display_contract(spec, common)
+        issue_codes = {item["code"] for item in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("composite_display_key_raw_result_field_missing", issue_codes)
+        self.assertIn("composite_display_key_display_result_field_missing", issue_codes)
+        self.assertIn("composite_display_key_alias_mismatch", issue_codes)
+        self.assertIn("composite_display_key_component_order_mismatch", issue_codes)
+        self.assertIn("composite_display_key_grid_field_mismatch", issue_codes)
+
     def test_runtime_loader_rejects_legacy_profile_catalog_shape(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             legacy_path = Path(temp_dir) / "legacy-profile-catalog.json"

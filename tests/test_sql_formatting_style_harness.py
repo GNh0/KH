@@ -119,9 +119,117 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
         self.assertIn("select_column_missing_leading_comma", codes)
-        self.assertIn("join_indentation", codes)
-        self.assertIn("join_condition_indentation", codes)
+        self.assertNotIn("join_indentation", codes)
+        self.assertNotIn("join_condition_indentation", codes)
         self.assertNotIn("case_not_parenthesized", codes)
+
+    def test_short_group_by_verticalization_is_rejected_in_nested_query(self):
+        sql = _fixture("derived_table_group_by_verticalized.sql")
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("query_list_unnecessary_verticalization", _issue_codes(result))
+
+    def test_inline_group_by_and_source_shaped_derived_join_are_allowed(self):
+        sql = _fixture("derived_table_group_by_inline.sql")
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("join_indentation", _issue_codes(result))
+        self.assertNotIn("join_condition_indentation", _issue_codes(result))
+        contract = result.metadata["style_lint"]["query_list_layout_contract"]
+        self.assertEqual(contract["preferred_line_width"], 100)
+        self.assertEqual(contract["hard_line_width"], 120)
+        self.assertEqual(contract["window_order_by"], "excluded_by_query_depth")
+
+    def test_overlong_inline_order_by_is_rejected(self):
+        sql = (
+            "SELECT A.ID\n"
+            "FROM SOURCE_TABLE A\n"
+            "ORDER BY A.EXTREMELY_LONG_PRODUCTION_IDENTIFIER_ONE, "
+            "A.EXTREMELY_LONG_PRODUCTION_IDENTIFIER_TWO, "
+            "A.EXTREMELY_LONG_PRODUCTION_IDENTIFIER_THREE;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("query_list_overlong_inline", _issue_codes(result))
+
+    def test_long_simple_order_by_rejects_one_item_per_row(self):
+        sql = (
+            "SELECT A.ID\n"
+            "FROM SOURCE_TABLE A\n"
+            "ORDER BY\n"
+            "    A.PRODUCTION_IDENTIFIER_ONE\n"
+            "  , A.PRODUCTION_IDENTIFIER_TWO\n"
+            "  , A.PRODUCTION_IDENTIFIER_THREE\n"
+            "  , A.PRODUCTION_IDENTIFIER_FOUR;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("query_list_not_compact", _issue_codes(result))
+
+    def test_long_simple_order_by_allows_compact_continuation_rows(self):
+        sql = (
+            "SELECT A.ID\n"
+            "FROM SOURCE_TABLE A\n"
+            "ORDER BY A.PRODUCTION_IDENTIFIER_ONE, A.PRODUCTION_IDENTIFIER_TWO\n"
+            "       , A.PRODUCTION_IDENTIFIER_THREE, A.PRODUCTION_IDENTIFIER_FOUR;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_long_simple_order_by_rejects_trailing_comma_line_breaks(self):
+        sql = (
+            "SELECT A.ID\n"
+            "FROM SOURCE_TABLE A\n"
+            "ORDER BY A.PRODUCTION_IDENTIFIER_ONE, A.PRODUCTION_IDENTIFIER_TWO,\n"
+            "         A.PRODUCTION_IDENTIFIER_THREE, A.PRODUCTION_IDENTIFIER_FOUR;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("query_list_continuation_comma_style", _issue_codes(result))
+
+    def test_wrapped_simple_order_by_rejects_rows_above_hard_width(self):
+        sql = (
+            "SELECT A.ID\n"
+            "FROM SOURCE_TABLE A\n"
+            "ORDER BY A.PRODUCTION_IDENTIFIER_ONE, A.PRODUCTION_IDENTIFIER_TWO\n"
+            "       , A.PRODUCTION_IDENTIFIER_THREE, A.PRODUCTION_IDENTIFIER_FOUR, "
+            "A.PRODUCTION_IDENTIFIER_FIVE, A.PRODUCTION_IDENTIFIER_SIX;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("query_list_hard_width_exceeded", _issue_codes(result))
+
+    def test_complex_order_item_and_window_order_by_remain_atomic(self):
+        sql = (
+            "SELECT ROW_NUMBER() OVER (\n"
+            "           PARTITION BY A.CATEGORY_CD\n"
+            "           ORDER BY\n"
+            "               A.CREATED_AT DESC\n"
+            "       ) AS ROW_NO\n"
+            "FROM SOURCE_TABLE A\n"
+            "ORDER BY\n"
+            "    COALESCE(LOWER(A.DISPLAY_NAME), CONCAT(A.CODE, A.ID)) COLLATE KOREAN_WANSUNG_CI_AS ASC\n"
+            "  , A.ID DESC;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("query_list_unnecessary_verticalization", _issue_codes(result))
 
     def test_formatting_preserves_original_unparenthesized_case(self):
         sql = (
@@ -536,8 +644,8 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
 
         self.assertTrue(result.success, result.to_dict())
 
-    def test_verifier_blocks_join_conditions_not_deep_enough_inside_if_exists(self):
-        bad_block = (
+    def test_verifier_preserves_nested_join_indentation_without_absolute_offset(self):
+        source_block = (
             "        IF EXISTS (\n"
             "                    SELECT 1\n"
             "                    FROM DEV000T A\n"
@@ -552,14 +660,14 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             "        END\n"
         )
 
-        result = verify_sql_formatting_style(bad_block, bad_block)
+        result = verify_sql_formatting_style(source_block, source_block)
 
-        self.assertFalse(result.success)
+        self.assertTrue(result.success, result.to_dict())
         codes = {
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("join_condition_indentation", codes)
+        self.assertNotIn("join_condition_indentation", codes)
 
     def test_verifier_blocks_where_subquery_inside_if_exists(self):
         cases = [

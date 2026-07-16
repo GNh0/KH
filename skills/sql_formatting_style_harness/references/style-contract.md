@@ -87,17 +87,28 @@ The non-null default above is an example of a caller/source-provided default, no
 - Keep the first projection after `SELECT`; put later projections on leading-comma lines.
 - Preserve `AS` tokens when present; do not add/remove optional tokens under a formatting-equivalence claim.
 - Parenthesize existing `CASE` expressions as required by the selected style only when the token change is explicitly accepted; otherwise report the difference.
-- Use eight spaces before a top-level `JOIN`; align `ON` and following `AND` terms.
+- Preserve the source or surrounding query block's `JOIN` indentation. There is no universal absolute `JOIN`, `ON`, or `AND` offset.
+- For newly authored SQL with no source layout, indent `JOIN` one query level below its `FROM` as a fallback and align same-block `ON`/`AND` terms. This is authoring guidance, not a verifier offset rule.
+- Keep derived-table `JOIN` layout source-preserving; do not infer a deeper indentation rule from generated output.
 - Preserve join type, source order, and every condition.
 
 ```sql
 SELECT A.ORDER_NO
      , B.QUANTITY
 FROM ORDER_HEADER A
-        LEFT OUTER JOIN ORDER_DETAIL B
-                     ON A.COMPANY_CD = B.COMPANY_CD
-                     AND A.ORDER_NO = B.ORDER_NO
+    LEFT OUTER JOIN ORDER_DETAIL B
+        ON A.COMPANY_CD = B.COMPANY_CD
+        AND A.ORDER_NO = B.ORDER_NO
 ```
+
+## GROUP BY and ORDER BY Lists
+
+- Split only at commas at the current query depth. Commas inside functions, subqueries, window expressions, or parenthesized expressions are part of one atomic item.
+- Preserve item order and tokens. Keep `ASC`, `DESC`, and `COLLATE` attached to their item.
+- Use 100 columns as the preferred packing width and 120 columns as the hard ceiling for packable simple rows. Short simple clauses that fit 100 columns stay inline: `GROUP BY T.ORGDIV, T.ORDNUM, T.ORDSEQ`.
+- Wrap longer lists greedily into compact leading-comma continuation rows at top-level commas. Do not place one simple item on each row by default.
+- Treat `CASE`, subqueries, `OVER`, comments, nested functions deeper than one parenthesis level, and items longer than 60 compact characters as complex. Keep each complex item atomic; it may occupy its own logical row and is not split merely to satisfy the simple-row ceiling.
+- Query-level and nested-query clauses are checked at their own token depth. Window and ordered-aggregate `ORDER BY` clauses are excluded from query-list lint because they occur at a deeper parenthesis depth.
 
 ## INSERT INTO ... SELECT
 

@@ -85,6 +85,8 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - Use explicit grid columns registered through `Columns.AddRange`.
 - Use repository editors for numeric, lookup, button, and boolean grid columns; register repositories before assigning `ColumnEdit`.
 - Keep `FieldName` and result-column names identical.
+- For an evidence-backed composite business identifier, keep every raw base/sequence key in the SELECT result for identity and logic, and bind the visible grid column to a separate display result field. Hide raw key columns by default unless PB/UI evidence requires them visible.
+- Do not infer components from a table name alone. Once PB/DataWindow/result/schema evidence establishes an ordered base key plus sequence keys, preserve a supplied display alias or derive the packaged `<BASE>S` default.
 
 ### Caller and Stored Procedures
 
@@ -92,6 +94,7 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - Values used only inside the procedure are local variables declared and assigned in the procedure.
 - Pass raw date/search inputs; derive helper dates and wildcard predicates inside the procedure.
 - Preserve supplied result-column names, branch values, literals, comments, calculations, and row-state behavior.
+- Build composite display SQL only from authoritative PB/DataWindow/result/business-key evidence. The packaged `BASE + '-' + FORMAT(SEQUENCE, '##0')` family appends additional sequences in key order. Do not add `CASE`, `ISNULL`, `CONCAT`, casts, or different null handling unless the source contract explicitly requires it.
 - A complete SELECT/SAVE body requires supplied PB/DataWindow SQL, supplied current procedure text, schema/contract evidence in the request, or an explicit inferred-draft approval.
 - Keep formatting verification separate from semantic equivalence. Offline generation cannot prove database behavior.
 
@@ -138,6 +141,10 @@ Do not inspect a local project to choose a provider during normal generation. Do
 
 ## UAF implementation targets
 
+- `src.skills.pb_to_csharp_migration.CompositeBusinessKeyDisplaySpec`
+- `src.skills.pb_to_csharp_migration.CompositeBusinessKeyDisplayObservation`
+- `src.skills.pb_to_csharp_migration.build_composite_business_key_display_plan`
+- `src.skills.pb_to_csharp_migration.verify_composite_business_key_display_contract`
 - `src.skills.pb_to_csharp_migration.MigrationInputState`
 - `src.skills.pb_to_csharp_migration.build_pb_to_csharp_migration_plan`
 - `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`

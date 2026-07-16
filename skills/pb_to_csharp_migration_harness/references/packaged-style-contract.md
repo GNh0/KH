@@ -273,6 +273,8 @@ It moves control creation, naming, tab order, and fixed grid registration out of
 - Register columns with `Columns.AddRange` in visible order.
 - Set `Name`, `FieldName`, mapped/post-conversion `Caption`, and one-based `VisibleIndex` explicitly; `Columns.AddRange` order must match the indices.
 - Keep `FieldName` identical to the SP result field.
+- When authoritative evidence defines a base key plus one or more sequence keys and a dedicated UI display field, SELECT retains all raw key components and additionally emits the display field. The visible Designer/Grid `FieldName` binds to that display alias; raw key columns remain available and are hidden unless supplied PB/UI evidence says otherwise.
+- Preserve a supplied display alias and PB caption. If no alias is supplied after the ordered business-key components are established, use the packaged `<BASE>S` default. A table name or similar field names alone are not enough to establish the components.
 - Apply every authoritative Layout Load default, not only the commonly visible `OptionsView` subset.
 - Numeric fields use a spin/numeric repository editor assigned through `ColumnEdit`.
 - Lookup fields use a lookup repository whose value/display members come from supplied evidence.
@@ -303,6 +305,7 @@ Rules:
 - C# passes raw search/date values. SQL owns wildcard and date derivation.
 - Do not add literal defaults, normalization blocks, or helper parameters without supplied evidence.
 - SELECT result fields exactly match C# bindings and `FieldName` values.
+- Composite display expressions preserve authoritative component order. The packaged direct style is `BASE + '-' + FORMAT(SEQUENCE, '##0')`, with `+ '-' + FORMAT(...)` repeated for each additional numeric sequence. Do not introduce `CASE`, `ISNULL`, `CONCAT`, casts, or other null/type rewrites without source evidence. `FORMAT` produces character output; the builder therefore requires character base-key and numeric sequence-key type evidence and never replaces the raw typed result fields.
 - SAVE branches document accepted row states, XML shape, write order, transaction boundary, and returned status/result sets.
 
 ## Stored Procedure Shapes

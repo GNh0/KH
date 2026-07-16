@@ -29,7 +29,7 @@ The provider applies only to formatting-preserving work. Requests for query opti
 
 1. Confirm provider precedence evidence: compatible host-local first, packaged KH second, otherwise blocked.
 2. Record that the execution actor is the host LLM. The package does not contain a full headless formatter.
-3. Read the exact source and canonical generic contract. Do not create a local contract copy.
+3. Read the exact source and canonical generic contract. Do not create a local contract copy. Treat source/surrounding `JOIN` layout as authoritative and use the contract's depth-aware `GROUP BY`/`ORDER BY` packing rules.
 4. Generate one candidate through the host LLM while preserving SQL behavior-sensitive tokens.
 5. If aliases changed, record a complete plan for every changed scope and declaration. Role-family membership must be reviewer-approved semantic input, not an inference from repeated table names or source order.
 6. Record whether the candidate came from a live host LLM or a static demo fixture. Never blur those provenance states.

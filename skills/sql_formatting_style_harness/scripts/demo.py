@@ -39,14 +39,16 @@ def _alias_sql() -> tuple[str, str, dict[str, Any]]:
     original = (
         "SELECT ORDER_HEADER.ORDER_NO, CUSTOMER.CUSTOMER_NAME\n"
         "FROM ORDER_HEADER\n"
-        "LEFT OUTER JOIN CUSTOMER ON ORDER_HEADER.CUSTOMER_ID = CUSTOMER.CUSTOMER_ID;\n"
+        "LEFT OUTER JOIN CUSTOMER ON ORDER_HEADER.CUSTOMER_ID = CUSTOMER.CUSTOMER_ID\n"
+        "GROUP BY ORDER_HEADER.ORDER_NO, CUSTOMER.CUSTOMER_NAME;\n"
     )
     formatted = (
         "SELECT A.ORDER_NO\n"
         "     , B.CUSTOMER_NAME\n"
         "FROM ORDER_HEADER A\n"
-        "        LEFT OUTER JOIN CUSTOMER B\n"
-        "                     ON A.CUSTOMER_ID = B.CUSTOMER_ID;\n"
+        "LEFT OUTER JOIN CUSTOMER B\n"
+        "ON A.CUSTOMER_ID = B.CUSTOMER_ID\n"
+        "GROUP BY A.ORDER_NO, B.CUSTOMER_NAME;\n"
     )
     plan = {
         "scopes": [
@@ -88,8 +90,8 @@ def _refactor_sql() -> tuple[str, str]:
         "SELECT DBO.F_LOOKUP_NAME(A.CODE) AS CODE_NAME FROM T_MAIN A;\n",
         "SELECT B.CODE_NAME AS CODE_NAME\n"
         "FROM T_MAIN A\n"
-        "        LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
-        "                     ON B.CODE = A.CODE;\n",
+        "    LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
+        "        ON B.CODE = A.CODE;\n",
     )
 
 

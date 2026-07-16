@@ -64,6 +64,12 @@ The authenticated path uses the Python API's host-supplied `runtime_receipt_auth
 
 For mappings with eight or more items, canonical non-comment expression text of at most 72 characters remains horizontally grouped. Expressions of 73 or more characters may use vertical fallback. At most one short singleton line is allowed as a row remainder; additional short singleton mappings block. The exact thresholds and measurement name are emitted as `style_lint.insert_select_layout_contract`.
 
+## Query Layout Contract
+
+`JOIN` layout is source-authoritative. The verifier does not require eight spaces before `JOIN` or a fixed offset for `ON`/`AND`; derived-table indentation is preserved rather than inferred from generated output. For new SQL only, one query indentation level below `FROM` is fallback authoring guidance, with same-block `ON`/`AND` terms aligned.
+
+Query-level `GROUP BY` and `ORDER BY` lists use a 100-column preferred width and 120-column hard ceiling. Short simple lists stay inline. Long lists split only at top-level commas and pack compactly across continuation rows; complex items stay atomic. Direction and collation modifiers stay attached. Window `ORDER BY` is excluded by query-depth detection. The exact policy is emitted as `style_lint.query_list_layout_contract`.
+
 ## Progressive Disclosure
 
 - Read `references/usage.md` for API/evidence shapes.

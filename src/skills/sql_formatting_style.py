@@ -56,6 +56,22 @@ _INSERT_SELECT_LAYOUT_CONTRACT = {
     "max_short_singleton_lines": 1,
     "measurement": "canonical_non_comment_token_text_length",
 }
+_QUERY_LIST_LAYOUT_CONTRACT = {
+    "preferred_line_width": 100,
+    "hard_line_width": 120,
+    "simple_item_max_length": 60,
+    "split_boundary": "top_level_commas_only",
+    "packing": "short_simple_inline_then_greedy_compact_rows",
+    "complex_item_markers": [
+        "CASE",
+        "subquery",
+        "OVER",
+        "comments",
+        "nested_parenthesis_depth_above_one",
+        "item_length_above_60",
+    ],
+    "window_order_by": "excluded_by_query_depth",
+}
 
 
 @dataclass(frozen=True)
@@ -308,6 +324,7 @@ def verify_sql_formatting_style(
         "issues": [item.to_dict() for item in style_issues],
         "contract_source": style_source,
         "insert_select_layout_contract": dict(_INSERT_SELECT_LAYOUT_CONTRACT),
+        "query_list_layout_contract": dict(_QUERY_LIST_LAYOUT_CONTRACT),
     }
 
     refactor_metadata, refactor_issues = _validate_scalar_function_refactor(
@@ -2410,7 +2427,7 @@ def _style_lint(
         )
     )
     issues.extend(_check_if_exists_where_subquery(formatted_tokens))
-    issues.extend(_check_join_indentation(formatted))
+    issues.extend(_check_query_list_layout(formatted, formatted_tokens))
     if operation != "formatting":
         issues.extend(_check_case_parentheses(formatted, formatted_tokens))
     return issues
@@ -3389,58 +3406,285 @@ def _check_if_exists_where_subquery(tokens: Sequence[_SqlToken]) -> List[SqlForm
     return issues
 
 
-def _check_join_indentation(sql: str) -> List[SqlFormattingIssue]:
+def _check_query_list_layout(
+    sql: str,
+    tokens: Sequence[_SqlToken],
+) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
-    masked_lines = _masked_sql(sql).splitlines()
-    raw_lines = sql.splitlines()
-    in_join = False
-    join_indent = -1
-    condition_indent = -1
-    for index, line in enumerate(masked_lines):
-        stripped = line.lstrip(" ")
-        raw = raw_lines[index] if index < len(raw_lines) else line
-        if re.match(r"(LEFT\s+OUTER\s+JOIN|RIGHT\s+OUTER\s+JOIN|FULL\s+OUTER\s+JOIN|INNER\s+JOIN|JOIN)\b", stripped, flags=re.IGNORECASE):
-            in_join = True
-            condition_indent = -1
-            join_indent = len(line) - len(stripped)
-            if join_indent % 4 != 0 or join_indent < 8:
-                issues.append(
-                    SqlFormattingIssue(
-                        code="join_indentation",
-                        severity="error",
-                        message="JOIN lines must use the contract indentation.",
-                        evidence=[raw],
-                        check_kind="style",
-                    )
-                )
+    preferred = _QUERY_LIST_LAYOUT_CONTRACT["preferred_line_width"]
+    hard = _QUERY_LIST_LAYOUT_CONTRACT["hard_line_width"]
+    for clause in _query_list_clauses(tokens):
+        items = clause["items"]
+        if not items:
             continue
-        if in_join and re.match(r"(WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|UNION|SELECT|FROM)\b", stripped, flags=re.IGNORECASE):
-            in_join = False
-        if in_join and re.match(r"(ON|AND)\b", stripped, flags=re.IGNORECASE) and "=" in stripped:
-            leading = len(line) - len(stripped)
-            if leading < 10 or (join_indent >= 0 and leading < join_indent + 13):
+        clause_token = tokens[clause["keyword_index"]]
+        clause_line = _sql_line_number(sql, clause_token.start)
+        item_text = [_compact_query_list_item(item) for item in items]
+        indent = _sql_line_indent(sql, clause_token.start)
+        compact_width = indent + len(clause["name"]) + 1 + len(", ".join(item_text))
+        item_lines = {
+            _sql_line_number(sql, token.start)
+            for item in items
+            for token in item
+        }
+        is_inline = item_lines == {clause_line}
+        all_simple = all(
+            _query_list_item_is_simple(sql, item, clause["depth"])
+            for item in items
+        )
+        evidence = [
+            f"clause={clause['name']}",
+            f"line={clause_line}",
+            f"query_depth={clause['depth']}",
+            f"item_count={len(items)}",
+            f"compact_width={compact_width}",
+            f"preferred_width={preferred}",
+            f"hard_width={hard}",
+        ]
+        if all_simple and compact_width <= preferred and not is_inline:
+            issues.append(
+                SqlFormattingIssue(
+                    code="query_list_unnecessary_verticalization",
+                    severity="error",
+                    message=(
+                        "Short simple GROUP BY/ORDER BY lists that fit the preferred width "
+                        "must remain inline."
+                    ),
+                    evidence=evidence,
+                    check_kind="style",
+                )
+            )
+        item_start_lines = [
+            _sql_line_number(sql, next(token.start for token in item if token.text.strip()))
+            for item in items
+        ]
+        one_item_per_row = len(items) > 1 and len(set(item_start_lines)) == len(items)
+        continuation_prefix = indent + len(clause["name"]) + 1
+        adjacent_pair_fits = any(
+            continuation_prefix + len(item_text[index]) + 2 + len(item_text[index + 1])
+            <= preferred
+            for index in range(len(item_text) - 1)
+        )
+        if (
+            all_simple
+            and compact_width > preferred
+            and one_item_per_row
+            and adjacent_pair_fits
+        ):
+            issues.append(
+                SqlFormattingIssue(
+                    code="query_list_not_compact",
+                    severity="error",
+                    message=(
+                        "Long simple GROUP BY/ORDER BY lists must pack adjacent items into "
+                        "compact continuation rows when they fit."
+                    ),
+                    evidence=evidence,
+                    check_kind="style",
+                )
+            )
+        if is_inline and compact_width > preferred:
+            issues.append(
+                SqlFormattingIssue(
+                    code="query_list_overlong_inline",
+                    severity="error",
+                    message=(
+                        "GROUP BY/ORDER BY lists wider than the preferred width must wrap "
+                        "at top-level commas; items remain atomic."
+                    ),
+                    evidence=[*evidence, f"hard_ceiling_exceeded={compact_width > hard}"],
+                    check_kind="style",
+                )
+            )
+        if all_simple and not is_inline:
+            clause_end_line = max(item_start_lines, default=clause_line)
+            physical_lines = sql.splitlines()
+            overlong_lines = [
+                line_number
+                for line_number in range(clause_line, clause_end_line + 1)
+                if line_number <= len(physical_lines)
+                and len(physical_lines[line_number - 1].expandtabs(4)) > hard
+            ]
+            if overlong_lines:
                 issues.append(
                     SqlFormattingIssue(
-                        code="join_condition_indentation",
+                        code="query_list_hard_width_exceeded",
                         severity="error",
-                        message="JOIN ON/AND conditions must be indented beneath JOIN.",
-                        evidence=[raw],
+                        message=(
+                            "Wrapped simple GROUP BY/ORDER BY rows must stay within the hard width."
+                        ),
+                        evidence=[*evidence, f"lines={overlong_lines}"],
                         check_kind="style",
                     )
                 )
-            if condition_indent < 0:
-                condition_indent = leading
-            elif leading != condition_indent:
+            trailing_break_commas = []
+            for comma_index, next_item in zip(clause["comma_indices"], items[1:]):
+                next_token = next(
+                    (token for token in next_item if token.kind not in {"line_comment", "block_comment"}),
+                    None,
+                )
+                if next_token is None:
+                    continue
+                comma_line = _sql_line_number(sql, tokens[comma_index].start)
+                next_line = _sql_line_number(sql, next_token.start)
+                if comma_line != next_line:
+                    trailing_break_commas.append(comma_line)
+            if trailing_break_commas:
                 issues.append(
                     SqlFormattingIssue(
-                        code="join_condition_alignment",
+                        code="query_list_continuation_comma_style",
                         severity="error",
-                        message="JOIN conditions for one JOIN must align.",
-                        evidence=[raw],
+                        message=(
+                            "Wrapped GROUP BY/ORDER BY continuation rows must use leading commas."
+                        ),
+                        evidence=[*evidence, f"trailing_break_comma_lines={trailing_break_commas}"],
                         check_kind="style",
                     )
                 )
     return issues
+
+
+def _query_list_clauses(tokens: Sequence[_SqlToken]) -> List[Dict[str, Any]]:
+    clauses: List[Dict[str, Any]] = []
+    for scope in _build_sql_scopes(tokens):
+        if tokens[scope.start].normalized != "SELECT":
+            continue
+        cursor = scope.start + 1
+        while cursor < scope.end:
+            token = tokens[cursor]
+            if token.depth != scope.depth or token.normalized not in {"GROUP", "ORDER"}:
+                cursor += 1
+                continue
+            by_index = _next_code_token_at_depth(tokens, cursor + 1, scope.end, scope.depth)
+            if by_index is None or tokens[by_index].normalized != "BY":
+                cursor += 1
+                continue
+            end = _query_list_clause_end(
+                tokens,
+                by_index + 1,
+                scope.end,
+                scope.depth,
+                token.normalized,
+            )
+            clauses.append(
+                {
+                    "name": f"{token.normalized} BY",
+                    "keyword_index": cursor,
+                    "depth": scope.depth,
+                    "items": _query_list_items(tokens, by_index + 1, end, scope.depth),
+                    "comma_indices": [
+                        index
+                        for index in range(by_index + 1, end)
+                        if tokens[index].text == "," and tokens[index].depth == scope.depth
+                    ],
+                }
+            )
+            cursor = max(end, by_index + 1)
+    return clauses
+
+
+def _next_code_token_at_depth(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    end: int,
+    depth: int,
+) -> int | None:
+    for index in range(start, min(end, len(tokens))):
+        token = tokens[index]
+        if token.kind in {"line_comment", "block_comment"}:
+            continue
+        if token.depth == depth:
+            return index
+    return None
+
+
+def _query_list_clause_end(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    end: int,
+    depth: int,
+    clause_keyword: str,
+) -> int:
+    stop_words = {
+        "GROUP": {"HAVING", "ORDER", "OPTION", "UNION", "EXCEPT", "INTERSECT", "FOR"},
+        "ORDER": {"OFFSET", "FETCH", "OPTION", "UNION", "EXCEPT", "INTERSECT", "FOR"},
+    }[clause_keyword]
+    for index in range(start, min(end, len(tokens))):
+        token = tokens[index]
+        if token.depth == depth and (token.normalized in stop_words or token.text == ";"):
+            return index
+    return min(end, len(tokens))
+
+
+def _query_list_items(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    end: int,
+    depth: int,
+) -> List[List[_SqlToken]]:
+    items: List[List[_SqlToken]] = []
+    item_start = start
+    for index in range(start, end):
+        if tokens[index].text == "," and tokens[index].depth == depth:
+            _append_query_list_item(items, tokens[item_start:index])
+            item_start = index + 1
+    _append_query_list_item(items, tokens[item_start:end])
+    return items
+
+
+def _append_query_list_item(
+    items: List[List[_SqlToken]],
+    candidate: Sequence[_SqlToken],
+) -> None:
+    item = list(candidate)
+    if any(token.kind not in {"line_comment", "block_comment"} for token in item):
+        items.append(item)
+
+
+def _query_list_item_is_simple(
+    sql: str,
+    item: Sequence[_SqlToken],
+    clause_depth: int,
+) -> bool:
+    if any(token.kind in {"line_comment", "block_comment"} for token in item):
+        return False
+    if any(token.normalized in {"CASE", "SELECT", "OVER"} for token in item):
+        return False
+    if max((token.depth for token in item), default=clause_depth) > clause_depth + 1:
+        return False
+    if len(_compact_query_list_item(item)) > _QUERY_LIST_LAYOUT_CONTRACT["simple_item_max_length"]:
+        return False
+    return len({_sql_line_number(sql, token.start) for token in item}) == 1
+
+
+def _compact_query_list_item(item: Sequence[_SqlToken]) -> str:
+    result = ""
+    previous = ""
+    for token in item:
+        if token.kind in {"line_comment", "block_comment"}:
+            text = " ".join(token.text.split())
+        else:
+            text = token.text
+        if not result:
+            result = text
+        elif text in {".", ",", ")", ";"} or previous in {"(", "."}:
+            result += text
+        elif text == "(":
+            result += text
+        else:
+            result += " " + text
+        previous = text
+    return result
+
+
+def _sql_line_number(sql: str, offset: int) -> int:
+    return sql.count("\n", 0, offset) + 1
+
+
+def _sql_line_indent(sql: str, offset: int) -> int:
+    line_start = sql.rfind("\n", 0, offset) + 1
+    prefix = sql[line_start:offset]
+    return len(prefix) - len(prefix.lstrip(" \t"))
 
 
 def _check_case_parentheses(sql: str, tokens: Sequence[_SqlToken]) -> List[SqlFormattingIssue]:

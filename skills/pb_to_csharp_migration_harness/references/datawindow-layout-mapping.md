@@ -19,6 +19,7 @@ Use the selected control provider from the packaged style contract.
 - XML column names: configured converter prefix plus exact uppercase field, preserving `#` and `$`.
 - C# column names: explicit valid `csharp_name` mappings; block when an XML name cannot safely become a C# identifier.
 - `FieldName`: exact supplied result field, including supported converter characters.
+- Composite business-key display: when PB/DataWindow/result/schema evidence establishes the ordered base and sequence components, map the visible column to the supplied display field or packaged `<BASE>S` default and retain the raw component result fields as hidden identity columns unless source visibility says otherwise. A table name or similar field names alone are insufficient.
 - `Caption`: supplied caption or documented fallback.
 - `VisibleIndex`: one-based PB `column=(` occurrence order, matching the DataWindowToXml `Layout -> Load` baseline.
 - Explicit Designer members and `Columns.AddRange` are required.

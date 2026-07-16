@@ -38,6 +38,7 @@ Mark PB, C#, Designer, and SQL source as `token_optimizer_status=passthrough`.
 6. Build these mappings before code:
    - action/event to C# method;
    - field to editor, `BindingField`, grid column, and result field;
+   - evidence-backed composite business key to raw result fields, display result field, and visible/hidden grid fields;
    - caller source to SP parameter;
    - derived value to SP local variable;
    - row state to payload and SAVE branch.
@@ -80,6 +81,7 @@ Do not inspect local references during normal generation. Do not add or upgrade 
 - Report local verification as static only with `actual_live_layout_load_observed=false`; caller-authored dictionaries and hashes do not prove a DevExpress Designer load.
 - Preserve C# role names (`grdList`/`gvwList`, `grdDetail`/`gvwDetail`, or an explicit table/purpose suffix); XML `gridView1` is not a C# naming source.
 - Keep `FieldName` identical to the documented result field.
+- When an ordered base key plus sequence keys is established, retain every raw key result field and bind the visible grid column to the supplied display alias or packaged `<BASE>S` default. Generate the packaged `BASE + '-' + FORMAT(SEQUENCE, '##0')` expression in component order without adding unrelated null/type rewrites.
 - Register repository editors before assigning `ColumnEdit`.
 - Use numeric, lookup, button, and boolean repositories according to the packaged contract.
 - Record unsupported DataWindow layout, computed, dropdown, protection, and update semantics as blocked or deferred.
@@ -134,6 +136,8 @@ A valid run is self-contained and offline. It records the packaged contract vers
 - Execution level: `python-module`
 - Implementation targets:
   - `src.skills.pb_to_csharp_migration.build_pb_to_csharp_migration_plan`
+  - `src.skills.pb_to_csharp_migration.build_composite_business_key_display_plan`
+  - `src.skills.pb_to_csharp_migration.verify_composite_business_key_display_contract`
   - `src.skills.pb_to_csharp_migration.load_packaged_migration_profile`
   - `src.skills.pb_to_csharp_migration.verify_migration_generated_csharp_style`
   - `src.skills.pb_to_csharp_migration.verify_devexpress_grid_xml_contract`

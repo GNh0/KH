@@ -59,13 +59,15 @@ def _sql_formatting_provider_scenario(output_dir: Path) -> tuple[dict[str, Any],
     source = (
         "select a.order_no, a.status_cd\n"
         "from order_header a\n"
-        "where a.status_cd = 'OPEN';\n"
+        "where a.status_cd = 'OPEN'\n"
+        "group by a.order_no, a.status_cd;\n"
     )
     candidate = (
         "SELECT A.ORDER_NO\n"
         "     , A.STATUS_CD\n"
         "FROM ORDER_HEADER A\n"
-        "WHERE A.STATUS_CD = 'OPEN';\n"
+        "WHERE A.STATUS_CD = 'OPEN'\n"
+        "GROUP BY A.ORDER_NO, A.STATUS_CD;\n"
     )
     changed = candidate.replace("'OPEN'", "'CLOSED'")
     success = verify_sql_formatting_style(source, candidate).to_dict()

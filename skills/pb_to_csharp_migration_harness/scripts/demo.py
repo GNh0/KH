@@ -170,9 +170,13 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     from src.contracts import HarnessResult
     from src.skills import demo_scenarios
     from src.skills.pb_to_csharp_migration import (
+        CompositeBusinessKeyDisplayObservation,
+        CompositeBusinessKeyDisplaySpec,
+        build_composite_business_key_display_plan,
         build_csharp_grid_column_designer_plan,
         generate_devexpress_grid_xml,
         load_packaged_migration_profile,
+        verify_composite_business_key_display_contract,
         verify_devexpress_grid_xml_contract,
         verify_migration_generated_csharp_style,
         verify_pb_migration_sp_generation_contract,
@@ -192,6 +196,30 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     )
     if not grid_plan.success:
         raise RuntimeError("synthetic DevExpress Designer generation failed")
+    composite_spec = CompositeBusinessKeyDisplaySpec(
+        base_field="ORDNUM",
+        sequence_fields=["ORDSEQ", "PORSEQ"],
+        evidence_kind="user-supplied-contract",
+        evidence_refs=["synthetic demo ordered business-key contract"],
+        display_caption="Order number",
+    )
+    composite_plan = build_composite_business_key_display_plan(composite_spec)
+    composite_contract = verify_composite_business_key_display_contract(
+        composite_spec,
+        CompositeBusinessKeyDisplayObservation(
+            result_fields=["ORDNUM", "ORDSEQ", "PORSEQ", "ORDNUMS"],
+            display_expression=(
+                "ORDNUM + '-' + FORMAT(ORDSEQ, '##0') + '-' + FORMAT(PORSEQ, '##0')"
+            ),
+            display_alias="ORDNUMS",
+            component_order=["ORDNUM", "ORDSEQ", "PORSEQ"],
+            visible_grid_field="ORDNUMS",
+            hidden_raw_fields=["ORDNUM", "ORDSEQ", "PORSEQ"],
+            grid_caption="Order number",
+        ),
+    )
+    if not composite_plan.success or not composite_contract.success:
+        raise RuntimeError("composite business-key display contract failed")
     designer = _designer_demo(grid_plan)
     grid_xml = generate_devexpress_grid_xml(grid_columns)
     csharp_path = output_dir / "CatalogBrowseForm.cs"
@@ -269,6 +297,8 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
         or not sp_contract.success
         or not grid_plan.success
         or not grid_xml_contract.success
+        or not composite_plan.success
+        or not composite_contract.success
     ):
         raise RuntimeError("packaged runtime C# validation did not enforce the generalized contract")
 
@@ -319,6 +349,16 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
                 item["code"] for item in sp_contract.metadata.get("issues", [])
             ],
             "grid_xml_contract": "passed" if grid_xml_contract.success else "blocked",
+            "composite_business_key_display": {
+                "status": "passed",
+                "raw_result_fields": composite_plan.metadata["plan"]["raw_result_fields"],
+                "display_result_field": composite_plan.metadata["plan"]["display_result_field"],
+                "display_expression": composite_plan.metadata["plan"]["display_expression"],
+                "visible_grid_field": composite_plan.metadata["plan"]["visible_grid_field"],
+                "hidden_raw_identity_fields": composite_plan.metadata["plan"][
+                    "hidden_raw_identity_fields"
+                ],
+            },
             "grid_designer_contract": runtime_mapped.metadata["grid_designer_contract"]["status"],
             "layout_load_artifact_verified": runtime_mapped.metadata["grid_designer_contract"]["layout_load_artifact_verified"],
             "actual_live_layout_load_observed": runtime_mapped.metadata["grid_designer_contract"]["actual_live_layout_load_observed"],

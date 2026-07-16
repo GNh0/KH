@@ -192,6 +192,12 @@ The harness first validates SQL correlation, authoritative definition artifacts,
 
 For eight or more target/value mappings, the verifier measures each source expression as canonical non-comment token text joined with one space. Expressions up to 72 characters must remain horizontally grouped by physical start line; at most one short singleton is allowed as a group remainder. Expressions of 73 characters or more have a declared vertical fallback and may start on their own lines. The emitted `style_lint.insert_select_layout_contract` records these thresholds and the measurement name.
 
+### JOIN and Query-List Layout
+
+Preserve existing `JOIN` indentation. No absolute indentation or `JOIN`-to-`ON` delta is a universal verifier rule, and generated deep indentation is not source authority. When authoring SQL without a source layout, one query indentation level below `FROM` is a fallback; align `ON` and continuation `AND` terms within that join block.
+
+For query-level `GROUP BY` and `ORDER BY`, the verifier splits only at commas whose token depth matches the clause. It keeps function/subquery commas, comments, `ASC`/`DESC`, and `COLLATE` within the item. Simple lists whose compact rendering fits the 100-column preferred width must remain inline; inline lists wider than 100 are rejected and must wrap compactly without exceeding the 120-column hard ceiling. Complex items remain atomic. Nested query clauses are evaluated in their own scope, while window and ordered-aggregate `ORDER BY` are excluded by their deeper token depth.
+
 ### Session Audit Binding
 
 The session audit accepts verifier evidence only when a real verifier call is correlated to structured output and the exact final SQL. The output must include valid SQL/style hashes, a verification id, passed mechanical checks, and the actual `alias_role_plan_validation` mapping. Accepted alias states are `not_needed` and `verified`.

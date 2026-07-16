@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.133",
+  "version": "2.9.134",
   "description": "KH UAF provides an auditable front-door runtime, packaged workflow skills, development progress state, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows. Plugin instructions request front-door routing for every new user task but cannot guarantee host auto-selection; session audits verify actual compliance.",
   "author": {
     "name": "KH UAF",
