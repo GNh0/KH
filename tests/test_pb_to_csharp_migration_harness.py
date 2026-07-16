@@ -28,6 +28,7 @@ from src.skills.pb_to_csharp_migration import (
     extract_datawindow_columns,
     extract_csharp_designer_control_specs,
     generate_devexpress_grid_xml,
+    verify_devexpress_grid_xml_contract,
     get_author_tagged_csharp_style_baseline,
     load_packaged_migration_profile,
     normalize_author_tagged_program_key,
@@ -183,6 +184,100 @@ def write_generalized_packaged_contract(directory, mutate=None):
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     profile_hash = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
     return path, payload, profile_hash
+
+
+def valid_devexpress_grid_designer(
+    form_class="RecordsBrowseForm",
+    *,
+    columns=None,
+    input_format="list",
+    table_name="",
+    purpose_name="",
+):
+    columns = columns or [{"field_name": "PRICE", "caption": "Price", "data_type": "decimal(18, 2)"}]
+    plan = build_csharp_grid_column_designer_plan(
+        columns,
+        input_format=input_format,
+        table_name=table_name,
+        purpose_name=purpose_name,
+        result_fields=[item["field_name"] for item in columns],
+    )
+    if not plan.success:
+        raise AssertionError(plan.to_dict())
+    return plan, f"partial class {form_class}\n{{\n{plan.stdout}\n}}"
+
+
+def observed_layout_load_evidence(path, *, grid_name="grdList", view_name="gvwList"):
+    artifact_path = Path(path).resolve()
+    xml_text = artifact_path.read_text(encoding="utf-8")
+    return {
+        "kind": "devexpress_designer_layout_load",
+        "status": "observed",
+        "artifact_path": str(artifact_path),
+        "artifact_sha256": "sha256:" + hashlib.sha256(xml_text.encode("utf-8")).hexdigest(),
+        "grid_control_name": grid_name,
+        "grid_view_name": view_name,
+    }
+
+
+def handwritten_grid_xml(field_name, prefix, *, view_name="gridView1"):
+    return f'''<XtraSerializer version="1.0" application="View">
+  <property name="#LayoutVersion" />
+  <property name="BestFitMaxRowCount">-1</property>
+  <property name="PreviewLineCount">-1</property>
+  <property name="HorzScrollStep">3</property>
+  <property name="FocusRectStyle">CellFocus</property>
+  <property name="ScrollStyle">LiveVertScroll, LiveHorzScroll</property>
+  <property name="PreviewIndent">-1</property>
+  <property name="GroupPanelText" />
+  <property name="PreviewFieldName" />
+  <property name="VertScrollTipFieldName" />
+  <property name="LevelIndent">-1</property>
+  <property name="GroupFooterShowMode">VisibleIfExpanded</property>
+  <property name="NewItemRowText" />
+  <property name="SynchronizeClones">true</property>
+  <property name="BorderStyle">Default</property>
+  <property name="ViewCaption" />
+  <property name="DetailHeight">350</property>
+  <property name="Name">{view_name}</property>
+  <property name="DetailTabHeaderLocation">Top</property>
+  <property name="ActiveFilterEnabled">true</property>
+  <property name="Columns" iskey="true" value="1">
+    <property name="Item1" isnull="true" iskey="true">
+      <property name="AppearanceHeader" isnull="true" iskey="true">
+        <property name="Options" isnull="true" iskey="true">
+          <property name="UseTextOptions">true</property>
+          <property name="UseFont">true</property>
+        </property>
+        <property name="TextOptions" isnull="true" iskey="true">
+          <property name="HAlignment">Center</property>
+          <property name="VAlignment">Center</property>
+        </property>
+        <property name="Font">Tahoma, 9pt</property>
+      </property>
+      <property name="AppearanceCell" isnull="true" iskey="true">
+        <property name="Options" isnull="true" iskey="true">
+          <property name="UseFont">true</property>
+        </property>
+        <property name="Font">Tahoma, 9pt</property>
+      </property>
+      <property name="Visible">true</property>
+      <property name="VisibleIndex">1</property>
+      <property name="FieldName">{field_name}</property>
+      <property name="Name">{prefix}{field_name}</property>
+      <property name="Caption">{field_name}</property>
+      <property name="ColumnEditName" />
+    </property>
+  </property>
+  <property name="OptionsView" isnull="true" iskey="true">
+    <property name="ShowViewCaption">false</property>
+    <property name="EnableAppearanceEvenRow">true</property>
+    <property name="ShowGroupPanel">false</property>
+    <property name="ColumnAutoWidth">false</property>
+    <property name="ShowFooter">true</property>
+    <property name="ShowAutoFilterRow">true</property>
+  </property>
+</XtraSerializer>'''
 
 
 def patch_runtime_profile_path(path):
@@ -400,6 +495,49 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertEqual(
             "ENTITY_ID",
             verbatim_result.metadata["result_field_contract"]["mappings"][0]["field_name"],
+        )
+
+    def test_csharp_validator_masks_if_false_and_raw_string_contract_evidence(self):
+        profile = loaded_test_profile()
+        fake = r'''
+        public class Noise {}
+        #if false
+        public partial class InventoryBrowseForm : System.Windows.Forms.Form
+        {
+            public InventoryBrowseForm() { InitializeComponent(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+        }
+        #endif
+        var raw = """public partial class InventoryBrowseForm : Form { InitializeComponent(); CallProc(); FieldName = "ENTITY_ID"; }""";
+        var interpolatedRaw = $$"""partial class InventoryBrowseForm { CallSaveProcedure(); DataSource = {{value}}; }""";
+        '''
+        result = _verify_migration_generated_csharp_style(
+            fake,
+            profile_evidence=profile,
+            program_key="InventoryBrowse",
+            result_fields=["ENTITY_ID"],
+        )
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual([], result.metadata["profile_consumption"]["matched_required_pattern_ids"])
+        self.assertFalse(result.metadata["program_form_contract"]["mapped"])
+
+    def test_result_field_mapping_requires_direct_resolvable_literal(self):
+        code_behind, designer = valid_csharp_contract_sources()
+        dynamic_designer = designer.replace(
+            'this.colList_ENTITY_ID.DataPropertyName = "ENTITY_ID";',
+            "this.colList_ENTITY_ID.DataPropertyName = ResolveFieldName();",
+        )
+        result = _verify_migration_generated_csharp_style(
+            code_behind,
+            designer_source_text=dynamic_designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="InventoryBrowse",
+            result_fields=["ENTITY_ID"],
+        )
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn(
+            "csharp_result_field_mapping_unresolved",
+            {item["code"] for item in result.metadata["issues"]},
         )
 
     def test_csharp_validator_blocks_designer_owned_ui_in_code_behind_without_dynamic_evidence(self):
@@ -661,6 +799,10 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
             }
         }
         '''
+        _, designer = valid_devexpress_grid_designer(
+            "RecordsBrowseForm",
+            columns=[{"field_name": "ENTITY_VALUE", "caption": "Entity value", "data_type": "string"}],
+        )
 
         blocked = _verify_migration_generated_csharp_style(
             code_behind_only,
@@ -1020,6 +1162,106 @@ END
                 ],
             )
         self.assertTrue(real_result.success, real_result.to_dict())
+
+    def test_orchestration_propagates_expected_grid_contract_and_missing_designer_fails(self):
+        code_behind, _ = valid_csharp_contract_sources()
+        sql = sp_metadata_header("Grid propagation") + '''
+CREATE PROCEDURE DBO.USP_GRID_SELECT
+AS
+BEGIN
+    SELECT 1 AS ENTITY_ID;
+END
+'''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                result = orchestrate_pb_migration_validation(
+                    csharp_source_text=code_behind,
+                    designer_source_text="",
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=[{"kind": "pasted_sql", "summary": "Grid source"}],
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                    expected_grid_role="list",
+                    expected_grid_columns=[{"field_name": "ENTITY_ID", "data_type": "string"}],
+                )
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(
+            ["load-profile", "validate-csharp"],
+            result.metadata["validation_contract"]["completed_stage_order"],
+        )
+        self.assertIn(
+            "expected_grid_designer_missing",
+            {item["code"] for item in result.metadata["evidence"]["csharp"]["issues"]},
+        )
+
+    def test_orchestration_propagates_multiple_master_detail_grid_contracts(self):
+        list_columns = [{"field_name": "MASTER_ID", "caption": "Master", "data_type": "string"}]
+        detail_columns = [{"field_name": "DETAIL_ID", "caption": "Detail", "data_type": "string"}]
+        list_plan = build_csharp_grid_column_designer_plan(list_columns, result_fields=["MASTER_ID"])
+        detail_plan = build_csharp_grid_column_designer_plan(
+            detail_columns, input_format="detail", result_fields=["DETAIL_ID"]
+        )
+        designer = f"partial class RecordsBrowseForm {{\n{list_plan.stdout}\n{detail_plan.stdout}\n}}"
+        code_behind = "public partial class RecordsBrowseForm : System.Windows.Forms.Form { public RecordsBrowseForm() { InitializeComponent(); } private void CallSelectProcedure() { this.grdList.DataSource = result; } }"
+        sql = sp_metadata_header("Master detail grid propagation") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT 1 AS MASTER_ID;
+    END
+END
+"""
+        contracts = [
+            {"id": "master", "role": "list", "columns": list_columns, "artifact_text": generate_devexpress_grid_xml(list_columns)},
+            {"id": "detail", "role": "detail", "columns": detail_columns, "artifact_text": generate_devexpress_grid_xml(detail_columns, prefix="colDetail_")},
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                passed = orchestrate_pb_migration_validation(
+                    csharp_source_text=code_behind,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=[{"kind": "pasted_sql", "summary": "Master detail source"}],
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="RecordsBrowse",
+                    result_fields=["MASTER_ID", "DETAIL_ID"],
+                    expected_grid_contracts=contracts,
+                )
+                blocked = orchestrate_pb_migration_validation(
+                    csharp_source_text=code_behind,
+                    designer_source_text=designer.replace(
+                        "this.colDetail_DETAIL_ID.VisibleIndex = 1;",
+                        "this.colDetail_DETAIL_ID.VisibleIndex = 0;",
+                        1,
+                    ),
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=[{"kind": "pasted_sql", "summary": "Master detail source"}],
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="RecordsBrowse",
+                    result_fields=["MASTER_ID", "DETAIL_ID"],
+                    expected_grid_contracts=contracts,
+                )
+        self.assertTrue(passed.success, passed.to_dict())
+        self.assertFalse(blocked.success, blocked.to_dict())
+        self.assertEqual(
+            ["load-profile", "validate-csharp"],
+            blocked.metadata["validation_contract"]["completed_stage_order"],
+        )
 
     def test_orchestrated_validation_rejects_commented_allowed_sp_identity(self):
         sql = """-- =============================================
@@ -1513,7 +1755,215 @@ column=(type=char(30) dbname="zx900t.record_code" name=record_code))
         self.assertIn("<property name=\"ShowFooter\">true</property>", xml_text)
         self.assertIn("<property name=\"ShowAutoFilterRow\">true</property>", xml_text)
 
-    def test_extracts_visual_order_csharp_names_and_matched_captions(self):
+        verified = verify_devexpress_grid_xml_contract(
+            xml_text,
+            expected_columns=[
+                {"field_name": "RECORD_ID", "caption": "RECORD_ID"},
+                {"field_name": "RECORD_CODE", "caption": "RECORD_CODE"},
+            ],
+        )
+        self.assertTrue(verified.success, verified.to_dict())
+        self.assertEqual(verified.metadata["serializer_version"], "1.0")
+        self.assertEqual(verified.metadata["serializer_application"], "View")
+        self.assertEqual(verified.metadata["columns"][0]["field_name"], "RECORD_ID")
+        self.assertEqual(verified.metadata["columns"][1]["name"], "colList_RECORD_CODE")
+        self.assertFalse(verified.metadata["actual_live_layout_load_observed"])
+
+    def test_generated_grid_xml_matches_canonical_authoritative_fixture_exactly(self):
+        expected = handwritten_grid_xml("ENTITY_ID", "colList_").replace(
+            '    <property name="ShowAutoFilterRow">',
+            '\t<property name="ShowAutoFilterRow">',
+        )
+        self.assertEqual(generate_devexpress_grid_xml(["ENTITY_ID"]), expected)
+
+    def test_special_field_names_round_trip_xml_and_require_explicit_csharp_mapping(self):
+        columns = [
+            {
+                "field_name": "RATE#",
+                "xml_column_name": "colSpecial_RATE#",
+                "csharp_name": "colSpecial_RATE_NUMBER",
+                "data_type": "string",
+            },
+            {
+                "field_name": "COST$",
+                "xml_column_name": "colSpecial_COST$",
+                "csharp_name": "colSpecial_COST_DOLLAR",
+                "data_type": "decimal(18, 2)",
+            },
+        ]
+        xml_text = generate_devexpress_grid_xml(columns, prefix="colSpecial_")
+        verified = verify_devexpress_grid_xml_contract(
+            xml_text,
+            expected_columns=columns,
+            expected_column_prefix="colSpecial_",
+        )
+        plan = build_csharp_grid_column_designer_plan(
+            columns,
+            prefix="colSpecial_",
+            input_format="purpose",
+            purpose_name="Special",
+            result_fields=["RATE#", "COST$"],
+        )
+        blocked = build_csharp_grid_column_designer_plan(
+            ["RATE#", "COST$"],
+            prefix="colSpecial_",
+            input_format="purpose",
+            purpose_name="Special",
+            result_fields=["RATE#", "COST$"],
+        )
+        designer = f"partial class SpecialBrowseForm {{\n{plan.stdout}\n}}"
+        style = _verify_migration_generated_csharp_style(
+            "public partial class SpecialBrowseForm : System.Windows.Forms.Form { public SpecialBrowseForm() { InitializeComponent(); } private void CallSelectProcedure() { this.grdSPECIAL.DataSource = result; } }",
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="SpecialBrowse",
+            expected_grid_role="purpose",
+            expected_grid_suffix="SPECIAL",
+            expected_grid_prefix="colSpecial_",
+            expected_grid_columns=columns,
+            result_fields=["RATE#", "COST$"],
+            layout_load_artifact_text=xml_text,
+        )
+
+        self.assertIn('<property name="FieldName">RATE#</property>', xml_text)
+        self.assertIn('<property name="Name">colSpecial_COST$</property>', xml_text)
+        self.assertTrue(verified.success, verified.to_dict())
+        self.assertTrue(plan.success, plan.to_dict())
+        self.assertTrue(style.success, style.to_dict())
+        self.assertIn("colSpecial_RATE_NUMBER", plan.stdout)
+        self.assertFalse(blocked.success, blocked.to_dict())
+        self.assertIn(
+            "grid_column_csharp_name_mapping_required",
+            {item["code"] for item in blocked.metadata["issues"]},
+        )
+
+    def test_grid_xml_verifier_rejects_wrong_serializer_view_options_and_column_values(self):
+        columns = [{"field_name": "PRICE", "caption": "Unit price", "data_type": "decimal(18, 2)"}]
+        valid_xml = generate_devexpress_grid_xml(columns)
+        mutations = {
+            "serializer": valid_xml.replace('version="1.0"', 'version="2.0"', 1),
+            "view": valid_xml.replace(
+                '<property name="BestFitMaxRowCount">-1</property>',
+                '<property name="BestFitMaxRowCount">0</property>',
+                1,
+            ),
+            "options": valid_xml.replace(
+                '<property name="ShowFooter">true</property>',
+                '<property name="ShowFooter">false</property>',
+                1,
+            ),
+            "appearance": valid_xml.replace(
+                '<property name="Font">Tahoma, 9pt</property>',
+                '<property name="Font">Arial, 9pt</property>',
+                1,
+            ),
+            "field": valid_xml.replace(
+                '<property name="FieldName">PRICE</property>',
+                '<property name="FieldName">price</property>',
+                1,
+            ),
+            "caption": valid_xml.replace(
+                '<property name="Caption">PRICE</property>',
+                '<property name="Caption">Unit price</property>',
+                1,
+            ),
+            "column_edit_name": valid_xml.replace(
+                '<property name="ColumnEditName" />',
+                '<property name="ColumnEditName">repSpin</property>',
+                1,
+            ),
+        }
+        for case, xml_text in mutations.items():
+            with self.subTest(case=case):
+                result = verify_devexpress_grid_xml_contract(xml_text, expected_columns=columns)
+                self.assertFalse(result.success, result.to_dict())
+                self.assertGreater(len(result.metadata["issues"]), 0)
+
+    def test_handwritten_grid_xml_accepts_list_detail_table_and_purpose_roles(self):
+        cases = [
+            ("list", "", "", "colList_", "ENTITY_ID"),
+            ("detail", "", "", "colDetail_", "LINE_ID"),
+            ("table", "ORDER", "", "colORDER_", "ORDER_ID"),
+            ("purpose", "", "LEDGER", "colLEDGER_", "ENTRY_ID"),
+        ]
+        for role, table_name, purpose_name, prefix, field_name in cases:
+            with self.subTest(role=role):
+                result = verify_devexpress_grid_xml_contract(
+                    handwritten_grid_xml(field_name, prefix),
+                    expected_columns=[{"field_name": field_name, "data_type": "string"}],
+                    input_format=role,
+                    table_name=table_name,
+                    purpose_name=purpose_name,
+                )
+                self.assertTrue(result.success, result.to_dict())
+
+    def test_grid_xml_security_hierarchy_and_duplicate_checks_fail_closed(self):
+        valid_xml = handwritten_grid_xml("ENTITY_ID", "colList_")
+        mutations = {
+            "dtd": '<!DOCTYPE XtraSerializer [<!ENTITY x "boom">]>' + valid_xml,
+            "entity": '<!ENTITY x "boom">' + valid_xml,
+            "duplicate": valid_xml.replace(
+                '<property name="BestFitMaxRowCount">-1</property>',
+                '<property name="BestFitMaxRowCount">-1</property>\n  <property name="BestFitMaxRowCount">-1</property>',
+                1,
+            ),
+            "unexpected": valid_xml.replace(
+                '<property name="#LayoutVersion" />',
+                '<property name="#LayoutVersion" />\n  <property name="Unexpected">x</property>',
+                1,
+            ),
+            "deep": valid_xml.replace(
+                '<property name="#LayoutVersion" />',
+                '<property name="#LayoutVersion">' + '<property name="X">' * 9 + '</property>' * 9 + '</property>',
+                1,
+            ),
+        }
+        for case, xml_text in mutations.items():
+            with self.subTest(case=case):
+                result = verify_devexpress_grid_xml_contract(
+                    xml_text,
+                    expected_columns=[{"field_name": "ENTITY_ID", "data_type": "string"}],
+                )
+                self.assertFalse(result.success, result.to_dict())
+        oversized = verify_devexpress_grid_xml_contract(" " * (1024 * 1024 + 1))
+        self.assertFalse(oversized.success, oversized.to_dict())
+        self.assertIn("grid_xml_size_limit_exceeded", {item["code"] for item in oversized.metadata["issues"]})
+
+    def test_grid_xml_rejects_wrong_view_name_column_name_and_visible_index(self):
+        valid_xml = handwritten_grid_xml("ENTITY_ID", "colList_")
+        mutations = [
+            valid_xml.replace(">gridView1</property>", ">gvwList</property>", 1),
+            valid_xml.replace(">colList_ENTITY_ID</property>", ">colWrong_ENTITY_ID</property>", 1),
+            valid_xml.replace('<property name="VisibleIndex">1</property>', '<property name="VisibleIndex">0</property>', 1),
+        ]
+        for xml_text in mutations:
+            result = verify_devexpress_grid_xml_contract(
+                xml_text,
+                expected_columns=[{"field_name": "ENTITY_ID", "data_type": "string"}],
+            )
+            self.assertFalse(result.success, result.to_dict())
+        csharp_mapping_is_separate = verify_devexpress_grid_xml_contract(
+            valid_xml,
+            expected_columns=[
+                {"field_name": "ENTITY_ID", "csharp_name": "colWrong_ENTITY_ID", "data_type": "string"}
+            ],
+        )
+        self.assertTrue(csharp_mapping_is_separate.success, csharp_mapping_is_separate.to_dict())
+
+    def test_packaged_contract_records_exact_layout_load_values(self):
+        payload = json.loads(
+            Path("skills/pb_to_csharp_migration_harness/references/packaged-style-contract.json").read_text(encoding="utf-8")
+        )
+        layout = payload["grid_layout_load_contract"]
+        self.assertEqual(layout["serializer"], {"version": "1.0", "application": "View"})
+        self.assertEqual(layout["xml_view_defaults"]["ScrollStyle"], "LiveVertScroll, LiveHorzScroll")
+        self.assertEqual(layout["xml_view_defaults"]["DetailHeight"], "350")
+        self.assertEqual(layout["xml_options_view_defaults"]["ShowAutoFilterRow"], "true")
+        self.assertEqual(layout["xml_column_defaults"]["AppearanceHeader.Font"], "Tahoma, 9pt")
+        self.assertEqual(layout["xml_column_defaults"]["ColumnEditName"], "")
+        self.assertTrue(layout["csharp_designer_result"]["xml_view_name_is_not_csharp_name"])
+
+    def test_extracts_pb_occurrence_order_with_csharp_names_and_matched_captions(self):
         source = """
 datawindow(units=0)
 table(column=(type=char(10) updatewhereclause=no name=as_record_name dbname="as_record_name" )
@@ -1526,13 +1976,20 @@ text(band=detail text="품명" x="901" y="12" height="60" width="133" name=as_it
 """
         specs = extract_datawindow_column_specs(source)
         xml_text = generate_devexpress_grid_xml(specs)
+        designer_plan = build_csharp_grid_column_designer_plan(
+            specs,
+            result_fields=[spec.field_name for spec in specs],
+        )
 
-        self.assertEqual([spec.field_name for spec in specs], ["AS_RECORD_CODE", "AS_RECORD_NAME"])
-        self.assertEqual([spec.caption for spec in specs], ["코드", "품명"])
-        self.assertEqual([spec.csharp_name for spec in specs], ["colList_AS_RECORD_CODE", "colList_AS_RECORD_NAME"])
-        self.assertIn("<property name=\"Caption\">코드</property>", xml_text)
-        self.assertIn("<property name=\"Caption\">품명</property>", xml_text)
+        self.assertEqual([spec.field_name for spec in specs], ["AS_RECORD_NAME", "AS_RECORD_CODE"])
+        self.assertEqual([spec.caption for spec in specs], ["품명", "코드"])
+        self.assertEqual([spec.csharp_name for spec in specs], ["colList_AS_RECORD_NAME", "colList_AS_RECORD_CODE"])
+        self.assertLess(xml_text.index("AS_RECORD_NAME"), xml_text.index("AS_RECORD_CODE"))
+        self.assertIn("<property name=\"Caption\">AS_RECORD_CODE</property>", xml_text)
+        self.assertIn("<property name=\"Caption\">AS_RECORD_NAME</property>", xml_text)
         self.assertIn("<property name=\"Name\">colList_AS_RECORD_CODE</property>", xml_text)
+        self.assertIn('this.colList_AS_RECORD_CODE.Caption = "코드";', designer_plan.stdout)
+        self.assertIn('this.colList_AS_RECORD_NAME.Caption = "품명";', designer_plan.stdout)
 
     def test_matches_header_band_captions_to_detail_columns(self):
         source = """
@@ -1558,6 +2015,8 @@ column(band=detail x="340" y="12" height="50" width="260" name=record_name )
         self.assertEqual(resolve_csharp_grid_column_prefix("purpose", purpose_name="BROWSE"), "colBROWSE_")
         self.assertEqual(resolve_csharp_grid_column_prefix("table", purpose_name="TREE"), "colTREE_")
         self.assertEqual(resolve_csharp_grid_column_prefix("colCustom_"), "colCustom_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("table"), "colTable_")
+        self.assertEqual(resolve_csharp_grid_column_prefix("purpose"), "colPurpose_")
         self.assertEqual(build_csharp_grid_column_name("record_code", prefix="colDetail_"), "colDetail_RECORD_CODE")
 
     def test_resolves_csharp_grid_control_name_variants(self):
@@ -1581,6 +2040,14 @@ column(band=detail x="340" y="12" height="50" width="260" name=record_name )
             resolve_csharp_grid_control_names("table", purpose_name="TREE"),
             {"grid_control_name": "grdTREE", "grid_view_name": "gvwTREE"},
         )
+        self.assertEqual(
+            resolve_csharp_grid_control_names("table"),
+            {"grid_control_name": "grdTable", "grid_view_name": "gvwTable"},
+        )
+        self.assertEqual(
+            resolve_csharp_grid_control_names("purpose"),
+            {"grid_control_name": "grdPurpose", "grid_view_name": "gvwPurpose"},
+        )
 
     def test_datawindow_layout_metadata_records_column_prefix_and_captions(self):
         source = """
@@ -1598,9 +2065,9 @@ text(band=detail text="품목코드" x="10" y="10" height="50" width="80" name=t
         )
         self.assertEqual(result.metadata["column_specs"][0]["csharp_name"], "colZX901T_RECORD_CODE")
         self.assertEqual(result.metadata["column_specs"][0]["caption"], "품목코드")
-        self.assertIn("<property name=\"Name\">gvwZX901T</property>", result.stdout)
+        self.assertIn("<property name=\"Name\">gridView1</property>", result.stdout)
         self.assertIn("<property name=\"Name\">colZX901T_RECORD_CODE</property>", result.stdout)
-        self.assertIn("<property name=\"Caption\">품목코드</property>", result.stdout)
+        self.assertIn("<property name=\"Caption\">RECORD_CODE</property>", result.stdout)
 
     def test_datawindow_layout_uses_purpose_name_when_table_name_is_ambiguous(self):
         source = """
@@ -1618,17 +2085,25 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         )
         self.assertEqual(result.metadata["column_specs"][0]["csharp_name"], "colBROWSE_SEQUENCE_ID")
         self.assertEqual(result.metadata["column_specs"][0]["caption"], "Sequence")
-        self.assertIn("<property name=\"Name\">gvwBROWSE</property>", result.stdout)
+        self.assertIn("<property name=\"Name\">gridView1</property>", result.stdout)
         self.assertIn("<property name=\"Name\">colBROWSE_SEQUENCE_ID</property>", result.stdout)
-        self.assertIn("<property name=\"Caption\">Sequence</property>", result.stdout)
+        self.assertIn("<property name=\"Caption\">SEQUENCE_ID</property>", result.stdout)
 
     def test_raw_converter_name_default_is_distinct_from_target_csharp_layout_name(self):
         xml_text = generate_devexpress_grid_xml(["RECORD_CODE"])
         layout = build_datawindow_grid_layout("column(band=detail x=\"1\" y=\"1\" width=\"10\" height=\"10\" name=record_code )")
+        legacy_named = build_datawindow_grid_layout(
+            "column(band=detail x=\"1\" y=\"1\" width=\"10\" height=\"10\" name=record_code )",
+            grid_view_name="legacySerializedView",
+        )
 
         self.assertIn("<property name=\"Name\">gridView1</property>", xml_text)
         self.assertEqual(layout.metadata["csharp_grid_names"]["grid_view_name"], "gvwList")
-        self.assertIn("<property name=\"Name\">gvwList</property>", layout.stdout)
+        self.assertEqual(layout.metadata["serialized_grid_view_name"], "gridView1")
+        self.assertIn("<property name=\"Name\">gridView1</property>", layout.stdout)
+        self.assertIn("<property name=\"Name\">legacySerializedView</property>", legacy_named.stdout)
+        self.assertEqual(legacy_named.metadata["csharp_grid_names"]["grid_view_name"], "gvwList")
+        self.assertTrue(legacy_named.metadata["legacy_grid_view_name_alias_used"])
 
     def test_gridview_designer_defaults_match_datawindow_to_xml_options_view(self):
         assignments = build_datawindow_gridview_designer_defaults("gvwList")
@@ -1811,6 +2286,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         self.assertIn("numeric_grid_column_displayformat_detected", issue_codes)
 
     def test_generated_csharp_style_accepts_numeric_spin_repository_columnedit(self):
+        columns = [{"field_name": "AMTTOT", "caption": "Amount", "data_type": "decimal(18, 2)"}]
         generated = '''
         private DevExpress.XtraGrid.Columns.GridColumn colList_AMTTOT;
         private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit rpsSpinAmt;
@@ -1822,11 +2298,18 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         this.colList_AMTTOT.Name = "colList_AMTTOT";
         this.colList_AMTTOT.ColumnEdit = this.rpsSpinAmt;
         '''
+        _, generated = valid_devexpress_grid_designer(
+            columns=columns,
+        )
 
-        result = verify_migration_generated_csharp_style(
+        result = _verify_migration_generated_csharp_style(
             generated,
             profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
             source_role="designer",
+            form_class="RecordsBrowseForm",
+            expected_grid_role="list",
+            expected_grid_columns=columns,
+            layout_load_artifact_text=generate_devexpress_grid_xml(columns),
         )
 
         self.assertTrue(result.success, result.metadata["issues"])
@@ -2709,6 +3192,11 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
 
         self.assertTrue(result.success, result.to_dict())
         self.assertIn("private DevExpress.XtraGrid.Columns.GridColumn colList_DISPLAY_NAME;", result.stdout)
+        self.assertIn("private DevExpress.XtraGrid.GridControl grdList;", result.stdout)
+        self.assertIn("private DevExpress.XtraGrid.Views.Grid.GridView gvwList;", result.stdout)
+        self.assertIn("this.grdList.MainView = this.gvwList;", result.stdout)
+        self.assertIn("this.grdList.ViewCollection.AddRange", result.stdout)
+        self.assertIn("this.gvwList.GridControl = this.grdList;", result.stdout)
         self.assertIn("this.gvwList.Columns.AddRange", result.stdout)
         self.assertIn('this.colList_DISPLAY_NAME.FieldName = "DISPLAY_NAME";', result.stdout)
         self.assertIn('this.colList_DISPLAY_NAME.Name = "colList_DISPLAY_NAME";', result.stdout)
@@ -2716,7 +3204,18 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         self.assertIn("this.grdList.RepositoryItems.AddRange", result.stdout)
         self.assertIn("this.colList_AMTTOT.ColumnEdit = this.rpsSpinAmt;", result.stdout)
         self.assertIn("this.colList_PRICE.ColumnEdit = this.rpsSpinAmt;", result.stdout)
+        self.assertIn("this.gvwList.BestFitMaxRowCount = -1;", result.stdout)
+        self.assertIn("this.gvwList.FocusRectStyle = DevExpress.XtraGrid.Views.Grid.DrawFocusRectStyle.CellFocus;", result.stdout)
+        self.assertIn("this.gvwList.OptionsView.ShowAutoFilterRow = true;", result.stdout)
+        self.assertIn("this.colList_PRICE.AppearanceHeader.Options.UseTextOptions = true;", result.stdout)
+        self.assertIn('this.colList_PRICE.AppearanceHeader.Font = new System.Drawing.Font("Tahoma", 9F);', result.stdout)
+        self.assertIn("this.colList_PRICE.AppearanceCell.Options.UseFont = true;", result.stdout)
         self.assertNotIn(".DisplayFormat.FormatString", result.stdout)
+        self.assertNotIn("ColumnEditName", result.stdout)
+        self.assertLess(
+            result.stdout.index("this.grdList.RepositoryItems.AddRange"),
+            result.stdout.index("this.colList_PRICE.ColumnEdit = this.rpsSpinAmt;"),
+        )
         self.assertNotIn("AddGridColumn", result.stdout)
         self.assertNotIn("Columns.AddField", result.stdout)
 
@@ -2750,6 +3249,601 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
             "grid_field_result_mismatch",
             {issue["code"] for issue in result.metadata["issues"]},
         )
+
+    def test_grid_column_designer_plan_uses_one_based_indices_and_rejects_name_override(self):
+        valid = build_csharp_grid_column_designer_plan(
+            [
+                {"field_name": "FIRST_ID", "data_type": "string"},
+                {"field_name": "SECOND_ID", "data_type": "string"},
+            ],
+            result_fields=["FIRST_ID", "SECOND_ID"],
+        )
+        invalid = build_csharp_grid_column_designer_plan(
+            [{"field_name": "PRICE", "csharp_name": "colWrong_PRICE", "data_type": "decimal"}],
+            result_fields=["PRICE"],
+        )
+        self.assertTrue(valid.success, valid.to_dict())
+        self.assertIn("this.colList_FIRST_ID.VisibleIndex = 1;", valid.stdout)
+        self.assertIn("this.colList_SECOND_ID.VisibleIndex = 2;", valid.stdout)
+        self.assertFalse(invalid.success, invalid.to_dict())
+        self.assertIn("grid_column_csharp_prefix_mismatch", {item["code"] for item in invalid.metadata["issues"]})
+
+    def test_explicit_grid_expectations_require_real_designer_not_comments_strings_raw_or_if_false(self):
+        code_behind = '''
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
+        {
+            public RecordsBrowseForm() { InitializeComponent(); }
+            protected void SearchCommand() { CallSelectProcedure(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+        }
+        '''
+        fake_designer = r'''
+        // private DevExpress.XtraGrid.GridControl grdList;
+        /* private DevExpress.XtraGrid.Views.Grid.GridView gvwList; */
+        var regular = "private DevExpress.XtraGrid.Columns.GridColumn colList_ENTITY_ID;";
+        var verbatim = @"this.grdList.MainView = this.gvwList;";
+        var interpolated = $"this.gvwList.Columns.AddRange({value});";
+        var raw = """this.gvwList.GridControl = this.grdList;""";
+        #if false
+        private DevExpress.XtraGrid.GridControl grdList;
+        private DevExpress.XtraGrid.Views.Grid.GridView gvwList;
+        #endif
+        '''
+        for designer in ("", fake_designer):
+            result = _verify_migration_generated_csharp_style(
+                code_behind,
+                designer_source_text=designer,
+                profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                program_key="RecordsBrowse",
+                expected_grid_role="list",
+                expected_grid_columns=[{"field_name": "ENTITY_ID", "data_type": "string"}],
+                result_fields=["ENTITY_ID"],
+            )
+            self.assertFalse(result.success, result.to_dict())
+            self.assertIn("expected_grid_designer_missing", {item["code"] for item in result.metadata["issues"]})
+
+    def test_explicit_grid_contract_requires_xml_even_with_complete_designer(self):
+        columns = [{"field_name": "ENTITY_ID", "caption": "Entity", "data_type": "string"}]
+        _, designer = valid_devexpress_grid_designer(columns=columns)
+        result = _verify_migration_generated_csharp_style(
+            "public partial class RecordsBrowseForm : System.Windows.Forms.Form { public RecordsBrowseForm() { InitializeComponent(); } private void CallSelectProcedure() { this.grdList.DataSource = result; } }",
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="RecordsBrowse",
+            expected_grid_role="list",
+            expected_grid_columns=columns,
+            result_fields=["ENTITY_ID"],
+        )
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("layout_load_artifact_required", {item["code"] for item in result.metadata["issues"]})
+
+    def test_unknown_preprocessor_branches_cannot_hide_static_ui_or_supply_grid_evidence(self):
+        columns = [{"field_name": "ENTITY_ID", "caption": "Entity", "data_type": "string"}]
+        _, designer = valid_devexpress_grid_designer(columns=columns)
+        code_behind = '''
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
+        {
+            public RecordsBrowseForm() { InitializeComponent(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+            #if DEBUG
+            private void ConfigureDebugUi() { this.txtFilter = new DevExpress.XtraEditors.TextEdit(); }
+            #endif
+        }
+        '''
+        static_ui = _verify_migration_generated_csharp_style(
+            code_behind,
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="RecordsBrowse",
+        )
+        zero_branch_static_ui = _verify_migration_generated_csharp_style(
+            code_behind.replace("#if DEBUG", "#if 0"),
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="RecordsBrowse",
+        )
+        conditional_grid = _verify_migration_generated_csharp_style(
+            code_behind.replace("#if DEBUG", "#if false"),
+            designer_source_text="#if DEBUG\n" + designer + "\n#endif",
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="RecordsBrowse",
+            expected_grid_role="list",
+            expected_grid_columns=columns,
+            result_fields=["ENTITY_ID"],
+            layout_load_artifact_text=generate_devexpress_grid_xml(columns),
+        )
+        self.assertIn("designer_owned_ui_in_code_behind", {item["code"] for item in static_ui.metadata["issues"]})
+        self.assertIn("designer_owned_ui_in_code_behind", {item["code"] for item in zero_branch_static_ui.metadata["issues"]})
+        self.assertIn("construction", static_ui.metadata["designer_owned_ui_contract"]["detected_categories"])
+        self.assertFalse(conditional_grid.success, conditional_grid.to_dict())
+        self.assertIn(
+            "grid_designer_unknown_conditional_compilation",
+            {item["code"] for item in conditional_grid.metadata["issues"]},
+        )
+
+    def test_designer_accepts_normal_tahoma_font_variants_and_rejects_extra_scroll_flags(self):
+        columns = [{"field_name": "ENTITY_ID", "caption": "Entity", "data_type": "string"}]
+        _, designer = valid_devexpress_grid_designer(columns=columns)
+        font_variant = designer.replace(
+            'new System.Drawing.Font("Tahoma", 9F)',
+            'new System.Drawing.Font("Tahoma", 9.0F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)',
+        )
+        extra_scroll = font_variant.replace(
+            "DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.LiveHorzScroll;",
+            "DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.LiveHorzScroll | DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.None;",
+            1,
+        )
+        duplicate_scroll = font_variant.replace(
+            "DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.LiveHorzScroll;",
+            "DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.LiveHorzScroll | DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.LiveHorzScroll;",
+            1,
+        )
+        kwargs = {
+            "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
+            "program_key": "RecordsBrowse",
+            "expected_grid_role": "list",
+            "expected_grid_columns": columns,
+            "result_fields": ["ENTITY_ID"],
+            "layout_load_artifact_text": generate_devexpress_grid_xml(columns),
+        }
+        code_behind = "public partial class RecordsBrowseForm : System.Windows.Forms.Form { public RecordsBrowseForm() { InitializeComponent(); } private void CallSelectProcedure() { this.grdList.DataSource = result; } }"
+        accepted = _verify_migration_generated_csharp_style(code_behind, designer_source_text=font_variant, **kwargs)
+        rejected = _verify_migration_generated_csharp_style(code_behind, designer_source_text=extra_scroll, **kwargs)
+        duplicate_rejected = _verify_migration_generated_csharp_style(code_behind, designer_source_text=duplicate_scroll, **kwargs)
+        self.assertTrue(accepted.success, accepted.to_dict())
+        self.assertFalse(rejected.success, rejected.to_dict())
+        self.assertFalse(duplicate_rejected.success, duplicate_rejected.to_dict())
+        self.assertIn("authoritative_gridview_default_mismatch", {item["code"] for item in rejected.metadata["issues"]})
+
+    def test_csharp_tahoma_nine_font_accepts_only_equivalent_regular_point_overloads(self):
+        accepted = [
+            'new Font("Tahoma", 9F)',
+            'new System.Drawing.Font("Tahoma", 9)',
+            'new Font("Tahoma", 9.0f, FontStyle.Regular)',
+            'new Font("Tahoma", 9.00F, GraphicsUnit.Point)',
+            'new Font("Tahoma", 9F, FontStyle.Regular, GraphicsUnit.Point)',
+            'new System.Drawing.Font("Tahoma", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, 1)',
+            'new Font("Tahoma", 9F, FontStyle.Regular, GraphicsUnit.Point, (byte)1, false)',
+        ]
+        for value in accepted:
+            with self.subTest(value=value):
+                self.assertTrue(pb_migration._csharp_tahoma_nine_font(value))
+
+    def test_csharp_tahoma_nine_font_rejects_non_regular_styles_units_and_flags(self):
+        rejected = [
+            'new Font("Tahoma", 9F, FontStyle.Bold)',
+            'new Font("Tahoma", 9F, FontStyle.Italic)',
+            'new Font("Tahoma", 9F, FontStyle.Underline)',
+            'new Font("Tahoma", 9F, FontStyle.Strikeout)',
+            'new Font("Tahoma", 9F, FontStyle.Regular | FontStyle.Bold)',
+            'new Font("Tahoma", 9F, FontStyle.Bold | FontStyle.Italic)',
+            'new Font("Tahoma", 9F, GraphicsUnit.Pixel)',
+            'new Font("Tahoma", 9F, GraphicsUnit.Display)',
+            'new Font("Tahoma", 9F, GraphicsUnit.Document)',
+            'new Font("Tahoma", 9F, GraphicsUnit.Inch)',
+            'new Font("Tahoma", 9F, GraphicsUnit.Millimeter)',
+            'new Font("Tahoma", 9F, GraphicsUnit.World)',
+            'new Font("Tahoma", 9F, FontStyle.Regular, GraphicsUnit.Point, 0)',
+            'new Font("Tahoma", 9F, FontStyle.Regular, GraphicsUnit.Point, 2)',
+            'new Font("Tahoma", 9F, FontStyle.Regular, GraphicsUnit.Point, 1, true)',
+            'new Font("Ta homa", 9F)',
+            'new Font("Tahoma", 9.1F)',
+            'new Font("Tahoma", 9D)',
+        ]
+        for value in rejected:
+            with self.subTest(value=value):
+                self.assertFalse(pb_migration._csharp_tahoma_nine_font(value))
+
+    def test_master_detail_contracts_validate_targets_independently_and_together(self):
+        list_columns = [{"field_name": "MASTER_ID", "caption": "Master", "data_type": "string"}]
+        detail_columns = [{"field_name": "DETAIL_ID", "caption": "Detail", "data_type": "string"}]
+        list_plan = build_csharp_grid_column_designer_plan(list_columns, input_format="list", result_fields=["MASTER_ID"])
+        detail_plan = build_csharp_grid_column_designer_plan(detail_columns, input_format="detail", result_fields=["DETAIL_ID"])
+        designer = f"partial class RecordsBrowseForm {{\n{list_plan.stdout}\n{detail_plan.stdout}\n}}"
+        code_behind = "public partial class RecordsBrowseForm : System.Windows.Forms.Form { public RecordsBrowseForm() { InitializeComponent(); } private void CallSelectProcedure() { this.grdList.DataSource = result; } }"
+        common = {
+            "designer_source_text": designer,
+            "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
+            "program_key": "RecordsBrowse",
+            "result_fields": ["MASTER_ID", "DETAIL_ID"],
+        }
+        targeted = _verify_migration_generated_csharp_style(
+            code_behind,
+            expected_grid_role="list",
+            expected_grid_columns=list_columns,
+            layout_load_artifact_text=generate_devexpress_grid_xml(list_columns),
+            **common,
+        )
+        contracts = [
+            {"id": "master", "role": "list", "columns": list_columns, "artifact_text": generate_devexpress_grid_xml(list_columns)},
+            {"id": "detail", "role": "detail", "columns": detail_columns, "artifact_text": generate_devexpress_grid_xml(detail_columns, prefix="colDetail_")},
+        ]
+        together = _verify_migration_generated_csharp_style(
+            code_behind,
+            expected_grid_contracts=contracts,
+            **common,
+        )
+        bad_detail = _verify_migration_generated_csharp_style(
+            code_behind,
+            designer_source_text=designer.replace("this.colDetail_DETAIL_ID.VisibleIndex = 1;", "this.colDetail_DETAIL_ID.VisibleIndex = 0;", 1),
+            profile_evidence=common["profile_evidence"],
+            program_key="RecordsBrowse",
+            result_fields=common["result_fields"],
+            expected_grid_contracts=contracts,
+        )
+        self.assertTrue(targeted.success, targeted.to_dict())
+        self.assertTrue(together.success, together.to_dict())
+        self.assertFalse(bad_detail.success, bad_detail.to_dict())
+        detail_issues = [item for item in bad_detail.metadata["issues"] if item.get("grid_contract_id") == "detail"]
+        self.assertTrue(detail_issues, bad_detail.to_dict())
+
+    def test_designer_visible_index_is_required_one_based_and_ordered(self):
+        columns = [
+            {"field_name": "FIRST_ID", "caption": "First", "data_type": "string"},
+            {"field_name": "SECOND_ID", "caption": "Second", "data_type": "string"},
+        ]
+        _, designer = valid_devexpress_grid_designer(columns=columns)
+        code_behind = '''
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
+        {
+            public RecordsBrowseForm() { InitializeComponent(); }
+            protected void SearchCommand() { CallSelectProcedure(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+        }
+        '''
+        mutations = {
+            "missing": designer.replace("this.colList_FIRST_ID.VisibleIndex = 1;", "", 1),
+            "zero_based": designer.replace("this.colList_FIRST_ID.VisibleIndex = 1;", "this.colList_FIRST_ID.VisibleIndex = 0;", 1),
+            "reordered_indices": designer.replace("this.colList_FIRST_ID.VisibleIndex = 1;", "this.colList_FIRST_ID.VisibleIndex = 2;", 1).replace("this.colList_SECOND_ID.VisibleIndex = 2;", "this.colList_SECOND_ID.VisibleIndex = 1;", 1),
+            "reordered_addrange": designer.replace(
+                "    this.colList_FIRST_ID,\n    this.colList_SECOND_ID",
+                "    this.colList_SECOND_ID,\n    this.colList_FIRST_ID",
+                1,
+            ),
+        }
+        for case, candidate in mutations.items():
+            with self.subTest(case=case):
+                result = _verify_migration_generated_csharp_style(
+                    code_behind,
+                    designer_source_text=candidate,
+                    profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                    program_key="RecordsBrowse",
+                    expected_grid_role="list",
+                    expected_grid_columns=columns,
+                    result_fields=["FIRST_ID", "SECOND_ID"],
+                )
+                self.assertFalse(result.success, result.to_dict())
+
+    def test_numeric_designer_verification_uses_declared_type_not_field_tokens(self):
+        columns = [
+            {"field_name": "TOTAL_TEXT", "caption": "Total text", "data_type": "string"},
+            {"field_name": "QUANTITY", "caption": "Quantity", "data_type": "decimal(18, 3)"},
+        ]
+        _, designer = valid_devexpress_grid_designer(columns=columns)
+        code_behind = '''
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
+        {
+            public RecordsBrowseForm() { InitializeComponent(); }
+            protected void SearchCommand() { CallSelectProcedure(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+        }
+        '''
+        missing_spin = designer.replace("this.colList_QUANTITY.ColumnEdit = this.rpsSpinAmt;", "", 1)
+        display_only = designer.replace(
+            "this.colList_QUANTITY.ColumnEdit = this.rpsSpinAmt;",
+            'this.colList_QUANTITY.DisplayFormat.FormatString = "#,##0.000";',
+            1,
+        )
+        for candidate in (missing_spin, display_only):
+            result = _verify_migration_generated_csharp_style(
+                code_behind,
+                designer_source_text=candidate,
+                profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                program_key="RecordsBrowse",
+                expected_grid_role="list",
+                expected_grid_columns=columns,
+                result_fields=["TOTAL_TEXT", "QUANTITY"],
+            )
+            self.assertFalse(result.success, result.to_dict())
+            numeric_issues = [item for item in result.metadata["issues"] if item["code"].startswith("numeric_grid")]
+            self.assertTrue(any("QUANTITY" in item.get("column", item.get("message", "")) for item in numeric_issues))
+            self.assertFalse(any("TOTAL_TEXT" in item.get("column", item.get("message", "")) for item in numeric_issues))
+
+    def test_paired_designer_accepts_valid_list_detail_and_table_purpose_roles(self):
+        cases = [
+            ("list", "", "", "List", "ENTITY_ID"),
+            ("detail", "", "", "Detail", "LINE_ID"),
+            ("table", "ORDER", "", "ORDER", "ORDER_ID"),
+            ("purpose", "", "LEDGER", "LEDGER", "ENTRY_ID"),
+        ]
+        for role, table_name, purpose_name, suffix, field_name in cases:
+            with self.subTest(role=role):
+                columns = [{"field_name": field_name, "caption": f"{field_name} caption", "data_type": "string"}]
+                plan, designer = valid_devexpress_grid_designer(
+                    columns=columns,
+                    input_format=role,
+                    table_name=table_name,
+                    purpose_name=purpose_name,
+                )
+                code_behind = f'''
+                public partial class RecordsBrowseForm : System.Windows.Forms.Form
+                {{
+                    public RecordsBrowseForm() {{ InitializeComponent(); }}
+                    protected void SearchCommand() {{ CallSelectProcedure(); }}
+                    private void CallSelectProcedure() {{ this.grd{suffix}.DataSource = result; }}
+                }}
+                '''
+                result = _verify_migration_generated_csharp_style(
+                    code_behind,
+                    designer_source_text=designer,
+                    profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                    program_key="RecordsBrowse",
+                    expected_grid_role=role,
+                    expected_grid_suffix=suffix if role in {"table", "purpose"} else "",
+                    expected_grid_columns=columns,
+                    result_fields=[field_name],
+                    layout_load_artifact_text=generate_devexpress_grid_xml(
+                        columns,
+                        prefix=plan.metadata["csharp_column_prefix"],
+                    ),
+                )
+                self.assertTrue(plan.success, plan.to_dict())
+                self.assertTrue(result.success, result.to_dict())
+                self.assertEqual(result.metadata["grid_designer_contract"]["grid_control_name"], f"grd{suffix}")
+                self.assertEqual(result.metadata["grid_designer_contract"]["grid_view_name"], f"gvw{suffix}")
+
+    def test_paired_designer_rejects_wrong_names_numeric_displayformat_appearance_and_wiring(self):
+        columns = [{"field_name": "PRICE", "caption": "Unit price", "data_type": "decimal(18, 2)"}]
+        _, valid_designer = valid_devexpress_grid_designer(columns=columns)
+        code_behind = '''
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
+        {
+            public RecordsBrowseForm() { InitializeComponent(); }
+            protected void SearchCommand() { CallSelectProcedure(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+        }
+        '''
+        mutations = {
+            "wrong_names": valid_designer.replace("grdList", "grdWrong").replace("gvwList", "gvwWrong").replace("colList_PRICE", "colArbitrary_PRICE"),
+            "displayformat_only": valid_designer.replace(
+                "this.colList_PRICE.ColumnEdit = this.rpsSpinAmt;",
+                'this.colList_PRICE.DisplayFormat.FormatString = "{0:#,##0.00}";',
+            ),
+            "missing_appearance": valid_designer.replace(
+                "this.colList_PRICE.AppearanceHeader.Options.UseFont = true;",
+                "",
+                1,
+            ),
+            "wrong_wiring": valid_designer.replace(
+                "this.grdList.MainView = this.gvwList;",
+                "this.grdList.MainView = this.gvwWrong;",
+                1,
+            ),
+            "wrong_viewcollection": valid_designer.replace(
+                "    this.gvwList\n});\nthis.gvwList.GridControl",
+                "    this.gvwWrong\n});\nthis.gvwList.GridControl",
+                1,
+            ),
+        }
+        expected_codes = {
+            "wrong_names": {
+                "grid_designer_member_or_initializer_missing",
+                "grid_column_member_or_initializer_missing",
+            },
+            "displayformat_only": {"numeric_grid_column_missing_spin_repository", "numeric_grid_column_displayformat_detected"},
+            "missing_appearance": {"authoritative_grid_column_default_missing"},
+            "wrong_wiring": {"grid_designer_wiring_identity_mismatch"},
+            "wrong_viewcollection": {"grid_designer_wiring_identity_mismatch"},
+        }
+        for case, designer in mutations.items():
+            with self.subTest(case=case):
+                result = _verify_migration_generated_csharp_style(
+                    code_behind,
+                    designer_source_text=designer,
+                    profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                    program_key="RecordsBrowse",
+                    expected_grid_role="list",
+                    expected_grid_columns=columns,
+                    result_fields=["PRICE"],
+                )
+                issue_codes = {item["code"] for item in result.metadata["issues"]}
+                self.assertFalse(result.success, result.to_dict())
+                self.assertTrue(expected_codes[case].intersection(issue_codes), issue_codes)
+
+    def test_paired_designer_missing_each_authoritative_loaded_default_fails(self):
+        columns = [{"field_name": "PRICE", "caption": "Unit price", "data_type": "decimal(18, 2)"}]
+        plan, valid_designer = valid_devexpress_grid_designer(columns=columns)
+        code_behind = '''
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
+        {
+            public RecordsBrowseForm() { InitializeComponent(); }
+            protected void SearchCommand() { CallSelectProcedure(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+        }
+        '''
+        authoritative_lines = list(plan.metadata["view_defaults"]) + [
+            "this.colList_PRICE.AppearanceHeader.Options.UseTextOptions = true;",
+            "this.colList_PRICE.AppearanceHeader.Options.UseFont = true;",
+            "this.colList_PRICE.AppearanceHeader.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.Center;",
+            "this.colList_PRICE.AppearanceHeader.TextOptions.VAlignment = DevExpress.Utils.VertAlignment.Center;",
+            'this.colList_PRICE.AppearanceHeader.Font = new System.Drawing.Font("Tahoma", 9F);',
+            "this.colList_PRICE.AppearanceCell.Options.UseFont = true;",
+            'this.colList_PRICE.AppearanceCell.Font = new System.Drawing.Font("Tahoma", 9F);',
+            "this.colList_PRICE.Visible = true;",
+        ]
+        for line in authoritative_lines:
+            with self.subTest(line=line):
+                result = _verify_migration_generated_csharp_style(
+                    code_behind,
+                    designer_source_text=valid_designer.replace(line, "", 1),
+                    profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                    program_key="RecordsBrowse",
+                    expected_grid_role="list",
+                    expected_grid_columns=columns,
+                    result_fields=["PRICE"],
+                )
+                self.assertFalse(result.success, result.to_dict())
+                self.assertTrue(
+                    {"authoritative_gridview_default_missing", "authoritative_optionsview_default_missing", "authoritative_grid_column_default_missing"}.intersection(
+                        {item["code"] for item in result.metadata["issues"]}
+                    )
+                )
+
+    def test_layout_artifact_and_self_attested_load_cannot_replace_designer_defaults(self):
+        columns = [{"field_name": "PRICE", "caption": "Unit price", "data_type": "decimal(18, 2)"}]
+        plan, designer = valid_devexpress_grid_designer(columns=columns)
+        for line in plan.metadata["view_defaults"]:
+            designer = designer.replace(line, "", 1)
+        for property_path in (
+            "AppearanceHeader.Options.UseTextOptions",
+            "AppearanceHeader.Options.UseFont",
+            "AppearanceHeader.TextOptions.HAlignment",
+            "AppearanceHeader.TextOptions.VAlignment",
+            "AppearanceHeader.Font",
+            "AppearanceCell.Options.UseFont",
+            "AppearanceCell.Font",
+        ):
+            designer = "\n".join(line for line in designer.splitlines() if f"colList_PRICE.{property_path}" not in line)
+        code_behind = '''
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
+        {
+            public RecordsBrowseForm() { InitializeComponent(); }
+            protected void SearchCommand() { CallSelectProcedure(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+        }
+        '''
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact_path = Path(temp_dir) / "grid-layout.xml"
+            artifact_path.write_text(generate_devexpress_grid_xml(columns), encoding="utf-8")
+            artifact_only = _verify_migration_generated_csharp_style(
+                code_behind,
+                designer_source_text=designer,
+                profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                program_key="RecordsBrowse",
+                expected_grid_role="list",
+                expected_grid_columns=columns,
+                result_fields=["PRICE"],
+                layout_load_artifact_path=str(artifact_path),
+            )
+            result = _verify_migration_generated_csharp_style(
+                code_behind,
+                designer_source_text=designer,
+                profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                program_key="RecordsBrowse",
+                expected_grid_role="list",
+                expected_grid_columns=columns,
+                result_fields=["PRICE"],
+                layout_load_artifact_path=str(artifact_path),
+                layout_load_evidence=observed_layout_load_evidence(artifact_path),
+            )
+        self.assertFalse(artifact_only.success, artifact_only.to_dict())
+        self.assertFalse(result.success, result.to_dict())
+        self.assertTrue(result.metadata["grid_designer_contract"]["layout_load_artifact_verified"])
+        self.assertFalse(result.metadata["grid_designer_contract"]["layout_load_evidence_verified"])
+        self.assertEqual(
+            result.metadata["grid_designer_contract"]["layout_load_evidence_status"],
+            "caller_assertion_ignored",
+        )
+        self.assertFalse(result.metadata["grid_designer_contract"]["actual_live_layout_load_observed"])
+
+    def test_paired_designer_rejects_reversed_input_tabindex_but_ignores_label(self):
+        columns = [{"field_name": "ENTITY_ID", "caption": "Entity", "data_type": "string"}]
+        _, designer = valid_devexpress_grid_designer(columns=columns)
+        designer += '''
+        private DevExpress.XtraEditors.TextEdit txtLEFT;
+        private DevExpress.XtraEditors.TextEdit txtRIGHT;
+        private DevExpress.XtraEditors.LabelControl lblIGNORED;
+        this.txtLEFT = new DevExpress.XtraEditors.TextEdit();
+        this.txtRIGHT = new DevExpress.XtraEditors.TextEdit();
+        this.lblIGNORED = new DevExpress.XtraEditors.LabelControl();
+        this.txtLEFT.Location = new System.Drawing.Point(10, 10);
+        this.txtRIGHT.Location = new System.Drawing.Point(110, 10);
+        this.lblIGNORED.Location = new System.Drawing.Point(5, 5);
+        this.txtLEFT.TabIndex = 2;
+        this.txtRIGHT.TabIndex = 1;
+        this.lblIGNORED.TabIndex = 99;
+        '''
+        code_behind = '''
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
+        {
+            public RecordsBrowseForm() { InitializeComponent(); }
+            protected void SearchCommand() { CallSelectProcedure(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+        }
+        '''
+        result = _verify_migration_generated_csharp_style(
+            code_behind,
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="RecordsBrowse",
+            expected_grid_role="list",
+            expected_grid_columns=columns,
+            result_fields=["ENTITY_ID"],
+        )
+        issue_codes = {item["code"] for item in result.metadata["issues"]}
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("input_tabindex_spatial_order_mismatch", issue_codes)
+        self.assertNotIn("lblIGNORED", [item["name"] for item in result.metadata["input_tab_order_contract"]["inputs"]])
+
+    def test_tabindex_requires_presence_and_contiguity_per_container_only(self):
+        columns = [{"field_name": "ENTITY_ID", "caption": "Entity", "data_type": "string"}]
+        _, base_designer = valid_devexpress_grid_designer(columns=columns)
+        code_behind = '''
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
+        {
+            public RecordsBrowseForm() { InitializeComponent(); }
+            protected void SearchCommand() { CallSelectProcedure(); }
+            private void CallSelectProcedure() { this.grdList.DataSource = result; }
+        }
+        '''
+
+        def verify(extra):
+            return _verify_migration_generated_csharp_style(
+                code_behind,
+                designer_source_text=base_designer + extra,
+                profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                program_key="RecordsBrowse",
+                expected_grid_role="list",
+                expected_grid_columns=columns,
+                result_fields=["ENTITY_ID"],
+                layout_load_artifact_text=generate_devexpress_grid_xml(columns),
+            )
+
+        missing = verify('''
+        private DevExpress.XtraEditors.TextEdit txtONLY;
+        this.txtONLY = new DevExpress.XtraEditors.TextEdit();
+        this.txtONLY.Location = new System.Drawing.Point(10, 10);
+        ''')
+        noncontiguous = verify('''
+        private DevExpress.XtraEditors.TextEdit txtLEFT;
+        private DevExpress.XtraEditors.TextEdit txtRIGHT;
+        this.txtLEFT = new DevExpress.XtraEditors.TextEdit();
+        this.txtRIGHT = new DevExpress.XtraEditors.TextEdit();
+        this.txtLEFT.Location = new System.Drawing.Point(10, 10);
+        this.txtRIGHT.Location = new System.Drawing.Point(110, 10);
+        this.txtLEFT.TabIndex = 10;
+        this.txtRIGHT.TabIndex = 999;
+        ''')
+        separate = verify('''
+        private DevExpress.XtraEditors.GroupControl grpLEFT;
+        private DevExpress.XtraEditors.GroupControl grpRIGHT;
+        private DevExpress.XtraEditors.TextEdit txtLEFT;
+        private DevExpress.XtraEditors.TextEdit txtRIGHT;
+        this.grpLEFT = new DevExpress.XtraEditors.GroupControl();
+        this.grpRIGHT = new DevExpress.XtraEditors.GroupControl();
+        this.txtLEFT = new DevExpress.XtraEditors.TextEdit();
+        this.txtRIGHT = new DevExpress.XtraEditors.TextEdit();
+        this.grpLEFT.Controls.Add(this.txtLEFT);
+        this.grpRIGHT.Controls.Add(this.txtRIGHT);
+        this.txtLEFT.Location = new System.Drawing.Point(110, 100);
+        this.txtRIGHT.Location = new System.Drawing.Point(10, 10);
+        this.txtLEFT.TabIndex = 5;
+        this.txtRIGHT.TabIndex = 99;
+        ''')
+        self.assertIn("input_tabindex_missing_with_layout", {item["code"] for item in missing.metadata["issues"]})
+        self.assertIn("input_tabindex_not_container_contiguous", {item["code"] for item in noncontiguous.metadata["issues"]})
+        self.assertTrue(separate.success, separate.to_dict())
+        self.assertFalse(separate.metadata["input_tab_order_contract"]["unrelated_containers_compared"])
 
     def test_sp_generation_contract_blocks_missing_sql_or_unbacked_full_sp(self):
         missing = verify_pb_migration_sp_generation_contract("")

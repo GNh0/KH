@@ -4,8 +4,8 @@ Use this reference with directly supplied SRD text, a user-provided field list, 
 
 ## Column Extraction
 
-- Preserve supplied field names and source order.
-- When visual column positions are present in supplied text, order by vertical then horizontal position.
+- Preserve raw PB `column=(` occurrence order exactly for grid XML and `VisibleIndex`.
+- Use vertical/horizontal sorting only for form-control placement; it must not reorder grid columns.
 - Match a nearby supplied text label to its field when the relationship is unambiguous.
 - Otherwise use the field name as the caption and record the fallback.
 - Keep computed fields distinct from stored fields.
@@ -16,10 +16,11 @@ Use this reference with directly supplied SRD text, a user-provided field list, 
 Use the selected control provider from the packaged style contract.
 
 - Grid/view names: `grd<Role>` and `gvw<Role>`.
-- Column names: `col<Role>_<FIELD>`.
-- `FieldName`: exact supplied result field.
+- XML column names: configured converter prefix plus exact uppercase field, preserving `#` and `$`.
+- C# column names: explicit valid `csharp_name` mappings; block when an XML name cannot safely become a C# identifier.
+- `FieldName`: exact supplied result field, including supported converter characters.
 - `Caption`: supplied caption or documented fallback.
-- `VisibleIndex`: supplied visual order.
+- `VisibleIndex`: one-based PB `column=(` occurrence order, matching the DataWindowToXml `Layout -> Load` baseline.
 - Explicit Designer members and `Columns.AddRange` are required.
 - Numeric, lookup, button, and boolean fields use the matching repository convention.
 - Repository initialization and registration precede `ColumnEdit` assignment.
@@ -34,7 +35,7 @@ Arrange label/editor pairs in stable rows and columns:
 2. Select editor kind from supplied metadata; otherwise use text.
 3. Name the control from the packaged grammar.
 4. Set `BindingField` when supported or record an explicit binding map.
-5. Assign `TabIndex` left-to-right, top-to-bottom.
+5. Within each independent container, assign present, unique, contiguous increasing `TabIndex` values to located input controls in row-major top-to-bottom/left-to-right order; validate containers independently and allow each container to restart its sequence.
 6. Keep required/read-only/null/edit-mask behavior only when supplied.
 
 Do not copy PB coordinates blindly. Exact geometry requires supplied visual evidence and explicit fidelity scope.

@@ -79,7 +79,9 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - A static assignment in code-behind is blocked unless supplied source or an explicit behavior contract proves the setting changes at runtime and targeted verification covers it.
 - Emit explicit members, initialization, parent containment, and collection registration.
 - Preserve supplied `BindingField`, `TabIndex`, bounds, docking, captions, editor properties, and grid/view links.
-- For contract-only generation, use stable row/column layout constraints and assign `TabIndex` left-to-right, top-to-bottom.
+- Within each independent container, located input controls follow row-major top-to-bottom/left-to-right order, and their `TabIndex` values must be present, unique, and contiguous increasing; labels and non-input controls are excluded. Validate different containers independently; each container may restart its sequence.
+- Treat generated View XML as the authoritative `Layout -> Load` baseline. An explicit grid contract requires both valid Layout-Load-ready XML and matching post-load-equivalent C# Designer state. Local dictionaries and file hashes never prove a live Designer load; record `actual_live_layout_load_observed=false` unless a genuinely external DevExpress host supplies stronger evidence.
+- Preserve target grid names (`grdList`/`gvwList`, `grdDetail`/`gvwDetail`, or explicit table/purpose suffixes); never copy XML `gridView1` into C# naming.
 - Use explicit grid columns registered through `Columns.AddRange`.
 - Use repository editors for numeric, lookup, button, and boolean grid columns; register repositories before assigning `ColumnEdit`.
 - Keep `FieldName` and result-column names identical.
@@ -141,6 +143,8 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - `src.skills.pb_to_csharp_migration.extract_datawindow_column_specs`
 - `src.skills.pb_to_csharp_migration.extract_csharp_designer_control_specs`
 - `src.skills.pb_to_csharp_migration.build_csharp_grid_column_designer_plan`
+- `src.skills.pb_to_csharp_migration.generate_devexpress_grid_xml`
+- `src.skills.pb_to_csharp_migration.verify_devexpress_grid_xml_contract`
 - `src.skills.pb_to_csharp_migration.build_detail_form_layout_plan`
 - `src.skills.pb_to_csharp_migration.resolve_csharp_control_stack`
 - `src.skills.pb_to_csharp_migration.verify_migration_generated_csharp_style`

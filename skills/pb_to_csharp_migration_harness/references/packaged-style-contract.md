@@ -183,6 +183,8 @@ For every supplied or generated editor, record:
 - `Location` and `Size`, or dock/anchor constraints;
 - relevant `Properties.*`, edit mask, read-only, null, and validation behavior.
 
+Within each independent container, located input controls follow row-major top-to-bottom/left-to-right visual order, and their `TabIndex` values must be present, unique, and contiguous increasing. Labels, grid columns, repositories, and other non-input controls do not participate in this check. Different containers are validated independently and may restart their sequence.
+
 Do not invent project-specific flags. Preserve them only when they are present in supplied source.
 
 ## Designer Ownership Boundary
@@ -256,18 +258,28 @@ It moves control creation, naming, tab order, and fixed grid registration out of
 
 ## Grid And Repository Contract
 
+- The authoritative workflow is DataWindow -> generated DevExpress View XML -> GridControl Designer `Layout -> Load` -> target C# Designer state. The XML is not merely a separate runtime serialization output; its fixed values define the baseline applied to the actual `GridView` and `GridColumn` components.
+- Keep XML representation rules separate from C# naming and repository conventions. XML may serialize `Name=gridView1` and an empty `ColumnEditName`; C# must retain target names and must not emit `ColumnEditName`.
+- XML uses `XtraSerializer` version `1.0`, application `View`.
+- Required XML View values are `BestFitMaxRowCount=-1`, `PreviewLineCount=-1`, `HorzScrollStep=3`, `FocusRectStyle=CellFocus`, `ScrollStyle=LiveVertScroll, LiveHorzScroll`, `PreviewIndent=-1`, empty `GroupPanelText`, `PreviewFieldName`, `VertScrollTipFieldName`, `NewItemRowText`, and `ViewCaption`, `LevelIndent=-1`, `GroupFooterShowMode=VisibleIfExpanded`, `SynchronizeClones=true`, `BorderStyle=Default`, `DetailHeight=350`, `DetailTabHeaderLocation=Top`, and `ActiveFilterEnabled=true`.
+- Required XML `OptionsView` values are `ShowViewCaption=false`, `EnableAppearanceEvenRow=true`, `ShowGroupPanel=false`, `ColumnAutoWidth=false`, `ShowFooter=true`, and `ShowAutoFilterRow=true`.
+- Every XML column uses header `UseTextOptions=true`, header `UseFont=true`, horizontal and vertical center alignment, header font `Tahoma, 9pt`, cell `UseFont=true`, cell font `Tahoma, 9pt`, `Visible=true`, and one-based `VisibleIndex` in raw PB `column=(` occurrence order. Visual y/x sorting is not used for grid XML. `FieldName` and XML `Caption` are the uppercase source field exactly as emitted by the HTML. A mapped PB caption is an intentional post-conversion C# Designer override, not source-exact XML emission.
+- XML `FieldName` and XML `Name` preserve converter characters including `#` and `$`. `xml_column_name` and `csharp_name` are separate contracts; C# generation requires an explicit valid identifier mapping when the XML name is not a safe C# member.
+- An explicit grid contract requires both valid Layout-Load-ready XML and C# Designer source containing equivalent applied View, `OptionsView`, column appearance, and one-based index values. Neither artifact nor hand-written assignments pass alone, and caller-authored observed-load dictionaries or hashes do not replace Designer validation.
+- Local verification is static and records `actual_live_layout_load_observed=false`; only a genuinely external DevExpress host can supply stronger evidence.
+- Use `grdList`/`gvwList`/`colList_<FIELD>` for list role, `grdDetail`/`gvwDetail`/`colDetail_<FIELD>` for detail role, and `grd<SUFFIX>`/`gvw<SUFFIX>`/`col<SUFFIX>_<FIELD>` for an explicit table or purpose. `colList_` is never the fallback for table or purpose roles.
+- Declare and initialize the `GridControl` and `GridView`, set `MainView`, register `ViewCollection`, set `GridControl`, and preserve the target `Name` values explicitly.
 - Declare each grid column as a Designer member.
 - Register columns with `Columns.AddRange` in visible order.
-- Set `Name`, `FieldName`, `Caption`, and `VisibleIndex` explicitly.
+- Set `Name`, `FieldName`, mapped/post-conversion `Caption`, and one-based `VisibleIndex` explicitly; `Columns.AddRange` order must match the indices.
 - Keep `FieldName` identical to the SP result field.
-- Default to hidden group panel, visible auto-filter row, visible footer, disabled auto-width, and even-row appearance when the selected grid provider supports them.
-- Center header text when supported; preserve supplied cell alignment.
+- Apply every authoritative Layout Load default, not only the commonly visible `OptionsView` subset.
 - Numeric fields use a spin/numeric repository editor assigned through `ColumnEdit`.
 - Lookup fields use a lookup repository whose value/display members come from supplied evidence.
 - Button fields use a button repository and one explicit button event.
 - Boolean fields use a check repository when the selected provider supports it.
 - Add repositories to the grid control's repository collection before assigning them to columns.
-- Do not use runtime column factories, `AddField`, generated `for` loops for fixed columns, or `DisplayFormat` as the only numeric behavior.
+- Do not use runtime column factories, `AddField`, generated `for` loops for fixed columns, or numeric GridColumn `DisplayFormat`. Numeric columns require `RepositoryItemSpinEdit` behavior.
 
 ## Caller And Procedure Contract
 

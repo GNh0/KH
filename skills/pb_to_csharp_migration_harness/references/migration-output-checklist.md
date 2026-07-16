@@ -30,10 +30,18 @@ Use this checklist before handoff or completion.
 - Provider fallback follows target wrapper, KoneLib, DevExpress, then WinForms from declared evidence.
 - No dependency was added, upgraded, or retargeted.
 - Designer members, initialization, containment, collections, bounds/layout, and `TabIndex` are explicit.
+- Within each independent container, located input controls follow row-major top-to-bottom/left-to-right order and have present, unique, contiguous increasing `TabIndex` values; labels and non-input controls are excluded. Different containers are validated independently and may restart their sequence.
 - Static control construction, layout, naming, binding fields, grid/repository wiring, `Appearance`, `Options`, and design properties are in `.Designer.cs` by default.
 - Code-behind contains runtime behavior, event-handler implementations, validation, procedure calls, result binding, and evidence-backed dynamic state only.
 - Every static UI assignment in code-behind has explicit source evidence, a runtime reason, and a targeted verification result; otherwise completion is blocked.
 - Grid columns are explicit and registered with `Columns.AddRange`.
+- DataWindow-generated View XML has passed value-level serializer/View/OptionsView/column verification.
+- Every explicit grid contract has both verified Layout-Load-ready XML and matching post-load-equivalent C# Designer defaults; neither artifact nor hand-written assignments pass alone.
+- `actual_live_layout_load_observed=false` is recorded unless an external DevExpress host supplied independently trustworthy evidence; caller dictionaries and hashes are not accepted.
+- XML and `VisibleIndex` order follows raw PB `column=(` occurrence order, never visual y/x order.
+- XML `FieldName`/`Name` preserve `#` and `$`; any distinct C# member identifier is an explicit valid `csharp_name` mapping.
+- XML and C# Designer `VisibleIndex` values are one-based and match source/`Columns.AddRange` order exactly.
+- GridControl/GridView names and wiring match list, detail, or explicit table/purpose role conventions; XML `gridView1` was not copied.
 - `FieldName` matches the SP result field.
 - Repository editors are registered before `ColumnEdit` assignment.
 - Numeric fields use numeric editor behavior, not formatting alone.

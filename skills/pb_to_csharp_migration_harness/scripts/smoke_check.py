@@ -181,6 +181,7 @@ REQUIRED_CONTRACT_KEYS = {
     "control_fallback_order",
     "designer_properties",
     "grid_repository_conventions",
+    "grid_layout_load_contract",
     "caller_parameter_rules",
     "stored_procedure_rules",
     "forbidden_patterns",
@@ -191,6 +192,10 @@ REQUIRED_CSHARP_RULE_IDS = {
     "designer_initialization",
     "migration_call_path",
     "ui_binding_or_result_mapping",
+}
+REQUIRED_GRID_IMPLEMENTATION_TARGETS = {
+    "src.skills.pb_to_csharp_migration.generate_devexpress_grid_xml",
+    "src.skills.pb_to_csharp_migration.verify_devexpress_grid_xml_contract",
 }
 SYNTHETIC_MAPPED_CSHARP = """
 public partial class CatalogBrowseForm : Form
@@ -499,6 +504,123 @@ def validate_designer_ownership_contract(contract: dict[str, object]) -> list[di
     return issues
 
 
+def validate_grid_layout_load_contract(contract: dict[str, object]) -> list[dict[str, object]]:
+    layout = contract.get("grid_layout_load_contract", {})
+    if not isinstance(layout, dict):
+        return [{"code": "grid_layout_load_contract_invalid"}]
+    expected_view = {
+        "BestFitMaxRowCount": "-1",
+        "PreviewLineCount": "-1",
+        "HorzScrollStep": "3",
+        "FocusRectStyle": "CellFocus",
+        "ScrollStyle": "LiveVertScroll, LiveHorzScroll",
+        "PreviewIndent": "-1",
+        "GroupPanelText": "",
+        "PreviewFieldName": "",
+        "VertScrollTipFieldName": "",
+        "NewItemRowText": "",
+        "ViewCaption": "",
+        "LevelIndent": "-1",
+        "GroupFooterShowMode": "VisibleIfExpanded",
+        "SynchronizeClones": "true",
+        "BorderStyle": "Default",
+        "DetailHeight": "350",
+        "DetailTabHeaderLocation": "Top",
+        "ActiveFilterEnabled": "true",
+    }
+    expected_options = {
+        "ShowViewCaption": "false",
+        "EnableAppearanceEvenRow": "true",
+        "ShowGroupPanel": "false",
+        "ColumnAutoWidth": "false",
+        "ShowFooter": "true",
+        "ShowAutoFilterRow": "true",
+    }
+    expected_columns = {
+        "AppearanceHeader.Options.UseTextOptions": "true",
+        "AppearanceHeader.Options.UseFont": "true",
+        "AppearanceHeader.TextOptions.HAlignment": "Center",
+        "AppearanceHeader.TextOptions.VAlignment": "Center",
+        "AppearanceHeader.Font": "Tahoma, 9pt",
+        "AppearanceCell.Options.UseFont": "true",
+        "AppearanceCell.Font": "Tahoma, 9pt",
+        "Visible": "true",
+        "FieldName": "uppercase source field exactly, including # and $",
+        "Name": "configured prefix plus uppercase source field exactly, including # and $",
+        "VisibleIndex": "one-based PB column=( occurrence order",
+        "Caption": "uppercase FieldName exactly as emitted by DataWindowToXml; mapped PB captions are intentional post-conversion C# Designer overrides",
+        "ColumnEditName": "",
+    }
+    issues: list[dict[str, object]] = []
+    if layout.get("serializer") != {"version": "1.0", "application": "View"}:
+        issues.append({"code": "grid_layout_serializer_values_changed"})
+    if layout.get("xml_view_defaults") != expected_view:
+        issues.append({"code": "grid_layout_view_values_changed"})
+    if layout.get("xml_options_view_defaults") != expected_options:
+        issues.append({"code": "grid_layout_options_values_changed"})
+    if layout.get("xml_column_defaults") != expected_columns:
+        issues.append({"code": "grid_layout_column_values_changed"})
+    csharp = layout.get("csharp_designer_result", {})
+    if not isinstance(csharp, dict) or csharp.get("xml_view_name_is_not_csharp_name") is not True:
+        issues.append({"code": "grid_layout_csharp_name_separation_missing"})
+    elif (
+        csharp.get("xml_column_name_is_separate_from_csharp_name") is not True
+        or csharp.get("actual_live_layout_load_observed") is not False
+        or csharp.get("verification_scope") != "static_xml_and_post_load_equivalent_designer_state"
+    ):
+        issues.append({"code": "grid_layout_static_verification_scope_changed"})
+    conventions = contract.get("grid_repository_conventions", {})
+    if (
+        not isinstance(conventions, dict)
+        or conventions.get("layout_load_artifact_and_designer_required") is not True
+        or conventions.get("caller_authored_load_evidence_accepted") is not False
+    ):
+        issues.append({"code": "grid_layout_artifact_and_designer_gate_missing"})
+    return issues
+
+
+def validate_generated_grid_xml_drift(repo_root: Path) -> list[dict[str, object]]:
+    root_text = str(repo_root)
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
+    from src.skills.pb_to_csharp_migration import (
+        generate_devexpress_grid_xml,
+        verify_devexpress_grid_xml_contract,
+    )
+
+    columns = [
+        {"field_name": "SECOND", "xml_column_name": "colProbe_SECOND", "csharp_name": "colProbe_SECOND"},
+        {"field_name": "RATE#", "xml_column_name": "colProbe_RATE#", "csharp_name": "colProbe_RATE_NUMBER"},
+        {"field_name": "COST$", "xml_column_name": "colProbe_COST$", "csharp_name": "colProbe_COST_DOLLAR"},
+    ]
+    xml_text = generate_devexpress_grid_xml(columns, prefix="colProbe_")
+    verified = verify_devexpress_grid_xml_contract(
+        xml_text,
+        expected_columns=columns,
+        expected_column_prefix="colProbe_",
+    )
+    issues: list[dict[str, object]] = []
+    markers = [
+        '<property name="VisibleIndex">1</property>',
+        '<property name="FieldName">SECOND</property>',
+        '<property name="Name">colProbe_RATE#</property>',
+        '<property name="FieldName">COST$</property>',
+        '\t<property name="ShowAutoFilterRow">true</property>',
+    ]
+    for marker in markers:
+        if marker not in xml_text:
+            issues.append({"code": "generated_grid_xml_marker_drift", "marker": marker})
+    if not (
+        xml_text.index("SECOND") < xml_text.index("RATE#") < xml_text.index("COST$")
+    ):
+        issues.append({"code": "generated_grid_xml_occurrence_order_drift"})
+    if xml_text.endswith("\n"):
+        issues.append({"code": "generated_grid_xml_trailing_newline_drift"})
+    if not verified.success or verified.metadata.get("actual_live_layout_load_observed") is not False:
+        issues.append({"code": "generated_grid_xml_verifier_drift"})
+    return issues
+
+
 def main() -> int:
     skill_dir = Path(__file__).resolve().parents[1]
     repo_root = find_repo_root(skill_dir)
@@ -552,6 +674,7 @@ def main() -> int:
         issues.append({"code": "control_fallback_order_changed"})
     issues.extend(validate_csharp_contract_rules(contract))
     issues.extend(validate_designer_ownership_contract(contract))
+    issues.extend(validate_grid_layout_load_contract(contract))
 
     privacy_scan_paths: list[tuple[str, Path]] = []
     if repo_root is None:
@@ -592,8 +715,12 @@ def main() -> int:
     targets = parse_implementation_targets(content)
     if not targets:
         issues.append({"code": "missing_implementation_targets", "path": "SKILL.md"})
+    missing_grid_targets = sorted(REQUIRED_GRID_IMPLEMENTATION_TARGETS - set(targets))
+    if missing_grid_targets:
+        issues.append({"code": "grid_implementation_targets_missing", "targets": missing_grid_targets})
 
     if repo_root is not None:
+        issues.extend(validate_generated_grid_xml_drift(repo_root))
         for target in targets:
             result = resolve_target(repo_root, target)
             target_results.append(result)

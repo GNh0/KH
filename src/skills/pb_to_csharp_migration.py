@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping
+from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from src.contracts import HarnessResult
@@ -905,6 +906,87 @@ class _CSharpLexicalView:
     string_literals: tuple[_CSharpStringLiteral, ...]
 
 
+def _evaluate_csharp_preprocessor_literal(expression: str) -> bool | None:
+    value = re.sub(r"\s+", "", str(expression or "")).lower()
+    while value.startswith("(") and value.endswith(")"):
+        value = value[1:-1]
+    if value == "false":
+        return False
+    return None
+
+
+def _mask_inactive_csharp_preprocessor(source_text: str) -> str:
+    """Mask only branches that cannot be active under any symbol definition."""
+    source = str(source_text or "")
+    masked = list(source)
+    stack: List[Dict[str, Any]] = []
+    active = True
+
+    def mask(start: int, end: int) -> None:
+        for position in range(start, min(end, len(masked))):
+            if masked[position] not in "\r\n":
+                masked[position] = " "
+
+    offset = 0
+    for line in source.splitlines(keepends=True):
+        line_end = offset + len(line)
+        directive = re.match(r"^[ \t]*#\s*(?P<name>if|elif|else|endif)\b(?P<value>.*)$", line)
+        if directive:
+            name = directive.group("name")
+            value = _evaluate_csharp_preprocessor_literal(directive.group("value"))
+            mask(offset, line_end)
+            if name == "if":
+                frame = {
+                    "parent_active": active,
+                    "remaining_possible": bool(active and value is not True),
+                }
+                stack.append(frame)
+                active = bool(active and value is not False)
+            elif name == "elif" and stack:
+                frame = stack[-1]
+                remaining_possible = bool(frame["remaining_possible"])
+                active = bool(remaining_possible and value is not False)
+                frame["remaining_possible"] = bool(remaining_possible and value is not True)
+            elif name == "else" and stack:
+                frame = stack[-1]
+                active = bool(frame["remaining_possible"])
+                frame["remaining_possible"] = False
+            elif name == "endif" and stack:
+                frame = stack.pop()
+                active = bool(frame["parent_active"])
+            offset = line_end
+            continue
+        if not active:
+            mask(offset, line_end)
+        offset = line_end
+    return "".join(masked)
+
+
+def _has_unknown_csharp_preprocessor(source_text: str) -> bool:
+    for match in re.finditer(
+        r"(?m)^[ \t]*#\s*(?:if|elif)\b(?P<value>.*)$",
+        str(source_text or ""),
+    ):
+        if _evaluate_csharp_preprocessor_literal(match.group("value")) is None:
+            return True
+    return False
+
+
+def _csharp_raw_string_prefix(source: str, index: int) -> tuple[int, int, bool] | None:
+    cursor = index
+    dollar_count = 0
+    while cursor < len(source) and source[cursor] == "$":
+        dollar_count += 1
+        cursor += 1
+    quote_start = cursor
+    while cursor < len(source) and source[cursor] == '"':
+        cursor += 1
+    quote_count = cursor - quote_start
+    if quote_count < 3:
+        return None
+    return cursor - index, quote_count, dollar_count > 0
+
+
 def _csharp_string_prefix(source: str, index: int) -> tuple[int, bool, bool] | None:
     for prefix, verbatim, interpolated in (
         ('$@"', True, True),
@@ -1055,7 +1137,7 @@ def _decode_csharp_regular_string(value: str) -> str | None:
 
 
 def _lex_csharp_non_code(source_text: str) -> _CSharpLexicalView:
-    source = str(source_text or "")
+    source = _mask_inactive_csharp_preprocessor(source_text)
     masked = list(source)
     comments_removed = list(source)
     literals: List[_CSharpStringLiteral] = []
@@ -1080,6 +1162,26 @@ def _lex_csharp_non_code(source_text: str) -> _CSharpLexicalView:
             mask(masked, index, end)
             mask(comments_removed, index, end)
             index = end
+            continue
+        raw_prefix = _csharp_raw_string_prefix(source, index)
+        if raw_prefix is not None:
+            prefix_length, quote_count, interpolated = raw_prefix
+            delimiter = '"' * quote_count
+            content_start = index + prefix_length
+            content_end = source.find(delimiter, content_start)
+            terminated = content_end >= 0
+            end = len(source) if not terminated else content_end + quote_count
+            literals.append(
+                _CSharpStringLiteral(
+                    start=index,
+                    end=end,
+                    value=(source[content_start:content_end] if terminated and not interpolated else None),
+                    interpolated=interpolated,
+                    terminated=terminated,
+                )
+            )
+            mask(masked, index, end)
+            index = end if end > index else index + 1
             continue
         prefix = _csharp_string_prefix(source, index)
         if prefix is not None:
@@ -1709,6 +1811,38 @@ DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS = {
     "ShowAutoFilterRow": "true",
 }
 
+DATAWINDOW_TO_CSHARP_GRIDVIEW_DEFAULTS = [
+    ("BestFitMaxRowCount", "-1"),
+    ("PreviewLineCount", "-1"),
+    ("HorzScrollStep", "3"),
+    ("FocusRectStyle", "DevExpress.XtraGrid.Views.Grid.DrawFocusRectStyle.CellFocus"),
+    (
+        "ScrollStyle",
+        "DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.LiveVertScroll | "
+        "DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.LiveHorzScroll",
+    ),
+    ("PreviewIndent", "-1"),
+    ("GroupPanelText", "string.Empty"),
+    ("PreviewFieldName", "string.Empty"),
+    ("VertScrollTipFieldName", "string.Empty"),
+    ("LevelIndent", "-1"),
+    (
+        "GroupFooterShowMode",
+        "DevExpress.XtraGrid.Views.Grid.GroupFooterShowMode.VisibleIfExpanded",
+    ),
+    ("NewItemRowText", "string.Empty"),
+    ("SynchronizeClones", "true"),
+    ("BorderStyle", "DevExpress.XtraEditors.Controls.BorderStyles.Default"),
+    ("ViewCaption", "string.Empty"),
+    ("DetailHeight", "350"),
+    ("DetailTabHeaderLocation", "DevExpress.XtraTab.TabHeaderLocation.Top"),
+    ("ActiveFilterEnabled", "true"),
+]
+
+DEVEXPRESS_GRID_XML_MAX_BYTES = 1024 * 1024
+DEVEXPRESS_GRID_XML_MAX_DEPTH = 8
+DEVEXPRESS_GRID_XML_MAX_ELEMENTS = 10000
+
 
 @dataclass(frozen=True)
 class MigrationInputState:
@@ -1803,6 +1937,7 @@ class DataWindowColumnSpec:
     field_name: str
     caption: str
     csharp_name: str
+    xml_column_name: str = ""
     data_type: str = ""
     source: str = "table-column"
     x: int | None = None
@@ -1815,6 +1950,7 @@ class DataWindowColumnSpec:
             "field_name": self.field_name,
             "caption": self.caption,
             "csharp_name": self.csharp_name,
+            "xml_column_name": self.xml_column_name,
             "data_type": self.data_type,
             "source": self.source,
             "x": self.x,
@@ -2618,7 +2754,7 @@ def extract_datawindow_columns(source_text: str) -> List[str]:
 
 
 def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_") -> List[DataWindowColumnSpec]:
-    """Extract DataWindow grid columns, C# column names, and best-effort captions from SRD text."""
+    """Extract DataWindow columns in exact column=( occurrence order."""
     source = str(source_text or "")
     starts = [match.start() for match in DATAWINDOW_COLUMN_PATTERN.finditer(source)]
     table_columns: List[Dict[str, str]] = []
@@ -2639,28 +2775,47 @@ def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_
                 }
             )
 
-    table_data_types = {
-        item["field_name"]: item["data_type"]
-        for item in table_columns
-        if item["field_name"]
-    }
-
     visual_columns = _extract_visual_datawindow_columns(source)
     text_controls = _extract_datawindow_text_controls(source)
     specs: List[DataWindowColumnSpec] = []
-    seen: set[str] = set()
 
+    visual_by_field: Dict[str, List[Dict[str, Any]]] = {}
     for column in visual_columns:
-        field_name = column["field_name"]
-        if not field_name or field_name in seen:
-            continue
-        caption = _match_datawindow_caption(column, text_controls) or field_name
+        visual_by_field.setdefault(column["field_name"], []).append(column)
+
+    for table_column in table_columns:
+        field_name = table_column["field_name"]
+        visual_matches = visual_by_field.get(field_name, [])
+        visual = visual_matches.pop(0) if visual_matches else {}
+        caption = _match_datawindow_caption(visual, text_controls) if visual else ""
         specs.append(
             DataWindowColumnSpec(
                 field_name=field_name,
-                caption=caption,
+                caption=caption or field_name,
                 csharp_name=build_csharp_grid_column_name(field_name, prefix=prefix),
-                data_type=table_data_types.get(field_name, ""),
+                xml_column_name=f"{prefix}{field_name}",
+                data_type=table_column["data_type"],
+                source="table-column",
+                x=visual.get("x"),
+                y=visual.get("y"),
+                width=visual.get("width"),
+                height=visual.get("height"),
+            )
+        )
+
+    if specs:
+        return specs
+
+    # Visual-only snippets remain supported, but source occurrence order is
+    # authoritative; coordinates are metadata for form placement only.
+    for column in visual_columns:
+        field_name = column["field_name"]
+        specs.append(
+            DataWindowColumnSpec(
+                field_name=field_name,
+                caption=_match_datawindow_caption(column, text_controls) or field_name,
+                csharp_name=build_csharp_grid_column_name(field_name, prefix=prefix),
+                xml_column_name=f"{prefix}{field_name}",
                 source="visual-column",
                 x=column.get("x"),
                 y=column.get("y"),
@@ -2668,31 +2823,14 @@ def extract_datawindow_column_specs(source_text: str, *, prefix: str = "colList_
                 height=column.get("height"),
             )
         )
-        seen.add(field_name)
-
-    for table_column in table_columns:
-        field_name = table_column["field_name"]
-        if field_name in seen:
-            continue
-        specs.append(
-            DataWindowColumnSpec(
-                field_name=field_name,
-                caption=field_name,
-                csharp_name=build_csharp_grid_column_name(field_name, prefix=prefix),
-                data_type=table_column["data_type"],
-            )
-        )
-        seen.add(field_name)
     return specs
 
 
 def build_csharp_grid_column_name(field_name: str, *, prefix: str = "colList_") -> str:
     """Build a target C# GridColumn member/control name such as colList_ENTITY_ID."""
     normalized = _normalize_datawindow_field_name(field_name)
-    safe = re.sub(r"[^A-Z0-9_]", "_", normalized)
-    if safe and safe[0].isdigit():
-        safe = f"_{safe}"
-    return f"{prefix}{safe}"
+    candidate = f"{prefix}{normalized}"
+    return candidate if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", candidate) else ""
 
 
 def resolve_csharp_grid_column_prefix(
@@ -2713,10 +2851,10 @@ def resolve_csharp_grid_column_prefix(
     if lowered in {"table", "dbtable", "source-table", "source_table"}:
         table = re.sub(r"[^A-Za-z0-9_]", "", str(table_name or "")).upper()
         purpose = re.sub(r"[^A-Za-z0-9_]", "", str(purpose_name or "")).upper()
-        return f"col{table}_" if table else (f"col{purpose}_" if purpose else "colList_")
+        return f"col{table}_" if table else (f"col{purpose}_" if purpose else "colTable_")
     if lowered in {"purpose", "domain", "role", "logical"}:
         purpose = re.sub(r"[^A-Za-z0-9_]", "", str(purpose_name or table_name or "")).upper()
-        return f"col{purpose}_" if purpose else "colList_"
+        return f"col{purpose}_" if purpose else "colPurpose_"
     if raw_format:
         safe = re.sub(r"[^A-Za-z0-9_]", "", raw_format)
         return f"col{safe}_" if safe.lower().startswith("list") or safe.lower().startswith("detail") else f"col{safe}_"
@@ -2740,10 +2878,10 @@ def resolve_csharp_grid_control_names(
         suffix = (
             re.sub(r"[^A-Za-z0-9_]", "", str(table_name or "")).upper()
             or re.sub(r"[^A-Za-z0-9_]", "", str(purpose_name or "")).upper()
-            or "List"
+            or "Table"
         )
     elif lowered in {"purpose", "domain", "role", "logical"}:
-        suffix = re.sub(r"[^A-Za-z0-9_]", "", str(purpose_name or table_name or "")).upper() or "List"
+        suffix = re.sub(r"[^A-Za-z0-9_]", "", str(purpose_name or table_name or "")).upper() or "Purpose"
     else:
         suffix = re.sub(r"[^A-Za-z0-9_]", "", raw_format) or "List"
         suffix = suffix[0].upper() + suffix[1:] if suffix and not suffix.isupper() else suffix
@@ -2753,14 +2891,91 @@ def resolve_csharp_grid_control_names(
     }
 
 
+def _caller_grid_column_csharp_name(value: Any) -> str:
+    if isinstance(value, DataWindowColumnSpec):
+        return str(value.csharp_name or "")
+    if isinstance(value, Mapping):
+        return str(value.get("csharp_name") or "")
+    return ""
+
+
+def _grid_column_mapping_issues(
+    column_inputs: Iterable[Any],
+    normalized: Iterable[DataWindowColumnSpec],
+    *,
+    prefix: str,
+) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    seen_csharp: set[str] = set()
+    for raw, column in zip(column_inputs, normalized):
+        expected_xml_name = f"{prefix}{column.field_name}"
+        if column.xml_column_name != expected_xml_name:
+            issues.append(
+                {
+                    "code": "grid_xml_column_name_mapping_mismatch",
+                    "severity": "error",
+                    "field_name": column.field_name,
+                    "expected": expected_xml_name,
+                    "actual": column.xml_column_name,
+                    "message": "XML Name must preserve the converter prefix plus exact uppercase FieldName.",
+                }
+            )
+        if not column.csharp_name:
+            issues.append(
+                {
+                    "code": "grid_column_csharp_name_mapping_required",
+                    "severity": "error",
+                    "field_name": column.field_name,
+                    "xml_column_name": column.xml_column_name,
+                    "message": "FieldName cannot be used as a C# member identifier; provide an explicit valid csharp_name mapping.",
+                }
+            )
+            continue
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", column.csharp_name):
+            issues.append(
+                {
+                    "code": "grid_column_csharp_name_invalid",
+                    "severity": "error",
+                    "field_name": column.field_name,
+                    "actual": column.csharp_name,
+                    "message": "GridColumn csharp_name must be a valid C# identifier distinct from XML Name.",
+                }
+            )
+        elif not column.csharp_name.startswith(prefix):
+            issues.append(
+                {
+                    "code": "grid_column_csharp_prefix_mismatch",
+                    "severity": "error",
+                    "field_name": column.field_name,
+                    "expected_prefix": prefix,
+                    "actual": column.csharp_name,
+                    "message": "GridColumn csharp_name must use the verified custom or role prefix.",
+                }
+            )
+        elif column.csharp_name in seen_csharp:
+            issues.append(
+                {
+                    "code": "grid_column_csharp_name_duplicate",
+                    "severity": "error",
+                    "field_name": column.field_name,
+                    "actual": column.csharp_name,
+                    "message": "Each GridColumn requires a distinct C# member identifier.",
+                }
+            )
+        seen_csharp.add(column.csharp_name)
+    return issues
+
+
 def generate_devexpress_grid_xml(
     columns: Iterable[Any],
     *,
     prefix: str = "colList_",
     grid_view_name: str = "gridView1",
+    serialized_view_name: str | None = None,
 ) -> str:
     """Generate the DevExpress GridView XML produced by the attached DataWindowToXml helper."""
     normalized = _normalize_grid_column_specs(columns, prefix=prefix)
+    xml_view_name = str(serialized_view_name or grid_view_name or "gridView1")
     lines = [
         '<XtraSerializer version="1.0" application="View">',
     ]
@@ -2768,18 +2983,18 @@ def generate_devexpress_grid_xml(
         if name == "#LayoutVersion" or value == "":
             lines.append(f'  <property name="{name}" />')
         elif name == "Name":
-            lines.append(f'  <property name="Name">{escape(grid_view_name)}</property>')
+            lines.append(f'  <property name="Name">{escape(xml_view_name)}</property>')
         else:
             lines.append(f'  <property name="{name}">{escape(value)}</property>')
     lines.insert(
         next(index for index, line in enumerate(lines) if 'DetailTabHeaderLocation' in line),
-        f'  <property name="Name">{escape(grid_view_name)}</property>',
+        f'  <property name="Name">{escape(xml_view_name)}</property>',
     )
     lines.append(f'  <property name="Columns" iskey="true" value="{len(normalized)}">')
     for index, column in enumerate(normalized, start=1):
         escaped_field_name = escape(column.field_name)
-        escaped_name = escape(column.csharp_name)
-        escaped_caption = escape(column.caption or column.field_name)
+        escaped_name = escape(column.xml_column_name)
+        escaped_caption = escaped_field_name
         lines.extend(
             [
                 f'    <property name="Item{index}" isnull="true" iskey="true">',
@@ -2816,7 +3031,8 @@ def generate_devexpress_grid_xml(
         ]
     )
     for name, value in DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS.items():
-        lines.append(f'    <property name="{name}">{value}</property>')
+        indent = "\t" if name == "ShowAutoFilterRow" else "    "
+        lines.append(f'{indent}<property name="{name}">{value}</property>')
     lines.extend(
         [
             '  </property>',
@@ -2826,16 +3042,391 @@ def generate_devexpress_grid_xml(
     return "\n".join(lines)
 
 
+def _xml_property_map(parent: ET.Element | None) -> Dict[str, ET.Element]:
+    if parent is None:
+        return {}
+    return {
+        str(child.attrib.get("name") or ""): child
+        for child in parent.findall("property")
+        if child.attrib.get("name")
+    }
+
+
+def _xml_property_text(element: ET.Element | None) -> str:
+    return "" if element is None or element.text is None else element.text
+
+
+def verify_devexpress_grid_xml_contract(
+    xml_text: str,
+    *,
+    expected_columns: Iterable[Any] | None = None,
+    input_format: str = "list",
+    table_name: str = "",
+    purpose_name: str = "",
+    expected_grid_view_name: str = "gridView1",
+    expected_serialized_view_name: str | None = None,
+    expected_column_prefix: str = "",
+) -> HarnessResult:
+    """Verify DataWindow-generated View XML values before DevExpress Designer Layout Load."""
+    issues: List[Dict[str, Any]] = []
+
+    def add_issue(code: str, message: str, **details: Any) -> None:
+        issues.append({"code": code, "severity": "error", "message": message, **details})
+
+    raw_xml = str(xml_text or "")
+    encoded_size = len(raw_xml.encode("utf-8"))
+    root: ET.Element | None = None
+    if encoded_size > DEVEXPRESS_GRID_XML_MAX_BYTES:
+        add_issue(
+            "grid_xml_size_limit_exceeded",
+            "Generated GridView XML exceeds the verifier size limit.",
+            actual=encoded_size,
+            maximum=DEVEXPRESS_GRID_XML_MAX_BYTES,
+        )
+    elif re.search(r"<!\s*(?:DOCTYPE|ENTITY)\b", raw_xml, flags=re.IGNORECASE):
+        add_issue(
+            "grid_xml_dtd_or_entity_forbidden",
+            "DTD and entity declarations are forbidden in GridView layout XML.",
+        )
+    else:
+        try:
+            root = ET.fromstring(raw_xml)
+        except ET.ParseError as exc:
+            add_issue("grid_xml_parse_error", "Generated GridView XML must be well-formed.", detail=str(exc))
+
+    def element_depth(element: ET.Element) -> int:
+        maximum = 0
+        pending = [(element, 1)]
+        while pending:
+            current, depth = pending.pop()
+            maximum = max(maximum, depth)
+            pending.extend((child, depth + 1) for child in list(current))
+        return maximum
+
+    def property_map(
+        parent: ET.Element | None,
+        *,
+        path: str,
+        allowed_names: set[str],
+    ) -> Dict[str, ET.Element]:
+        mapped: Dict[str, ET.Element] = {}
+        if parent is None:
+            return mapped
+        for child in list(parent):
+            if child.tag != "property":
+                add_issue(
+                    "grid_xml_unexpected_element",
+                    "GridView layout hierarchy accepts property elements only.",
+                    path=path,
+                    actual=child.tag,
+                )
+                continue
+            name = str(child.attrib.get("name") or "")
+            if not name or name not in allowed_names:
+                add_issue(
+                    "grid_xml_unexpected_property",
+                    "GridView layout contains an unexpected property name.",
+                    path=path,
+                    actual=name,
+                )
+            if name in mapped:
+                add_issue(
+                    "grid_xml_duplicate_property",
+                    "GridView layout properties must be unique within each serializer scope.",
+                    path=path,
+                    property=name,
+                )
+                continue
+            mapped[name] = child
+        return mapped
+
+    def require_attributes(element: ET.Element | None, expected: Dict[str, str], *, path: str) -> None:
+        if element is not None and dict(element.attrib) != expected:
+            add_issue(
+                "grid_xml_attribute_mismatch",
+                "GridView layout element attributes must match the DataWindowToXml hierarchy exactly.",
+                path=path,
+                expected=expected,
+                actual=dict(element.attrib),
+            )
+
+    def require_leaf(element: ET.Element | None, *, path: str) -> None:
+        if element is not None and list(element):
+            add_issue(
+                "grid_xml_leaf_hierarchy_mismatch",
+                "Scalar GridView layout properties must not contain nested elements.",
+                path=path,
+            )
+
+    resolved_prefix = str(expected_column_prefix or "") or resolve_csharp_grid_column_prefix(
+        input_format, table_name=table_name, purpose_name=purpose_name
+    )
+    expected_columns_list = None if expected_columns is None else list(expected_columns)
+    normalized_expected = (
+        None
+        if expected_columns_list is None
+        else _normalize_grid_column_specs(expected_columns_list, prefix=resolved_prefix)
+    )
+    for column in normalized_expected or []:
+        expected_xml_name = f"{resolved_prefix}{column.field_name}"
+        if column.xml_column_name != expected_xml_name:
+            add_issue(
+                "grid_xml_column_name_mapping_mismatch",
+                "Expected XML Name must preserve the verified prefix plus exact uppercase FieldName.",
+                field_name=column.field_name,
+                expected=expected_xml_name,
+                actual=column.xml_column_name,
+            )
+    verified_columns: List[Dict[str, Any]] = []
+    if root is not None:
+        element_count = sum(1 for _ in root.iter())
+        depth = element_depth(root)
+        if element_count > DEVEXPRESS_GRID_XML_MAX_ELEMENTS:
+            add_issue(
+                "grid_xml_element_limit_exceeded",
+                "Generated GridView XML contains too many elements.",
+                actual=element_count,
+                maximum=DEVEXPRESS_GRID_XML_MAX_ELEMENTS,
+            )
+        if depth > DEVEXPRESS_GRID_XML_MAX_DEPTH:
+            add_issue(
+                "grid_xml_depth_limit_exceeded",
+                "Generated GridView XML exceeds the permitted hierarchy depth.",
+                actual=depth,
+                maximum=DEVEXPRESS_GRID_XML_MAX_DEPTH,
+            )
+        if root.tag != "XtraSerializer":
+            add_issue("grid_xml_serializer_element_mismatch", "Root element must be XtraSerializer.")
+        require_attributes(root, {"version": "1.0", "application": "View"}, path="XtraSerializer")
+        if root.attrib.get("version") != "1.0":
+            add_issue("grid_xml_serializer_version_mismatch", "Serializer version must be 1.0.")
+        if root.attrib.get("application") != "View":
+            add_issue("grid_xml_serializer_application_mismatch", "Serializer application must be View.")
+
+        top_names = {name for name, _ in DATAWINDOW_TO_XML_GRIDVIEW_TOP_LEVEL_PROPERTIES}
+        top_names.update({"Name", "Columns", "OptionsView"})
+        top = property_map(root, path="XtraSerializer", allowed_names=top_names)
+        for property_name, expected_value in DATAWINDOW_TO_XML_GRIDVIEW_TOP_LEVEL_PROPERTIES:
+            element = top.get(property_name)
+            actual_value = _xml_property_text(element)
+            require_attributes(element, {"name": property_name}, path=f"XtraSerializer/{property_name}")
+            require_leaf(element, path=f"XtraSerializer/{property_name}")
+            if element is None or actual_value != expected_value:
+                add_issue(
+                    "grid_xml_top_level_value_mismatch",
+                    f"GridView XML property {property_name} must equal the authoritative Layout Load value.",
+                    property=property_name,
+                    expected=expected_value,
+                    actual=None if element is None else actual_value,
+                )
+        serialized_view_name = str(expected_serialized_view_name or expected_grid_view_name or "gridView1")
+        name_element = top.get("Name")
+        require_attributes(name_element, {"name": "Name"}, path="XtraSerializer/Name")
+        require_leaf(name_element, path="XtraSerializer/Name")
+        if name_element is None or _xml_property_text(name_element) != serialized_view_name:
+            add_issue(
+                "grid_xml_view_name_mismatch",
+                "The serialized View Name must match the generated XML artifact name; C# target naming is verified separately.",
+                expected=serialized_view_name,
+                actual=None if name_element is None else _xml_property_text(name_element),
+            )
+
+        columns_element = top.get("Columns")
+        column_elements = list(columns_element.findall("property")) if columns_element is not None else []
+        if columns_element is None:
+            add_issue("grid_xml_columns_missing", "GridView XML must contain the keyed Columns property.")
+        else:
+            for child in list(columns_element):
+                if child.tag != "property":
+                    add_issue(
+                        "grid_xml_unexpected_element",
+                        "Columns may contain serialized Item properties only.",
+                        path="XtraSerializer/Columns",
+                        actual=child.tag,
+                    )
+            require_attributes(
+                columns_element,
+                {"name": "Columns", "iskey": "true", "value": str(len(column_elements))},
+                path="XtraSerializer/Columns",
+            )
+            if columns_element.attrib.get("value") != str(len(column_elements)):
+                add_issue(
+                    "grid_xml_column_count_mismatch",
+                    "Columns value must equal the number of serialized column items.",
+                    expected=str(len(column_elements)),
+                    actual=columns_element.attrib.get("value"),
+                )
+        if normalized_expected is not None and len(column_elements) != len(normalized_expected):
+            add_issue(
+                "grid_xml_expected_column_count_mismatch",
+                "Serialized column count must match the expected DataWindow mapping.",
+                expected=len(normalized_expected),
+                actual=len(column_elements),
+            )
+
+        for index, column_element in enumerate(column_elements, start=1):
+            require_attributes(
+                column_element,
+                {"name": f"Item{index}", "isnull": "true", "iskey": "true"},
+                path=f"XtraSerializer/Columns/Item{index}",
+            )
+            column_property_names = {
+                "AppearanceHeader", "AppearanceCell", "Visible", "VisibleIndex", "FieldName", "Name", "Caption", "ColumnEditName"
+            }
+            props = property_map(
+                column_element,
+                path=f"XtraSerializer/Columns/Item{index}",
+                allowed_names=column_property_names,
+            )
+            expected = (
+                normalized_expected[index - 1]
+                if normalized_expected is not None and index <= len(normalized_expected)
+                else None
+            )
+            field_name = _xml_property_text(props.get("FieldName"))
+            expected_field = expected.field_name if expected is not None else field_name.upper()
+            expected_name = (
+                expected.xml_column_name
+                if expected is not None
+                else f"{resolved_prefix}{expected_field}"
+            )
+            expected_caption = expected_field
+            value_checks = {
+                "Visible": "true",
+                "VisibleIndex": str(index),
+                "FieldName": expected_field,
+                "Name": expected_name,
+                "Caption": expected_caption,
+                "ColumnEditName": "",
+            }
+            for property_name, expected_value in value_checks.items():
+                element = props.get(property_name)
+                actual_value = _xml_property_text(element)
+                require_attributes(
+                    element,
+                    {"name": property_name},
+                    path=f"XtraSerializer/Columns/Item{index}/{property_name}",
+                )
+                require_leaf(element, path=f"XtraSerializer/Columns/Item{index}/{property_name}")
+                if element is None or actual_value != expected_value:
+                    add_issue(
+                        "grid_xml_column_value_mismatch",
+                        f"Serialized column {index} property {property_name} has the wrong value.",
+                        column=index,
+                        property=property_name,
+                        expected=expected_value,
+                        actual=None if element is None else actual_value,
+                    )
+            if field_name != field_name.upper() or not re.fullmatch(r"[A-Z_#$][A-Z0-9_#$]*", field_name):
+                add_issue(
+                    "grid_xml_field_name_not_upper_source_field",
+                    "Column FieldName must be the uppercase source field.",
+                    column=index,
+                    actual=field_name,
+                )
+
+            header_element = props.get("AppearanceHeader")
+            cell_element = props.get("AppearanceCell")
+            require_attributes(header_element, {"name": "AppearanceHeader", "isnull": "true", "iskey": "true"}, path=f"Item{index}/AppearanceHeader")
+            require_attributes(cell_element, {"name": "AppearanceCell", "isnull": "true", "iskey": "true"}, path=f"Item{index}/AppearanceCell")
+            header = property_map(header_element, path=f"Item{index}/AppearanceHeader", allowed_names={"Options", "TextOptions", "Font"})
+            header_options_element = header.get("Options")
+            header_text_element = header.get("TextOptions")
+            cell = property_map(cell_element, path=f"Item{index}/AppearanceCell", allowed_names={"Options", "Font"})
+            cell_options_element = cell.get("Options")
+            for nested, nested_name, nested_path in (
+                (header_options_element, "Options", f"Item{index}/AppearanceHeader/Options"),
+                (header_text_element, "TextOptions", f"Item{index}/AppearanceHeader/TextOptions"),
+                (cell_options_element, "Options", f"Item{index}/AppearanceCell/Options"),
+            ):
+                require_attributes(nested, {"name": nested_name, "isnull": "true", "iskey": "true"}, path=nested_path)
+            header_options = property_map(header_options_element, path=f"Item{index}/AppearanceHeader/Options", allowed_names={"UseTextOptions", "UseFont"})
+            header_text = property_map(header_text_element, path=f"Item{index}/AppearanceHeader/TextOptions", allowed_names={"HAlignment", "VAlignment"})
+            cell_options = property_map(cell_options_element, path=f"Item{index}/AppearanceCell/Options", allowed_names={"UseFont"})
+            appearance_checks = [
+                ("AppearanceHeader.Options.UseTextOptions", header_options.get("UseTextOptions"), "true"),
+                ("AppearanceHeader.Options.UseFont", header_options.get("UseFont"), "true"),
+                ("AppearanceHeader.TextOptions.HAlignment", header_text.get("HAlignment"), "Center"),
+                ("AppearanceHeader.TextOptions.VAlignment", header_text.get("VAlignment"), "Center"),
+                ("AppearanceHeader.Font", header.get("Font"), "Tahoma, 9pt"),
+                ("AppearanceCell.Options.UseFont", cell_options.get("UseFont"), "true"),
+                ("AppearanceCell.Font", cell.get("Font"), "Tahoma, 9pt"),
+            ]
+            for property_path, element, expected_value in appearance_checks:
+                actual_value = _xml_property_text(element)
+                require_attributes(element, {"name": property_path.split(".")[-1]}, path=f"Item{index}/{property_path}")
+                require_leaf(element, path=f"Item{index}/{property_path}")
+                if element is None or actual_value != expected_value:
+                    add_issue(
+                        "grid_xml_column_appearance_value_mismatch",
+                        f"Serialized column {index} {property_path} must match the authoritative Layout Load value.",
+                        column=index,
+                        property=property_path,
+                        expected=expected_value,
+                        actual=None if element is None else actual_value,
+                    )
+            verified_columns.append(
+                {"field_name": field_name, "name": _xml_property_text(props.get("Name")), "caption": _xml_property_text(props.get("Caption"))}
+            )
+
+        options_element = top.get("OptionsView")
+        require_attributes(options_element, {"name": "OptionsView", "isnull": "true", "iskey": "true"}, path="XtraSerializer/OptionsView")
+        options = property_map(
+            options_element,
+            path="XtraSerializer/OptionsView",
+            allowed_names=set(DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS),
+        )
+        for property_name, expected_value in DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS.items():
+            element = options.get(property_name)
+            actual_value = _xml_property_text(element)
+            require_attributes(element, {"name": property_name}, path=f"XtraSerializer/OptionsView/{property_name}")
+            require_leaf(element, path=f"XtraSerializer/OptionsView/{property_name}")
+            if element is None or actual_value != expected_value:
+                add_issue(
+                    "grid_xml_options_view_value_mismatch",
+                    f"OptionsView.{property_name} must match the authoritative Layout Load value.",
+                    property=property_name,
+                    expected=expected_value,
+                    actual=None if element is None else actual_value,
+                )
+
+    passed = not issues
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "status": "passed" if passed else "blocked",
+        "serializer_version": "1.0",
+        "serializer_application": "View",
+        "xml_size_bytes": encoded_size,
+        "csharp_column_prefix": resolved_prefix,
+        "columns": verified_columns,
+        "issues": issues,
+        "layout_load_semantics": (
+            "Static verification proves exact Layout-Load-ready XML only; it does not prove that DevExpress Designer loaded it."
+        ),
+        "actual_live_layout_load_observed": False,
+        "token_optimizer_status": "passthrough",
+    }
+    return HarnessResult(
+        success=passed,
+        stdout=json.dumps({"status": metadata["status"], "issue_count": len(issues)}, ensure_ascii=False, sort_keys=True),
+        stderr="" if passed else "Generated DevExpress GridView XML contract verification failed.",
+        exit_code=0 if passed else 1,
+        metadata=metadata,
+    )
+
+
 def build_datawindow_gridview_designer_defaults(view_name: str = "gvwList") -> List[str]:
-    """Return safe C# GridView OptionsView assignments matching DataWindowToXml defaults."""
+    """Return C# assignments equivalent to authoritative DataWindow XML Layout Load defaults."""
     view = str(view_name or "gvwList").strip() or "gvwList"
     return [
-        f"this.{view}.OptionsView.ShowViewCaption = false;",
-        f"this.{view}.OptionsView.EnableAppearanceEvenRow = true;",
-        f"this.{view}.OptionsView.ShowGroupPanel = false;",
-        f"this.{view}.OptionsView.ColumnAutoWidth = false;",
-        f"this.{view}.OptionsView.ShowFooter = true;",
-        f"this.{view}.OptionsView.ShowAutoFilterRow = true;",
+        *[
+            f"this.{view}.{property_name} = {value};"
+            for property_name, value in DATAWINDOW_TO_CSHARP_GRIDVIEW_DEFAULTS
+        ],
+        *[
+            f"this.{view}.OptionsView.{property_name} = {value};"
+            for property_name, value in DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS.items()
+        ],
     ]
 
 
@@ -2850,13 +3441,15 @@ def build_csharp_grid_column_designer_plan(
     default_allow_edit: bool = False,
     result_fields: Iterable[str] | None = None,
 ) -> HarnessResult:
-    """Build explicit Designer-style GridColumn declarations and assignments."""
+    """Build an explicit Designer grid equivalent to the authoritative XML Layout Load result."""
+    column_inputs = list(columns)
     resolved_prefix = prefix or resolve_csharp_grid_column_prefix(
         input_format, table_name=table_name, purpose_name=purpose_name
     )
     grid_names = resolve_csharp_grid_control_names(input_format, table_name=table_name, purpose_name=purpose_name)
-    view_name = str(grid_view_name or grid_names["grid_view_name"]).strip() or "gvwList"
-    normalized = _normalize_grid_column_specs(columns, prefix=resolved_prefix)
+    requested_view_name = str(grid_view_name or "").strip()
+    view_name = grid_names["grid_view_name"]
+    normalized = _normalize_grid_column_specs(column_inputs, prefix=resolved_prefix)
     if not normalized:
         return HarnessResult(
             success=False,
@@ -2890,6 +3483,34 @@ def build_csharp_grid_column_designer_plan(
         if normalized_result_fields is not None
         and column.field_name not in normalized_result_fields
     ]
+    issues.extend(_grid_column_mapping_issues(column_inputs, normalized, prefix=resolved_prefix))
+    role = str(input_format or "list").strip().lower()
+    if role in {"table", "dbtable", "source-table", "source_table"} and not str(table_name or purpose_name).strip():
+        issues.append(
+            {
+                "code": "grid_table_suffix_required",
+                "severity": "error",
+                "message": "Table-role grids require an explicit table or purpose suffix; colList_ is reserved for list role.",
+            }
+        )
+    if role in {"purpose", "domain", "role", "logical"} and not str(purpose_name or table_name).strip():
+        issues.append(
+            {
+                "code": "grid_purpose_suffix_required",
+                "severity": "error",
+                "message": "Purpose-role grids require an explicit purpose suffix; colList_ is reserved for list role.",
+            }
+        )
+    if requested_view_name and requested_view_name != view_name:
+        issues.append(
+            {
+                "code": "grid_view_name_role_mismatch",
+                "severity": "error",
+                "expected": view_name,
+                "actual": requested_view_name,
+                "message": "C# GridView naming follows the target role and must not copy the serialized XML view name.",
+            }
+        )
     numeric_repository_by_column: Dict[str, str] = {}
     for column in normalized:
         field_upper = str(column.field_name or "").upper()
@@ -2899,13 +3520,19 @@ def build_csharp_grid_column_designer_plan(
             else:
                 numeric_repository_by_column[column.csharp_name] = "rpsSpinAmt"
     required_repositories = sorted(set(numeric_repository_by_column.values()))
-    declarations = [f"private DevExpress.XtraGrid.Columns.GridColumn {column.csharp_name};" for column in normalized]
+    declarations = [
+        f"private DevExpress.XtraGrid.GridControl {grid_names['grid_control_name']};",
+        f"private DevExpress.XtraGrid.Views.Grid.GridView {view_name};",
+        *[f"private DevExpress.XtraGrid.Columns.GridColumn {column.csharp_name};" for column in normalized],
+    ]
     declarations.extend(
         f"private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit {repository_name};"
         for repository_name in required_repositories
     )
     initializers = [
-        f"this.{column.csharp_name} = new DevExpress.XtraGrid.Columns.GridColumn();" for column in normalized
+        f"this.{grid_names['grid_control_name']} = new DevExpress.XtraGrid.GridControl();",
+        f"this.{view_name} = new DevExpress.XtraGrid.Views.Grid.GridView();",
+        *[f"this.{column.csharp_name} = new DevExpress.XtraGrid.Columns.GridColumn();" for column in normalized],
     ]
     initializers.extend(
         f"this.{repository_name} = new DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit();"
@@ -2919,8 +3546,18 @@ def build_csharp_grid_column_designer_plan(
         ],
         "});",
     ]
+    grid_wiring = [
+        f"this.{grid_names['grid_control_name']}.MainView = this.{view_name};",
+        f"this.{grid_names['grid_control_name']}.Name = \"{grid_names['grid_control_name']}\";",
+        f"this.{grid_names['grid_control_name']}.ViewCollection.AddRange(new DevExpress.XtraGrid.Views.Base.BaseView[] {{",
+        f"    this.{view_name}",
+        "});",
+        f"this.{view_name}.GridControl = this.{grid_names['grid_control_name']};",
+        f"this.{view_name}.Name = \"{view_name}\";",
+    ]
+    view_defaults = build_datawindow_gridview_designer_defaults(view_name)
     assignments: List[str] = []
-    for index, column in enumerate(normalized):
+    for index, column in enumerate(normalized, start=1):
         visible = "true"
         assignments.extend(
             [
@@ -2928,6 +3565,13 @@ def build_csharp_grid_column_designer_plan(
                 f'this.{column.csharp_name}.FieldName = "{_escape_csharp_string(column.field_name)}";',
                 f'this.{column.csharp_name}.Name = "{_escape_csharp_string(column.csharp_name)}";',
                 f"this.{column.csharp_name}.OptionsColumn.AllowEdit = {str(default_allow_edit).lower()};",
+                f"this.{column.csharp_name}.AppearanceHeader.Options.UseTextOptions = true;",
+                f"this.{column.csharp_name}.AppearanceHeader.Options.UseFont = true;",
+                f"this.{column.csharp_name}.AppearanceHeader.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.Center;",
+                f"this.{column.csharp_name}.AppearanceHeader.TextOptions.VAlignment = DevExpress.Utils.VertAlignment.Center;",
+                f'this.{column.csharp_name}.AppearanceHeader.Font = new System.Drawing.Font("Tahoma", 9F);',
+                f"this.{column.csharp_name}.AppearanceCell.Options.UseFont = true;",
+                f'this.{column.csharp_name}.AppearanceCell.Font = new System.Drawing.Font("Tahoma", 9F);',
                 f"this.{column.csharp_name}.Visible = {visible};",
                 f"this.{column.csharp_name}.VisibleIndex = {index};",
             ]
@@ -2968,6 +3612,12 @@ def build_csharp_grid_column_designer_plan(
         "// GridView column registration",
         *add_range,
         "",
+        "// GridControl and GridView wiring",
+        *grid_wiring,
+        "",
+        "// Authoritative DataWindow XML Layout Load defaults",
+        *view_defaults,
+        "",
         "// RepositoryItemSpinEdit registration",
         *repository_registration,
         "",
@@ -2987,6 +3637,8 @@ def build_csharp_grid_column_designer_plan(
         "declarations": declarations,
         "initializers": initializers,
         "add_range": add_range,
+        "grid_wiring": grid_wiring,
+        "view_defaults": view_defaults,
         "assignments": assignments,
         "repository_registration": repository_registration,
         "repository_assignments": repository_assignments,
@@ -2994,8 +3646,9 @@ def build_csharp_grid_column_designer_plan(
         "result_fields": sorted(normalized_result_fields or []),
         "issues": issues,
         "designer_contract": (
-            "Use explicit GridColumn members and Columns.AddRange with colList_/colDetail_/col<TABLE>_/col<PURPOSE>_ "
-            "names. Do not generate runtime AddGridColumn, Columns.AddField, or view.Name + \"_\" + fieldName helpers by default."
+            "Use explicit grd<Role>/gvw<Role>/col<Role>_<FIELD> members, GridControl/GridView wiring, Columns.AddRange, "
+            "and the authoritative DataWindow XML Layout Load defaults. Register repositories before ColumnEdit and "
+            "do not copy the serialized gridView1 name into C# Designer output."
         ),
         "token_optimizer_status": "passthrough",
         "token_optimizer_status_reason": "Generated Designer code is contract-sensitive and was not compressed.",
@@ -3506,8 +4159,18 @@ def _validate_csharp_result_field_contract(
         }
         for item in mismatches
     ]
+    issues.extend(
+        {
+            "code": "csharp_result_field_mapping_unresolved",
+            "severity": "error",
+            **item,
+            "message": "C# BindingField/FieldName/DataPropertyName mappings must use a resolvable direct string literal.",
+        }
+        for item in unresolved
+    )
+    has_errors = any(item.get("severity") == "error" for item in issues)
     return issues, {
-        "status": "passed" if not issues else "blocked",
+        "status": "passed" if not has_errors else "blocked",
         "declared_result_fields": sorted(declared),
         "mappings": mappings,
         "mismatches": mismatches,
@@ -3628,6 +4291,664 @@ def _validate_designer_owned_ui_contract(
     }
 
 
+def _grid_contract_suffix(
+    role: str,
+    suffix: str,
+    designer_source: str,
+) -> tuple[str, List[Dict[str, Any]]]:
+    issues: List[Dict[str, Any]] = []
+    normalized_role = str(role or "").strip().lower()
+    normalized_suffix = re.sub(r"[^A-Za-z0-9_]", "", str(suffix or "").strip())
+    if normalized_role in {"", "list", "main", "master"} and not normalized_suffix:
+        if normalized_role:
+            return "List", issues
+    if normalized_role in {"detail", "line", "child"} and not normalized_suffix:
+        return "Detail", issues
+    if normalized_role in {"table", "dbtable", "source-table", "source_table", "purpose", "domain", "role", "logical"}:
+        if not normalized_suffix:
+            issues.append(
+                {
+                    "code": "expected_grid_suffix_required",
+                    "severity": "error",
+                    "message": "Table or purpose grid verification requires an explicit expected suffix; List is not a fallback for these roles.",
+                }
+            )
+            return "Table" if normalized_role.startswith(("table", "dbtable", "source")) else "Purpose", issues
+        return normalized_suffix.upper(), issues
+    if normalized_suffix:
+        return normalized_suffix if normalized_suffix.isupper() else normalized_suffix[0].upper() + normalized_suffix[1:], issues
+    column_match = re.search(r"\bcol(?P<suffix>[A-Za-z0-9]+)_[A-Z][A-Z0-9_]*\b", designer_source)
+    if column_match:
+        return column_match.group("suffix"), issues
+    view_match = re.search(r"\bgvw(?P<suffix>[A-Za-z0-9_]+)\b", designer_source)
+    return (view_match.group("suffix") if view_match else "List"), issues
+
+
+def _csharp_designer_assignments(
+    source: str,
+    structural_source: str = "",
+) -> Dict[tuple[str, str], str]:
+    assignments: Dict[tuple[str, str], str] = {}
+    for match in re.finditer(
+        r"(?m)^\s*this\.(?P<member>[A-Za-z_][A-Za-z0-9_]*)\."
+        r"(?P<property>[A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(?P<value>.*?)\s*;\s*$",
+        source,
+    ):
+        if structural_source:
+            lhs = f"this.{match.group('member')}.{match.group('property')}"
+            if lhs not in structural_source[match.start() : match.end()]:
+                continue
+        assignments[(match.group("member"), match.group("property"))] = match.group("value").strip()
+    return assignments
+
+
+def _csharp_direct_string_value(value: str) -> str | None:
+    raw = str(value or "").strip()
+    if raw in {"string.Empty", "System.String.Empty", '""'}:
+        return ""
+    match = re.fullmatch(r'"((?:\\.|[^"\\])*)"', raw)
+    if not match:
+        return None
+    return match.group(1).replace(r'\"', '"')
+
+
+def _csharp_layout_value_matches(property_name: str, actual: str, expected: str) -> bool:
+    raw = str(actual or "").strip()
+    if expected == "string.Empty":
+        return _csharp_direct_string_value(raw) == ""
+    if property_name == "ScrollStyle":
+        if re.search(r"[^|]\+|\+[^|]", raw):
+            return False
+        flags = [
+            part.strip().strip("()").split(".")[-1]
+            for part in raw.split("|")
+            if part.strip()
+        ]
+        return len(flags) == 2 and set(flags) == {"LiveVertScroll", "LiveHorzScroll"}
+    if expected in {"true", "false"} or re.fullmatch(r"-?\d+", expected):
+        return re.sub(r"\s+", "", raw).lower() == expected.lower()
+    return raw.split(".")[-1] == expected.split(".")[-1]
+
+
+def _csharp_tahoma_nine_font(value: str) -> bool:
+    font = r"(?:System\.Drawing\.)?Font"
+    match = re.fullmatch(
+        rf"new\s+{font}\s*\(\s*(?P<arguments>[^\r\n]*)\s*\)",
+        str(value or "").strip(),
+    )
+    if not match:
+        return False
+
+    arguments = [argument.strip() for argument in match.group("arguments").split(",")]
+    if len(arguments) < 2 or arguments[0] != '"Tahoma"':
+        return False
+    if not re.fullmatch(r"9(?:\.0+)?[Ff]?", arguments[1]):
+        return False
+
+    optional = arguments[2:]
+    regular = {"FontStyle.Regular", "System.Drawing.FontStyle.Regular"}
+    point = {"GraphicsUnit.Point", "System.Drawing.GraphicsUnit.Point"}
+    if not optional:
+        return True
+    if len(optional) == 1:
+        return optional[0] in regular or optional[0] in point
+    if optional[0] not in regular or optional[1] not in point:
+        return False
+    if len(optional) == 2:
+        return True
+    if not re.fullmatch(r"(?:1|\(\s*byte\s*\)\s*1)", optional[2]):
+        return False
+    return len(optional) == 3 or (len(optional) == 4 and optional[3] == "false")
+
+
+def _validate_input_tab_order(designer_source: str) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    source = str(designer_source or "")
+    if not source.strip():
+        return [], {"status": "not_requested", "inputs": []}
+    control_types: Dict[str, str] = {}
+    for match in CSHARP_FIELD_DECLARATION_PATTERN.finditer(source):
+        control_types[match.group("name")] = match.group("type")
+    for match in CSHARP_NEW_CONTROL_PATTERN.finditer(source):
+        control_types[match.group("name")] = match.group("type")
+    locations = {
+        match.group("name"): (int(match.group("x")), int(match.group("y")))
+        for match in re.finditer(
+            r"this\.(?P<name>[A-Za-z_][A-Za-z0-9_]*)\.Location\s*=\s*"
+            r"new\s+(?:System\.Drawing\.)?Point\s*\(\s*(?P<x>-?\d+)\s*,\s*(?P<y>-?\d+)\s*\)\s*;",
+            source,
+        )
+    }
+    tab_indexes = {
+        match.group("name"): int(match.group("index"))
+        for match in re.finditer(
+            r"this\.(?P<name>[A-Za-z_][A-Za-z0-9_]*)\.TabIndex\s*=\s*(?P<index>\d+)\s*;",
+            source,
+        )
+    }
+    parents: Dict[str, str] = {}
+    for match in re.finditer(
+        r"this\.(?:(?P<container>[A-Za-z_][A-Za-z0-9_]*)\.)?Controls\.Add\s*\(\s*this\.(?P<child>[A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;",
+        source,
+    ):
+        parents[match.group("child")] = match.group("container") or "<form>"
+
+    def is_input(name: str, type_name: str) -> bool:
+        lowered_type = str(type_name or "").lower()
+        if any(token in lowered_type for token in ("label", "grid", "column", "repository", "panel", "group", "tabpage", "container")):
+            return False
+        if any(
+            token in lowered_type
+            for token in (
+                "textedit", "spinedit", "dateedit", "lookupedit", "buttonedit", "checkedit", "memoedit",
+                "radiogroup", "textbox", "combobox", "datetimepicker", "numericupdown", "checkbox", "radiobutton",
+            )
+        ):
+            return True
+        return bool(re.match(r"^(?:txt|spn|spin|ymd|dt|cbo|btn|chk|memo|rad)[A-Z0-9_]", name, re.IGNORECASE))
+
+    inputs = [
+        {
+            "name": name,
+            "type": type_name,
+            "container": parents.get(name, "<form>"),
+            "x": locations[name][0],
+            "y": locations[name][1],
+            "tab_index": tab_indexes.get(name),
+        }
+        for name, type_name in control_types.items()
+        if name in locations and is_input(name, type_name)
+    ]
+    if not inputs:
+        return [], {"status": "not_applicable", "inputs": inputs}
+    issues: List[Dict[str, Any]] = []
+    for item in inputs:
+        if item["tab_index"] is None:
+            issues.append(
+                {
+                    "code": "input_tabindex_missing_with_layout",
+                    "severity": "error",
+                    "member": item["name"],
+                    "message": "Input controls with Designer Location evidence require explicit TabIndex values.",
+                }
+            )
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for item in inputs:
+        grouped.setdefault(str(item["container"]), []).append(item)
+    container_contracts: List[Dict[str, Any]] = []
+    spatial: List[Dict[str, Any]] = []
+    for container, members in sorted(grouped.items()):
+        ordered = sorted(members, key=lambda item: (int(item["y"]), int(item["x"]), str(item["name"])))
+        spatial.extend(ordered)
+        actual = [item["tab_index"] for item in ordered]
+        container_contracts.append(
+            {
+                "container": container,
+                "spatial_order": [item["name"] for item in ordered],
+                "tab_indexes": actual,
+            }
+        )
+        if any(value is None for value in actual):
+            continue
+        indexes = [int(value) for value in actual]
+        if indexes != sorted(indexes):
+            issues.append(
+                {
+                    "code": "input_tabindex_spatial_order_mismatch",
+                    "severity": "error",
+                    "message": "Input TabIndex must increase in left-to-right, then top-to-bottom order within its parent container.",
+                    "container": container,
+                    "spatial_order": [item["name"] for item in ordered],
+                    "tab_indexes": indexes,
+                }
+            )
+        expected_contiguous = list(range(min(indexes), min(indexes) + len(indexes)))
+        if indexes != expected_contiguous:
+            issues.append(
+                {
+                    "code": "input_tabindex_not_container_contiguous",
+                    "severity": "error",
+                    "message": "Input TabIndex values must be contiguous within each parent container.",
+                    "container": container,
+                    "expected": expected_contiguous,
+                    "actual": indexes,
+                }
+            )
+    return issues, {
+        "status": "passed" if not issues else "blocked",
+        "inputs": spatial,
+        "containers": container_contracts,
+        "labels_and_non_inputs_ignored": True,
+        "unrelated_containers_compared": False,
+    }
+
+
+def _validate_devexpress_designer_grid_contract(
+    designer_source: str,
+    *,
+    designer_code: str,
+    expected_grid_role: str,
+    expected_grid_suffix: str,
+    expected_grid_prefix: str,
+    expected_grid_columns: Iterable[Any] | None,
+    result_fields: Iterable[str] | None,
+    layout_load_artifact_path: str,
+    layout_load_artifact_text: str,
+    layout_load_evidence: Any,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    source = str(designer_source or "")
+    code_source = str(designer_code or "")
+    expected_requested = bool(
+        str(expected_grid_role or "").strip()
+        or str(expected_grid_suffix or "").strip()
+        or expected_grid_columns is not None
+        or str(layout_load_artifact_path or "").strip()
+        or str(layout_load_artifact_text or "").strip()
+        or layout_load_evidence is not None
+    )
+    if not code_source.strip() or not re.search(r"\b(?:GridView|GridColumn|XtraGrid\.)\b", code_source):
+        if expected_requested:
+            issue = {
+                "code": "expected_grid_designer_missing",
+                "severity": "error",
+                "message": "Explicit grid metadata requires a real C# Designer GridControl/GridView contract.",
+            }
+            return [issue], {
+                "status": "blocked",
+                "layout_load_artifact_verified": False,
+                "layout_load_evidence_verified": False,
+                "actual_live_layout_load_observed": False,
+                "verification_scope": "static_xml_and_post_load_equivalent_designer_state",
+                "designer_source_used": False,
+            }
+        return [], {
+            "status": "not_requested",
+            "layout_load_artifact_verified": False,
+            "layout_load_evidence_verified": False,
+            "actual_live_layout_load_observed": False,
+            "verification_scope": "static_xml_and_post_load_equivalent_designer_state",
+        }
+    issues: List[Dict[str, Any]] = []
+    suffix, suffix_issues = _grid_contract_suffix(expected_grid_role, expected_grid_suffix, code_source)
+    issues.extend(suffix_issues)
+    grid_name = f"grd{suffix}"
+    view_name = f"gvw{suffix}"
+    prefix = str(expected_grid_prefix or "").strip() or f"col{suffix}_"
+    assignments = _csharp_designer_assignments(source, code_source)
+    expected_input_source = expected_grid_columns if expected_grid_columns is not None else result_fields
+    expected_input = None if expected_input_source is None else list(expected_input_source)
+    normalized_expected = (
+        _normalize_grid_column_specs(expected_input, prefix=prefix)
+        if expected_input is not None
+        else []
+    )
+    if expected_input is not None:
+        issues.extend(_grid_column_mapping_issues(expected_input, normalized_expected, prefix=prefix))
+    observed_columns = [
+        {"name": match.group(0), "field_name": match.group("field")}
+        for match in re.finditer(
+            rf"\b{re.escape(prefix)}(?P<field>[A-Z][A-Z0-9_]*)\b",
+            code_source,
+        )
+    ]
+    observed_by_name = {item["name"]: item for item in observed_columns}
+    if not normalized_expected:
+        normalized_columns: List[Dict[str, Any]] = [
+            {"field_name": item["field_name"], "csharp_name": item["name"], "caption": None}
+            for item in observed_by_name.values()
+        ]
+    else:
+        normalized_columns = [
+            {
+                "field_name": item.field_name,
+                "csharp_name": item.csharp_name,
+                "caption": item.caption or item.field_name,
+                "data_type": item.data_type,
+            }
+            for item in normalized_expected
+        ]
+
+    artifact_verified = False
+    artifact_issue_codes: List[str] = []
+    artifact_path_resolved = ""
+    artifact_sha256 = ""
+    artifact_source = ""
+    artifact_text = str(layout_load_artifact_text or "")
+    if str(layout_load_artifact_path or "").strip():
+        path = Path(layout_load_artifact_path)
+        try:
+            path_xml_text = path.read_text(encoding="utf-8-sig")
+        except OSError as exc:
+            issues.append(
+                {
+                    "code": "layout_load_artifact_unreadable",
+                    "severity": "error",
+                    "message": "The explicit Layout Load artifact path must be readable.",
+                    "detail": str(exc),
+                }
+            )
+        else:
+            artifact_path_resolved = str(path.resolve())
+            if artifact_text and artifact_text != path_xml_text:
+                issues.append(
+                    {
+                        "code": "layout_load_artifact_text_path_mismatch",
+                        "severity": "error",
+                        "message": "When both XML text and path are supplied, their exact content must match.",
+                    }
+                )
+            else:
+                artifact_text = path_xml_text
+                artifact_source = "path"
+    elif artifact_text:
+        artifact_source = "text"
+
+    if expected_requested and not artifact_text:
+        issues.append(
+            {
+                "code": "layout_load_artifact_required",
+                "severity": "error",
+                "message": "An explicit grid contract requires valid Layout-Load-ready XML text or an XML artifact path plus matching Designer source.",
+            }
+        )
+    if artifact_text:
+        artifact_sha256 = "sha256:" + hashlib.sha256(artifact_text.encode("utf-8")).hexdigest()
+        xml_result = verify_devexpress_grid_xml_contract(
+            artifact_text,
+            expected_columns=expected_input,
+            input_format=expected_grid_role or "list",
+            table_name=expected_grid_suffix if str(expected_grid_role).lower() == "table" else "",
+            purpose_name=expected_grid_suffix if str(expected_grid_role).lower() in {"purpose", "domain", "role", "logical"} else "",
+            expected_column_prefix=prefix,
+        )
+        artifact_verified = xml_result.success
+        artifact_issue_codes = [item["code"] for item in xml_result.metadata.get("issues", [])]
+        if not artifact_verified:
+            issues.append(
+                {
+                    "code": "layout_load_artifact_contract_failed",
+                    "severity": "error",
+                    "message": "The Layout-Load-ready XML did not pass exact value-level contract verification.",
+                    "artifact_issue_codes": artifact_issue_codes,
+                }
+            )
+
+    # Local dictionaries and hashes are caller assertions, not DevExpress host receipts.
+    layout_load_evidence_verified = False
+    layout_load_evidence_status = (
+        "caller_assertion_ignored" if layout_load_evidence is not None else "not_supplied"
+    )
+
+    def add_missing(code: str, message: str, **details: Any) -> None:
+        issues.append({"code": code, "severity": "error", "message": message, **details})
+
+    declarations = {
+        "grid": bool(re.search(rf"\bprivate\s+DevExpress\.XtraGrid\.GridControl\s+{re.escape(grid_name)}\s*;", code_source)),
+        "view": bool(re.search(rf"\bprivate\s+DevExpress\.XtraGrid\.Views\.Grid\.GridView\s+{re.escape(view_name)}\s*;", code_source)),
+    }
+    initializers = {
+        "grid": bool(re.search(rf"this\.{re.escape(grid_name)}\s*=\s*new\s+DevExpress\.XtraGrid\.GridControl\s*\(", code_source)),
+        "view": bool(re.search(rf"this\.{re.escape(view_name)}\s*=\s*new\s+DevExpress\.XtraGrid\.Views\.Grid\.GridView\s*\(", code_source)),
+    }
+    for kind, present in {**{f"declaration_{k}": v for k, v in declarations.items()}, **{f"initializer_{k}": v for k, v in initializers.items()}}.items():
+        if not present:
+            add_missing("grid_designer_member_or_initializer_missing", "GridControl and GridView must be explicit Designer members and initializers.", item=kind)
+    main_view_targets = re.findall(
+        rf"this\.{re.escape(grid_name)}\.MainView\s*=\s*this\.([A-Za-z_][A-Za-z0-9_]*)\s*;",
+        code_source,
+    )
+    if main_view_targets != [view_name]:
+        add_missing(
+            "grid_designer_wiring_identity_mismatch",
+            "GridControl.MainView must reference exactly the expected GridView member.",
+            item="MainView",
+            expected=[view_name],
+            actual=main_view_targets,
+        )
+    view_collection_calls = list(
+        re.finditer(
+            rf"this\.{re.escape(grid_name)}\.ViewCollection\.AddRange\s*\((?P<body>[\s\S]*?)\)\s*;",
+            code_source,
+        )
+    )
+    view_collection_members = (
+        re.findall(r"this\.(gvw[A-Za-z_][A-Za-z0-9_]*)", view_collection_calls[0].group("body"))
+        if len(view_collection_calls) == 1
+        else []
+    )
+    if len(view_collection_calls) != 1 or view_collection_members != [view_name]:
+        add_missing(
+            "grid_designer_wiring_identity_mismatch",
+            "GridControl.ViewCollection.AddRange must contain exactly the expected GridView member.",
+            item="ViewCollection",
+            expected=[view_name],
+            actual=view_collection_members,
+        )
+    grid_control_targets = re.findall(
+        rf"this\.{re.escape(view_name)}\.GridControl\s*=\s*this\.([A-Za-z_][A-Za-z0-9_]*)\s*;",
+        code_source,
+    )
+    if grid_control_targets != [grid_name]:
+        add_missing(
+            "grid_designer_wiring_identity_mismatch",
+            "GridView.GridControl must reference exactly the expected GridControl member.",
+            item="GridControl",
+            expected=[grid_name],
+            actual=grid_control_targets,
+        )
+    columns_add_range_pattern = rf"this\.{re.escape(view_name)}\.Columns\.AddRange\s*\((?P<body>[\s\S]*?)\)\s*;"
+    column_add_range_calls = list(re.finditer(columns_add_range_pattern, code_source))
+    if len(column_add_range_calls) != 1:
+        add_missing(
+            "grid_designer_wiring_missing",
+            "GridView.Columns.AddRange must be present exactly once.",
+            item="Columns.AddRange",
+        )
+    for member, expected_value in ((grid_name, grid_name), (view_name, view_name)):
+        actual = _csharp_direct_string_value(assignments.get((member, "Name"), ""))
+        if actual != expected_value:
+            add_missing(
+                "grid_component_name_mismatch",
+                "C# component Name must use the target role naming contract, not the XML gridView1 name.",
+                member=member,
+                expected=expected_value,
+                actual=actual,
+            )
+    for property_name, expected_value in DATAWINDOW_TO_CSHARP_GRIDVIEW_DEFAULTS:
+        actual = assignments.get((view_name, property_name))
+        if actual is None:
+            add_missing(
+                "authoritative_gridview_default_missing",
+                "C# Designer must contain the post-load-equivalent authoritative GridView value.",
+                property=property_name,
+                expected=expected_value,
+            )
+        elif not _csharp_layout_value_matches(property_name, actual, expected_value):
+            add_missing(
+                "authoritative_gridview_default_mismatch",
+                "C# Designer GridView value conflicts with the authoritative Layout Load baseline.",
+                property=property_name,
+                expected=expected_value,
+                actual=actual,
+            )
+    for property_name, expected_value in DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS.items():
+        property_path = f"OptionsView.{property_name}"
+        actual = assignments.get((view_name, property_path))
+        if actual is None:
+            add_missing(
+                "authoritative_optionsview_default_missing",
+                "C# Designer must contain the post-load-equivalent authoritative OptionsView value.",
+                property=property_path,
+                expected=expected_value,
+            )
+        elif not _csharp_layout_value_matches(property_name, actual, expected_value):
+            add_missing(
+                "authoritative_optionsview_default_mismatch",
+                "C# Designer OptionsView value conflicts with the authoritative Layout Load baseline.",
+                property=property_path,
+                expected=expected_value,
+                actual=actual,
+            )
+
+    if re.search(r"\.ColumnEditName\s*=", code_source):
+        add_missing(
+            "csharp_column_edit_name_assignment_detected",
+            "ColumnEditName is an empty XML serializer value only and must not be emitted as a C# Designer assignment.",
+        )
+    expected_order = [item["csharp_name"] for item in normalized_columns]
+    if expected_order and len(column_add_range_calls) == 1:
+        actual_order = re.findall(
+            r"this\.(col[A-Za-z_][A-Za-z0-9_]*)",
+            column_add_range_calls[0].group("body"),
+        )
+        if actual_order != expected_order:
+            add_missing(
+                "grid_columns_addrange_identity_order_mismatch",
+                "GridView.Columns.AddRange must contain exactly the expected GridColumn members in loaded VisibleIndex order.",
+                expected=expected_order,
+                actual=actual_order,
+            )
+    for visible_index, item in enumerate(normalized_columns, start=1):
+        column_name = item["csharp_name"]
+        field_name = item["field_name"]
+        if not re.search(
+            rf"\bprivate\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s+{re.escape(column_name)}\s*;",
+            code_source,
+        ) or not re.search(
+            rf"this\.{re.escape(column_name)}\s*=\s*new\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s*\(",
+            code_source,
+        ):
+            add_missing(
+                "grid_column_member_or_initializer_missing",
+                "Each targeted GridColumn must be an explicit Designer member and initializer.",
+                column=column_name,
+            )
+        checks = [
+            ("Name", column_name, "string"),
+            ("FieldName", field_name, "string"),
+            ("Visible", "true", "value"),
+            ("VisibleIndex", str(visible_index), "value"),
+            ("AppearanceHeader.Options.UseTextOptions", "true", "value"),
+            ("AppearanceHeader.Options.UseFont", "true", "value"),
+            ("AppearanceHeader.TextOptions.HAlignment", "Center", "enum"),
+            ("AppearanceHeader.TextOptions.VAlignment", "Center", "enum"),
+            ("AppearanceHeader.Font", "Tahoma, 9", "font"),
+            ("AppearanceCell.Options.UseFont", "true", "value"),
+            ("AppearanceCell.Font", "Tahoma, 9", "font"),
+        ]
+        if item.get("caption") is not None:
+            checks.insert(2, ("Caption", str(item["caption"]), "string"))
+        for property_path, expected_value, value_kind in checks:
+            actual = assignments.get((column_name, property_path))
+            if actual is None:
+                add_missing(
+                    "authoritative_grid_column_default_missing",
+                    "C# Designer column must contain the post-load-equivalent authoritative value.",
+                    column=column_name,
+                    property=property_path,
+                    expected=expected_value,
+                )
+                continue
+            matched = (
+                _csharp_direct_string_value(actual) == expected_value
+                if value_kind == "string"
+                else _csharp_tahoma_nine_font(actual)
+                if value_kind == "font"
+                else actual.split(".")[-1] == expected_value
+                if value_kind == "enum"
+                else re.sub(r"\s+", "", actual).lower() == expected_value.lower()
+            )
+            if not matched:
+                add_missing(
+                    "authoritative_grid_column_default_mismatch",
+                    "C# Designer column value conflicts with the authoritative Layout Load baseline.",
+                    column=column_name,
+                    property=property_path,
+                    expected=expected_value,
+                    actual=actual,
+                )
+        if item.get("caption") is None:
+            caption = _csharp_direct_string_value(assignments.get((column_name, "Caption"), ""))
+            if caption is None or caption == "":
+                add_missing(
+                    "grid_column_caption_missing",
+                    "GridColumn Caption must use supplied PB text when mapped and otherwise fall back to FieldName.",
+                    column=column_name,
+                )
+
+        declared_numeric = _is_numeric_grid_data_type(str(item.get("data_type") or ""))
+        is_numeric = declared_numeric is True or (
+            declared_numeric is None and not normalized_expected and _is_numeric_grid_field_name(field_name)
+        )
+        if is_numeric:
+            repository_rhs = assignments.get((column_name, "ColumnEdit"), "")
+            repository_match = re.fullmatch(r"this\.(rpsSpin[A-Za-z0-9_]*)", repository_rhs)
+            if not repository_match:
+                add_missing(
+                    "numeric_grid_column_missing_spin_repository",
+                    "Numeric GridColumns require RepositoryItemSpinEdit through ColumnEdit.",
+                    column=column_name,
+                )
+            else:
+                repository_name = repository_match.group(1)
+                repository_declared = bool(
+                    re.search(
+                        rf"\b(?:private\s+)?(?:DevExpress\.XtraEditors\.Repository\.)?RepositoryItemSpinEdit\s+{re.escape(repository_name)}\s*;",
+                        code_source,
+                    )
+                )
+                repository_initialized = bool(
+                    re.search(
+                        rf"this\.{re.escape(repository_name)}\s*=\s*new\s+(?:DevExpress\.XtraEditors\.Repository\.)?RepositoryItemSpinEdit\s*\(",
+                        code_source,
+                    )
+                )
+                if not repository_declared or not repository_initialized:
+                    add_missing(
+                        "numeric_grid_spin_repository_not_declared_or_initialized",
+                        "Numeric GridColumns require a declared and initialized RepositoryItemSpinEdit.",
+                        column=column_name,
+                        repository=repository_name,
+                    )
+                registration = re.search(
+                    rf"this\.{re.escape(grid_name)}\.RepositoryItems\.AddRange\s*\([\s\S]*?this\.{re.escape(repository_name)}[\s\S]*?\)\s*;",
+                    code_source,
+                )
+                column_edit_offset = code_source.find(f"this.{column_name}.ColumnEdit")
+                if registration is None or registration.start() > column_edit_offset:
+                    add_missing(
+                        "numeric_grid_repository_registration_order_invalid",
+                        "RepositoryItemSpinEdit must be registered on the GridControl before ColumnEdit assignment.",
+                        column=column_name,
+                        repository=repository_name,
+                    )
+            if re.search(rf"this\.{re.escape(column_name)}\.DisplayFormat\.Format(?:String|Type)\s*=", code_source):
+                add_missing(
+                    "numeric_grid_column_displayformat_detected",
+                    "Numeric GridColumns must use SpinEdit behavior and must not emit GridColumn DisplayFormat.",
+                    column=column_name,
+                )
+
+    return issues, {
+        "status": "passed" if not issues else "blocked",
+        "expected_grid_role": expected_grid_role or "inferred",
+        "expected_grid_suffix": suffix,
+        "grid_control_name": grid_name,
+        "grid_view_name": view_name,
+        "grid_column_prefix": prefix,
+        "expected_columns": normalized_columns,
+        "layout_load_artifact_verified": artifact_verified,
+        "layout_load_evidence_verified": layout_load_evidence_verified,
+        "layout_load_evidence_status": layout_load_evidence_status,
+        "actual_live_layout_load_observed": False,
+        "verification_scope": "static_xml_and_post_load_equivalent_designer_state",
+        "layout_load_artifact_source": artifact_source,
+        "layout_load_artifact_path": artifact_path_resolved,
+        "layout_load_artifact_sha256": artifact_sha256,
+        "layout_load_artifact_issue_codes": artifact_issue_codes,
+        "designer_source_used": True,
+    }
+
+
 def verify_migration_generated_csharp_style(
     source_text: str,
     *,
@@ -3639,12 +4960,23 @@ def verify_migration_generated_csharp_style(
     source_role: str = "code-behind",
     runtime_dynamic_ui_evidence: Any = None,
     result_fields: Iterable[str] | None = None,
+    expected_grid_role: str = "",
+    expected_grid_suffix: str = "",
+    expected_grid_prefix: str = "",
+    expected_grid_columns: Iterable[Any] | None = None,
+    expected_grid_contracts: Iterable[Mapping[str, Any]] | None = None,
+    layout_load_artifact_path: str = "",
+    layout_load_artifact_text: str = "",
+    layout_load_evidence: Any = None,
     require_designer_companion: bool = False,
     primary_style_evidence_paths: Any = None,
     excluded_paths: Any = None,
     require_author_tagged_evidence: bool = False,
 ) -> HarnessResult:
     """Block generated C# patterns that do not match the target Designer/grid style."""
+    result_fields_list = None if result_fields is None else list(result_fields)
+    expected_grid_columns_list = None if expected_grid_columns is None else list(expected_grid_columns)
+    expected_grid_contracts_list = [dict(item) for item in (expected_grid_contracts or [])]
     source_view = _lex_csharp_non_code(source_text)
     designer_view = _lex_csharp_non_code(designer_source_text)
     source = source_view.comments_removed
@@ -3691,9 +5023,79 @@ def verify_migration_generated_csharp_style(
     result_field_issues, result_field_contract = _validate_csharp_result_field_contract(
         source_view,
         designer_view,
-        result_fields,
+        result_fields_list,
     )
     issues.extend(result_field_issues)
+    grid_designer_source = designer_source if designer_view.code.strip() else (source if str(source_role).lower() == "designer" else "")
+    grid_designer_code = (
+        designer_view.code
+        if designer_view.code.strip()
+        else (source_view.code if str(source_role).lower() == "designer" else "")
+    )
+    explicit_grid_requested = bool(
+        expected_grid_contracts_list
+        or str(expected_grid_role or expected_grid_suffix or expected_grid_prefix).strip()
+        or expected_grid_columns_list is not None
+        or str(layout_load_artifact_path or layout_load_artifact_text).strip()
+    )
+    raw_grid_source = designer_source_text if str(designer_source_text or "").strip() else (
+        source_text if str(source_role).lower() == "designer" else ""
+    )
+    if explicit_grid_requested and _has_unknown_csharp_preprocessor(raw_grid_source):
+        issues.append(
+            {
+                "code": "grid_designer_unknown_conditional_compilation",
+                "severity": "error",
+                "message": "Unknown conditional-compilation branches cannot serve as unconditional Designer grid evidence.",
+            }
+        )
+    if expected_grid_contracts_list:
+        contract_results: List[Dict[str, Any]] = []
+        for contract_index, contract in enumerate(expected_grid_contracts_list):
+            contract_issues, contract_metadata = _validate_devexpress_designer_grid_contract(
+                grid_designer_source,
+                designer_code=grid_designer_code,
+                expected_grid_role=str(contract.get("role") or contract.get("expected_grid_role") or ""),
+                expected_grid_suffix=str(contract.get("suffix") or contract.get("expected_grid_suffix") or ""),
+                expected_grid_prefix=str(contract.get("prefix") or contract.get("expected_grid_prefix") or ""),
+                expected_grid_columns=contract.get("columns", contract.get("expected_grid_columns")),
+                result_fields=contract.get("result_fields", result_fields_list),
+                layout_load_artifact_path=str(contract.get("artifact_path") or contract.get("layout_load_artifact_path") or ""),
+                layout_load_artifact_text=str(contract.get("artifact_text") or contract.get("layout_load_artifact_text") or ""),
+                layout_load_evidence=contract.get("layout_load_evidence"),
+            )
+            for item in contract_issues:
+                item.setdefault("grid_contract_index", contract_index)
+                if contract.get("id"):
+                    item.setdefault("grid_contract_id", str(contract["id"]))
+            issues.extend(contract_issues)
+            contract_metadata["grid_contract_index"] = contract_index
+            contract_metadata["grid_contract_id"] = str(contract.get("id") or "")
+            contract_results.append(contract_metadata)
+        grid_designer_contract = {
+            "status": "passed" if all(item.get("status") == "passed" for item in contract_results) else "blocked",
+            "contracts": contract_results,
+            "actual_live_layout_load_observed": False,
+            "verification_scope": "static_xml_and_post_load_equivalent_designer_state",
+        }
+    else:
+        grid_contract_issues, grid_designer_contract = _validate_devexpress_designer_grid_contract(
+            grid_designer_source,
+            designer_code=grid_designer_code,
+            expected_grid_role=expected_grid_role,
+            expected_grid_suffix=expected_grid_suffix,
+            expected_grid_prefix=expected_grid_prefix,
+            expected_grid_columns=expected_grid_columns_list,
+            result_fields=result_fields_list,
+            layout_load_artifact_path=layout_load_artifact_path,
+            layout_load_artifact_text=layout_load_artifact_text,
+            layout_load_evidence=layout_load_evidence,
+        )
+        issues.extend(grid_contract_issues)
+    tab_order_issues, input_tab_order_contract = _validate_input_tab_order(
+        designer_view.code if designer_view.code.strip() else (source_view.code if str(source_role).lower() == "designer" else "")
+    )
+    issues.extend(tab_order_issues)
     profile_consumption = dict(
         profile_context.get("consumption", profile_context)
         if isinstance(profile_context, dict)
@@ -3827,13 +5229,15 @@ def verify_migration_generated_csharp_style(
             }
         )
 
+    grid_source = designer_view.code if designer_view.code.strip() else source_view.code
+    combined_grid_source = f"{source_view.code}\n{designer_view.code}"
     has_designer_grid_column_members = bool(
-        re.search(r"\bprivate\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s+col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\s*;", source)
-        and re.search(r"this\.col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\s*=\s*new\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s*\(\s*\)\s*;", source)
-        and re.search(r"\.Columns\.AddRange\s*\([\s\S]*this\.col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+", source)
+        re.search(r"\bprivate\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s+col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\s*;", grid_source)
+        and re.search(r"this\.col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\s*=\s*new\s+DevExpress\.XtraGrid\.Columns\.GridColumn\s*\(\s*\)\s*;", grid_source)
+        and re.search(r"\.Columns\.AddRange\s*\([\s\S]*this\.col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+", grid_source)
     )
 
-    if re.search(r"\bAddGridColumn\s*\(", source):
+    if re.search(r"\bAddGridColumn\s*\(", combined_grid_source):
         issues.append(
             {
                 "code": "runtime_add_grid_column_helper_detected",
@@ -3844,7 +5248,7 @@ def verify_migration_generated_csharp_style(
                 ),
             }
         )
-    if re.search(r"\.Columns\.AddField\s*\(", source):
+    if re.search(r"\.Columns\.AddField\s*\(", combined_grid_source):
         issues.append(
             {
                 "code": "runtime_columns_addfield_detected",
@@ -3855,7 +5259,7 @@ def verify_migration_generated_csharp_style(
                 ),
             }
         )
-    if re.search(r"\.Columns\.Add\s*\(", source):
+    if re.search(r"\.Columns\.Add\s*\(", combined_grid_source):
         issues.append(
             {
                 "code": "runtime_columns_add_detected",
@@ -3863,7 +5267,7 @@ def verify_migration_generated_csharp_style(
                 "message": "Generated grid columns must not be registered through runtime Columns.Add; use explicit Designer Columns.AddRange registration.",
             }
         )
-    for constructor_match in re.finditer(r"(?m)^.*new\s+(?:DevExpress\.XtraGrid\.Columns\.)?GridColumn\s*\(\s*\)\s*;", source):
+    for constructor_match in re.finditer(r"(?m)^.*new\s+(?:DevExpress\.XtraGrid\.Columns\.)?GridColumn\s*\(\s*\)\s*;", combined_grid_source):
         statement = constructor_match.group(0)
         is_designer_member_initializer = bool(
             re.match(
@@ -3880,7 +5284,7 @@ def verify_migration_generated_csharp_style(
                 }
             )
             break
-    if re.search(r"\.Name\s*=\s*[^;\n]*view\.Name\s*\+\s*\"_\"\s*\+\s*fieldName", source):
+    if re.search(r"\.Name\s*=\s*[^;\n]*view\.Name\s*\+[^;\n]*\+\s*fieldName", combined_grid_source):
         issues.append(
             {
                 "code": "view_name_fieldname_column_name_detected",
@@ -3891,7 +5295,7 @@ def verify_migration_generated_csharp_style(
                 ),
             }
         )
-    if "GridColumn" in source and not re.search(r"\bcol(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\b", source):
+    if "GridColumn" in grid_source and not re.search(r"\bcol(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+\b", grid_source):
         issues.append(
             {
                 "code": "missing_target_grid_column_name_pattern",
@@ -4186,31 +5590,42 @@ def verify_migration_generated_csharp_style(
             }
         )
 
-    numeric_column_names = set()
-    for column_name in re.findall(r"this\.(col(?:List|Detail|[A-Za-z0-9]+)_([A-Z0-9_]+))\.", source):
-        full_name, field_name = column_name
-        if _is_numeric_grid_field_name(field_name):
-            numeric_column_names.add(full_name)
-    numeric_column_names.update(
-        re.findall(
-            r"this\.(col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+)\.DisplayFormat\.FormatType\s*=\s*DevExpress\.Utils\.FormatType\.Numeric",
-            source,
+    numeric_column_names: set[str] = set()
+    if expected_grid_contracts_list:
+        # Each targeted contract already validates its own type-driven repositories.
+        pass
+    elif expected_grid_columns_list is not None:
+        expected_prefix = str(grid_designer_contract.get("grid_column_prefix") or "colList_")
+        numeric_column_names.update(
+            item.csharp_name
+            for item in _normalize_grid_column_specs(expected_grid_columns_list, prefix=expected_prefix)
+            if _is_numeric_grid_data_type(item.data_type) is True
         )
-    )
-    for match in re.finditer(
-        r'this\.(col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+)\.DisplayFormat\.FormatString\s*=\s*"([^"]+)"',
-        source,
-    ):
-        if _display_format_string_looks_numeric(match.group(2)):
-            numeric_column_names.add(match.group(1))
+    else:
+        for column_name in re.findall(r"this\.(col(?:List|Detail|[A-Za-z0-9]+)_([A-Z0-9_]+))\.", grid_source):
+            full_name, field_name = column_name
+            if _is_numeric_grid_field_name(field_name):
+                numeric_column_names.add(full_name)
+        numeric_column_names.update(
+            re.findall(
+                r"this\.(col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+)\.DisplayFormat\.FormatType\s*=\s*DevExpress\.Utils\.FormatType\.Numeric",
+                grid_source,
+            )
+        )
+        for match in re.finditer(
+            r'this\.(col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+)\.DisplayFormat\.FormatString\s*=\s*"([^"]+)"',
+            designer_source if designer_source.strip() else source,
+        ):
+            if _display_format_string_looks_numeric(match.group(2)):
+                numeric_column_names.add(match.group(1))
     for column_name in sorted(numeric_column_names):
         spin_repository_match = re.search(
             rf"this\.{re.escape(column_name)}\.ColumnEdit\s*=\s*this\.(rpsSpin[A-Za-z0-9_]*)\s*;",
-            source,
+            grid_source,
         )
         has_spin_repository = bool(spin_repository_match)
         has_column_numeric_display = bool(
-            re.search(rf"this\.{re.escape(column_name)}\.DisplayFormat\.Format(?:String|Type)\s*=", source)
+            re.search(rf"this\.{re.escape(column_name)}\.DisplayFormat\.Format(?:String|Type)\s*=", grid_source)
         )
         if not has_spin_repository:
             issues.append(
@@ -4225,13 +5640,13 @@ def verify_migration_generated_csharp_style(
             repository_declared = bool(
                 re.search(
                     rf"(?:private\s+)?(?:DevExpress\.XtraEditors\.Repository\.)?RepositoryItemSpinEdit\s+{re.escape(repository_name)}\s*;",
-                    source,
+                    grid_source,
                 )
             )
             repository_initialized = bool(
                 re.search(
                     rf"this\.{re.escape(repository_name)}\s*=\s*new\s+(?:DevExpress\.XtraEditors\.Repository\.)?RepositoryItemSpinEdit\s*\(",
-                    source,
+                    grid_source,
                 )
             )
             if not repository_declared or not repository_initialized:
@@ -4267,6 +5682,8 @@ def verify_migration_generated_csharp_style(
         "program_form_contract": program_form_contract,
         "designer_owned_ui_contract": designer_owned_ui_contract,
         "result_field_contract": result_field_contract,
+        "grid_designer_contract": grid_designer_contract,
+        "input_tab_order_contract": input_tab_order_contract,
         "primary_style_evidence_paths": primary_paths,
         "excluded_paths": excluded,
         "author_tagged_generation_recipe": (
@@ -4810,6 +6227,14 @@ def orchestrate_pb_migration_validation(
     csharp_source_role: str = "code-behind",
     runtime_dynamic_ui_evidence: Any = None,
     result_fields: Iterable[str] | None = None,
+    expected_grid_role: str = "",
+    expected_grid_suffix: str = "",
+    expected_grid_prefix: str = "",
+    expected_grid_columns: Iterable[Any] | None = None,
+    expected_grid_contracts: Iterable[Mapping[str, Any]] | None = None,
+    layout_load_artifact_path: str = "",
+    layout_load_artifact_text: str = "",
+    layout_load_evidence: Any = None,
     source_evidence: Any = None,
     allow_inferred_draft: bool = False,
     cte_temp_table_reason: str = "",
@@ -4905,6 +6330,14 @@ def orchestrate_pb_migration_validation(
         source_role=csharp_source_role,
         runtime_dynamic_ui_evidence=runtime_dynamic_ui_evidence,
         result_fields=result_fields,
+        expected_grid_role=expected_grid_role,
+        expected_grid_suffix=expected_grid_suffix,
+        expected_grid_prefix=expected_grid_prefix,
+        expected_grid_columns=expected_grid_columns,
+        expected_grid_contracts=expected_grid_contracts,
+        layout_load_artifact_path=layout_load_artifact_path,
+        layout_load_artifact_text=layout_load_artifact_text,
+        layout_load_evidence=layout_load_evidence,
         require_designer_companion=True,
     )
     stages.append(
@@ -4958,13 +6391,14 @@ def build_datawindow_grid_layout(
     table_name: str = "",
     purpose_name: str = "",
     grid_view_name: str = "",
+    serialized_view_name: str = "",
 ) -> HarnessResult:
     """Build grid XML from SRD text and return contract-shaped evidence."""
     resolved_prefix = prefix or resolve_csharp_grid_column_prefix(
         input_format, table_name=table_name, purpose_name=purpose_name
     )
     grid_names = resolve_csharp_grid_control_names(input_format, table_name=table_name, purpose_name=purpose_name)
-    resolved_grid_view_name = grid_view_name or grid_names["grid_view_name"]
+    resolved_serialized_view_name = serialized_view_name or grid_view_name or "gridView1"
     column_specs = extract_datawindow_column_specs(source_text, prefix=resolved_prefix)
     if not column_specs:
         return HarnessResult(
@@ -4978,7 +6412,11 @@ def build_datawindow_grid_layout(
                 "blocked_reason": "missing_datawindow_columns",
             },
         )
-    xml = generate_devexpress_grid_xml(column_specs, prefix=resolved_prefix, grid_view_name=resolved_grid_view_name)
+    xml = generate_devexpress_grid_xml(
+        column_specs,
+        prefix=resolved_prefix,
+        serialized_view_name=resolved_serialized_view_name,
+    )
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
         "status": "passed",
@@ -4988,12 +6426,16 @@ def build_datawindow_grid_layout(
         "csharp_column_prefix": resolved_prefix,
         "csharp_column_prefix_rule": "{input_format}_{column}: colList_, colDetail_, col<TABLE>_, or col<PURPOSE>_",
         "csharp_grid_names": grid_names,
+        "serialized_grid_view_name": resolved_serialized_view_name,
+        "legacy_grid_view_name_alias_used": bool(grid_view_name and not serialized_view_name),
         "csharp_grid_name_rule": "grdList/gvwList, grdDetail/gvwDetail, grd<TABLE>/gvw<TABLE>, or grd<PURPOSE>/gvw<PURPOSE>",
         "converter_contract": (
-            "DataWindowToXml-compatible SRD visual-column/table-column to DevExpress GridView XML mapping "
-            "with target C# column names and matched DataWindow captions when available"
+            "DataWindowToXml-compatible PB column occurrence order with exact XML names, separate C# member mappings, "
+            "and matched DataWindow captions when available"
         ),
         "gridview_defaults": DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS,
+        "verification_scope": "static_layout_load_ready_xml_generation",
+        "actual_live_layout_load_observed": False,
     }
     return HarnessResult(
         success=True,
@@ -5009,12 +6451,13 @@ def _normalize_grid_column_specs(columns: Iterable[Any], *, prefix: str) -> List
     for item in columns:
         if isinstance(item, DataWindowColumnSpec):
             if item.field_name:
+                field_name = _normalize_datawindow_field_name(item.field_name)
                 specs.append(
                     DataWindowColumnSpec(
-                        field_name=_normalize_datawindow_field_name(item.field_name),
+                        field_name=field_name,
                         caption=str(item.caption or item.field_name),
-                        csharp_name=item.csharp_name
-                        or build_csharp_grid_column_name(item.field_name, prefix=prefix),
+                        csharp_name=str(item.csharp_name or build_csharp_grid_column_name(field_name, prefix=prefix)),
+                        xml_column_name=str(item.xml_column_name or f"{prefix}{field_name}"),
                         data_type=item.data_type,
                         source=item.source,
                         x=item.x,
@@ -5029,11 +6472,14 @@ def _normalize_grid_column_specs(columns: Iterable[Any], *, prefix: str) -> List
                 item.get("field_name") or item.get("field") or item.get("name") or ""
             )
             if field_name:
+                csharp_name = str(item.get("csharp_name") or "").strip()
+                xml_column_name = str(item.get("xml_column_name") or "").strip()
                 specs.append(
                     DataWindowColumnSpec(
                         field_name=field_name,
                         caption=str(item.get("caption") or field_name),
-                        csharp_name=str(item.get("csharp_name") or build_csharp_grid_column_name(field_name, prefix=prefix)),
+                        csharp_name=csharp_name or build_csharp_grid_column_name(field_name, prefix=prefix),
+                        xml_column_name=xml_column_name or f"{prefix}{field_name}",
                         data_type=str(
                             item.get("data_type")
                             or item.get("datatype")
@@ -5055,6 +6501,7 @@ def _normalize_grid_column_specs(columns: Iterable[Any], *, prefix: str) -> List
                     field_name=field_name,
                     caption=field_name,
                     csharp_name=build_csharp_grid_column_name(field_name, prefix=prefix),
+                    xml_column_name=f"{prefix}{field_name}",
                     source="provided",
                 )
             )
@@ -5315,7 +6762,7 @@ def _extract_visual_datawindow_columns(source: str) -> List[Dict[str, Any]]:
                 "line_index": line_index,
             }
         )
-    return sorted(columns, key=lambda item: (_sort_int(item.get("y")), _sort_int(item.get("x")), item["line_index"]))
+    return columns
 
 
 def _extract_datawindow_text_controls(source: str) -> List[Dict[str, Any]]:
@@ -5404,10 +6851,6 @@ def _parse_optional_int(value: Any) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
-
-
-def _sort_int(value: int | None) -> int:
-    return value if value is not None else 1_000_000
 
 
 def _coerce_state(state: MigrationInputState | Dict[str, Any] | None) -> MigrationInputState:

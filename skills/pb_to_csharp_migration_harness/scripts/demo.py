@@ -54,41 +54,42 @@ namespace SyntheticMigration
         private void CallSelectProcedure()
         {
             DataTable result = new DataTable();
-            grdBrowse.DataSource = result;
+            grdList.DataSource = result;
         }
     }
 }
 """
 
 
-def _designer_demo() -> str:
-    return """using System.Drawing;
-using System.Windows.Forms;
-
-namespace SyntheticMigration
-{
+def _designer_demo(plan) -> str:
+    metadata = plan.metadata
+    body_sections = [
+        metadata["initializers"],
+        metadata["add_range"],
+        metadata["grid_wiring"],
+        metadata["view_defaults"],
+        metadata["repository_registration"],
+        metadata["repository_assignments"],
+        metadata["assignments"],
+    ]
+    declarations = "\n        ".join(metadata["declarations"])
+    statements = "\n\n".join(
+        "\n".join(f"            {line}" for line in section)
+        for section in body_sections
+        if section
+    )
+    return f"""namespace SyntheticMigration
+{{
     partial class CatalogBrowseForm
-    {
-        private TextBox txtFilterText;
-        private DataGridView grdBrowse;
-        private DataGridViewTextBoxColumn colBrowse_ENTITY_ID;
+    {{
+        {declarations}
 
         private void InitializeComponent()
-        {
-            this.txtFilterText = new TextBox();
-            this.grdBrowse = new DataGridView();
-            this.colBrowse_ENTITY_ID = new DataGridViewTextBoxColumn();
-
-            this.txtFilterText.Name = "txtFilterText";
-            this.txtFilterText.Location = new Point(16, 16);
-            this.txtFilterText.Size = new Size(180, 24);
-            this.txtFilterText.TabIndex = 0;
-            this.colBrowse_ENTITY_ID.Name = "colBrowse_ENTITY_ID";
-            this.colBrowse_ENTITY_ID.DataPropertyName = "ENTITY_ID";
-            this.grdBrowse.Columns.AddRange(this.colBrowse_ENTITY_ID);
-        }
-    }
-}
+        {{
+{statements}
+        }}
+    }}
+}}
 """
 
 
@@ -137,11 +138,11 @@ def _validate_csharp_structure(contract: dict, source: str) -> dict:
 def _validate_designer_ownership(contract: dict, code_behind: str) -> dict:
     patterns = contract["designer_ownership"]["code_behind_static_ui_patterns"]
     misplaced_fixture = """
-this.txtFilterText = new TextBox();
+this.txtFilterText = new DevExpress.XtraEditors.TextEdit();
 this.txtFilterText.Name = "txtFilterText";
-this.grdBrowse.Columns.AddRange(this.colBrowse_ENTITY_ID);
-this.colBrowse_ENTITY_ID.ColumnEdit = this.repEntity;
-this.gvwBrowse.OptionsView.ShowGroupPanel = false;
+this.gvwList.Columns.AddRange(this.colList_ENTITY_ID);
+this.colList_ENTITY_ID.ColumnEdit = this.repEntity;
+this.gvwList.OptionsView.ShowGroupPanel = false;
 """
     code_behind_matches = [
         item["id"]
@@ -169,15 +170,36 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     from src.contracts import HarnessResult
     from src.skills import demo_scenarios
     from src.skills.pb_to_csharp_migration import (
+        build_csharp_grid_column_designer_plan,
+        generate_devexpress_grid_xml,
         load_packaged_migration_profile,
+        verify_devexpress_grid_xml_contract,
         verify_migration_generated_csharp_style,
         verify_pb_migration_sp_generation_contract,
     )
 
     contract = _load_contract()
     csharp = _csharp_demo()
-    designer = _designer_demo()
     sql = _sql_demo()
+    grid_columns = [
+        {"field_name": "ENTITY_ID", "caption": "Entity", "data_type": "string"},
+        {"field_name": "QUANTITY", "caption": "Quantity", "data_type": "decimal(18, 3)"},
+    ]
+    grid_plan = build_csharp_grid_column_designer_plan(
+        grid_columns,
+        input_format="list",
+        result_fields=[item["field_name"] for item in grid_columns],
+    )
+    if not grid_plan.success:
+        raise RuntimeError("synthetic DevExpress Designer generation failed")
+    designer = _designer_demo(grid_plan)
+    grid_xml = generate_devexpress_grid_xml(grid_columns)
+    csharp_path = output_dir / "CatalogBrowseForm.cs"
+    designer_path = output_dir / "CatalogBrowseForm.Designer.cs"
+    sql_path = output_dir / "SP_CATALOG_SELECT.sql"
+    grid_xml_path = output_dir / "CatalogBrowseGrid.xml"
+    evidence_path = output_dir / "offline_generation_evidence.json"
+    grid_xml_path.write_text(grid_xml, encoding="utf-8")
     mapped = _validate_csharp_structure(contract, csharp)
     empty = _validate_csharp_structure(contract, "")
     unrelated = _validate_csharp_structure(contract, "public class UnmappedWidget {}")
@@ -198,6 +220,11 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
         profile_evidence=profile,
         form_class="CatalogBrowseForm",
         source_role="code-behind",
+        result_fields=[item["field_name"] for item in grid_columns],
+        expected_grid_role="list",
+        expected_grid_suffix="List",
+        expected_grid_columns=grid_columns,
+        layout_load_artifact_path=str(grid_xml_path),
     )
     runtime_unrelated = verify_migration_generated_csharp_style(
         "public class UnmappedWidget {}",
@@ -226,6 +253,10 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
         ],
         profile_evidence=profile,
     )
+    grid_xml_contract = verify_devexpress_grid_xml_contract(
+        grid_xml,
+        expected_columns=grid_columns,
+    )
     split_validated = runtime_mapped.metadata.get("designer_owned_ui_contract", {}).get(
         "split_contract_validated"
     )
@@ -236,13 +267,11 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
         or runtime_unrelated.success
         or runtime_misplaced.success
         or not sp_contract.success
+        or not grid_plan.success
+        or not grid_xml_contract.success
     ):
         raise RuntimeError("packaged runtime C# validation did not enforce the generalized contract")
 
-    csharp_path = output_dir / "CatalogBrowseForm.cs"
-    designer_path = output_dir / "CatalogBrowseForm.Designer.cs"
-    sql_path = output_dir / "SP_CATALOG_SELECT.sql"
-    evidence_path = output_dir / "offline_generation_evidence.json"
     csharp_path.write_text(csharp, encoding="utf-8")
     designer_path.write_text(designer, encoding="utf-8")
     sql_path.write_text(sql, encoding="utf-8")
@@ -258,10 +287,12 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
         "profile_update_ran": False,
         "external_discovery_ran": False,
         "token_optimizer_status": "passthrough",
+        "verification_scope": "static_xml_and_post_load_equivalent_designer_state",
+        "actual_live_layout_load_observed": False,
         "selected_families": {
             "screen": "browse",
             "method": "event",
-            "provider": "winforms",
+            "provider": "devexpress",
             "procedure": "select",
         },
         "caller_parameter_matrix": [
@@ -287,6 +318,13 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
             "sp_issue_codes": [
                 item["code"] for item in sp_contract.metadata.get("issues", [])
             ],
+            "grid_xml_contract": "passed" if grid_xml_contract.success else "blocked",
+            "grid_designer_contract": runtime_mapped.metadata["grid_designer_contract"]["status"],
+            "layout_load_artifact_verified": runtime_mapped.metadata["grid_designer_contract"]["layout_load_artifact_verified"],
+            "actual_live_layout_load_observed": runtime_mapped.metadata["grid_designer_contract"]["actual_live_layout_load_observed"],
+            "grid_xml_issue_codes": [
+                item["code"] for item in grid_xml_contract.metadata.get("issues", [])
+            ],
         },
         "negative_structural_cases": {
             "empty_source": empty,
@@ -308,6 +346,8 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
             "external_discovery_ran": False,
             "token_optimizer_status": "passthrough",
             "designer_default_owner": ".Designer.cs",
+            "verification_scope": "static_xml_and_post_load_equivalent_designer_state",
+            "actual_live_layout_load_observed": False,
         },
     )
     blocked_result = HarnessResult(
@@ -371,6 +411,13 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
             created_by_case="success",
         ),
         demo_scenarios._artifact_record_from_file(
+            grid_xml_path,
+            "synthetic-devexpress-grid-layout",
+            output_dir,
+            ["XML readable", "serializer and Layout Load values verified"],
+            created_by_case="success",
+        ),
+        demo_scenarios._artifact_record_from_file(
             evidence_path,
             "offline-generation-evidence",
             output_dir,
@@ -385,9 +432,11 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
             "migration_plan": {
                 "mode": "contract-only",
                 "screen": "browse",
-                "provider": "winforms",
+                "provider": "devexpress",
                 "profile_source": "packaged-only",
                 "designer_default_owner": ".Designer.cs",
+                "verification_scope": "static_xml_and_post_load_equivalent_designer_state",
+                "actual_live_layout_load_observed": False,
             },
         },
         success_evidence=[
@@ -397,6 +446,8 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
             "Designer ownership scan kept static UI out of code-behind",
             "misplaced static UI fixture was correctly rejected",
             "demo SQL passed verify_pb_migration_sp_generation_contract",
+            "generated View XML and matching DevExpress Designer source passed static contract verification",
+            "actual live DevExpress Layout Load was not observed",
             "no external discovery or profile update ran",
         ],
         success_behavior=(

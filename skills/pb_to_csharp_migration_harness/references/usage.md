@@ -74,6 +74,11 @@ Do not inspect local references during normal generation. Do not add or upgrade 
 - Preserve supplied control types, properties, bounds, containment, collection calls, `BindingField`, `FieldName`, and `TabIndex`.
 - Use stable label/editor rows and columns for contract-only detail forms.
 - Declare grid columns explicitly and register them with `Columns.AddRange`.
+- Treat DataWindow-generated View XML as the authoritative design-time `Layout -> Load` baseline. An explicit grid contract requires both XML that passes `verify_devexpress_grid_xml_contract` and matching post-load-equivalent View, `OptionsView`, and column state in `.Designer.cs`.
+- Preserve `column=(` occurrence order for XML and one-based `VisibleIndex`; visual coordinate sorting is only for form-control placement.
+- Preserve converter `FieldName` and XML `Name`, including `#` and `$`. Keep `xml_column_name` separate from a valid explicit `csharp_name`; block C# generation when no safe mapping exists.
+- Report local verification as static only with `actual_live_layout_load_observed=false`; caller-authored dictionaries and hashes do not prove a DevExpress Designer load.
+- Preserve C# role names (`grdList`/`gvwList`, `grdDetail`/`gvwDetail`, or an explicit table/purpose suffix); XML `gridView1` is not a C# naming source.
 - Keep `FieldName` identical to the documented result field.
 - Register repository editors before assigning `ColumnEdit`.
 - Use numeric, lookup, button, and boolean repositories according to the packaged contract.
@@ -86,6 +91,7 @@ Do not inspect local references during normal generation. Do not add or upgrade 
 - Treat a static property assignment in code-behind as a failure unless supplied source or an explicit behavior contract proves it is dynamic.
 - For an approved dynamic exception, record the source evidence, runtime reason, changed property, triggering state, and targeted verification.
 - Scan both generated files separately and report file ownership evidence; a combined snippet is not enough to prove the boundary.
+- Within each independent container, verify that located input controls follow row-major top-to-bottom/left-to-right order and have present, unique, contiguous increasing `TabIndex` values; labels and non-input controls are excluded. Validate different containers independently; each container may restart its sequence.
 
 ## Stored Procedure Generation
 
@@ -130,6 +136,7 @@ A valid run is self-contained and offline. It records the packaged contract vers
   - `src.skills.pb_to_csharp_migration.build_pb_to_csharp_migration_plan`
   - `src.skills.pb_to_csharp_migration.load_packaged_migration_profile`
   - `src.skills.pb_to_csharp_migration.verify_migration_generated_csharp_style`
+  - `src.skills.pb_to_csharp_migration.verify_devexpress_grid_xml_contract`
   - `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_generation_contract`
 - Actual runtime path: from the repository root, run `python -m skills.pb_to_csharp_migration_harness.scripts.demo --output-dir <tmp>` for the packaged offline scenario, or call the listed Python targets with the exact packaged contract identity during a real migration.
 - Completion rule: withhold completion when structural validation, source evidence, caller/SP mapping, or offline verification remains blocked.
