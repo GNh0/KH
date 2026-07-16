@@ -321,12 +321,12 @@ def verify_pb_migration_sp_with_sql_formatting(*args, **kwargs):
 class PbToCSharpMigrationHarnessTests(unittest.TestCase):
     def _composite_display_spec(self, **overrides):
         values = {
-            "base_field": "ORDNUM",
-            "sequence_fields": ["ORDSEQ"],
+            "base_field": "KEYVALUE",
+            "sequence_fields": ["SEQUENCE1"],
             "evidence_kind": "user-supplied-contract",
-            "evidence_refs": ["user example: ordered business-key components"],
-            "display_field": "ORDNUMS",
-            "display_caption": "Order number",
+            "evidence_refs": ["ordered key-value plus sequence components"],
+            "display_field": "KEYVALUES",
+            "display_caption": "Composite key",
             "base_type_family": "character",
             "sequence_type_family": "numeric",
             "sequence_format": "##0",
@@ -334,54 +334,94 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         values.update(overrides)
         return CompositeBusinessKeyDisplaySpec(**values)
 
-    def test_sa110t_composite_display_key_retains_raw_fields_and_binds_display(self):
+    def test_composite_display_key_retains_key_and_sequence_fields(self):
         spec = self._composite_display_spec()
         plan = build_composite_business_key_display_plan(spec)
         observation = CompositeBusinessKeyDisplayObservation(
-            result_fields=["ORDNUM", "ORDSEQ", "ORDNUMS"],
-            display_expression="ORDNUM + '-' + FORMAT(ORDSEQ, '##0')",
-            display_alias="ORDNUMS",
-            component_order=["ORDNUM", "ORDSEQ"],
-            visible_grid_field="ORDNUMS",
-            hidden_raw_fields=["ORDNUM", "ORDSEQ"],
-            grid_caption="Order number",
+            result_fields=["KEYVALUE", "SEQUENCE1", "KEYVALUES"],
+            display_expression="KEYVALUE + '-' + FORMAT(SEQUENCE1, '##0')",
+            display_alias="KEYVALUES",
+            component_order=["KEYVALUE", "SEQUENCE1"],
+            visible_grid_field="KEYVALUES",
+            hidden_raw_fields=["KEYVALUE", "SEQUENCE1"],
+            grid_caption="Composite key",
         )
 
         verified = verify_composite_business_key_display_contract(spec, observation)
 
         self.assertTrue(plan.success, plan.to_dict())
-        self.assertEqual(["ORDNUM", "ORDSEQ"], plan.metadata["plan"]["raw_result_fields"])
-        self.assertEqual("ORDNUMS", plan.metadata["plan"]["visible_grid_field"])
+        self.assertEqual(["KEYVALUE", "SEQUENCE1"], plan.metadata["plan"]["raw_result_fields"])
+        self.assertEqual("KEYVALUES", plan.metadata["plan"]["visible_grid_field"])
         self.assertEqual(
-            "ORDNUM + '-' + FORMAT(ORDSEQ, '##0')",
+            "KEYVALUE + '-' + FORMAT(SEQUENCE1, '##0')",
             plan.metadata["plan"]["display_expression"],
         )
         self.assertTrue(verified.success, verified.to_dict())
 
-    def test_sa130t_composite_display_key_includes_all_sequences_in_key_order(self):
-        spec = self._composite_display_spec(sequence_fields=["ORDSEQ", "PORSEQ"])
+    def test_composite_display_key_includes_all_sequences_in_declared_order(self):
+        spec = self._composite_display_spec(sequence_fields=["SEQUENCE1", "SEQUENCE2"])
         plan = build_composite_business_key_display_plan(spec)
         verified = verify_composite_business_key_display_contract(
             spec,
             {
-                "result_fields": ["ORDNUM", "ORDSEQ", "PORSEQ", "ORDNUMS"],
+                "result_fields": ["KEYVALUE", "SEQUENCE1", "SEQUENCE2", "KEYVALUES"],
                 "display_expression": (
-                    "ORDNUM + '-' + FORMAT(ORDSEQ, '##0') + '-' + FORMAT(PORSEQ, '##0')"
+                    "KEYVALUE + '-' + FORMAT(SEQUENCE1, '##0') "
+                    "+ '-' + FORMAT(SEQUENCE2, '##0')"
                 ),
-                "display_alias": "ORDNUMS",
-                "component_order": ["ORDNUM", "ORDSEQ", "PORSEQ"],
-                "visible_grid_field": "ORDNUMS",
-                "hidden_raw_fields": ["ORDNUM", "ORDSEQ", "PORSEQ"],
-                "grid_caption": "Order number",
+                "display_alias": "KEYVALUES",
+                "component_order": ["KEYVALUE", "SEQUENCE1", "SEQUENCE2"],
+                "visible_grid_field": "KEYVALUES",
+                "hidden_raw_fields": ["KEYVALUE", "SEQUENCE1", "SEQUENCE2"],
+                "grid_caption": "Composite key",
             },
         )
 
         self.assertTrue(plan.success, plan.to_dict())
         self.assertEqual(
-            "ORDNUM + '-' + FORMAT(ORDSEQ, '##0') + '-' + FORMAT(PORSEQ, '##0')",
+            "KEYVALUE + '-' + FORMAT(SEQUENCE1, '##0') "
+            "+ '-' + FORMAT(SEQUENCE2, '##0')",
             plan.metadata["plan"]["display_expression"],
         )
         self.assertTrue(verified.success, verified.to_dict())
+
+    def test_composite_display_key_is_name_agnostic(self):
+        for case_index in range(1, 13):
+            base_field = f"KEY_{case_index}"
+            sequence_fields = [
+                f"SEQUENCE_{case_index}_{position}"
+                for position in range(1, (case_index % 3) + 2)
+            ]
+            display_field = f"DISPLAY_{case_index}"
+            expression = base_field + "".join(
+                f" + '-' + FORMAT({field_name}, '##0')"
+                for field_name in sequence_fields
+            )
+            with self.subTest(base_field=base_field, sequence_fields=sequence_fields):
+                spec = self._composite_display_spec(
+                    base_field=base_field,
+                    sequence_fields=sequence_fields,
+                    display_field=display_field,
+                )
+                plan = build_composite_business_key_display_plan(spec)
+                raw_fields = [base_field, *sequence_fields]
+                verified = verify_composite_business_key_display_contract(
+                    spec,
+                    {
+                        "result_fields": [*raw_fields, display_field],
+                        "display_expression": expression,
+                        "display_alias": display_field,
+                        "component_order": raw_fields,
+                        "visible_grid_field": display_field,
+                        "hidden_raw_fields": raw_fields,
+                        "grid_caption": "Composite key",
+                    },
+                )
+
+                self.assertTrue(plan.success, plan.to_dict())
+                self.assertEqual(raw_fields, plan.metadata["plan"]["raw_result_fields"])
+                self.assertEqual(expression, plan.metadata["plan"]["display_expression"])
+                self.assertTrue(verified.success, verified.to_dict())
 
     def test_composite_display_key_requires_authoritative_evidence_and_derives_default_alias(self):
         missing_evidence = build_composite_business_key_display_plan(
@@ -400,22 +440,23 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
             {item["code"] for item in missing_evidence.metadata["issues"]},
         )
         self.assertTrue(missing_alias.success, missing_alias.to_dict())
-        self.assertEqual("ORDNUMS", missing_alias.metadata["plan"]["display_result_field"])
+        self.assertEqual("KEYVALUES", missing_alias.metadata["plan"]["display_result_field"])
         self.assertTrue(approved_default.success, approved_default.to_dict())
-        self.assertEqual("ORDNUMS", approved_default.metadata["plan"]["display_result_field"])
+        self.assertEqual("KEYVALUES", approved_default.metadata["plan"]["display_result_field"])
 
     def test_composite_display_key_verifier_rejects_missing_raw_alias_and_wrong_order(self):
-        spec = self._composite_display_spec(sequence_fields=["ORDSEQ", "PORSEQ"])
+        spec = self._composite_display_spec(sequence_fields=["SEQUENCE1", "SEQUENCE2"])
         common = {
-            "result_fields": ["ORDNUM", "PORSEQ", "WRONG_ALIAS"],
+            "result_fields": ["KEYVALUE", "SEQUENCE2", "WRONG_ALIAS"],
             "display_expression": (
-                "ORDNUM + '-' + FORMAT(ORDSEQ, '##0') + '-' + FORMAT(PORSEQ, '##0')"
+                "KEYVALUE + '-' + FORMAT(SEQUENCE1, '##0') "
+                "+ '-' + FORMAT(SEQUENCE2, '##0')"
             ),
             "display_alias": "WRONG_ALIAS",
-            "component_order": ["ORDNUM", "PORSEQ", "ORDSEQ"],
+            "component_order": ["KEYVALUE", "SEQUENCE2", "SEQUENCE1"],
             "visible_grid_field": "WRONG_ALIAS",
-            "hidden_raw_fields": ["ORDNUM", "ORDSEQ", "PORSEQ"],
-            "grid_caption": "Order number",
+            "hidden_raw_fields": ["KEYVALUE", "SEQUENCE1", "SEQUENCE2"],
+            "grid_caption": "Composite key",
         }
 
         result = verify_composite_business_key_display_contract(spec, common)

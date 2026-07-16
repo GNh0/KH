@@ -196,30 +196,43 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     )
     if not grid_plan.success:
         raise RuntimeError("synthetic DevExpress Designer generation failed")
-    composite_spec = CompositeBusinessKeyDisplaySpec(
-        base_field="ORDNUM",
-        sequence_fields=["ORDSEQ", "PORSEQ"],
-        evidence_kind="user-supplied-contract",
-        evidence_refs=["synthetic demo ordered business-key contract"],
-        display_caption="Order number",
-    )
-    composite_plan = build_composite_business_key_display_plan(composite_spec)
-    composite_contract = verify_composite_business_key_display_contract(
-        composite_spec,
-        CompositeBusinessKeyDisplayObservation(
-            result_fields=["ORDNUM", "ORDSEQ", "PORSEQ", "ORDNUMS"],
-            display_expression=(
-                "ORDNUM + '-' + FORMAT(ORDSEQ, '##0') + '-' + FORMAT(PORSEQ, '##0')"
+    composite_display_plans = []
+    for scenario_index, sequence_count in enumerate((1, 2, 4), start=1):
+        base_field = f"KEYFIELD_{scenario_index}"
+        sequence_fields = [
+            f"SEQUENCEFIELD_{scenario_index}_{position}"
+            for position in range(1, sequence_count + 1)
+        ]
+        display_field = f"DISPLAYFIELD_{scenario_index}"
+        display_expression = base_field + "".join(
+            f" + '-' + FORMAT({field_name}, '##0')"
+            for field_name in sequence_fields
+        )
+        raw_fields = [base_field, *sequence_fields]
+        composite_spec = CompositeBusinessKeyDisplaySpec(
+            base_field=base_field,
+            sequence_fields=sequence_fields,
+            evidence_kind="user-supplied-contract",
+            evidence_refs=["synthetic ordered key-value plus sequence contract"],
+            display_field=display_field,
+            display_caption="Composite key",
+        )
+        composite_plan = build_composite_business_key_display_plan(composite_spec)
+        composite_contract = verify_composite_business_key_display_contract(
+            composite_spec,
+            CompositeBusinessKeyDisplayObservation(
+                result_fields=[*raw_fields, display_field],
+                display_expression=display_expression,
+                display_alias=display_field,
+                component_order=raw_fields,
+                visible_grid_field=display_field,
+                hidden_raw_fields=raw_fields,
+                grid_caption="Composite key",
             ),
-            display_alias="ORDNUMS",
-            component_order=["ORDNUM", "ORDSEQ", "PORSEQ"],
-            visible_grid_field="ORDNUMS",
-            hidden_raw_fields=["ORDNUM", "ORDSEQ", "PORSEQ"],
-            grid_caption="Order number",
-        ),
-    )
-    if not composite_plan.success or not composite_contract.success:
-        raise RuntimeError("composite business-key display contract failed")
+        )
+        if not composite_plan.success or not composite_contract.success:
+            raise RuntimeError("composite business-key display contract failed")
+        composite_display_plans.append(composite_plan.metadata["plan"])
     designer = _designer_demo(grid_plan)
     grid_xml = generate_devexpress_grid_xml(grid_columns)
     csharp_path = output_dir / "CatalogBrowseForm.cs"
@@ -297,8 +310,6 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
         or not sp_contract.success
         or not grid_plan.success
         or not grid_xml_contract.success
-        or not composite_plan.success
-        or not composite_contract.success
     ):
         raise RuntimeError("packaged runtime C# validation did not enforce the generalized contract")
 
@@ -351,13 +362,9 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
             "grid_xml_contract": "passed" if grid_xml_contract.success else "blocked",
             "composite_business_key_display": {
                 "status": "passed",
-                "raw_result_fields": composite_plan.metadata["plan"]["raw_result_fields"],
-                "display_result_field": composite_plan.metadata["plan"]["display_result_field"],
-                "display_expression": composite_plan.metadata["plan"]["display_expression"],
-                "visible_grid_field": composite_plan.metadata["plan"]["visible_grid_field"],
-                "hidden_raw_identity_fields": composite_plan.metadata["plan"][
-                    "hidden_raw_identity_fields"
-                ],
+                "contract": "key-value plus ordered sequence fields",
+                "name_specific_routing": False,
+                "scenarios": composite_display_plans,
             },
             "grid_designer_contract": runtime_mapped.metadata["grid_designer_contract"]["status"],
             "layout_load_artifact_verified": runtime_mapped.metadata["grid_designer_contract"]["layout_load_artifact_verified"],

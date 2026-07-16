@@ -87,6 +87,7 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - Keep `FieldName` and result-column names identical.
 - For an evidence-backed composite business identifier, keep every raw base/sequence key in the SELECT result for identity and logic, and bind the visible grid column to a separate display result field. Hide raw key columns by default unless PB/UI evidence requires them visible.
 - Do not infer components from a table name alone. Once PB/DataWindow/result/schema evidence establishes an ordered base key plus sequence keys, preserve a supplied display alias or derive the packaged `<BASE>S` default.
+- The contract is field-name agnostic: one key-value field plus one or more ordered sequence fields. Never implement a table, prefix, business-domain, or column-name whitelist.
 
 ### Caller and Stored Procedures
 

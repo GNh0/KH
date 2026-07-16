@@ -82,6 +82,7 @@ Do not inspect local references during normal generation. Do not add or upgrade 
 - Preserve C# role names (`grdList`/`gvwList`, `grdDetail`/`gvwDetail`, or an explicit table/purpose suffix); XML `gridView1` is not a C# naming source.
 - Keep `FieldName` identical to the documented result field.
 - When an ordered base key plus sequence keys is established, retain every raw key result field and bind the visible grid column to the supplied display alias or packaged `<BASE>S` default. Generate the packaged `BASE + '-' + FORMAT(SEQUENCE, '##0')` expression in component order without adding unrelated null/type rewrites.
+- Treat field names as data, not routing rules. The planner receives one key-value field and an ordered sequence-field list; it must not branch on field names, prefixes, tables, or business domains.
 - Register repository editors before assigning `ColumnEdit`.
 - Use numeric, lookup, button, and boolean repositories according to the packaged contract.
 - Record unsupported DataWindow layout, computed, dropdown, protection, and update semantics as blocked or deferred.

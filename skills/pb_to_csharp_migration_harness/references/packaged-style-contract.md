@@ -275,6 +275,7 @@ It moves control creation, naming, tab order, and fixed grid registration out of
 - Keep `FieldName` identical to the SP result field.
 - When authoritative evidence defines a base key plus one or more sequence keys and a dedicated UI display field, SELECT retains all raw key components and additionally emits the display field. The visible Designer/Grid `FieldName` binds to that display alias; raw key columns remain available and are hidden unless supplied PB/UI evidence says otherwise.
 - Preserve a supplied display alias and PB caption. If no alias is supplied after the ordered business-key components are established, use the packaged `<BASE>S` default. A table name or similar field names alone are not enough to establish the components.
+- Do not whitelist tables, prefixes, domains, or field names. Source evidence supplies one key-value field, one or more sequence fields, and their exact order.
 - Apply every authoritative Layout Load default, not only the commonly visible `OptionsView` subset.
 - Numeric fields use a spin/numeric repository editor assigned through `ColumnEdit`.
 - Lookup fields use a lookup repository whose value/display members come from supplied evidence.
