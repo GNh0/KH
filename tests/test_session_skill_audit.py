@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +12,15 @@ from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.session_skill_audit import (
     analyze_session_skills,
     summarize_session_skill_audits,
+)
+from src.skills.sql_formatting_provider import (
+    SQL_PROVIDER_RECEIPT_CLAIM_KIND,
+    SQL_PROVIDER_SELECTION_RECEIPT_CLAIM_KIND,
+    _sql_provider_runtime_boundary,
+    _sql_provider_selection_runtime_boundary,
+    attach_sql_formatting_cli_runtime_receipt,
+    attach_sql_provider_selection_runtime_receipt,
+    sql_provider_selection_sha256,
 )
 
 
@@ -97,7 +108,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         }
 
     @staticmethod
-    def front_door_exec_output(receipt, call_id="front-door-exec-1", *, exit_code=1):
+    def front_door_exec_output(receipt, call_id="front-door-exec-1", *, exit_code=0):
         output = json.dumps(receipt) if isinstance(receipt, dict) else str(receipt)
         return {
             "type": "response_item",
@@ -107,7 +118,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                 "output": [
                     {
                         "type": "input_text",
-                        "text": "Script failed\nWall time 1.2 seconds\nOutput:\n",
+                        "text": "Script completed\nWall time 1.2 seconds\nOutput:\n",
                     },
                     {
                         "type": "input_text",
@@ -242,20 +253,226 @@ class SessionSkillAuditTests(unittest.TestCase):
         result.update(overrides)
         return result
 
+    def sql_binding_events(
+        self,
+        original_sql,
+        formatted_sql,
+        *,
+        call_id="bind-sql-final-1",
+        provider_path=r"C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+        verification_id="9" * 64,
+        artifact_initial_bytes=None,
+        artifact_mutations=None,
+    ):
+        draft_response = f"```sql\n{formatted_sql}\n```"
+        artifact_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(artifact_tmp.cleanup)
+        artifact_root = Path(artifact_tmp.name)
+        artifact_paths = {
+            "original_file": artifact_root / "original.sql",
+            "candidate_file": artifact_root / "candidate.sql",
+            "response_file": artifact_root / "response.md",
+            "provider_selection_file": artifact_root / "provider-selection.json",
+        }
+        original_file = str(artifact_paths["original_file"])
+        candidate_file = str(artifact_paths["candidate_file"])
+        response_file = str(artifact_paths["response_file"])
+        provider_selection_file = str(artifact_paths["provider_selection_file"])
+        session_id = "session-audit"
+        invocation_nonce = "session-audit-bind-0001"
+        provider_selection = self.sql_front_door_output(provider_path)
+        artifact_paths["original_file"].write_text(original_sql, encoding="utf-8")
+        artifact_paths["candidate_file"].write_text(formatted_sql, encoding="utf-8")
+        artifact_paths["response_file"].write_text(draft_response, encoding="utf-8")
+        artifact_paths["provider_selection_file"].write_text(
+            json.dumps(provider_selection),
+            encoding="utf-8",
+        )
+        for artifact_name, content in dict(artifact_initial_bytes or {}).items():
+            artifact_paths[artifact_name].write_bytes(bytes(content))
+        selection_sha256 = sql_provider_selection_sha256(provider_selection)
+        receipt = {
+            "status": "passed",
+            "provider_path_guard": {
+                "status": "accepted",
+                "authority": "selected-active-provider",
+                "provider_path": provider_path,
+                "selected_active_provider_path": provider_path,
+                "current_packaged_fallback_path": str(
+                    (
+                        Path(__file__).resolve().parents[1]
+                        / "skills"
+                        / "sql_formatting"
+                        / "SKILL.md"
+                    ).resolve()
+                ),
+                "provider_id": "sql-formatting",
+                "provider_source": "host-local-skill",
+                "provider_selection_sha256": selection_sha256,
+            },
+            "cli_inputs": {
+                "module": "src.skills.sql_formatting_provider",
+                "exit_status": 0,
+                "arguments": {
+                    "original_file": original_file,
+                    "candidate_file": candidate_file,
+                    "response_file": response_file,
+                    "provider_path": provider_path,
+                    "selected_active_provider_path": provider_path,
+                    "provider_selection_file": provider_selection_file,
+                    "session_id": session_id,
+                    "invocation_nonce": invocation_nonce,
+                },
+                "resolved_paths": {
+                    "original_file": original_file,
+                    "candidate_file": candidate_file,
+                    "response_file": response_file,
+                    "provider_path": provider_path,
+                    "selected_active_provider_path": provider_path,
+                    "provider_selection_file": provider_selection_file,
+                },
+                "hashes": {
+                    "original_text_sha256": hashlib.sha256(
+                        original_sql.encode("utf-8")
+                    ).hexdigest(),
+                    "candidate_text_sha256": hashlib.sha256(
+                        formatted_sql.encode("utf-8")
+                    ).hexdigest(),
+                    "response_text_sha256": hashlib.sha256(
+                        draft_response.encode("utf-8")
+                    ).hexdigest(),
+                    "provider_selection_sha256": selection_sha256,
+                    "original_file_sha256": hashlib.sha256(
+                        artifact_paths["original_file"].read_bytes()
+                    ).hexdigest(),
+                    "candidate_file_sha256": hashlib.sha256(
+                        artifact_paths["candidate_file"].read_bytes()
+                    ).hexdigest(),
+                    "response_file_sha256": hashlib.sha256(
+                        artifact_paths["response_file"].read_bytes()
+                    ).hexdigest(),
+                    "provider_selection_file_sha256": hashlib.sha256(
+                        artifact_paths["provider_selection_file"].read_bytes()
+                    ).hexdigest(),
+                },
+            },
+            "binding": {
+                "status": "bound",
+                "original_sha256": hashlib.sha256(
+                    original_sql.encode("utf-8")
+                ).hexdigest(),
+                "formatted_sha256": hashlib.sha256(
+                    formatted_sql.encode("utf-8")
+                ).hexdigest(),
+                "final_response_sha256": hashlib.sha256(
+                    draft_response.encode("utf-8")
+                ).hexdigest(),
+                "verification_id": verification_id,
+                "sql_fence_count": 1,
+            },
+            "verification": {
+                "success": True,
+                "exit_code": 0,
+                "stdout": '{"status":"passed"}',
+                "stderr": "",
+                "execution_time": 0.0,
+                "metadata": {
+                    "harness": "sql-formatting-style-harness",
+                    "operation": "formatting",
+                    "token_optimizer_status": "passthrough",
+                    "not_used_reason": "Exact SQL evidence requires passthrough.",
+                    "original_sha256": hashlib.sha256(
+                        original_sql.encode("utf-8")
+                    ).hexdigest(),
+                    "formatted_sha256": hashlib.sha256(
+                        formatted_sql.encode("utf-8")
+                    ).hexdigest(),
+                    "verification_id": verification_id,
+                    "release_readiness": {"status": "ready"},
+                },
+            },
+        }
+        receipt = attach_sql_formatting_cli_runtime_receipt(
+            receipt,
+            session_id=session_id,
+            invocation_nonce=invocation_nonce,
+        )
+        for artifact_name, replacement in dict(artifact_mutations or {}).items():
+            artifact_path = artifact_paths[artifact_name]
+            if replacement is None:
+                artifact_path.unlink()
+            elif isinstance(replacement, bytes):
+                artifact_path.write_bytes(replacement)
+            elif callable(replacement):
+                artifact_path.write_bytes(replacement(artifact_path.read_bytes()))
+            else:
+                artifact_path.write_text(str(replacement), encoding="utf-8")
+        return [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "shell_command",
+                    "call_id": call_id,
+                    "arguments": (
+                        "python -m src.skills.sql_formatting_provider "
+                        f"--original-file {original_file} --candidate-file {candidate_file} "
+                        f"--response-file {response_file} "
+                        f'--provider-path "{provider_path}" '
+                        f'--selected-active-provider-path "{provider_path}" '
+                        f'--provider-selection-file "{provider_selection_file}" '
+                        f'--session-id "{session_id}" '
+                        f'--invocation-nonce "{invocation_nonce}"'
+                    ),
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": f"Exit code: 0\n{json.dumps(receipt)}",
+                },
+            },
+        ]
+
     @staticmethod
-    def sql_provider_contract():
-        return (
-            "---\n"
-            "name: sql-formatting\n"
-            "description: Format SQL without changing behavior.\n"
-            "---\n"
-            "# SQL Formatting\n"
-            "Preserve original SQL logic, identifiers, values, comments, and string literals."
+    def sql_binding_receipt(binding_output_event):
+        output = str(binding_output_event["payload"]["output"])
+        return json.loads(output[output.find("{") :])
+
+    @staticmethod
+    def set_sql_binding_receipt(binding_output_event, receipt, *, exit_code=0):
+        binding_output_event["payload"]["output"] = (
+            f"Exit code: {exit_code}\n{json.dumps(receipt)}"
         )
 
     @staticmethod
-    def sql_front_door_output():
-        return {
+    def sql_provider_contract():
+        return (
+            Path(__file__).resolve().parents[1]
+            / "skills"
+            / "sql_formatting"
+            / "SKILL.md"
+        ).read_text(encoding="utf-8")
+
+    @staticmethod
+    def sql_front_door_output(
+        provider_path=r"C:\Users\KONEIT\.codex\skills\sql-formatting\SKILL.md",
+        *,
+        source="host-local-skill",
+    ):
+        resolved_path = str(Path(provider_path).expanduser().resolve())
+        return attach_sql_provider_selection_runtime_receipt({
+            "schema_version": 1,
+            "host": "local",
+            "project": str(Path.cwd().resolve()),
+            "provider_id": "sql-formatting",
+            "provider_path": resolved_path,
+            "selected_active_provider_path": resolved_path,
+            "provider_source": source,
+            "compatibility": "compatible",
+            "selection_status": "selected",
             "front_door_status": "ok",
             "runtime_applied_skills": [
                 "always-on-front-door",
@@ -265,14 +482,28 @@ class SessionSkillAuditTests(unittest.TestCase):
                 "skill-catalog",
             ],
             "selected_not_executed_skills": ["sql-formatting-style-harness"],
+            "skill_status_summary": {
+                "sql-formatting": {"status": "selected"},
+                "sql-formatting-style-harness": {"status": "selected"},
+            },
             "plugin_route": {
                 "route": "single",
                 "controller": {
                     "provider_id": "sql-formatting",
                     "capability": "sql_formatting",
+                    "metadata": {
+                        "path": resolved_path,
+                        "source": source,
+                        "compatibility": "compatible",
+                    },
                 },
             },
-        }
+            "execution_gate": {
+                "can_execute": True,
+                "status": "execution_allowed_after_selected_skill_setup",
+                "reason": "SQL formatting provider selected after required skill setup.",
+            },
+        })
 
     @staticmethod
     def goal_front_door_output():
@@ -348,6 +579,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             if provider_output_after_verifier_call
             else [inspect_call, inspect_output, verifier_call, verifier_output]
         )
+        front_door_call_id = "sql-front-door"
         return [
             {
                 "type": "response_item",
@@ -357,6 +589,11 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "content": f"{source_sql or original_sql}\nformat this SQL",
                 },
             },
+            self.front_door_call(call_id=front_door_call_id),
+            self.front_door_output(
+                self.sql_front_door_output(),
+                call_id=front_door_call_id,
+            ),
             *ordered_evidence,
             {
                 "type": "response_item",
@@ -379,23 +616,20 @@ class SessionSkillAuditTests(unittest.TestCase):
             "verified_scopes": [],
             "conflicts": [],
         }
-        path = self.write_session(
-            [
-                {
-                    "type": "response_item",
-                    "payload": {
-                        "type": "function_call_output",
-                        "output": json.dumps(self.sql_front_door_output()),
-                    },
+        events = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": f"{original_sql}\nformat this SQL",
                 },
-                {
-                    "type": "response_item",
-                    "payload": {
-                        "type": "message",
-                        "role": "user",
-                        "content": f"{original_sql}\nformat this SQL",
-                    },
-                },
+            },
+            self.front_door_call(call_id="sql-front-door-alias-field"),
+            self.front_door_output(
+                self.sql_front_door_output(),
+                call_id="sql-front-door-alias-field",
+            ),
                 {
                     "type": "response_item",
                     "payload": {
@@ -434,16 +668,19 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "output": json.dumps(verifier),
                     },
                 },
-                {
-                    "type": "response_item",
-                    "payload": {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": f"```sql\n{formatted_sql}\n```",
-                    },
+        ]
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": f"```sql\n{formatted_sql}\n```",
                 },
-            ]
+            }
         )
+        path = self.write_session(events)
 
         audit = analyze_session_skills(path)
 
@@ -481,7 +718,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call_output",
                         "call_id": "verify-legacy-alias-field",
-                        "output": json.dumps(
+                        "output": "Exit code: 0\n" + json.dumps(
                             {
                                 **self.sql_verifier_result(original_sql, formatted_sql),
                                 "alias_role_plan_validation": None,
@@ -1302,25 +1539,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertEqual(audit.usage_summary["sql_formatting_evidence"]["status"], "not_required")
 
     def test_sql_formatting_front_door_route_is_selection_only(self):
-        front_door_output = {
-            "front_door_status": "ok",
-            "runtime_applied_skills": [
-                "always-on-front-door",
-                "automatic-intake-harness",
-                "plugin-composition-policy",
-                "request-complexity-router",
-                "skill-catalog",
-            ],
-            "selected_not_executed_skills": [],
-            "skill_status_summary": {},
-            "plugin_route": {
-                "route": "single",
-                "controller": {
-                    "provider_id": "sql-formatting",
-                    "capability": "sql_formatting",
-                },
-            },
-        }
+        front_door_output = self.sql_front_door_output()
         path = self.write_session(
             [
                 {
@@ -1334,13 +1553,11 @@ class SessionSkillAuditTests(unittest.TestCase):
                         ),
                     },
                 },
-                {
-                    "type": "response_item",
-                    "payload": {
-                        "type": "function_call_output",
-                        "output": json.dumps(front_door_output),
-                    },
-                },
+                self.front_door_call(call_id="sql-selection-only"),
+                self.front_door_output(
+                    front_door_output,
+                    call_id="sql-selection-only",
+                ),
                 {
                     "type": "response_item",
                     "payload": {
@@ -1364,33 +1581,15 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertIn("formatter_application_not_proven", evidence["states"])
         self.assertEqual(
             rows["sql-formatting-style-harness"]["acceptance"]["status"],
-            "missing_application",
+            "missing_outputs",
         )
 
 
     def test_sql_formatting_route_passes_when_style_verifier_runs_before_output(self):
         original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
         formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
-        front_door_output = {
-            "front_door_status": "ok",
-            "runtime_applied_skills": [
-                "always-on-front-door",
-                "automatic-intake-harness",
-                "plugin-composition-policy",
-                "request-complexity-router",
-                "skill-catalog",
-            ],
-            "selected_not_executed_skills": ["sql-formatting-style-harness"],
-            "plugin_route": {
-                "route": "single",
-                "controller": {
-                    "provider_id": "sql-formatting",
-                    "capability": "sql_formatting",
-                },
-            },
-        }
-        path = self.write_session(
-            [
+        front_door_output = self.sql_front_door_output()
+        events = [
                 {
                     "type": "response_item",
                     "payload": {
@@ -1399,13 +1598,11 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "content": f"{original_sql}\nformat this SQL",
                     },
                 },
-                {
-                    "type": "response_item",
-                    "payload": {
-                        "type": "function_call_output",
-                        "output": json.dumps(front_door_output),
-                    },
-                },
+                self.front_door_call(call_id="sql-route-pass"),
+                self.front_door_output(
+                    front_door_output,
+                    call_id="sql-route-pass",
+                ),
                 {
                     "type": "response_item",
                     "payload": {
@@ -1460,16 +1657,19 @@ class SessionSkillAuditTests(unittest.TestCase):
                         ),
                     },
                 },
-                {
-                    "type": "response_item",
-                    "payload": {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": f"```sql\n{formatted_sql}\n```",
-                    },
-                },
             ]
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": f"```sql\n{formatted_sql}\n```",
+                },
+            }
         )
+        path = self.write_session(events)
 
         audit = analyze_session_skills(path)
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
@@ -1481,8 +1681,9 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertIn("provider_selected", evidence["states"])
         self.assertIn("provider_inspected", evidence["states"])
         self.assertIn("verifier_executed", evidence["states"])
+        self.assertIn("final_response_bound", evidence["states"])
         self.assertIn("verified_before_output", evidence["states"])
-        self.assertEqual(evidence["verification_id"], "verify-sql-1")
+        self.assertEqual(evidence["verification_id"], "9" * 64)
 
     def test_sql_formatting_style_verifier_call_without_output_does_not_pass(self):
         front_door_output = {
@@ -2271,7 +2472,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertIn("verifier_output_call_id_mismatch", evidence["binding_errors"])
         self.assertNotIn("verified_before_output", evidence["states"])
 
-    def test_sql_formatting_verifier_without_call_ids_uses_bounded_sequence(self):
+    def test_sql_formatting_verifier_without_final_binding_does_not_pass(self):
         original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
         formatted_sql = "SELECT A.SUBCD\nFROM BA011T AS A;"
         path = self.write_session(
@@ -2329,8 +2530,1399 @@ class SessionSkillAuditTests(unittest.TestCase):
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
         evidence = audit.usage_summary["sql_formatting_evidence"]
 
-        self.assertNotIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
+        self.assertIn("final_response_binding_missing", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_output_must_match_binder_call_id(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        binding_events[1]["payload"]["call_id"] = "bind-sql-final-other"
+        events.extend(binding_events)
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(
+            "final_response_binding_call_id_mismatch",
+            evidence["binding_errors"],
+        )
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_response_mutation_after_binding_is_rejected(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        events.pop()
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": f"```sql\n{formatted_sql.rstrip(';')}\n```",
+                },
+            }
+        )
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("final_response_changed_after_binding", evidence["binding_errors"])
+        self.assertIn("formatted_sha256_mismatch", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_requires_cli_file_argument_receipt(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        receipt = self.sql_binding_receipt(binding_events[1])
+        receipt.pop("cli_inputs")
+        self.set_sql_binding_receipt(binding_events[1], receipt)
+        events.extend(binding_events)
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("cli_input_receipt_missing", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_cli_file_argument_mismatch(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        receipt = self.sql_binding_receipt(binding_events[1])
+        receipt["cli_inputs"]["arguments"]["candidate_file"] = "other.sql"
+        self.set_sql_binding_receipt(binding_events[1], receipt)
+        events.extend(binding_events)
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("cli_input_candidate_file_mismatch", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_direct_synthetic_binder_function_call_is_not_execution_evidence(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        binding_events[0]["payload"]["name"] = (
+            "guard_and_bind_verified_sql_final_response"
+        )
+        events.extend(binding_events)
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("final_response_binding_missing", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_echo_comment_write_output_and_pipeline_fakes(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        wrappers = {
+            "echo": lambda command: f"echo {command}",
+            "comment": lambda command: f"# {command}",
+            "write_output": lambda command: f"Write-Output '{command}'",
+            "pipeline": lambda command: f"{command} | Out-Null",
+        }
+
+        for name, wrap in wrappers.items():
+            with self.subTest(name=name):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                command = binding_events[0]["payload"]["arguments"]
+                binding_events[0]["payload"]["arguments"] = wrap(command)
+                events.extend(binding_events)
+                events.append(final_message)
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertIn("final_response_binding_missing", evidence["binding_errors"])
+                self.assertNotIn("verified_before_output", evidence["states"])
+                self.assertTrue(
+                    any(
+                        error.startswith("sql_binder_")
+                        for error in evidence["binding_errors"]
+                    ),
+                    evidence,
+                )
+
+    def test_sql_final_binding_rejects_nonzero_shell_output_with_shaped_receipt(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        receipt = self.sql_binding_receipt(binding_events[1])
+        self.set_sql_binding_receipt(binding_events[1], receipt, exit_code=1)
+        events.extend(binding_events)
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(
+            "final_response_binding_shell_exit_status_not_success",
+            evidence["binding_errors"],
+        )
+        self.assertIn("final_response_binding_command_failed", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_skills_root_and_codex_home_command_authority(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        mutations = {
+            "skills_root": lambda command: f'{command} --skills-root "C:\\fake\\skills"',
+            "codex_home_prefix": lambda command: (
+                f'$env:CODEX_HOME="C:\\fake"; {command}'
+            ),
+        }
+
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                command = binding_events[0]["payload"]["arguments"]
+                binding_events[0]["payload"]["arguments"] = mutate(command)
+                events.extend(binding_events)
+                events.append(final_message)
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                expected = (
+                    "sql_binder_skills_root_override_rejected"
+                    if name == "skills_root"
+                    else "sql_binder_command_not_standalone"
+                )
+                self.assertIn(expected, evidence["binding_errors"])
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_missing_shell_exit_status(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        receipt = self.sql_binding_receipt(binding_events[1])
+        binding_events[1]["payload"]["output"] = json.dumps(receipt)
+        events.extend(binding_events)
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(
+            "final_response_binding_shell_exit_status_missing",
+            evidence["binding_errors"],
+        )
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_accepts_only_correlated_exec_result_flow(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        command = binding_events[0]["payload"]["arguments"]
+        binding_events[0]["payload"]["name"] = "functions.exec"
+        binding_events[0]["payload"]["arguments"] = (
+            f"const r = await tools.shell_command({json.dumps({'command': command})}); "
+            "text(r);"
+        )
+        events.extend(binding_events)
+        events.append(final_message)
+
+        evidence = analyze_session_skills(
+            self.write_session(events)
+        ).usage_summary["sql_formatting_evidence"]
         self.assertIn("verified_before_output", evidence["states"])
+
+        invalid_sources = {
+            "dead_branch": (
+                f"if (false) {{ const r = await tools.shell_command("
+                f"{json.dumps({'command': command})}); text(r); }}"
+            ),
+            "unreturned": (
+                f"const r = await tools.shell_command("
+                f"{json.dumps({'command': command})});"
+            ),
+            "wrong_result": (
+                f"const r = await tools.shell_command("
+                f"{json.dumps({'command': command})}); text(other);"
+            ),
+            "nested_unrelated": (
+                f"const r = await tools.shell_command("
+                f"{json.dumps({'command': command})}); "
+                "const other = await tools.get_goal({}); text(r);"
+            ),
+        }
+        for label, source in invalid_sources.items():
+            with self.subTest(label=label):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                binding_events[0]["payload"]["name"] = "functions.exec"
+                binding_events[0]["payload"]["arguments"] = source
+                events.extend(binding_events)
+                events.append(final_message)
+                evidence = analyze_session_skills(
+                    self.write_session(events)
+                ).usage_summary["sql_formatting_evidence"]
+                self.assertIn(
+                    "sql_binder_exec_result_flow_invalid",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_noncanonical_text_exit_zero(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        for exit_line in [
+            "Exit code: 0.0",
+            "Exit code: 00",
+            "Exit code: 0.0extra",
+            "Exit code: +0",
+            "Exit code: -0",
+            "Exit code: 0 trailing",
+            "Exit code: 0 ",
+        ]:
+            with self.subTest(exit_line=exit_line):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                receipt = self.sql_binding_receipt(binding_events[1])
+                binding_events[1]["payload"]["output"] = (
+                    f"{exit_line}\n{json.dumps(receipt)}"
+                )
+                events.extend(binding_events)
+                events.append(final_message)
+                evidence = analyze_session_skills(
+                    self.write_session(events)
+                ).usage_summary["sql_formatting_evidence"]
+                self.assertIn(
+                    "final_response_binding_shell_exit_status_invalid",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_duplicate_json_keys(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        replacements = {
+            "top_status": ('"status": "passed"', '"status":"blocked","status":"passed"'),
+            "nested_status": ('"status": "bound"', '"status":"blocked","status":"bound"'),
+        }
+        for label, (needle, replacement) in replacements.items():
+            with self.subTest(label=label):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                receipt = self.sql_binding_receipt(binding_events[1])
+                raw = json.dumps(receipt)
+                self.assertIn(needle, raw)
+                binding_events[1]["payload"]["output"] = (
+                    "Exit code: 0\n" + raw.replace(needle, replacement, 1)
+                )
+                events.extend(binding_events)
+                events.append(final_message)
+                evidence = analyze_session_skills(
+                    self.write_session(events)
+                ).usage_summary["sql_formatting_evidence"]
+                self.assertIn(
+                    "final_response_binding_receipt_invalid",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_cli_extras_and_split_provider_paths_with_valid_hmac(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        cases = {
+            "extra": "cli_input_argument_unexpected_unexpected",
+            "split": "cli_input_provider_paths_mismatch",
+        }
+        for label, expected in cases.items():
+            with self.subTest(label=label):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                receipt = self.sql_binding_receipt(binding_events[1])
+                receipt.pop("runtime_receipt")
+                if label == "extra":
+                    receipt["cli_inputs"]["arguments"]["unexpected"] = "value"
+                else:
+                    selected = r"C:\other\sql-formatting\SKILL.md"
+                    receipt["cli_inputs"]["arguments"][
+                        "selected_active_provider_path"
+                    ] = selected
+                    receipt["cli_inputs"]["resolved_paths"][
+                        "selected_active_provider_path"
+                    ] = selected
+                    receipt["provider_path_guard"][
+                        "selected_active_provider_path"
+                    ] = selected
+                with mock.patch(
+                    "src.skills.sql_formatting_provider.validate_sql_final_response_release_schema",
+                    return_value=[],
+                ):
+                    receipt = attach_sql_formatting_cli_runtime_receipt(
+                        receipt,
+                        session_id="session-audit",
+                        invocation_nonce="session-audit-bind-0001",
+                    )
+                self.set_sql_binding_receipt(binding_events[1], receipt)
+                events.extend(binding_events)
+                events.append(final_message)
+                evidence = analyze_session_skills(
+                    self.write_session(events)
+                ).usage_summary["sql_formatting_evidence"]
+                self.assertIn(expected, evidence["binding_errors"])
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_receipt_ids_cannot_be_replayed_same_request_or_after_correction(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        replay_call = json.loads(json.dumps(binding_events[0]))
+        replay_output = json.loads(json.dumps(binding_events[1]))
+        replay_call["payload"]["call_id"] = "bind-sql-final-replay"
+        replay_output["payload"]["call_id"] = "bind-sql-final-replay"
+        events.extend(binding_events)
+        events.extend([replay_call, replay_output])
+        events.append(final_message)
+        evidence = analyze_session_skills(
+            self.write_session(events)
+        ).usage_summary["sql_formatting_evidence"]
+        self.assertIn("sql_provider_runtime_receipt_replayed", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        old_final = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        replay_call = json.loads(json.dumps(binding_events[0]))
+        replay_output = json.loads(json.dumps(binding_events[1]))
+        replay_call["payload"]["call_id"] = "bind-after-correction"
+        replay_output["payload"]["call_id"] = "bind-after-correction"
+        events.extend(binding_events)
+        events.append(old_final)
+        events.append(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Try again.",
+                },
+            }
+        )
+        events.extend([replay_call, replay_output])
+        events.append(old_final)
+        evidence = analyze_session_skills(
+            self.write_session(events)
+        ).usage_summary["sql_formatting_evidence"]
+        self.assertIn("sql_provider_runtime_receipt_replayed", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_provider_selection_receipt_id_cannot_be_replayed(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        replay_call = json.loads(json.dumps(events[1]))
+        replay_output = json.loads(json.dumps(events[2]))
+        replay_call["payload"]["call_id"] = "sql-front-door-replay"
+        replay_output["payload"]["call_id"] = "sql-front-door-replay"
+        events[3:3] = [replay_call, replay_output]
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(final_message)
+
+        evidence = analyze_session_skills(
+            self.write_session(events)
+        ).usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(
+            "provider_selection_runtime_receipt_replayed",
+            evidence["binding_errors"],
+        )
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_provider_selection_file_duplicate_provider_id_fails_closed(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        receipt = self.sql_binding_receipt(binding_events[1])
+        receipt.pop("runtime_receipt")
+        selection_path = Path(
+            receipt["cli_inputs"]["resolved_paths"]["provider_selection_file"]
+        )
+        selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        duplicate = json.dumps(selection).replace(
+            '"provider_id": "sql-formatting"',
+            '"provider_id":"other","provider_id":"sql-formatting"',
+            1,
+        )
+        selection_path.write_text(duplicate, encoding="utf-8")
+        receipt["cli_inputs"]["hashes"]["provider_selection_file_sha256"] = (
+            hashlib.sha256(selection_path.read_bytes()).hexdigest()
+        )
+        with mock.patch(
+            "src.skills.sql_formatting_provider.validate_sql_final_response_release_schema",
+            return_value=[],
+        ):
+            receipt = attach_sql_formatting_cli_runtime_receipt(
+                receipt,
+                session_id="session-audit",
+                invocation_nonce="session-audit-bind-0001",
+            )
+        self.set_sql_binding_receipt(binding_events[1], receipt)
+        events.extend(binding_events)
+        events.append(final_message)
+
+        evidence = analyze_session_skills(
+            self.write_session(events)
+        ).usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(
+            "cli_input_provider_selection_file_read_failed",
+            evidence["binding_errors"],
+        )
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_full_release_schema_matrix_with_valid_hmac(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        cases = {
+            "status_false": (
+                ("status",),
+                False,
+                "final_response_release_status_not_string",
+            ),
+            "status_blocked": (
+                ("status",),
+                "blocked",
+                "final_response_release_status_not_passed",
+            ),
+            "missing_binding": (
+                ("binding",),
+                None,
+                "final_response_release_binding_missing",
+            ),
+            "missing_guard": (
+                ("provider_path_guard",),
+                None,
+                "final_response_release_provider_path_guard_missing",
+            ),
+            "missing_verification": (
+                ("verification",),
+                None,
+                "final_response_release_verification_missing",
+            ),
+            "binding_verification_id_bool": (
+                ("binding", "verification_id"),
+                True,
+                "final_response_binding_verification_id_not_string",
+            ),
+            "fence_bool": (
+                ("binding", "sql_fence_count"),
+                True,
+                "final_response_binding_sql_fence_count_not_integer",
+            ),
+            "binding_extra_coercible": (
+                ("binding", "legacy_fence_count"),
+                1,
+                "final_response_binding_legacy_fence_count_unexpected",
+            ),
+            "guard_authority": (
+                ("provider_path_guard", "authority"),
+                "caller-selected",
+                "provider_path_guard_authority_mismatch",
+            ),
+            "guard_path": (
+                ("provider_path_guard", "provider_path"),
+                r"C:\other\sql-formatting\SKILL.md",
+                "provider_path_guard_provider_path_mismatch",
+            ),
+            "verification_id_bool": (
+                ("verification", "metadata", "verification_id"),
+                True,
+                "final_response_verification_verification_id_not_string",
+            ),
+        }
+        for label, (path, replacement, expected) in cases.items():
+            with self.subTest(label=label):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                receipt = self.sql_binding_receipt(binding_events[1])
+                receipt.pop("runtime_receipt")
+                target = receipt
+                for key in path[:-1]:
+                    target = target[key]
+                if replacement is None:
+                    target.pop(path[-1])
+                else:
+                    target[path[-1]] = replacement
+                with mock.patch(
+                    "src.skills.sql_formatting_provider.validate_sql_final_response_release_schema",
+                    return_value=[],
+                    create=True,
+                ):
+                    receipt = attach_sql_formatting_cli_runtime_receipt(
+                        receipt,
+                        session_id="session-audit",
+                        invocation_nonce="session-audit-bind-0001",
+                    )
+                self.set_sql_binding_receipt(binding_events[1], receipt)
+                events.extend(binding_events)
+                events.append(final_message)
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertIn(expected, evidence["binding_errors"])
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_verified_runtime_external_authenticity(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        receipt = self.sql_binding_receipt(binding_events[1])
+        receipt["runtime_receipt"]["external_authenticity"] = "verified"
+        boundary = _sql_provider_runtime_boundary()
+        receipt["runtime_receipt"]["producer_claim"] = boundary._claim_digest(
+            receipt["runtime_receipt"]
+        )
+        self.set_sql_binding_receipt(binding_events[1], receipt)
+        events.extend(binding_events)
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(
+            "sql_provider_runtime_receipt_external_authenticity_mismatch",
+            evidence["binding_errors"],
+        )
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_type_confused_shell_exit_evidence(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        for label, replacement in {
+            "false": False,
+            "float": 0.0,
+            "string": "0",
+        }.items():
+            with self.subTest(label=label):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                receipt = self.sql_binding_receipt(binding_events[1])
+                binding_events[1]["payload"]["exit_code"] = replacement
+                binding_events[1]["payload"]["output"] = json.dumps(receipt)
+                events.extend(binding_events)
+                events.append(final_message)
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertIn(
+                    "final_response_binding_shell_exit_status_invalid",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_fails_closed_without_correlated_provider_selection(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = [
+            event
+            for event in self.sql_audit_events(original_sql, formatted_sql)
+            if event.get("payload", {}).get("call_id") != "sql-front-door"
+        ]
+        final_message = events.pop()
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertFalse(evidence["provider_selected"])
+        self.assertIn("front_door_provider_selection_missing", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_self_authored_front_door_selection(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        for event in events:
+            payload = event.get("payload", {})
+            if payload.get("call_id") != "sql-front-door" or payload.get("type") != "function_call_output":
+                continue
+            output = str(payload["output"])
+            selection = json.loads(output[output.find("{") :])
+            selection.pop("provider_selection_receipt", None)
+            payload["output"] = f"Exit code: 0\n{json.dumps(selection)}"
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertFalse(evidence["provider_selected"])
+        self.assertIn(
+            "front_door_provider_selection_provenance_invalid",
+            evidence["binding_errors"],
+        )
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_reopens_and_requires_all_cli_artifacts(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        for artifact_name in [
+            "original_file",
+            "candidate_file",
+            "response_file",
+            "provider_selection_file",
+        ]:
+            with self.subTest(artifact=artifact_name):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                events.extend(
+                    self.sql_binding_events(
+                        original_sql,
+                        formatted_sql,
+                        artifact_mutations={artifact_name: None},
+                    )
+                )
+                events.append(final_message)
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertIn(
+                    f"cli_input_{artifact_name}_missing",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rehashes_artifacts_after_receipt(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        tampered_selection = self.sql_front_door_output(
+            r"C:\active\tampered-sql-formatting\SKILL.md"
+        )
+        cases = {
+            "original_file": "SELECT CHANGED FROM BA011T;",
+            "candidate_file": formatted_sql + "\n-- changed",
+            "response_file": f"```sql\n{formatted_sql}\n```\nchanged",
+            "provider_selection_file": json.dumps(tampered_selection),
+        }
+        for artifact_name, replacement in cases.items():
+            with self.subTest(artifact=artifact_name):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                events.extend(
+                    self.sql_binding_events(
+                        original_sql,
+                        formatted_sql,
+                        artifact_mutations={artifact_name: replacement},
+                    )
+                )
+                events.append(final_message)
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertIn(
+                    f"cli_input_{artifact_name}_hash_mismatch",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_raw_byte_only_artifact_changes(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        draft_response = f"```sql\n{formatted_sql}\n```"
+        crlf_candidate = formatted_sql.replace("\n", "\r\n").encode("utf-8")
+        crlf_response = draft_response.replace("\n", "\r\n").encode("utf-8")
+        cases = {
+            "original_file": {
+                "initial": {},
+                "mutation": lambda raw: b"\xef\xbb\xbf" + raw,
+            },
+            "candidate_file": {
+                "initial": {"candidate_file": crlf_candidate},
+                "mutation": lambda raw: raw.replace(b"\r\n", b"\n"),
+            },
+            "response_file": {
+                "initial": {"response_file": crlf_response},
+                "mutation": lambda raw: raw.replace(b"\r\n", b"\n"),
+            },
+            "provider_selection_file": {
+                "initial": {},
+                "mutation": lambda raw: json.dumps(
+                    json.loads(raw.decode("utf-8")),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ).encode("utf-8"),
+            },
+        }
+        for artifact_name, case in cases.items():
+            with self.subTest(artifact=artifact_name):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                events.extend(
+                    self.sql_binding_events(
+                        original_sql,
+                        formatted_sql,
+                        artifact_initial_bytes=case["initial"],
+                        artifact_mutations={artifact_name: case["mutation"]},
+                    )
+                )
+                events.append(final_message)
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertIn(
+                    f"cli_input_{artifact_name}_raw_hash_mismatch",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_accepts_unchanged_raw_artifacts(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("verified_before_output", evidence["states"])
+        self.assertFalse(
+            any("raw_hash" in error for error in evidence["binding_errors"]),
+            evidence,
+        )
+
+    def test_sql_provider_selection_requires_successful_front_door_output_status(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        cases = {
+            "nonzero": lambda selection: f"Exit code: 2\n{json.dumps(selection)}",
+            "missing": lambda selection: json.dumps(selection),
+            "decimal": lambda selection: f"Exit code: 0.0\n{json.dumps(selection)}",
+            "leading_zero": lambda selection: f"Exit code: 00\n{json.dumps(selection)}",
+            "decimal_suffix": lambda selection: f"Exit code: 0.0extra\n{json.dumps(selection)}",
+            "signed": lambda selection: f"Exit code: +0\n{json.dumps(selection)}",
+            "trailing": lambda selection: f"Exit code: 0 trailing\n{json.dumps(selection)}",
+        }
+        for label, render_output in cases.items():
+            with self.subTest(label=label):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                selection_event = events[2]["payload"]
+                signed_selection = json.loads(
+                    str(selection_event["output"])[
+                        str(selection_event["output"]).find("{") :
+                    ]
+                )
+                selection_event["output"] = render_output(signed_selection)
+                events.extend(self.sql_binding_events(original_sql, formatted_sql))
+                events.append(final_message)
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"][
+                        "front_door_runtime_receipts"
+                    ],
+                    0,
+                )
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "missing_front_door"
+                        for issue in audit.issues
+                    )
+                )
+                self.assertFalse(evidence["provider_selected"])
+                self.assertIn(
+                    "front_door_provider_selection_missing",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_locally_signed_type_confused_receipts(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        cli_cases = {
+            "exit_false": (
+                lambda receipt: receipt["cli_inputs"].__setitem__("exit_status", False),
+                "cli_input_exit_status_not_integer",
+            ),
+            "exit_float": (
+                lambda receipt: receipt["cli_inputs"].__setitem__("exit_status", 0.0),
+                "cli_input_exit_status_not_integer",
+            ),
+            "numeric_hash": (
+                lambda receipt: receipt["cli_inputs"]["hashes"].__setitem__(
+                    "candidate_text_sha256", 123
+                ),
+                "cli_input_hash_candidate_text_sha256_not_string",
+            ),
+            "numeric_path": (
+                lambda receipt: receipt["cli_inputs"]["resolved_paths"].__setitem__(
+                    "candidate_file", 456
+                ),
+                "cli_input_resolved_path_candidate_file_not_string",
+            ),
+            "numeric_session": (
+                lambda receipt: receipt["cli_inputs"]["arguments"].__setitem__(
+                    "session_id", 789
+                ),
+                "cli_input_argument_session_id_not_string",
+            ),
+            "numeric_nonce": (
+                lambda receipt: receipt["cli_inputs"]["arguments"].__setitem__(
+                    "invocation_nonce", 1011
+                ),
+                "cli_input_argument_invocation_nonce_not_string",
+            ),
+            "list_module": (
+                lambda receipt: receipt["cli_inputs"].__setitem__("module", []),
+                "cli_input_module_not_string",
+            ),
+            "object_argument": (
+                lambda receipt: receipt["cli_inputs"]["arguments"].__setitem__(
+                    "response_file", {}
+                ),
+                "cli_input_argument_response_file_not_string",
+            ),
+            "null_hash": (
+                lambda receipt: receipt["cli_inputs"]["hashes"].__setitem__(
+                    "response_file_sha256", None
+                ),
+                "cli_input_hash_response_file_sha256_not_string",
+            ),
+        }
+        for label, (mutate, expected) in cli_cases.items():
+            with self.subTest(label=label):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                receipt = self.sql_binding_receipt(binding_events[1])
+                receipt.pop("runtime_receipt", None)
+                mutate(receipt)
+                with mock.patch(
+                    "src.skills.sql_formatting_provider._successful_sql_cli_input_errors",
+                    return_value=[],
+                ):
+                    receipt = attach_sql_formatting_cli_runtime_receipt(
+                        receipt,
+                        session_id="session-audit",
+                        invocation_nonce="session-audit-bind-0001",
+                    )
+                self.set_sql_binding_receipt(binding_events[1], receipt)
+                events.extend(binding_events)
+                events.append(final_message)
+
+                evidence = analyze_session_skills(
+                    self.write_session(events)
+                ).usage_summary["sql_formatting_evidence"]
+
+                self.assertIn(expected, evidence["binding_errors"])
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_audit_rejects_signed_invalid_or_blocked_provider_selections(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        cases = {
+            "blocked_gate": lambda value: value["execution_gate"].__setitem__(
+                "can_execute", False
+            ),
+            "schema_bool": lambda value: value.__setitem__("schema_version", True),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(label=label):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                output_event = events[2]["payload"]
+                selection = json.loads(
+                    str(output_event["output"])[str(output_event["output"]).find("{") :]
+                )
+                selection.pop("provider_selection_receipt", None)
+                mutate(selection)
+                with mock.patch(
+                    "src.skills.sql_formatting_provider._sql_provider_selection_schema_errors",
+                    return_value=[],
+                ):
+                    selection = attach_sql_provider_selection_runtime_receipt(selection)
+                output_event["output"] = f"Exit code: 0\n{json.dumps(selection)}"
+                events.extend(self.sql_binding_events(original_sql, formatted_sql))
+                events.append(final_message)
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertFalse(evidence["provider_selected"])
+                self.assertIn(
+                    "front_door_provider_selection_provenance_invalid",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        output_event = events[2]["payload"]
+        selection = json.loads(
+            str(output_event["output"])[str(output_event["output"]).find("{") :]
+        )
+        selection["provider_selection_receipt"]["authority"] = "other"
+        boundary = _sql_provider_selection_runtime_boundary()
+        selection["provider_selection_receipt"]["producer_claim"] = boundary._claim_digest(
+            selection["provider_selection_receipt"]
+        )
+        output_event["output"] = f"Exit code: 0\n{json.dumps(selection)}"
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(final_message)
+
+        evidence = analyze_session_skills(
+            self.write_session(events)
+        ).usage_summary["sql_formatting_evidence"]
+
+        self.assertFalse(evidence["provider_selected"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_audit_rejects_recomputed_hmac_with_wrong_cli_receipt_identity(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        receipt = self.sql_binding_receipt(binding_events[1])
+        receipt["runtime_receipt"]["authority"] = "other"
+        boundary = _sql_provider_runtime_boundary()
+        receipt["runtime_receipt"]["producer_claim"] = boundary._claim_digest(
+            receipt["runtime_receipt"]
+        )
+        self.set_sql_binding_receipt(binding_events[1], receipt)
+        events.extend(binding_events)
+        events.append(final_message)
+
+        evidence = analyze_session_skills(
+            self.write_session(events)
+        ).usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(
+            "sql_provider_runtime_receipt_authority_mismatch",
+            evidence["binding_errors"],
+        )
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+        for field, replacement in {"schema_version": True, "exit_code": False}.items():
+            with self.subTest(runtime_field=field):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                final_message = events.pop()
+                binding_events = self.sql_binding_events(original_sql, formatted_sql)
+                receipt = self.sql_binding_receipt(binding_events[1])
+                payload = {
+                    key: value
+                    for key, value in receipt["runtime_receipt"].items()
+                    if key
+                    not in {
+                        "producer_boundary",
+                        "authority",
+                        "external_authenticity",
+                        "receipt_id",
+                        "producer_claim",
+                    }
+                }
+                payload[field] = replacement
+                receipt["runtime_receipt"] = _sql_provider_runtime_boundary().issue_claim(
+                    payload,
+                    claim_kind=SQL_PROVIDER_RECEIPT_CLAIM_KIND,
+                    claim_id_field="receipt_id",
+                    claim_id_prefix="sql-provider",
+                )
+                self.set_sql_binding_receipt(binding_events[1], receipt)
+                events.extend(binding_events)
+                events.append(final_message)
+
+                evidence = analyze_session_skills(
+                    self.write_session(events)
+                ).usage_summary["sql_formatting_evidence"]
+
+                self.assertIn(
+                    f"sql_provider_runtime_receipt_{field}_mismatch",
+                    evidence["binding_errors"],
+                )
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_binding_rejects_front_door_provider_path_mismatch(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(
+            original_sql,
+            formatted_sql,
+            provider_path=r"C:\active\other-sql-formatting\SKILL.md",
+        )
+        events.extend(binding_events)
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("front_door_provider_path_mismatch", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_later_sql_request_without_new_answer_invalidates_bound_receipt(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        first_final = events.pop()
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(first_final)
+        events.append(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Change the alias and format the SQL again.",
+                },
+            }
+        )
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn(
+            "later_sql_request_without_new_bound_answer",
+            evidence["binding_errors"],
+        )
+        self.assertIn("provider_selection_invalidated", evidence["states"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_immediate_short_contextual_corrections_invalidate_bound_sql(self):
+        corrections = [
+            "No, that's wrong.",
+            "That is not what I asked.",
+            "Try again.",
+            "아니요, 틀렸습니다.",
+            "제가 요청한 내용이 아닙니다.",
+            "다시 해주세요.",
+        ]
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        for correction in corrections:
+            with self.subTest(correction=correction):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                first_final = events.pop()
+                events.extend(self.sql_binding_events(original_sql, formatted_sql))
+                events.append(first_final)
+                events.append(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": correction,
+                        },
+                    }
+                )
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertIn(
+                    "later_sql_request_without_new_bound_answer",
+                    evidence["binding_errors"],
+                )
+                self.assertIn("provider_selection_invalidated", evidence["states"])
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_unrelated_followups_do_not_invalidate_bound_sql(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        for message in [
+            "Thanks for the help.",
+            "Try again tomorrow after the deployment window.",
+            "이제 배포 일정만 확인해 주세요.",
+        ]:
+            with self.subTest(message=message):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                first_final = events.pop()
+                events.extend(self.sql_binding_events(original_sql, formatted_sql))
+                events.append(first_final)
+                events.append(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": message,
+                        },
+                    }
+                )
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertIn("verified_before_output", evidence["states"])
+                self.assertNotIn(
+                    "later_sql_request_without_new_bound_answer",
+                    evidence["binding_errors"],
+                )
+
+        unrelated_events = [
+            {
+                "type": "response_item",
+                "payload": {"type": "message", "role": "user", "content": "Draft release notes."},
+            },
+            {
+                "type": "response_item",
+                "payload": {"type": "message", "role": "assistant", "content": "Release notes draft."},
+            },
+            {
+                "type": "response_item",
+                "payload": {"type": "message", "role": "user", "content": "Try again."},
+            },
+        ]
+        unrelated = analyze_session_skills(self.write_session(unrelated_events))
+        self.assertFalse(unrelated.usage_summary["sql_formatting_evidence"]["required"])
+
+    def test_latest_user_correction_invalidates_prior_sql_binding_even_when_text_is_same(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        first_final = events.pop()
+        events.extend(self.sql_binding_events(original_sql, formatted_sql))
+        events.append(first_final)
+        events.append(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Keep the SQL text, but recheck it after this correction.",
+                },
+            }
+        )
+        events.append(first_final)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("final_response_binding_missing", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_sql_final_response_with_extra_non_sql_fence_is_rejected(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        final_response = f"```sql\n{formatted_sql}\n```\n\n```text\nreceipt\n```"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        receipt = self.sql_binding_receipt(binding_events[1])
+        response_hash = hashlib.sha256(final_response.encode("utf-8")).hexdigest()
+        receipt["binding"]["final_response_sha256"] = response_hash
+        receipt["cli_inputs"]["hashes"]["response_text_sha256"] = response_hash
+        self.set_sql_binding_receipt(binding_events[1], receipt)
+        events.extend(binding_events)
+        events.append(
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": final_response,
+                },
+            }
+        )
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("final_sql_not_exactly_extractable", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_real_cli_receipt_passes_session_audit_end_to_end(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        provider_path = repo_root / "skills" / "sql_formatting" / "SKILL.md"
+        original_sql = "SELECT ORDER_ID FROM ORDER_HEADER;"
+        formatted_sql = "SELECT ORDER_ID\nFROM ORDER_HEADER;"
+        final_response = f"```sql\n{formatted_sql}\n```"
+        artifact_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(artifact_tmp.cleanup)
+        root = Path(artifact_tmp.name)
+        original_path = root / "original.sql"
+        candidate_path = root / "candidate.sql"
+        response_path = root / "response.md"
+        selection_path = root / "provider-selection.json"
+        session_id = "session-audit"
+        invocation_nonce = "real-cli-session-0001"
+        provider_selection = self.sql_front_door_output(
+            provider_path,
+            source="packaged-kh-skill",
+        )
+        original_path.write_text(original_sql, encoding="utf-8")
+        candidate_path.write_text(formatted_sql, encoding="utf-8")
+        response_path.write_text(final_response, encoding="utf-8")
+        selection_path.write_text(
+            json.dumps(provider_selection),
+            encoding="utf-8",
+        )
+        command = [
+            sys.executable,
+            "-m",
+            "src.skills.sql_formatting_provider",
+            "--original-file",
+            str(original_path),
+            "--candidate-file",
+            str(candidate_path),
+            "--response-file",
+            str(response_path),
+            "--provider-path",
+            str(provider_path),
+            "--selected-active-provider-path",
+            str(provider_path),
+            "--provider-selection-file",
+            str(selection_path),
+            "--session-id",
+            session_id,
+            "--invocation-nonce",
+            invocation_nonce,
+        ]
+        completed = subprocess.run(
+            command,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        receipt = json.loads(completed.stdout)
+        call_text = subprocess.list2cmdline(command)
+        events = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": f"{original_sql}\nformat this SQL",
+                },
+            },
+            self.front_door_call(call_id="real-cli-front-door"),
+            self.front_door_output(
+                provider_selection,
+                call_id="real-cli-front-door",
+            ),
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "shell_command",
+                    "call_id": "inspect-real-provider",
+                    "arguments": f'Get-Content -Raw "{provider_path}"',
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "inspect-real-provider",
+                    "output": self.sql_provider_contract(),
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "shell_command",
+                    "call_id": "bind-real-cli",
+                    "arguments": call_text,
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "bind-real-cli",
+                    "output": f"Exit code: 0\n{json.dumps(receipt)}",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": final_response,
+                },
+            },
+        ]
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("verified_before_output", evidence["states"])
+        self.assertEqual(evidence["status"], "verified_before_output")
+
+    def test_sql_final_binding_provider_receipt_path_must_match_call(self):
+        original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
+        formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
+        events = self.sql_audit_events(original_sql, formatted_sql)
+        final_message = events.pop()
+        binding_events = self.sql_binding_events(original_sql, formatted_sql)
+        receipt = self.sql_binding_receipt(binding_events[1])
+        receipt["provider_path_guard"]["provider_path"] = (
+            r"C:\Users\KONEIT\.codex\plugins\cache\stale\sql-formatting\SKILL.md"
+        )
+        self.set_sql_binding_receipt(binding_events[1], receipt)
+        events.extend(binding_events)
+        events.append(final_message)
+
+        audit = analyze_session_skills(self.write_session(events))
+        evidence = audit.usage_summary["sql_formatting_evidence"]
+
+        self.assertIn("provider_path_receipt_mismatch", evidence["binding_errors"])
+        self.assertNotIn("verified_before_output", evidence["states"])
 
     def test_sql_formatting_verifier_cannot_bind_unfenced_final_sql(self):
         original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
@@ -5612,7 +7204,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call_output",
                         "call_id": "front-door-active-directive",
-                        "output": json.dumps(
+                        "output": "Exit code: 0\n" + json.dumps(
                             {
                                 "front_door_status": "ok",
                                 "plugin_route": {"route": "single"},
@@ -5780,7 +7372,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call_output",
                         "call_id": "front-door-plugin-request",
-                        "output": json.dumps(
+                        "output": "Exit code: 0\n" + json.dumps(
                             {
                                 "front_door_status": "ok",
                                 "plugin_route": {"route": "single"},
@@ -5944,7 +7536,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call_output",
                         "call_id": "front-door-command",
-                        "output": json.dumps(front_door_output),
+                        "output": "Exit code: 0\n" + json.dumps(front_door_output),
                     },
                 },
                 {
@@ -6047,7 +7639,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "custom_tool_call_output",
                         "call_id": "front-door-custom",
-                        "output": json.dumps(front_door_output),
+                        "output": "Exit code: 0\n" + json.dumps(front_door_output),
                     },
                 },
                 {
@@ -6155,7 +7747,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call_output",
                         "call_id": "front-door-wrapper",
-                        "output": json.dumps(front_door_output),
+                        "output": "Exit code: 0\n" + json.dumps(front_door_output),
                     },
                 },
                 {
@@ -8271,7 +9863,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             1,
         )
 
-    def test_real_exec_exit_one_accepts_only_strict_blocked_front_door_receipt(self):
+    def test_real_exec_exit_three_never_counts_as_front_door_receipt(self):
         produced = build_kh_front_door(
             "Implement a large cross-module software redesign with tests and review.",
             project=Path(__file__).resolve().parents[1],
@@ -8292,8 +9884,8 @@ class SessionSkillAuditTests(unittest.TestCase):
             "status": "allowed",
         }
         cases = {
-            "current_blocked_packet": (produced, False),
-            "legacy_2_9_129_pending_skill_packet": (legacy_2_9_129, False),
+            "current_blocked_packet": (produced, True),
+            "legacy_2_9_129_pending_skill_packet": (legacy_2_9_129, True),
             "missing_required_actions": (missing_actions, True),
             "nonblocked_authorization": (allowed_authorization, True),
             "malformed_packet": ('{"front_door_status":"ok"', True),
@@ -8313,7 +9905,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                             },
                         },
                         self.front_door_exec_call(call_id),
-                        self.front_door_exec_output(output, call_id),
+                        self.front_door_exec_output(output, call_id, exit_code=3),
                         {
                             "type": "response_item",
                             "payload": {
@@ -8340,7 +9932,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     0 if expected_missing else 1,
                 )
 
-    def test_actual_escaped_exec_call_correlates_legacy_exit_one_receipt(self):
+    def test_actual_escaped_exec_call_correlates_successful_receipt(self):
         receipt = self.legacy_2_9_129_pending_front_door_receipt()
         path = self.write_session(
             [
@@ -8380,6 +9972,136 @@ class SessionSkillAuditTests(unittest.TestCase):
                 for issue in audit.issues
             )
         )
+
+    def test_front_door_runtime_rejects_non_standalone_command_shapes(self):
+        receipt = self.producer_micro_receipt()
+        base = "python -m src.orchestration.kh_front_door --prompt audit --micro-summary"
+        commands = {
+            "comment": f"# {base}",
+            "echo": f"echo {base}",
+            "write_output": f"Write-Output '{base}'",
+            "pipeline": f"{base} | Out-Null",
+            "separator": f"Write-Output preflight; {base}",
+            "redirection": f"{base} > front-door.json",
+        }
+        for label, command in commands.items():
+            with self.subTest(label=label):
+                call_id = f"fake-front-door-{label}"
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect the session audit module.",
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "call_id": call_id,
+                                "arguments": command,
+                            },
+                        },
+                        self.front_door_output(receipt, call_id),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"][
+                        "front_door_runtime_receipts"
+                    ],
+                    0,
+                )
+                self.assertTrue(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "missing_front_door"
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_sql_provider_selection_rejects_non_standalone_front_door_calls(self):
+        original_sql = "SELECT * FROM BA011T;"
+        formatted_sql = "SELECT *\nFROM BA011T;"
+        base = "python -m src.orchestration.kh_front_door --prompt sql --summary"
+        commands = {
+            "comment": f"# {base}",
+            "echo": f"echo {base}",
+            "write_output": f"Write-Output '{base}'",
+            "pipeline": f"{base} | Out-Null",
+            "separator": f"Write-Output preflight; {base}",
+            "redirection": f"{base} > front-door.json",
+        }
+        for label, command in commands.items():
+            with self.subTest(label=label):
+                events = self.sql_audit_events(original_sql, formatted_sql)
+                events[1]["payload"]["arguments"] = command
+
+                audit = analyze_session_skills(self.write_session(events))
+                evidence = audit.usage_summary["sql_formatting_evidence"]
+
+                self.assertFalse(evidence["provider_selected"])
+                self.assertNotIn("verified_before_output", evidence["states"])
+
+    def test_front_door_runtime_rejects_nonzero_or_missing_shell_exit_evidence(self):
+        receipt = self.producer_micro_receipt()
+        cases = {
+            "nonzero": self.front_door_output(receipt, "front-door-exit", exit_code=2),
+            "missing": {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "front-door-exit",
+                    "output": json.dumps(receipt),
+                },
+            },
+        }
+        for label, output in cases.items():
+            with self.subTest(label=label):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect the session audit module.",
+                            },
+                        },
+                        self.front_door_call("front-door-exit"),
+                        output,
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+                self.assertEqual(
+                    audit.postmortem["token_optimizer_evidence"][
+                        "front_door_runtime_receipts"
+                    ],
+                    0,
+                )
 
     def test_front_door_skill_read_with_valid_output_is_not_execution(self):
         receipt = self.legacy_2_9_129_pending_front_door_receipt()
@@ -8580,7 +10302,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_exit_three_requires_strict_blocked_front_door_packet(self):
+    def test_exit_three_rejects_all_front_door_packets(self):
         blocked = build_kh_front_door(
             "Implement a large cross-module software redesign with tests and review.",
             project=Path(__file__).resolve().parents[1],
@@ -8590,7 +10312,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             project=Path(__file__).resolve().parents[1],
         ).to_compact_summary_dict()
         cases = {
-            "strict_blocked": (blocked, False, 1),
+            "strict_blocked": (blocked, True, 0),
             "inconsistent_nonblocked": (nonblocked, True, 0),
         }
         for label, (receipt, expected_missing, expected_receipts) in cases.items():
@@ -9672,7 +11394,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     )
                 )
 
-    def test_producer_micro_strict_blocked_exit_three_is_runtime_receipt(self):
+    def test_producer_micro_strict_blocked_exit_three_is_not_runtime_receipt(self):
         receipt = build_kh_front_door(
             "Implement a large cross-module software redesign with tests and review.",
             project=Path(__file__).resolve().parents[1],
@@ -9711,7 +11433,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertFalse(
+        self.assertTrue(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
@@ -9722,7 +11444,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             audit.postmortem["token_optimizer_evidence"][
                 "front_door_runtime_receipts"
             ],
-            1,
+            0,
         )
 
     def test_front_door_call_before_request_boundary_cannot_satisfy_later_request(self):

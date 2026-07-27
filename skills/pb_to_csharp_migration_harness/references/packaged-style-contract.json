@@ -333,11 +333,146 @@
     "result fields match C# bindings and grid FieldName values"
   ],
   "stored_procedure_rules": {
-    "metadata_fields": [
-      "AUTHOR",
-      "CREATE DATE",
+    "required_metadata_fields": [
       "DESCRIPTION"
     ],
+    "optional_source_backed_metadata_fields": [
+      "AUTHOR",
+      "CREATE DATE"
+    ],
+    "metadata_placeholders_allowed": false,
+    "operation_modes": [
+      "new_generation",
+      "pb_srd_generation",
+      "existing_sp_cleanup",
+      "approved_inferred_draft"
+    ],
+    "pasted_sql_evidence_roles": [
+      "existing_procedure",
+      "pb_query",
+      "body_fragment"
+    ],
+    "external_caller_requires": [
+      "verified",
+      "caller_id",
+      "artifact_caller_id_match",
+      "target_procedure",
+      "artifact_target_procedure_match",
+      "artifact_uri_or_path",
+      "sha256",
+      "ordered_typed_parameter_contract"
+    ],
+    "csharp_call_proves": [
+      "strict_one_or_two_part_target_procedure",
+      "explicit_schema_identity_or_default_DBO",
+      "ordered_parameter_names",
+      "complete_balanced_semicolon_terminated_call",
+      "globally_balanced_active_code_delimiters",
+      "complete_containing_class_struct_or_record",
+      "complete_ordinary_containing_method_body",
+      "all_active_dbClient_calls_counted_by_csharp_tokens",
+      "whitespace_and_comments_between_receiver_dot_method_and_parenthesis_supported",
+      "unsupported_dbClient_methods_count_toward_cardinality",
+      "exactly_one_total_active_dbClient_call",
+      "sole_dbClient_call_is_supported_sp_method",
+      "direct_method_body_expression_or_return_context",
+      "ordinary_method_requires_plausible_return_type_and_complete_type_scope",
+      "builtin_qualified_generic_nullable_array_tuple_and_task_like_return_types_supported",
+      "reserved_control_keywords_and_ambiguous_return_types_rejected",
+      "interpolated_string_expression_invocations_counted_conservatively",
+      "conditional_parenthesized_and_null_forgiving_receivers_counted",
+      "constructor_static_constructor_destructor_operator_conversion_accessor_rejected",
+      "bare_fragment_top_level_local_function_and_accessor_rejected",
+      "lambda_delegate_local_function_and_initializer_context_rejected",
+      "exact_case_sensitive_dbClient_receiver_and_method",
+      "direct_sp_string_first_top_level_argument",
+      "direct_DbParameter_remaining_top_level_arguments",
+      "restricted_scalar_DbParameter_value_expression",
+      "literal_identifier_member_indexer_method_cast_grouping_unary_and_coalesce_values",
+      "lambda_delegate_new_array_initializer_collection_assignment_binary_and_ternary_values_rejected",
+      "literal_preprocessor_evaluation",
+      "unknown_symbol_caller_evidence_rejected_without_symbol_contract"
+    ],
+    "branch_contract_requires": [
+      "verified",
+      "strict_target_procedure",
+      "artifact_target_procedure_match",
+      "artifact_uri_or_path",
+      "sha256",
+      "complete_branch_sql",
+      "hierarchical_condition_and_arm_paths",
+      "nested_branch_occurrences",
+      "unified_statement_and_branch_opening_event_order",
+      "preceding_sibling_events_for_later_branch_position",
+      "single_complete_authority_for_full_candidate_trace",
+      "complete_composite_trace_and_source_lineage"
+    ],
+    "composite_contract_requires": [
+      "verified",
+      "strict_target_procedure",
+      "artifact_target_procedure_match",
+      "artifact_uri_or_path",
+      "sha256",
+      "complete_trace_sql",
+      "exact_target_procedure",
+      "canonical_trace_schema_kh_pb_nonwrapper_trace_v2",
+      "trace_sha256",
+      "canonical_utf8_sorted_compact_json_sha256",
+      "trace_sql_hash_equals_candidate_hash",
+      "ordered_lineage_equals_all_correlated_source_artifact_hashes",
+      "subset_unknown_duplicate_and_reordered_lineage_rejected",
+      "exact_candidate_trace_key_counts"
+    ],
+    "body_traceability_requires": [
+      "complete_executable_source_statement_per_candidate_statement",
+      "source_statement_occurrence_consumed_once",
+      "join_and_predicate_coverage",
+      "declaration_assignment_and_error_control_coverage",
+      "residual_executable_and_control_token_coverage",
+      "condition_fingerprint_and_then_else_arm_binding",
+      "nested_branch_path_binding",
+      "unified_per_path_executable_event_order",
+      "statement_and_nested_branch_opening_share_total_ordinal",
+      "try_catch_while_nested_scope_and_transaction_structure_preserved",
+      "scope_omission_reorder_and_movement_rejected",
+      "only_first_root_procedure_envelope_set_nocount_before_nonwrapper_is_generated_wrapper",
+      "duplicate_later_nested_and_branch_set_nocount_requires_authority",
+      "generated_wrapper_reported_ordinal_zero",
+      "first_nonwrapper_reported_ordinal_one",
+      "cross_artifact_trace_key_pooling_rejected",
+      "source_source_and_branch_source_splicing_rejected"
+    ],
+    "generated_wrapper_allowlist": [
+      "procedure_envelope",
+      "first_root_level_pre_body_SET_NOCOUNT_ON_only"
+    ],
+    "csharp_call_does_not_prove": [
+      "sql_type",
+      "default",
+      "OUTPUT",
+      "READONLY"
+    ],
+    "parameter_option_parser": "sql-string-aware",
+    "existing_sp_cleanup_preserves": [
+      "procedure_identity",
+      "comment_payloads_and_relative_executable_positions",
+      "statements",
+      "operators",
+      "literals",
+      "terminators",
+      "ordered_typed_signature"
+    ],
+    "existing_sp_cleanup_allowed_changes": [
+      "whitespace",
+      "keyword_or_identifier_case"
+    ],
+    "accepted_ssms_preamble": [
+      "USE_GO",
+      "OBJECT_BLOCK_COMMENT",
+      "SET_ANSI_NULLS_GO",
+      "SET_QUOTED_IDENTIFIER_GO"
+    ],
+    "approved_inferred_draft_release_status": "pending",
     "set_nocount": true,
     "parameter_layout": "leading-comma",
     "select_column_layout": "leading-comma",
@@ -352,11 +487,18 @@
       "T1",
       "TA1"
     ],
-    "complete_body_requires": [
-      "supplied source SQL",
-      "supplied current procedure",
-      "supplied schema or result/write contract",
-      "explicit inferred-draft approval"
+    "release_ready_body_requires": [
+      "readable_sha256_bound_pb_datawindow_existing_sp_or_pasted_sql_artifact",
+      "same_procedure_or_meaningful_preserved_fragment_correlation",
+      "authoritative_caller_contract"
+    ],
+    "final_sql_emission_requires": [
+      "sp_generation_contract_passed",
+      "authoritative_provider_path",
+      "selected_active_provider_path",
+      "correlated_front_door_provider_selection",
+      "exact_fenced_final_response",
+      "fresh_release_ready_verifier_receipt"
     ]
   },
   "forbidden_patterns": [

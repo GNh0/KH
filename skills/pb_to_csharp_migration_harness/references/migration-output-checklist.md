@@ -50,9 +50,17 @@ Use this checklist before handoff or completion.
 
 ## Stored Procedures
 
-- Complete output has supplied result/write evidence or explicit inferred-draft approval.
-- Metadata placeholders are resolved from the request or remain visibly unresolved.
+- The selected operation is recorded as `new_generation`, `pb_srd_generation`, `existing_sp_cleanup`, or `approved_inferred_draft`.
+- Complete release-ready output has independently captured, readable, SHA-256-matched result/write/body evidence; schema summaries and candidate-as-source evidence do not qualify. An approved inferred draft remains pending.
+- Every executable statement and structural control event consumes one canonical event. IF/ELSE, WHILE body paths, generic nested BEGIN/END, TRY/CATCH openings and closings, and transaction-control statements preserve scope and order. Only the first root-level pre-body `SET NOCOUNT ON` in a procedure envelope is wrapper ordinal `0`; transaction-following, duplicate, later, nested, branch-path, and fragment-level forms require authority and a positive ordinal. One single independently bound source artifact or one complete SHA-bound branch/composite artifact covers the entire non-wrapper stream. A composite has exact candidate `target_procedure`, complete `trace_sql`, v2 canonical `trace_sha256`, and ordered lineage equal to every correlated source SHA-256. Structural omission/reordering/scope movement, condition-only artifacts, partial/unknown/duplicate/reordered lineage, wrong hashes, trace mismatch, cross-artifact splicing, flat fingerprint pools, branch/statement swaps, arm swaps, nested-arm swaps, and per-arm reordering are rejected.
+- `DESCRIPTION` is concrete. `AUTHOR` and `CREATE DATE` are absent unless exact authoritative source evidence supplies them. No metadata placeholder remains.
 - Every SP parameter exists in the caller matrix or has a documented external caller.
+- C# caller evidence names a strict one-part or two-part candidate `target_procedure`, and the bound artifact is globally delimiter-balanced and contains one complete `class`/`struct`/`record`, one complete ordinary method with a plausible built-in/qualified/generic/nullable/array/tuple/task-like return type, and exactly one active `dbClient` invocation. Invocation counting includes direct, conditional-access, parenthesized, null-forgiving, whitespace/comment-separated, and interpolated-string payload forms; unsupported methods also count, so a hidden second call fails. Reserved control keywords and ambiguous unsupported return-type syntax fail closed. The sole call is a complete semicolon-terminated, case-sensitive supported SP method used as a direct method-body expression or `return`. Constructors/static constructors, destructors, operators/conversions, accessors, bare fragments, top-level/local functions, lambdas, delegates, anonymous contexts, initializers, and nested expressions are rejected. Its first top-level argument is the direct SP string; every remaining top-level argument is a direct supported `new DbParameter` constructor whose value is a restricted scalar literal/identifier/member/indexer/method/cast/grouping/unary/`??` expression. Literal preprocessor conditions are evaluated; unknown-symbol regions containing caller evidence fail closed without symbol evidence. It does not claim SQL types, defaults, `OUTPUT`, or `READONLY`.
+- External caller evidence is verified and includes matching evidence/artifact caller identity and strict `target_procedure`, a readable artifact path (or host-resolved URI), SHA-256, and ordered SQL types. Empty or extra identity qualifiers fail closed.
+- Pasted SQL has an explicit `existing_procedure`, `pb_query`, or `body_fragment` role and resolves to a readable, SHA-256-matched artifact, not only a summary, inline claim, or unresolved URI.
+- Existing-SP cleanup changes only whitespace/case and preserves procedure identity, every comment payload at its relative executable-token position, statements, operators, literals, terminators, and the complete ordered typed original signature, defaults, `OUTPUT`, and `READONLY`.
+- Parameter defaults are parsed with SQL string awareness; `OUTPUT`/`READONLY` inside literals are not options.
+- Normal SSMS `USE`/`GO`, Object comment, ANSI settings, and `GO` preamble are accepted before the metadata header.
 - Internal calculations and derived dates are local variables.
 - Raw search/date values cross the caller boundary.
 - Supplied predicates, literals, comments, calculations, result order, and write behavior are preserved.
@@ -78,6 +86,7 @@ Use this checklist before handoff or completion.
 - Per-file Designer ownership scan and any dynamic-state exception evidence are recorded.
 - SP generation verifier status is recorded when SQL is generated.
 - SQL formatter/verifier status is recorded separately.
+- Emitted SQL has an actual final-response binding receipt with exact original/candidate/final hashes and correlated provider-selection evidence.
 - Build/syntax/manual checks and exact commands are recorded.
 - Unsupported PB parity, UI fidelity, and DB equivalence claims remain blocked.
 - Residual risks and next required evidence are explicit.

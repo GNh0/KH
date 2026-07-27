@@ -5,14 +5,25 @@ from datetime import datetime
 import hashlib
 import json
 import re
+import shlex
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Set
+from typing import Any, Dict, Iterable, List, Mapping, Sequence, Set
 
 from src.orchestration.goal_ledger import GoalLedger
 from src.orchestration.plugin_composition import looks_like_sql_output_request
 from src.orchestration.request_classifier import classify_request
 from src.orchestration.session_postmortem import analyze_codex_session_jsonl
+from src.skills.sql_formatting_provider import (
+    DuplicateJsonKeyError,
+    SqlFormattingCliArtifactError,
+    _successful_sql_cli_input_errors,
+    load_json_without_duplicate_keys,
+    load_sql_formatting_cli_artifacts,
+    sql_provider_selection_sha256,
+    validate_sql_provider_selection_runtime_receipt,
+    validate_sql_formatting_cli_runtime_receipt,
+)
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 
 
@@ -412,6 +423,8 @@ class SessionTextRecord:
     role: str = ""
     call_id: str = ""
     name: str = ""
+    arguments: str = ""
+    exit_codes: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -918,8 +931,8 @@ def _scoped_current_goal_evidence(path: Path) -> Dict[str, Any]:
             if candidate.stat().st_size > 1_000_000:
                 errors.append(f"{scope}:current_goal_too_large")
                 continue
-            raw = json.loads(candidate.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            raw = load_json_without_duplicate_keys(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, DuplicateJsonKeyError):
             errors.append(f"{scope}:current_goal_unreadable")
             continue
         if not isinstance(raw, dict):
@@ -1030,8 +1043,8 @@ def _session_metadata(path: Path) -> Dict[str, Any]:
         if not line.strip():
             continue
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
+            event = load_json_without_duplicate_keys(line)
+        except (json.JSONDecodeError, DuplicateJsonKeyError):
             continue
         if event.get("type") == "session_meta" and isinstance(event.get("payload"), dict):
             return dict(event["payload"])
@@ -2616,6 +2629,10 @@ def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
 
 def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
     records = _session_text_records(path)
+    session_metadata = _session_metadata(path)
+    raw_session_id = session_metadata.get("id")
+    session_id = raw_session_id.strip() if type(raw_session_id) is str else ""
+    session_cwd = str(session_metadata.get("cwd", "") or "").strip()
     result: Dict[str, Any] = {
         "required": False,
         "status": "not_required",
@@ -2627,6 +2644,7 @@ def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
         "verifier_failed": False,
         "verifier_pending": False,
         "verifier_evidence_unbound": False,
+        "final_response_bound": False,
         "verified_before_output": False,
         "verification_id": "",
         "binding_errors": [],
@@ -2657,22 +2675,74 @@ def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
         ) and _looks_like_sql_answer(lowered):
             action_index = index
             action_kind = "sql_output"
-            break
+            continue
         if _looks_like_sql_db_write(record):
             action_index = index
             action_kind = "db_write"
-            break
     if action_index < 0:
+        return result
+
+    contextual_correction_index = (
+        _immediate_contextual_sql_correction_index(records, action_index)
+        if action_kind == "sql_output"
+        else -1
+    )
+    later_request_index = next(
+        (
+            index
+            for index in range(action_index + 1, len(records))
+            if records[index].role == "user"
+            and not _is_passive_text(records[index].text)
+            and (
+                _is_sql_follow_up_request(records[index].text)
+                or index == contextual_correction_index
+            )
+        ),
+        -1,
+    )
+    if later_request_index >= 0:
+        result["required"] = True
+        result["action_kind"] = action_kind
+        result["status"] = "formatter_application_not_proven"
+        result["states"] = ["provider_selection_invalidated", "formatter_application_not_proven"]
+        result["binding_errors"] = ["later_sql_request_without_new_bound_answer"]
+        result["issues"] = [
+            {
+                "skill": "sql-formatting",
+                "status": "missing_before_sql_output",
+                "severity": "P1",
+                "reason": (
+                    "A later user SQL correction or new SQL request invalidated the prior provider selection, "
+                    "verification, and final-response binding, but no newly bound answer followed."
+                ),
+                "action": "Rerun front-door provider selection, the verifier, and the final binder for the later request.",
+                "binding_errors": ["later_sql_request_without_new_bound_answer"],
+                "samples": [_short(records[later_request_index].text)],
+            }
+        ]
         return result
 
     result["required"] = True
     result["action_kind"] = action_kind
+    verification_boundary_index = max(
+        (
+            index
+            for index in range(request_index, action_index)
+            if records[index].role == "user"
+            and not _is_passive_text(records[index].text)
+        ),
+        default=request_index,
+    )
     before_action = range(request_index + 1, action_index)
+    provider_selections = _correlated_sql_provider_selections(
+        records,
+        lower_bound=verification_boundary_index,
+        upper_bound=action_index,
+    )
     selected_indices = [
-        index
-        for index in before_action
-        if records[index].payload_type in {"function_call_output", "custom_tool_call_output"}
-        and _has_sql_formatting_route_evidence(records[index].text.lower())
+        int(item["output_index"])
+        for item in provider_selections
+        if item.get("provenance_valid") is True
     ]
     inspected_indices = []
     for index in before_action:
@@ -2684,17 +2754,28 @@ def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
     verifier_calls = [
         index
         for index in before_action
+        if index > verification_boundary_index
         if _invokes_sql_formatting_verifier(records[index])
     ]
     verifier_outputs = [
         index
         for index in before_action
+        if index > verification_boundary_index
         if _is_sql_verifier_output_candidate(records[index])
+    ]
+    binder_candidates = [
+        index
+        for index in before_action
+        if index > verification_boundary_index
+        if _looks_like_sql_final_response_binder_attempt(records[index])
+    ]
+    binding_calls = [
+        index for index in binder_candidates if _invokes_sql_final_response_binder(records[index])
     ]
 
     result["provider_selected"] = bool(selected_indices)
     result["provider_inspected"] = bool(inspected_indices)
-    result["verifier_executed"] = bool(verifier_calls)
+    result["verifier_executed"] = bool(verifier_calls or binding_calls)
     states: List[str] = []
     if result["provider_selected"]:
         states.append("provider_selected")
@@ -2705,6 +2786,12 @@ def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
 
     final_sql = _extract_actionable_sql(records[action_index], action_kind)
     binding_errors: List[str] = []
+    for candidate_index in binder_candidates:
+        invocation = _sql_final_response_cli_invocation(records[candidate_index])
+        if invocation.get("valid"):
+            continue
+        for error in invocation.get("errors", []):
+            _append_unique_text(binding_errors, str(error))
     latest_evaluation: Dict[str, Any] = {}
     used_output_indices: Set[int] = set()
     for call_index in verifier_calls:
@@ -2761,11 +2848,60 @@ def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
         states.append("verifier_evidence_unbound")
 
     verifier_bound = verifier_status == "passed"
-    verified = bool(result["provider_inspected"] and result["verifier_executed"] and verifier_bound)
+    latest_binding: Dict[str, Any] = {}
+    for call_index in binding_calls:
+        output_index, correlation_error = _correlated_sql_final_binding_output(
+            records,
+            call_index,
+            action_index,
+        )
+        if correlation_error:
+            _append_unique_text(binding_errors, correlation_error)
+        if output_index < 0:
+            latest_binding = {
+                "status": "unbound",
+                "errors": [correlation_error or "final_response_binding_output_missing"],
+            }
+            continue
+        latest_binding = _evaluate_sql_final_response_binding(
+            records[output_index],
+            records[call_index],
+            records[action_index],
+            final_sql,
+            records=records,
+            request_index=request_index,
+            call_index=call_index,
+            output_index=output_index,
+            inspected_indices=inspected_indices,
+            provider_selections=provider_selections,
+            session_id=session_id,
+            session_cwd=session_cwd,
+        )
+        for error in latest_binding.get("errors", []):
+            _append_unique_text(binding_errors, str(error))
+
+    binding_bound = latest_binding.get("status") == "bound"
+    if action_kind == "sql_output" and not binding_bound:
+        _append_unique_text(binding_errors, "final_response_binding_missing")
+    if binding_bound:
+        result["final_response_bound"] = True
+        states.append("final_response_bound")
+
+    verified = bool(
+        result["provider_selected"]
+        and
+        result["provider_inspected"]
+        and result["verifier_executed"]
+        and (binding_bound if action_kind == "sql_output" else verifier_bound)
+    )
     if verified:
         result["formatter_application_proven"] = True
         result["verified_before_output"] = True
-        result["verification_id"] = str(latest_evaluation.get("verification_id", ""))
+        result["verification_id"] = str(
+            (latest_binding if action_kind == "sql_output" else latest_evaluation).get(
+                "verification_id", ""
+            )
+        )
         result["status"] = "verified_before_output"
         states.append("verified_before_output")
     else:
@@ -2795,11 +2931,12 @@ def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
                 "severity": "P1",
                 "reason": (
                     f"An actionable SQL request reached {action_phrase} without provider inspection and "
-                    "bound verifier evidence proving the formatted SQL. Provider selection alone is not application."
+                    "a correlated final-response binding receipt proving the exact formatted SQL. "
+                    "Provider selection or verifier execution alone is not application."
                 ),
                 "action": (
                     "Inspect the host-local sql-formatting contract, apply it, then execute "
-                    "`verify_sql_formatting_style` and bind its successful evidence to the final SQL."
+                    "`guard_and_bind_verified_sql_final_response` and emit only its bound final response."
                 ),
                 "evidence_states": list(states),
                 "samples": sample,
@@ -2812,7 +2949,9 @@ def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
                     "The session did not prove that the host-local SQL formatting contract was applied "
                     f"before {action_phrase}. Reading SKILL.md is inspection only."
                 ),
-                "action": "Require provider inspection plus successful, bound SQL verifier execution before actionable output.",
+                "action": (
+                    "Require provider inspection plus a successful guard-and-bind receipt before actionable output."
+                ),
                 "evidence_states": list(states),
                 "samples": sample,
             },
@@ -2967,8 +3106,18 @@ def _valid_sql_formatting_skill_contract(text: str) -> bool:
         "preserve sql logic",
         "preserve string literals",
         "string literals unchanged",
+        "without semantic changes",
+        "must not drift into optimization",
     ]
-    return "sql" in lowered and any(marker in lowered for marker in preservation_terms)
+    required_runtime_markers = [
+        "verify_sql_formatting_style",
+        "guard_and_bind_verified_sql_final_response",
+    ]
+    return (
+        "sql" in lowered
+        and any(marker in lowered for marker in preservation_terms)
+        and all(marker in lowered for marker in required_runtime_markers)
+    )
 
 
 def _invokes_sql_formatting_verifier(record: SessionTextRecord) -> bool:
@@ -2988,6 +3137,682 @@ def _invokes_sql_formatting_verifier(record: SessionTextRecord) -> bool:
         re.search(r"\bpython(?:\.exe)?\b[^\r\n]*(?:-m\s+src\.skills\.sql_formatting_style|sql_formatting_style\.py)", lowered)
         or re.search(r"\bpython(?:\.exe)?\b[^\r\n]*verify_sql_formatting_style\s*\(", lowered)
     )
+
+
+def _invokes_sql_final_response_binder(record: SessionTextRecord) -> bool:
+    return bool(_sql_final_response_cli_invocation(record).get("valid"))
+
+
+def _looks_like_sql_final_response_binder_attempt(record: SessionTextRecord) -> bool:
+    if record.payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    return "src.skills.sql_formatting_provider" in f"{record.text} {record.arguments}".lower()
+
+
+def _sql_final_response_cli_invocation(record: SessionTextRecord) -> Dict[str, Any]:
+    errors: List[str] = []
+    if record.payload_type not in {"function_call", "custom_tool_call"}:
+        return {"valid": False, "errors": ["sql_binder_not_tool_call"]}
+    name = record.name.lower().replace("-", "_")
+    if not any(marker in name for marker in ["shell", "exec", "command", "powershell"]):
+        return {"valid": False, "errors": ["sql_binder_not_shell_tool"]}
+
+    command = _exact_shell_command_text(record)
+    if not command:
+        error = (
+            "sql_binder_exec_result_flow_invalid"
+            if "exec" in name and "tools.shell_command" in str(record.arguments or "")
+            else "sql_binder_command_not_extractable"
+        )
+        return {"valid": False, "errors": [error]}
+    command = command.strip()
+    if command.startswith("&"):
+        if len(command) == 1 or not command[1].isspace():
+            return {"valid": False, "errors": ["sql_binder_command_not_standalone"]}
+        command = command[1:].lstrip()
+    if not command or _contains_unquoted_shell_control(command):
+        return {"valid": False, "errors": ["sql_binder_command_not_standalone"]}
+
+    try:
+        tokens = [_strip_shell_token_quotes(item) for item in shlex.split(command, posix=False)]
+    except ValueError:
+        return {"valid": False, "errors": ["sql_binder_command_parse_failed"]}
+    if len(tokens) < 4:
+        return {"valid": False, "errors": ["sql_binder_command_incomplete"]}
+    executable = Path(tokens[0].replace("\\", "/")).name.lower()
+    if executable not in {"python", "python.exe"}:
+        errors.append("sql_binder_executable_not_python")
+    if tokens[1:3] != ["-m", "src.skills.sql_formatting_provider"]:
+        errors.append("sql_binder_module_mismatch")
+
+    required_flags = {
+        "--original-file",
+        "--candidate-file",
+        "--response-file",
+        "--provider-path",
+        "--selected-active-provider-path",
+        "--provider-selection-file",
+        "--session-id",
+        "--invocation-nonce",
+    }
+    optional_flags = {
+        "--style-contract",
+        "--alias-role-plan-file",
+        "--cte-temp-table-reason",
+    }
+    arguments: Dict[str, str] = {}
+    index = 3
+    while index < len(tokens):
+        token = tokens[index]
+        if not token.startswith("--"):
+            errors.append("sql_binder_unexpected_positional_argument")
+            break
+        if token not in required_flags | optional_flags:
+            errors.append(
+                "sql_binder_skills_root_override_rejected"
+                if token == "--skills-root"
+                else "sql_binder_unknown_flag"
+            )
+            break
+        if token in arguments:
+            errors.append("sql_binder_duplicate_flag")
+            break
+        if index + 1 >= len(tokens) or tokens[index + 1].startswith("--"):
+            errors.append("sql_binder_flag_value_missing")
+            break
+        arguments[token] = tokens[index + 1]
+        index += 2
+    missing = sorted(required_flags - set(arguments))
+    if missing:
+        errors.extend(f"sql_binder_required_flag_missing:{flag}" for flag in missing)
+    nonce = arguments.get("--invocation-nonce", "")
+    if nonce and not re.fullmatch(r"[A-Za-z0-9._:-]{16,128}", nonce):
+        errors.append("sql_binder_invocation_nonce_invalid")
+    return {
+        "valid": not errors,
+        "command": command,
+        "arguments": arguments,
+        "errors": errors,
+    }
+
+
+def _exact_shell_command_text(record: SessionTextRecord) -> str:
+    value = str(record.arguments or "").strip()
+    name = record.name.lower().replace("-", "_")
+    if not value:
+        return ""
+    if "exec" not in name:
+        try:
+            parsed = load_json_without_duplicate_keys(value)
+        except (json.JSONDecodeError, DuplicateJsonKeyError):
+            parsed = None
+        if isinstance(parsed, dict):
+            command = parsed.get("command")
+            return command if isinstance(command, str) else ""
+        return value
+    source = re.sub(
+        r"^\s*//\s*@exec:[^\r\n]*(?:\r?\n|$)",
+        "",
+        value,
+        count=1,
+    )
+    statement = re.fullmatch(
+        r"\s*const\s+(?P<result>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+        r"await\s+tools\.shell_command\s*\(\s*(?P<arguments>\{[\s\S]*\})\s*\)\s*;\s*"
+        r"text\s*\(\s*(?P=result)\s*\)\s*;\s*",
+        source,
+    )
+    if (
+        statement is None
+        or source.count("tools.shell_command") != 1
+        or source.count("tools.") != 1
+        or len(re.findall(r"\bawait\b", source)) != 1
+    ):
+        return ""
+    arguments_text = re.sub(
+        r"(?P<prefix>[{,]\s*)(?P<key>[A-Za-z_$][A-Za-z0-9_$]*)\s*:",
+        lambda match: f'{match.group("prefix")}\"{match.group("key")}\":',
+        statement.group("arguments"),
+    )
+    try:
+        parsed_arguments = load_json_without_duplicate_keys(arguments_text)
+    except (json.JSONDecodeError, DuplicateJsonKeyError):
+        return ""
+    command = parsed_arguments.get("command") if isinstance(parsed_arguments, dict) else None
+    return command if isinstance(command, str) else ""
+
+
+def _contains_unquoted_shell_control(command: str) -> bool:
+    quote = ""
+    escaped = False
+    for character in command:
+        if escaped:
+            escaped = False
+            continue
+        if quote == '"' and character == "\\":
+            escaped = True
+            continue
+        if character in {"'", '"'}:
+            if not quote:
+                quote = character
+            elif quote == character:
+                quote = ""
+            continue
+        if not quote and character in {"|", ";", ">", "<", "#", "\r", "\n", "&"}:
+            return True
+    return bool(quote)
+
+
+def _strip_shell_token_quotes(value: str) -> str:
+    text = str(value)
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _sql_cli_flag(call: SessionTextRecord, flag: str) -> str:
+    invocation = _sql_final_response_cli_invocation(call)
+    arguments = invocation.get("arguments")
+    if not isinstance(arguments, dict):
+        return ""
+    return str(arguments.get(flag, "") or "").strip()
+
+
+def _sql_cli_input_receipt_errors(
+    receipt: Dict[str, Any],
+    call: SessionTextRecord,
+    binding: Dict[str, Any],
+    *,
+    session_cwd: str,
+) -> tuple[List[str], Any]:
+    cli_inputs = receipt.get("cli_inputs")
+    if not isinstance(cli_inputs, dict):
+        return ["cli_input_receipt_missing"], None
+    errors: List[str] = list(_successful_sql_cli_input_errors(cli_inputs))
+    module = cli_inputs.get("module")
+    if type(module) is not str:
+        errors.append("cli_input_module_not_string")
+    elif module != "src.skills.sql_formatting_provider":
+        errors.append("cli_input_module_mismatch")
+
+    arguments = cli_inputs.get("arguments")
+    if not isinstance(arguments, dict):
+        errors.append("cli_input_arguments_missing")
+        arguments = {}
+    flag_map = {
+        "original_file": "--original-file",
+        "candidate_file": "--candidate-file",
+        "response_file": "--response-file",
+        "provider_path": "--provider-path",
+        "selected_active_provider_path": "--selected-active-provider-path",
+        "provider_selection_file": "--provider-selection-file",
+        "session_id": "--session-id",
+        "invocation_nonce": "--invocation-nonce",
+    }
+    exact_value_keys = {"session_id", "invocation_nonce"}
+    for key, flag in flag_map.items():
+        call_value = _sql_cli_flag(call, flag)
+        raw_receipt_value = arguments.get(key)
+        if type(raw_receipt_value) is not str:
+            errors.append(f"cli_input_argument_{key}_not_string")
+            receipt_value = ""
+        else:
+            receipt_value = raw_receipt_value.strip()
+        if not call_value:
+            errors.append(f"cli_input_{key}_call_scope_missing")
+        elif key in exact_value_keys and call_value != receipt_value:
+            errors.append(f"cli_input_{key}_mismatch")
+        elif key not in exact_value_keys and _normalized_sql_provider_path(call_value) != _normalized_sql_provider_path(receipt_value):
+            errors.append(f"cli_input_{key}_mismatch")
+
+    hashes = cli_inputs.get("hashes")
+    if not isinstance(hashes, dict):
+        errors.append("cli_input_hashes_missing")
+        hashes = {}
+    hash_bindings = {
+        "original_text_sha256": "original_sha256",
+        "candidate_text_sha256": "formatted_sha256",
+        "response_text_sha256": "final_response_sha256",
+    }
+    for receipt_key, binding_key in hash_bindings.items():
+        raw_value = hashes.get(receipt_key)
+        raw_expected = binding.get(binding_key)
+        if type(raw_value) is not str:
+            errors.append(f"cli_input_hash_{receipt_key}_not_string")
+            value = ""
+        else:
+            value = raw_value.lower()
+        expected = (
+            raw_expected.lower() if type(raw_expected) is str else ""
+        )
+        if type(raw_expected) is not str:
+            errors.append(f"{binding_key}_not_string")
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            errors.append(f"cli_input_{receipt_key}_missing_or_invalid")
+        elif value != expected:
+            errors.append(f"cli_input_{receipt_key}_mismatch")
+    raw_selection_hash = hashes.get("provider_selection_sha256")
+    if type(raw_selection_hash) is not str:
+        errors.append("cli_input_hash_provider_selection_sha256_not_string")
+        selection_hash = ""
+    else:
+        selection_hash = raw_selection_hash.lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", selection_hash):
+        errors.append("cli_input_provider_selection_sha256_missing_or_invalid")
+    exit_status = cli_inputs.get("exit_status")
+    if type(exit_status) is not int:
+        errors.append("cli_input_exit_status_not_integer")
+    elif exit_status != 0:
+        errors.append("cli_input_exit_status_not_success")
+
+    artifact_flags = {
+        "original_file": "--original-file",
+        "candidate_file": "--candidate-file",
+        "response_file": "--response-file",
+        "provider_selection_file": "--provider-selection-file",
+    }
+    actual_paths: Dict[str, str] = {}
+    if all(_sql_cli_flag(call, flag) for flag in artifact_flags.values()):
+        for key, flag in artifact_flags.items():
+            supplied = Path(_sql_cli_flag(call, flag)).expanduser()
+            if not supplied.is_absolute() and session_cwd:
+                supplied = Path(session_cwd).expanduser() / supplied
+            actual_paths[key] = str(supplied.resolve())
+    artifacts = None
+    if len(actual_paths) == len(artifact_flags):
+        try:
+            artifacts = load_sql_formatting_cli_artifacts(**actual_paths)
+        except SqlFormattingCliArtifactError as exc:
+            errors.append(f"cli_input_{exc.code}")
+        except (OSError, ValueError, json.JSONDecodeError):
+            errors.append("cli_input_artifact_reopen_failed")
+    if artifacts is not None:
+        resolved_paths = cli_inputs.get("resolved_paths")
+        if not isinstance(resolved_paths, dict):
+            errors.append("cli_input_resolved_paths_missing")
+            resolved_paths = {}
+        for key, actual_path in artifacts.resolved_paths.items():
+            raw_receipt_path = resolved_paths.get(key)
+            if type(raw_receipt_path) is not str:
+                errors.append(f"cli_input_resolved_path_{key}_not_string")
+                receipt_path = ""
+            else:
+                receipt_path = raw_receipt_path.strip()
+            if not receipt_path:
+                errors.append(f"cli_input_{key}_resolved_path_missing")
+            elif _normalized_sql_provider_path(receipt_path) != _normalized_sql_provider_path(actual_path):
+                errors.append(f"cli_input_{key}_resolved_path_mismatch")
+        artifact_hash_bindings = {
+            "original_file": ("original_text_sha256", "original_sha256"),
+            "candidate_file": ("candidate_text_sha256", "formatted_sha256"),
+            "response_file": ("response_text_sha256", "final_response_sha256"),
+        }
+        for artifact_name, (hash_key, binding_key) in artifact_hash_bindings.items():
+            actual_hash = artifacts.hashes[hash_key]
+            raw_receipt_hash = hashes.get(hash_key)
+            raw_binding_hash = binding.get(binding_key)
+            if type(raw_receipt_hash) is not str:
+                errors.append(f"cli_input_hash_{hash_key}_not_string")
+                receipt_hash = ""
+            else:
+                receipt_hash = raw_receipt_hash.lower()
+            binding_hash = (
+                raw_binding_hash.lower()
+                if type(raw_binding_hash) is str
+                else ""
+            )
+            if actual_hash != receipt_hash or actual_hash != binding_hash:
+                errors.append(f"cli_input_{artifact_name}_hash_mismatch")
+        actual_selection_hash = artifacts.hashes["provider_selection_sha256"]
+        if actual_selection_hash != selection_hash:
+            errors.append("cli_input_provider_selection_file_hash_mismatch")
+        for artifact_name in artifact_flags:
+            raw_hash_key = f"{artifact_name}_sha256"
+            raw_receipt_raw_hash = hashes.get(raw_hash_key)
+            if type(raw_receipt_raw_hash) is not str:
+                errors.append(f"cli_input_hash_{raw_hash_key}_not_string")
+                receipt_raw_hash = ""
+            else:
+                receipt_raw_hash = raw_receipt_raw_hash.lower()
+            actual_raw_hash = artifacts.hashes[raw_hash_key]
+            if not re.fullmatch(r"[0-9a-f]{64}", receipt_raw_hash):
+                errors.append(
+                    f"cli_input_{artifact_name}_raw_hash_missing_or_invalid"
+                )
+            elif actual_raw_hash != receipt_raw_hash:
+                errors.append(f"cli_input_{artifact_name}_raw_hash_mismatch")
+        provenance_errors = validate_sql_provider_selection_runtime_receipt(
+            artifacts.provider_selection
+        )
+        if provenance_errors:
+            errors.append("cli_input_provider_selection_provenance_invalid")
+    return list(dict.fromkeys(errors)), artifacts
+
+
+def _correlated_sql_final_binding_output(
+    records: List[SessionTextRecord],
+    call_index: int,
+    action_index: int,
+) -> tuple[int, str]:
+    call = records[call_index]
+    if not call.call_id:
+        return -1, "final_response_binding_call_id_missing"
+    for index in range(call_index + 1, action_index):
+        record = records[index]
+        if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+            continue
+        if record.call_id == call.call_id:
+            return index, ""
+    if any(
+        records[index].call_id
+        and records[index].call_id != call.call_id
+        and _sql_final_binding_receipt(records[index].text)
+        for index in range(call_index + 1, action_index)
+    ):
+        return -1, "final_response_binding_call_id_mismatch"
+    return -1, "final_response_binding_output_missing"
+
+
+def _sql_binder_shell_output_status(
+    record: SessionTextRecord,
+) -> tuple[int | None, List[str]]:
+    recorded: List[Any] = list(record.exit_codes)
+    if any(type(value) is not int for value in recorded):
+        return None, ["final_response_binding_shell_exit_status_invalid"]
+    output_text = _strip_passive_prefix(record.text)
+    textual_exit_lines = [
+        line
+        for line in output_text.splitlines()
+        if re.match(r"(?i)^\s*exit\s+code\s*:", line)
+    ]
+    for line in textual_exit_lines:
+        match = re.fullmatch(r"Exit code: (0|[1-9][0-9]*)", line)
+        if match is None:
+            return None, ["final_response_binding_shell_exit_status_invalid"]
+        recorded.append(int(match.group(1)))
+    root = _json_object_from_text(record.text)
+    if root and not (
+        isinstance(root.get("binding"), dict)
+        and isinstance(root.get("provider_path_guard"), dict)
+    ):
+        for key in ["exit_code", "return_code", "returncode"]:
+            if key not in root:
+                continue
+            if type(root[key]) is not int:
+                return None, ["final_response_binding_shell_exit_status_invalid"]
+            recorded.append(root[key])
+    if not recorded:
+        return None, ["final_response_binding_shell_exit_status_missing"]
+    if len(set(recorded)) != 1:
+        return None, ["final_response_binding_shell_exit_status_conflicting"]
+    status = recorded[0]
+    if status != 0:
+        return status, ["final_response_binding_shell_exit_status_not_success"]
+    return status, []
+
+
+def _evaluate_sql_final_response_binding(
+    record: SessionTextRecord,
+    call: SessionTextRecord,
+    final_record: SessionTextRecord,
+    final_sql: str | None,
+    *,
+    records: List[SessionTextRecord],
+    request_index: int,
+    call_index: int,
+    output_index: int,
+    inspected_indices: List[int],
+    provider_selections: List[Dict[str, Any]],
+    session_id: str,
+    session_cwd: str,
+) -> Dict[str, Any]:
+    errors: List[str] = []
+    receipt = _sql_final_binding_receipt(record.text)
+    if not receipt:
+        return {"status": "unbound", "errors": ["final_response_binding_receipt_invalid"]}
+    runtime_receipt = receipt.get("runtime_receipt")
+    receipt_id = (
+        runtime_receipt.get("receipt_id")
+        if isinstance(runtime_receipt, dict)
+        else None
+    )
+    if type(receipt_id) is str and _sql_runtime_receipt_seen_before(
+        records,
+        output_index=output_index,
+        receipt_id=receipt_id,
+        selection=False,
+    ):
+        errors.append("sql_provider_runtime_receipt_replayed")
+
+    provider_guard = receipt.get("provider_path_guard")
+    binding = receipt.get("binding")
+    release_status = receipt.get("status")
+    if type(release_status) is not str or release_status != "passed":
+        errors.append("final_response_binding_status_not_bound")
+    if (
+        not isinstance(provider_guard, dict)
+        or type(provider_guard.get("status")) is not str
+        or provider_guard.get("status") != "accepted"
+    ):
+        errors.append("provider_path_guard_not_accepted")
+        provider_guard = {}
+    if (
+        not isinstance(binding, dict)
+        or type(binding.get("status")) is not str
+        or binding.get("status") != "bound"
+    ):
+        errors.append("final_response_binding_not_bound")
+        binding = {}
+    cli_input_errors, actual_artifacts = _sql_cli_input_receipt_errors(
+        receipt,
+        call,
+        binding,
+        session_cwd=session_cwd,
+    )
+    errors.extend(cli_input_errors)
+
+    output_status, output_status_errors = _sql_binder_shell_output_status(record)
+    errors.extend(output_status_errors)
+    if output_status != 0:
+        errors.append("final_response_binding_command_failed")
+
+    invocation = _sql_final_response_cli_invocation(call)
+    for error in invocation.get("errors", []):
+        errors.append(str(error))
+
+    provider_path = _sql_cli_flag(call, "--provider-path")
+    selected_provider_path = _sql_cli_flag(call, "--selected-active-provider-path")
+    provider_selection_file = _sql_cli_flag(call, "--provider-selection-file")
+    invocation_session_id = _sql_cli_flag(call, "--session-id")
+    invocation_nonce = _sql_cli_flag(call, "--invocation-nonce")
+    if not provider_path:
+        errors.append("provider_path_call_scope_missing")
+    elif not _provider_path_inspected_before_binding(
+        records,
+        call_index=call_index,
+        provider_path=provider_path,
+        inspected_indices=inspected_indices,
+    ):
+        errors.append("bound_provider_path_not_inspected")
+    if selected_provider_path and _normalized_sql_provider_path(selected_provider_path) != _normalized_sql_provider_path(provider_path):
+        errors.append("selected_provider_path_mismatch")
+    receipt_provider_path_value = provider_guard.get("provider_path")
+    receipt_provider_path = (
+        receipt_provider_path_value.strip()
+        if type(receipt_provider_path_value) is str
+        else ""
+    )
+    if type(receipt_provider_path_value) is not str:
+        errors.append("provider_path_guard_provider_path_not_string")
+    if provider_path and _normalized_sql_provider_path(receipt_provider_path) != _normalized_sql_provider_path(provider_path):
+        errors.append("provider_path_receipt_mismatch")
+
+    eligible_selections = [
+        item
+        for item in provider_selections
+        if int(item.get("output_index", -1)) < call_index
+    ]
+    provider_selection = eligible_selections[-1] if eligible_selections else {}
+    selection_path = str(provider_selection.get("provider_path", "") or "").strip()
+    selection_sha256 = str(provider_selection.get("selection_sha256", "") or "").strip().lower()
+    if not provider_selection:
+        errors.append("front_door_provider_selection_missing")
+    else:
+        for provenance_error in provider_selection.get("provenance_errors", []):
+            errors.append(str(provenance_error))
+        if _normalized_sql_provider_path(selection_path) != _normalized_sql_provider_path(provider_path):
+            errors.append("front_door_provider_path_mismatch")
+        if _normalized_sql_provider_path(selection_path) != _normalized_sql_provider_path(selected_provider_path):
+            errors.append("front_door_selected_provider_path_mismatch")
+        guard_selection_hash_value = provider_guard.get("provider_selection_sha256")
+        guard_selection_hash = (
+            guard_selection_hash_value.strip().lower()
+            if type(guard_selection_hash_value) is str
+            else ""
+        )
+        if type(guard_selection_hash_value) is not str:
+            errors.append("provider_path_guard_provider_selection_sha256_not_string")
+        if guard_selection_hash != selection_sha256:
+            errors.append("provider_guard_selection_hash_mismatch")
+        guard_provider_id = provider_guard.get("provider_id")
+        selection_provider_id = provider_selection.get("provider_id")
+        if (
+            type(guard_provider_id) is not str
+            or type(selection_provider_id) is not str
+            or guard_provider_id != selection_provider_id
+        ):
+            errors.append("provider_guard_provider_id_mismatch")
+        guard_provider_source = provider_guard.get("provider_source")
+        selection_provider_source = provider_selection.get("provider_source")
+        if (
+            type(guard_provider_source) is not str
+            or type(selection_provider_source) is not str
+            or guard_provider_source != selection_provider_source
+        ):
+            errors.append("provider_guard_provider_source_mismatch")
+        if (
+            actual_artifacts is not None
+            and actual_artifacts.hashes["provider_selection_sha256"]
+            != selection_sha256
+        ):
+            errors.append("front_door_provider_selection_file_mismatch")
+    if not provider_selection_file:
+        errors.append("provider_selection_file_call_scope_missing")
+    if not invocation_session_id or invocation_session_id != session_id:
+        errors.append("provider_invocation_session_scope_mismatch")
+
+    errors.extend(
+        validate_sql_formatting_cli_runtime_receipt(
+            receipt,
+            expected_session_id=session_id,
+            expected_invocation_nonce=invocation_nonce,
+            expected_provider_selection_sha256=selection_sha256,
+        )
+    )
+
+    hash_values: Dict[str, str] = {}
+    for key in ["original_sha256", "formatted_sha256", "final_response_sha256"]:
+        raw_value = binding.get(key)
+        hash_values[key] = raw_value.strip().lower() if type(raw_value) is str else ""
+        if type(raw_value) is not str:
+            errors.append(f"{key}_not_string")
+    original_hash = hash_values["original_sha256"]
+    formatted_hash = hash_values["formatted_sha256"]
+    final_response_hash = hash_values["final_response_sha256"]
+    for key, value in [("original_sha256", original_hash), ("formatted_sha256", formatted_hash)]:
+        if not re.fullmatch(r"[0-9a-f]{64}", value):
+            errors.append(f"{key}_missing_or_invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", final_response_hash):
+        errors.append("final_response_sha256_missing_or_invalid")
+    elif hashlib.sha256(final_record.text.encode("utf-8")).hexdigest() != final_response_hash:
+        errors.append("final_response_changed_after_binding")
+    if re.fullmatch(r"[0-9a-f]{64}", original_hash):
+        if not _original_hash_bound_to_session_source(
+            records,
+            request_index=request_index,
+            call_index=call_index,
+            original_sha256=original_hash,
+        ):
+            errors.append("original_sql_not_bound_to_session_source")
+    if final_sql is None:
+        errors.append("final_sql_not_exactly_extractable")
+    elif re.fullmatch(r"[0-9a-f]{64}", formatted_hash):
+        if hashlib.sha256(final_sql.encode("utf-8")).hexdigest() != formatted_hash:
+            errors.append("formatted_sha256_mismatch")
+
+    verification_id_value = binding.get("verification_id")
+    verification_id = (
+        verification_id_value.strip()
+        if type(verification_id_value) is str
+        else ""
+    )
+    if type(verification_id_value) is not str:
+        errors.append("verification_id_not_string")
+    elif not re.fullmatch(r"[0-9a-fA-F]{64}", verification_id):
+        errors.append("verification_id_missing_or_invalid")
+    fence_count = binding.get("sql_fence_count")
+    if type(fence_count) is not int:
+        errors.append("sql_fence_count_not_integer")
+    elif fence_count != 1:
+        errors.append("sql_fence_count_not_one")
+    return {
+        "status": "unbound" if errors else "bound",
+        "errors": errors,
+        "verification_id": verification_id,
+    }
+
+
+def _sql_final_binding_receipt(text: str) -> Dict[str, Any]:
+    root = _json_object_from_text(text)
+    if not root:
+        return {}
+    pending: List[Dict[str, Any]] = [root]
+    seen: Set[int] = set()
+    while pending:
+        current = pending.pop(0)
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        if (
+            isinstance(current.get("binding"), dict)
+            and isinstance(current.get("provider_path_guard"), dict)
+        ) or (
+            "runtime_receipt" in current and "cli_inputs" in current
+        ):
+            return current
+        for key in ["metadata", "evidence", "verification", "release", "result"]:
+            nested = current.get(key)
+            if isinstance(nested, dict):
+                pending.append(nested)
+        stdout = current.get("stdout")
+        if isinstance(stdout, str):
+            nested_stdout = _json_object_from_text(stdout)
+            if nested_stdout:
+                pending.append(nested_stdout)
+    return {}
+
+
+def _provider_path_inspected_before_binding(
+    records: List[SessionTextRecord],
+    *,
+    call_index: int,
+    provider_path: str,
+    inspected_indices: List[int],
+) -> bool:
+    target = _normalized_sql_provider_path(provider_path)
+    for index in range(call_index):
+        if not _looks_like_sql_formatting_provider_inspection(records[index]):
+            continue
+        if _normalized_sql_provider_path(records[index].text).find(target) < 0:
+            continue
+        if any(index < output_index < call_index for output_index in inspected_indices):
+            return True
+    return False
+
+
+def _normalized_sql_provider_path(value: str) -> str:
+    return re.sub(r"/+", "/", str(value or "").replace("\\", "/")).strip().lower()
 
 
 def _is_sql_verifier_output_candidate(record: SessionTextRecord) -> bool:
@@ -3171,9 +3996,13 @@ def _original_sql_bound_to_session_source(
 ) -> bool:
     if not _looks_like_actionable_sql_source(original_sql):
         return False
-    request = records[request_index]
-    if request.role == "user" and _has_exact_actionable_sql_source(request.text, original_sql):
-        return True
+    latest_user_sources = _latest_user_sql_sources(
+        records,
+        start_index=request_index,
+        end_index=call_index,
+    )
+    if latest_user_sources:
+        return any(source.strip() == original_sql.strip() for source in latest_user_sources)
 
     for index in range(request_index + 1, call_index):
         call = records[index]
@@ -3187,6 +4016,64 @@ def _original_sql_bound_to_session_source(
         ) >= 0:
             return True
     return False
+
+
+def _original_hash_bound_to_session_source(
+    records: List[SessionTextRecord],
+    *,
+    request_index: int,
+    call_index: int,
+    original_sha256: str,
+) -> bool:
+    latest_user_sources = _latest_user_sql_sources(
+        records,
+        start_index=request_index,
+        end_index=call_index,
+    )
+    if latest_user_sources:
+        return any(
+            original_sha256 in _sql_text_hash_variants(candidate)
+            for candidate in latest_user_sources
+        )
+    for index in range(request_index, call_index):
+        record = records[index]
+        if record.payload_type in {"function_call_output", "custom_tool_call_output"}:
+            candidates = _extract_actionable_sql_sources(record.text)
+        else:
+            continue
+        if any(original_sha256 in _sql_text_hash_variants(candidate) for candidate in candidates):
+            return True
+    return False
+
+
+def _latest_user_sql_sources(
+    records: List[SessionTextRecord],
+    *,
+    start_index: int,
+    end_index: int,
+) -> List[str]:
+    latest: List[str] = []
+    for index in range(start_index, end_index):
+        if records[index].role != "user":
+            continue
+        candidates = _extract_actionable_sql_sources(records[index].text)
+        if candidates:
+            latest = candidates
+    return latest
+
+
+def _sql_text_hash_variants(text: str) -> Set[str]:
+    value = str(text or "")
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    trimmed = normalized.rstrip("\n")
+    variants = {
+        value,
+        normalized,
+        trimmed,
+        trimmed + "\n",
+        trimmed.replace("\n", "\r\n") + "\r\n",
+    }
+    return {hashlib.sha256(item.encode("utf-8")).hexdigest() for item in variants}
 
 
 def _looks_like_actionable_sql_source(text: str) -> bool:
@@ -3341,6 +4228,8 @@ def _extract_actionable_sql(record: SessionTextRecord, action_kind: str) -> str 
                 return value
         return None
 
+    if _markdown_fenced_block_count(record.text) != 1:
+        return None
     pattern = re.compile(
         r"^[ \t]*```[ \t]*(?:sql|tsql|t-sql)[ \t]*\r?\n(.*?)^[ \t]*```[ \t]*$",
         flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
@@ -3354,6 +4243,25 @@ def _extract_actionable_sql(record: SessionTextRecord, action_kind: str) -> str 
     if sql.endswith("\n"):
         return sql[:-1]
     return sql
+
+
+def _markdown_fenced_block_count(text: str) -> int:
+    active_marker = ""
+    count = 0
+    pattern = re.compile(r"^[ ]{0,3}(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
+    for line in str(text or "").splitlines():
+        match = pattern.match(line)
+        if not match:
+            continue
+        marker = match.group("marker")
+        info = match.group("info").strip()
+        if not active_marker:
+            active_marker = marker
+            count += 1
+            continue
+        if marker[0] == active_marker[0] and len(marker) >= len(active_marker) and not info:
+            active_marker = ""
+    return count
 
 
 def _append_unique_text(items: List[str], value: str) -> None:
@@ -3436,6 +4344,220 @@ def _sql_formatting_role(value: Any) -> bool:
     provider_id = str(value.get("provider_id", "") or value.get("id", "") or value.get("name", ""))
     capability = str(value.get("capability", ""))
     return provider_id == "sql-formatting" or capability == "sql_formatting"
+
+
+def _sql_provider_role_evidence(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    provider_id = str(value.get("provider_id", "") or value.get("id", "") or "").strip()
+    capability = str(value.get("capability", "") or "").strip()
+    if provider_id != "sql-formatting" and capability != "sql_formatting":
+        return {}
+    metadata = value.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    provider_path = str(metadata.get("path", "") or "").strip()
+    provider_source = str(metadata.get("source", "") or "").strip()
+    compatibility = str(metadata.get("compatibility", "compatible") or "").strip().lower()
+    if (
+        not provider_path
+        or provider_source not in {"host-local-skill", "packaged-kh-skill"}
+        or compatibility not in {"compatible", "supported", "verified"}
+    ):
+        return {}
+    return {
+        "provider_id": provider_id or "sql-formatting",
+        "provider_path": provider_path,
+        "provider_source": provider_source,
+    }
+
+
+def _correlated_sql_provider_selections(
+    records: Sequence[SessionTextRecord],
+    *,
+    lower_bound: int,
+    upper_bound: int,
+) -> List[Dict[str, Any]]:
+    pending: Dict[str, int] = {}
+    selections: List[Dict[str, Any]] = []
+    for index in range(max(0, lower_bound + 1), min(len(records), upper_bound)):
+        record = records[index]
+        if record.payload_type in {"function_call", "custom_tool_call"}:
+            if record.call_id and _record_invokes_front_door(record):
+                pending[record.call_id] = index
+            continue
+        if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+            continue
+        call_index = pending.pop(record.call_id, None) if record.call_id else None
+        if call_index is None:
+            continue
+        if not _front_door_output_succeeded(
+            {
+                "type": record.payload_type,
+                "name": record.name,
+                "output": record.text,
+            },
+            {
+                "type": records[call_index].payload_type,
+                "name": records[call_index].name,
+                "arguments": records[call_index].arguments,
+            },
+        ):
+            continue
+        data = _front_door_json(record.text)
+        if not _has_normalized_front_door_receipt(data):
+            continue
+        if str(data.get("front_door_status", "") or "").strip().lower() != "ok":
+            continue
+        route = data.get("plugin_route")
+        if not isinstance(route, dict):
+            continue
+        roles: List[Any] = [route.get("controller")]
+        assistants = route.get("assistants")
+        if isinstance(assistants, list):
+            roles.extend(assistants)
+        matched = [_sql_provider_role_evidence(role) for role in roles]
+        matched = [item for item in matched if item]
+        if len(matched) != 1:
+            continue
+        provenance_details = validate_sql_provider_selection_runtime_receipt(data)
+        runtime_receipt = data.get("provider_selection_receipt")
+        receipt_id = (
+            runtime_receipt.get("provider_selection_receipt_id")
+            if isinstance(runtime_receipt, dict)
+            else None
+        )
+        if type(receipt_id) is str and _sql_runtime_receipt_seen_before(
+            records,
+            output_index=index,
+            receipt_id=receipt_id,
+            selection=True,
+        ):
+            provenance_details.append("provider_selection_runtime_receipt_replayed")
+        selections.append(
+            {
+                **matched[0],
+                "call_index": call_index,
+                "output_index": index,
+                "selection_sha256": sql_provider_selection_sha256(data),
+                "provenance_valid": not provenance_details,
+                "provenance_errors": (
+                    []
+                    if not provenance_details
+                    else list(
+                        dict.fromkeys(
+                            [
+                                "front_door_provider_selection_provenance_invalid",
+                                *(
+                                    ["provider_selection_runtime_receipt_replayed"]
+                                    if "provider_selection_runtime_receipt_replayed"
+                                    in provenance_details
+                                    else []
+                                ),
+                            ]
+                        )
+                    )
+                ),
+                "provenance_error_details": provenance_details,
+                "data": data,
+            }
+        )
+    return selections
+
+
+def _sql_runtime_receipt_seen_before(
+    records: Sequence[SessionTextRecord],
+    *,
+    output_index: int,
+    receipt_id: str,
+    selection: bool,
+) -> bool:
+    for index in range(0, min(output_index, len(records))):
+        record = records[index]
+        if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
+            continue
+        data = _front_door_json(record.text) if selection else _sql_final_binding_receipt(record.text)
+        receipt = data.get(
+            "provider_selection_receipt" if selection else "runtime_receipt"
+        )
+        if not isinstance(receipt, dict):
+            continue
+        key = "provider_selection_receipt_id" if selection else "receipt_id"
+        if type(receipt.get(key)) is str and receipt[key] == receipt_id:
+            return True
+    return False
+
+
+def _record_invokes_front_door(record: SessionTextRecord) -> bool:
+    payload = {
+        "type": record.payload_type,
+        "name": record.name,
+        "arguments": record.arguments,
+    }
+    return _is_front_door_runtime_command(
+        payload,
+        f"{record.name} {record.arguments}".lower(),
+    )
+
+
+def _is_sql_follow_up_request(text: str) -> bool:
+    lowered = str(text or "").lower()
+    if looks_like_sql_output_request(lowered):
+        return True
+    return any(
+        marker in lowered
+        for marker in [
+            " sql",
+            "sql ",
+            "query",
+            "join",
+            "where",
+            "group by",
+            "order by",
+            "alias",
+            "format",
+            "recheck",
+            "correction",
+            "정리",
+            "수정",
+            "다시",
+            "쿼리",
+            "별칭",
+        ]
+    )
+
+
+def _immediate_contextual_sql_correction_index(
+    records: Sequence[SessionTextRecord],
+    action_index: int,
+) -> int:
+    for index in range(action_index + 1, len(records)):
+        record = records[index]
+        if record.role == "user" and not _is_passive_text(record.text):
+            return index if _is_short_contextual_sql_correction(record.text) else -1
+        if (
+            record.role == "assistant"
+            and record.payload_type in {"message", "agent_message"}
+            and not _is_passive_text(record.text)
+        ):
+            return -1
+    return -1
+
+
+def _is_short_contextual_sql_correction(text: str) -> bool:
+    value = str(text or "").strip().casefold()
+    if not value or len(value) > 80 or "\n" in value or "\r" in value:
+        return False
+    value = re.sub(r"['’]", "", value)
+    value = re.sub(r"[^0-9a-z가-힣]+", " ", value).strip()
+    return value in {
+        "no thats wrong",
+        "that is not what i asked",
+        "try again",
+        "아니요 틀렸습니다",
+        "제가 요청한 내용이 아닙니다",
+        "다시 해주세요",
+    }
 
 
 def _looks_like_sql_answer(lowered: str) -> bool:
@@ -5329,8 +6451,8 @@ def _is_subagent_session(path: Path) -> bool:
         if not line.strip():
             continue
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
+            event = load_json_without_duplicate_keys(line)
+        except (json.JSONDecodeError, DuplicateJsonKeyError):
             continue
         if event.get("type") != "session_meta":
             continue
@@ -5866,8 +6988,8 @@ def _session_payload_events(path: Path) -> List[Dict[str, Any]]:
         if not line.strip():
             continue
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
+            event = load_json_without_duplicate_keys(line)
+        except (json.JSONDecodeError, DuplicateJsonKeyError):
             continue
         if event.get("type") in {"response_item", "event_msg"} and isinstance(event.get("payload"), dict):
             events.append(event)
@@ -5906,7 +7028,7 @@ def _correlated_front_door_receipts(
         if payload_type not in {"function_call_output", "custom_tool_call_output"} or not call_id:
             continue
         pending = pending_calls.pop(call_id, None)
-        if pending is None or not _front_door_output_succeeded(payload):
+        if pending is None or not _front_door_output_succeeded(payload, pending[1]):
             continue
         call_index, _call = pending
         if call_index <= latest_request_boundary:
@@ -5921,34 +7043,37 @@ def _correlated_front_door_receipts(
     return receipts
 
 
-def _front_door_output_succeeded(payload: Dict[str, Any]) -> bool:
+def _front_door_output_succeeded(
+    payload: Dict[str, Any],
+    call_payload: Dict[str, Any],
+) -> bool:
     recorded_exit_codes: List[int] = []
     for key in ["exit_code", "return_code"]:
         if key in payload:
-            try:
-                recorded_exit_codes.append(int(payload[key]))
-            except (TypeError, ValueError):
+            if type(payload[key]) is not int:
                 return False
-    text = _payload_text(payload)
-    recorded_exit_codes.extend(
-        int(code)
-        for code in re.findall(r"(?im)\bexit\s+code\s*:\s*(-?\d+)\b", text)
-    )
-    if any(code not in {0, 1, 3} for code in recorded_exit_codes):
+            recorded_exit_codes.append(payload[key])
+    text = _strip_passive_prefix(_payload_text(payload))
+    textual_exit_lines = [
+        line
+        for line in text.splitlines()
+        if re.match(r"(?i)^\s*exit\s+code\s*:", line)
+    ]
+    for line in textual_exit_lines:
+        match = re.fullmatch(r"Exit code: (0|[1-9][0-9]*)", line)
+        if match is None:
+            return False
+        recorded_exit_codes.append(int(match.group(1)))
+    if any(code != 0 for code in recorded_exit_codes):
         return False
-    if 1 in recorded_exit_codes:
-        if any(code != 1 for code in recorded_exit_codes):
-            return False
-        return _is_strict_blocked_front_door_packet(_front_door_json(text))
-    if 3 in recorded_exit_codes:
-        if any(code != 3 for code in recorded_exit_codes):
-            return False
-        return _is_strict_blocked_front_door_packet(_front_door_json(text))
 
     status = str(payload.get("status", "") or "").strip().lower()
     if status in {"error", "failed", "failure"} or payload.get("success") is False:
         return False
-    return not recorded_exit_codes or all(code == 0 for code in recorded_exit_codes)
+    call_name = str(call_payload.get("name", "") or "").strip().lower()
+    if _is_trusted_front_door_tool_name(call_name):
+        return not recorded_exit_codes or all(code == 0 for code in recorded_exit_codes)
+    return bool(recorded_exit_codes) and all(code == 0 for code in recorded_exit_codes)
 
 
 def _is_strict_blocked_front_door_packet(data: Dict[str, Any]) -> bool:
@@ -6268,8 +7393,8 @@ def _session_integrity_issues(path: Path) -> List[Dict[str, Any]]:
         duplicate_boundary_field = bool(structure.get("duplicate_boundary_field"))
         error = ""
         try:
-            json.loads(line)
-        except json.JSONDecodeError as exc:
+            load_json_without_duplicate_keys(line)
+        except (json.JSONDecodeError, DuplicateJsonKeyError) as exc:
             if not duplicate_boundary_field and not _malformed_line_can_hide_task_boundary(line):
                 continue
             error = str(exc)
@@ -6891,8 +8016,8 @@ def _runtime_command_candidates(payload: Dict[str, Any]) -> List[str]:
         candidates.append(raw)
 
     try:
-        structured = json.loads(raw)
-    except (TypeError, json.JSONDecodeError):
+        structured = load_json_without_duplicate_keys(raw)
+    except (TypeError, json.JSONDecodeError, DuplicateJsonKeyError):
         structured = None
     if isinstance(structured, dict):
         command = structured.get("command")
@@ -6928,36 +8053,44 @@ def _decode_command_literal(literal: str) -> str:
 
 
 def _command_invokes_front_door(command: str) -> bool:
-    for segment in _shell_command_segments(command):
-        tokens = _shell_command_tokens(segment)
-        if not tokens:
-            continue
-        executable = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
-        if executable not in {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}:
-            continue
+    value = str(command or "").strip()
+    if value.startswith("&"):
+        if len(value) == 1 or not value[1].isspace():
+            return False
+        value = value[1:].lstrip()
+    if not value or _contains_unquoted_shell_control(value):
+        return False
+    try:
+        tokens = [_strip_shell_token_quotes(item) for item in shlex.split(value, posix=False)]
+    except ValueError:
+        return False
+    if len(tokens) < 3:
+        return False
+    executable = tokens[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if executable not in {"python", "python.exe", "python3", "python3.exe", "py", "py.exe"}:
+        return False
 
-        index = 1
-        while index < len(tokens):
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        lowered_token = token.lower()
+        if lowered_token in {"-c", "-"}:
+            return False
+        if lowered_token == "-m":
+            return bool(
+                index + 1 < len(tokens)
+                and tokens[index + 1].lower() == "src.orchestration.kh_front_door"
+            )
+        if lowered_token == "--":
+            index += 1
+            if index >= len(tokens):
+                return False
             token = tokens[index]
             lowered_token = token.lower()
-            if lowered_token in {"-c", "-"}:
-                break
-            if lowered_token == "-m":
-                return bool(
-                    index + 1 < len(tokens)
-                    and tokens[index + 1].lower() == "src.orchestration.kh_front_door"
-                )
-            if lowered_token == "--":
-                index += 1
-                if index >= len(tokens):
-                    break
-                token = tokens[index]
-                lowered_token = token.lower()
-            if lowered_token.startswith("-"):
-                index += 2 if lowered_token in {"-w", "-x"} else 1
-                continue
-            return _is_trusted_front_door_script_path(token)
-        continue
+        if lowered_token.startswith("-"):
+            index += 2 if lowered_token in {"-w", "-x"} else 1
+            continue
+        return _is_trusted_front_door_script_path(token)
     return False
 
 
@@ -7349,8 +8482,8 @@ def _session_text_records(path: Path) -> List[SessionTextRecord]:
         if not line.strip():
             continue
         try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
+            event = load_json_without_duplicate_keys(line)
+        except (json.JSONDecodeError, DuplicateJsonKeyError):
             continue
         payload = event.get("payload")
         if not isinstance(payload, dict):
@@ -7384,6 +8517,8 @@ def _session_text_records(path: Path) -> List[SessionTextRecord]:
                     role=role,
                     call_id=str(payload.get("call_id", "") or payload.get("tool_call_id", "")),
                     name=str(payload.get("name", "")),
+                    arguments=_payload_arguments_text(payload),
+                    exit_codes=_payload_exit_codes(payload),
                 )
             )
             previous_call_was_passive = payload_type in {"function_call", "custom_tool_call"} and passive
@@ -7417,6 +8552,36 @@ def _payload_text(payload: Dict[str, Any]) -> str:
     if payload_type == "task_complete":
         return str(payload.get("last_agent_message", ""))
     return ""
+
+
+def _payload_arguments_text(payload: Dict[str, Any]) -> str:
+    if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
+        return ""
+    value = payload.get("arguments")
+    if value is None:
+        value = payload.get("input")
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        command = value.get("command")
+        if isinstance(command, str):
+            return command
+        return json.dumps(dict(value), ensure_ascii=False, sort_keys=True)
+    return str(value or "")
+
+
+def _payload_exit_codes(payload: Dict[str, Any]) -> tuple[Any, ...]:
+    if str(payload.get("type", "")) not in {
+        "function_call_output",
+        "custom_tool_call_output",
+    }:
+        return ()
+    values: List[Any] = []
+    for key in ["exit_code", "return_code", "returncode"]:
+        if key not in payload:
+            continue
+        values.append(payload[key])
+    return tuple(values)
 
 
 def _content_text(content: Any) -> str:
@@ -7998,8 +9163,8 @@ def _json_object_from_text(text: str) -> Dict[str, Any]:
     if start < 0 or end <= start:
         return {}
     try:
-        data = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
+        data = load_json_without_duplicate_keys(text[start : end + 1])
+    except (json.JSONDecodeError, DuplicateJsonKeyError):
         return {}
     return data if isinstance(data, dict) else {}
 

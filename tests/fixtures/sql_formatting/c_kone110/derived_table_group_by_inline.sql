@@ -2,13 +2,13 @@ SELECT A.ORGDIV
      , A.ORDNUM
      , B.ROW_COUNT
 FROM MA900T A
-LEFT OUTER JOIN (
-    SELECT T.ORGDIV
-         , T.ORDNUM
-         , T.ORDSEQ
-         , COUNT(*) AS ROW_COUNT
-    FROM MA910T T
-    GROUP BY T.ORGDIV, T.ORDNUM, T.ORDSEQ
-) B
-ON A.ORGDIV = B.ORGDIV
-AND A.ORDNUM = B.ORDNUM;
+        LEFT OUTER JOIN (
+            SELECT T.ORGDIV
+                 , T.ORDNUM
+                 , T.ORDSEQ
+                 , COUNT(*) AS ROW_COUNT
+            FROM MA910T T
+            GROUP BY T.ORGDIV, T.ORDNUM, T.ORDSEQ
+        ) B
+                     ON A.ORGDIV = B.ORGDIV
+                     AND A.ORDNUM = B.ORDNUM;

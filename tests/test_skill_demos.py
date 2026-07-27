@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -151,6 +152,82 @@ class SkillDemoTests(unittest.TestCase):
                 "src.skills.sql_formatting_style.verify_sql_formatting_style",
             )
             self.assertTrue(pipeline["verification"]["success"])
+            self.assertEqual(
+                pipeline["path_authority"]["authority"],
+                "current-packaged-fallback",
+            )
+            self.assertEqual(
+                pipeline["final_response_binding"]["status"],
+                "bound",
+            )
+            self.assertEqual(
+                pipeline["final_response_binding"]["formatted_sha256"],
+                payload["success_case"]["payload"]["metadata"]["formatted_sha256"],
+            )
+            for case in ["extra_key", "duplicate_json_key", "malformed_exit"]:
+                negative = pipeline["strict_schema_negative_cases"][case]
+                self.assertEqual(negative["status"], "rejected", negative)
+                self.assertTrue(negative["errors"], negative)
+            for contract in payload["contracts"]:
+                self.assertTrue(contract["schema_validation_checked"], contract)
+                self.assertEqual(contract["schema_validation_errors"], [], contract)
+            self.assertEqual(
+                pipeline["verification"]["verification_id"],
+                payload["success_case"]["payload"]["metadata"]["verification_id"],
+            )
+            authoritative_verification = json.loads(
+                (output_dir / "verification.json").read_text(encoding="utf-8")
+            )
+            binding_receipt = json.loads(
+                (output_dir / "final_response_binding.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                pipeline["verification"]["authority"],
+                "final_binding_verifier_result",
+            )
+            self.assertEqual(
+                authoritative_verification,
+                binding_receipt["verification"],
+            )
+            self.assertEqual(
+                authoritative_verification["metadata"]["verification_id"],
+                binding_receipt["binding"]["verification_id"],
+            )
+            self.assertEqual(
+                authoritative_verification["metadata"]["formatted_sha256"],
+                binding_receipt["binding"]["formatted_sha256"],
+            )
+            self.assertEqual(
+                pipeline["raw_artifact_binding"]["status"],
+                "passed",
+            )
+            self.assertEqual(
+                pipeline["raw_artifact_binding"]["hashes"],
+                {
+                    "original_file_sha256": hashlib.sha256(
+                        (output_dir / "source.sql").read_bytes()
+                    ).hexdigest(),
+                    "candidate_file_sha256": hashlib.sha256(
+                        (output_dir / "formatted_candidate.sql").read_bytes()
+                    ).hexdigest(),
+                    "response_file_sha256": hashlib.sha256(
+                        (output_dir / "final_response.md").read_bytes()
+                    ).hexdigest(),
+                    "provider_selection_file_sha256": hashlib.sha256(
+                        (output_dir / "provider_selection.json").read_bytes()
+                    ).hexdigest(),
+                },
+            )
+            self.assertRegex(
+                pipeline["final_response_binding"]["verification_id"],
+                r"^[0-9a-f]{64}$",
+            )
+            self.assertEqual(
+                pipeline["blocked_binding_code"],
+                "verifier_not_ready",
+            )
 
     def test_sql_style_demo_separates_formatting_success_from_refactor_readiness(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -195,6 +272,43 @@ class SkillDemoTests(unittest.TestCase):
             ]
             self.assertEqual(refactor["status"], "mechanically_valid")
             self.assertEqual(refactor["execution_authentication"], "not_authenticated")
+
+    def test_sql_formatting_style_demo_success_case_payload_matches_verifier_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp) / "sql-formatting-style-harness"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.skills.demo_scenarios",
+                    "--skill",
+                    "sql-formatting-style-harness",
+                    "--output-dir",
+                    str(output_dir),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                encoding="utf-8",
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self._assert_demo_payload("sql-formatting-style-harness", payload, output_dir)
+            success_payload = payload["success_case"]["payload"]
+            success_artifact = json.loads(
+                (output_dir / "sql_formatting_success.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(payload["success_case"]["status"], "passed")
+            self.assertTrue(success_payload["success"], success_payload)
+            self.assertEqual(success_payload["exit_code"], 0)
+            self.assertTrue(success_artifact["success"], success_artifact)
+            self.assertEqual(success_artifact["exit_code"], 0)
+            self.assertEqual(
+                success_artifact["metadata"]["alias_role_plan_validation"]["status"],
+                "verified",
+            )
 
     def _assert_demo_payload(self, skill_name, payload, output_dir):
         self.assertEqual(payload["schema_version"], "1.0")

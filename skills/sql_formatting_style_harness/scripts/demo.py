@@ -46,8 +46,8 @@ def _alias_sql() -> tuple[str, str, dict[str, Any]]:
         "SELECT A.ORDER_NO\n"
         "     , B.CUSTOMER_NAME\n"
         "FROM ORDER_HEADER A\n"
-        "LEFT OUTER JOIN CUSTOMER B\n"
-        "ON A.CUSTOMER_ID = B.CUSTOMER_ID\n"
+        "        LEFT OUTER JOIN CUSTOMER B\n"
+        "                     ON A.CUSTOMER_ID = B.CUSTOMER_ID\n"
         "GROUP BY A.ORDER_NO, B.CUSTOMER_NAME;\n"
     )
     plan = {
@@ -85,13 +85,117 @@ def _alias_sql() -> tuple[str, str, dict[str, Any]]:
     return original, formatted, plan
 
 
-def _refactor_sql() -> tuple[str, str]:
+def _comma_source_sql() -> tuple[str, dict[str, Any]]:
+    sql = (
+        "SELECT A.ORDER_NO\n"
+        "     , B.CUSTOMER_NAME\n"
+        "FROM ORDER_HEADER A, CUSTOMER B\n"
+        "WHERE A.CUSTOMER_ID = B.CUSTOMER_ID;\n"
+    )
+    _, _, plan = _alias_sql()
+    for role in plan["scopes"][0]["roles"]:
+        for member in role["members"]:
+            member["original_alias"] = member["alias"]
+    return sql, plan
+
+
+def _derived_layout_sql() -> tuple[str, str, dict[str, Any]]:
+    original = (
+        "SELECT A.ORDER_NO\n"
+        "     , B.ROW_COUNT\n"
+        "FROM ORDER_HEADER A\n"
+        "LEFT OUTER JOIN (\n"
+        "    SELECT T.ORDER_NO\n"
+        "         , COUNT(*) AS ROW_COUNT\n"
+        "    FROM ORDER_LINE T\n"
+        "    GROUP BY T.ORDER_NO\n"
+        ") B\n"
+        "ON A.ORDER_NO = B.ORDER_NO;\n"
+    )
+    formatted = original
+    plan = {
+        "scopes": [
+            {
+                "scope_id": "scope_1",
+                "basis_references": ["review://demo/order-and-summary-roles"],
+                "roles": [
+                    {
+                        "name": "order",
+                        "kind": "main",
+                        "members": [
+                            {"source": "ORDER_HEADER", "original_alias": "A", "alias": "A"}
+                        ],
+                    },
+                    {
+                        "name": "summary",
+                        "kind": "support",
+                        "members": [
+                            {"source": "(DERIVED)", "original_alias": "B", "alias": "B"}
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+    return original, formatted, plan
+
+
+def _predicate_context_sql() -> tuple[str, dict[str, Any]]:
+    sql = (
+        "SELECT A.ORDER_NO\n"
+        "     , B.CUSTOMER_NAME\n"
+        "FROM ORDER_HEADER A\n"
+        "        LEFT OUTER JOIN CUSTOMER B\n"
+        "                     ON B.ACTIVE_DT BETWEEN CASE WHEN A.STATUS_CD = 'OPEN'\n"
+        "          AND A.CREATED_DT IS NOT NULL THEN A.CREATED_DT\n"
+        "                           ELSE A.DEFAULT_DT END\n"
+        "             AND A.CLOSED_DT\n"
+        "                     AND B.ACTIVE_YN = 'Y';\n"
+    )
+    _, plan = _comma_source_sql()
+    return sql, plan
+
+
+def _refactor_sql() -> tuple[str, str, dict[str, Any]]:
+    plan = {
+        "scopes": [
+            {
+                "scope_id": "scope_1",
+                "basis_references": ["review://demo/main-and-lookup-roles"],
+                "roles": [
+                    {
+                        "name": "main",
+                        "kind": "main",
+                        "members": [
+                            {
+                                "source": "T_MAIN",
+                                "original_alias": "A",
+                                "alias": "A",
+                            }
+                        ],
+                    },
+                    {
+                        "name": "lookup",
+                        "kind": "support",
+                        "members": [
+                            {
+                                "source": "DBO.CODE_LOOKUP",
+                                "original_alias": "B",
+                                "alias": "B",
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
     return (
         "SELECT DBO.F_LOOKUP_NAME(A.CODE) AS CODE_NAME FROM T_MAIN A;\n",
         "SELECT B.CODE_NAME AS CODE_NAME\n"
         "FROM T_MAIN A\n"
-        "    LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
-        "        ON B.CODE = A.CODE;\n",
+        "        LEFT OUTER JOIN DBO.CODE_LOOKUP B\n"
+        "                     ON B.CODE = A.CODE;\n",
+        plan,
     )
 
 
@@ -197,7 +301,10 @@ def _run_cases(output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
     formatting_original, formatting_output = _formatting_sql()
     alias_original, alias_output, alias_plan = _alias_sql()
-    refactor_original, refactor_output = _refactor_sql()
+    comma_source, comma_source_plan = _comma_source_sql()
+    derived_original, derived_output, derived_plan = _derived_layout_sql()
+    predicate_context, predicate_context_plan = _predicate_context_sql()
+    refactor_original, refactor_output, refactor_alias_plan = _refactor_sql()
     cases = {
         "formatting_success": verify_sql_formatting_style(formatting_original, formatting_output),
         "semantic_mutation_blocked": verify_sql_formatting_style(
@@ -214,10 +321,26 @@ def _run_cases(output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             alias_output,
             alias_role_plan=alias_plan,
         ),
+        "comma_source_plan_verified": verify_sql_formatting_style(
+            comma_source,
+            comma_source,
+            alias_role_plan=comma_source_plan,
+        ),
+        "derived_noncanonical_layout_blocked": verify_sql_formatting_style(
+            derived_original,
+            derived_output,
+            alias_role_plan=derived_plan,
+        ),
+        "predicate_context_verified": verify_sql_formatting_style(
+            predicate_context,
+            predicate_context,
+            alias_role_plan=predicate_context_plan,
+        ),
         "refactor_not_proven": verify_sql_formatting_style(
             refactor_original,
             refactor_output,
             operation="refactor",
+            alias_role_plan=refactor_alias_plan,
             scalar_function_refactor=_refactor_evidence(
                 refactor_original,
                 refactor_output,
@@ -228,6 +351,7 @@ def _run_cases(output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             refactor_original,
             refactor_output,
             operation="refactor",
+            alias_role_plan=refactor_alias_plan,
             scalar_function_refactor=_refactor_evidence(
                 refactor_original,
                 refactor_output,
@@ -241,6 +365,9 @@ def _run_cases(output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "source_invalid": False,
         "alias_plan_required": False,
         "alias_plan_verified": True,
+        "comma_source_plan_verified": True,
+        "derived_noncanonical_layout_blocked": False,
+        "predicate_context_verified": True,
         "refactor_not_proven": False,
         "refactor_provenance_correlated_not_proven": False,
     }
@@ -341,10 +468,10 @@ def _build_report(output_dir: Path, host: str) -> dict[str, Any]:
             "payload": success_payload,
             "evidence": [
                 f"{CAPABILITY}: complete token stream preserved",
-                f"{SEMANTIC_PROBE}: seven versioned cases executed",
+                f"{SEMANTIC_PROBE}: ten versioned cases executed",
             ],
             "expected_behavior": "Preserve formatting tokens and gate alias/refactor evidence independently.",
-            "side_effects": ["writes seven UTF-8 HarnessResult artifacts under output_dir"],
+            "side_effects": ["writes ten UTF-8 HarnessResult artifacts under output_dir"],
             "skill_demo_context": context,
             "capability_proven": CAPABILITY,
             "semantic_probe": SEMANTIC_PROBE,

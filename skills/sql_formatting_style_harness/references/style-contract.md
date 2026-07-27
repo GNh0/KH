@@ -29,16 +29,20 @@ Any CTE/temp-table introduction, scalar-to-join conversion, optional-token addit
 
 Business grouping is reviewer/LLM judgment supported by concrete source references. Python does not infer roles from table names, repeated object names, or source order.
 
+- The structural first `FROM` source, or parsed DML target source, is main `A`; that structural rule does not assign semantic support families from the order of later sources.
+- An explicitly aliased sole source in an outer statement scope uses `A`. An unchanged unaliased sole source remains `not_needed`; nested/CTE internal alias conventions remain separate.
+- Comma-separated `FROM` sources are multi-source and require the same explicit aliases and complete approved role plan as joined sources.
 - Each scope has exactly one main source, and it is `A`. Main aliases `A1`, `A2`, and later are invalid.
 - Each subsequent distinct business-role family advances through `B`, `C`, `D`, and so on.
 - A singleton non-main family uses its bare letter.
 - Multiple sibling sources in one non-main family use suffixes from the first member, such as `B1`, `B2`; the next distinct family then advances to `C`.
 - Role letters are sequential; do not skip a family.
 - `T`, `T1`, and related families are reserved for derived-query internals.
-- A plan is per scope and covers every declaration/reference affected by an alias change.
-- Numbered main-family declaration aliases (`A1`, `A2`, and later) are invalid in every parsed scope even when aliases are unchanged. Numbered non-main families such as `B1`/`B2` are valid.
-- Every changed scope supplies one or more structured basis objects with `kind="reviewer_approved_business_role"`, a controlled reviewer artifact URI `source` using the `review`, `spec`, `ticket`, or `design` scheme, literal `reviewer_approved=true`, and `role_names` that exactly cover the scope's declared role names. The only compatibility form is `review://<review-id>/<declared-role-names>-roles`, whose URI scheme and role path explicitly declare reviewer-approved business-role evidence. Other strings and identity/order URI schemes do not satisfy this evidence contract.
-- If evidence is missing, retain existing aliases. Never guess a role.
+- An unchanged multi-source scope inside a derived table does not need the outer A/B plan when every source has an explicit documented `T`-family alias. An alias change inside that scope still requires a complete scope plan.
+- A plan is per scope and covers every declaration/reference in each multi-source formatted scope, plus every declaration/reference affected by an alias change in any other scope.
+- Numbered main-family declaration aliases (`A1`, `A2`, and later) are invalid in every parsed scope even when aliases are unchanged. Numbered non-main families such as `B1`/`B2` are valid only when the approved role plan declares their sibling membership.
+- Every multi-source or alias-changed scope supplies one or more structured basis objects with `kind="reviewer_approved_business_role"`, a controlled reviewer artifact URI `source` using the `review`, `spec`, `ticket`, or `design` scheme, literal `reviewer_approved=true`, and `role_names` that exactly cover the scope's declared role names. The only compatibility form is `review://<review-id>/<declared-role-names>-roles`, whose URI scheme and role path explicitly declare reviewer-approved business-role evidence. Other strings and identity/order URI schemes do not satisfy this evidence contract.
+- Multi-source formatted output never passes with missing aliases or missing role evidence. Produce a complete source-bound approved plan and canonical aliases, or block the candidate. Never guess a role.
 
 ### Non-Normative Example
 
@@ -50,7 +54,7 @@ Every stored-procedure draft or cleanup deliverable includes the standard metada
 
 ```sql
 -- =============================================
--- DESCRIPTION: 주문 조회
+-- DESCRIPTION: ORDER LOOKUP
 -- =============================================
 CREATE OR ALTER PROCEDURE [DBO].[SP_ORDER_SELECT]
 ```
@@ -67,7 +71,7 @@ Parameter rules:
 
 ```sql
 -- =============================================
--- DESCRIPTION: 주문 조회
+-- DESCRIPTION: ORDER LOOKUP
 -- =============================================
 CREATE OR ALTER PROCEDURE [DBO].[SP_ORDER_SELECT]
       @COMPANY_CD    VARCHAR(2)
@@ -87,18 +91,21 @@ The non-null default above is an example of a caller/source-provided default, no
 - Keep the first projection after `SELECT`; put later projections on leading-comma lines.
 - Preserve `AS` tokens when present; do not add/remove optional tokens under a formatting-equivalence claim.
 - Parenthesize existing `CASE` expressions as required by the selected style only when the token change is explicitly accepted; otherwise report the difference.
-- Preserve the source or surrounding query block's `JOIN` indentation. There is no universal absolute `JOIN`, `ON`, or `AND` offset.
-- For newly authored SQL with no source layout, indent `JOIN` one query level below its `FROM` as a fallback and align same-block `ON`/`AND` terms. This is authoring guidance, not a verifier offset rule.
-- Keep derived-table `JOIN` layout source-preserving; do not infer a deeper indentation rule from generated output.
+- Use spaces only for SQL indentation. Any leading tab is a style error.
+- For every join, including one whose source is a derived table, indent the join clause exactly eight columns from the current query scope's `FROM` column. Treat valid `LOOP`, `HASH`, `MERGE`, and `REMOTE` hints as part of the line-leading join clause.
+- Keep the complete join type/hint prefix and `JOIN` token on one line; do not split `LEFT OUTER` from `JOIN`.
+- Align `ON` and each actual line-leading same-join continuation `AND`, including continuations inside grouping parentheses, to the `I` column of that join's `JOIN` token. Do not classify inline `AND`, `BETWEEN`'s delimiter `AND`, `CASE`-internal `AND`, or tokens inside a nested `SELECT` as outer continuation targets. Resolve nested `CASE` and `BETWEEN` ownership by ordered predicate context, so a `CASE` operand cannot consume an enclosing `BETWEEN` delimiter.
+- Compute indentation from the nested query/block's own `FROM`; do not use an absolute outer-query column.
+- Do not preserve a separate source-shaped exception for a join that introduces a derived table. Its top-level inner clauses start four columns inside the outer join clause, its closing parenthesis and alias align with the outer join clause on the same physical line, and joins inside it use that nested query's own `FROM` column. A detached hard-left alias is invalid.
 - Preserve join type, source order, and every condition.
 
 ```sql
 SELECT A.ORDER_NO
      , B.QUANTITY
 FROM ORDER_HEADER A
-    LEFT OUTER JOIN ORDER_DETAIL B
-        ON A.COMPANY_CD = B.COMPANY_CD
-        AND A.ORDER_NO = B.ORDER_NO
+        LEFT OUTER JOIN ORDER_DETAIL B
+                     ON A.COMPANY_CD = B.COMPANY_CD
+                     AND A.ORDER_NO = B.ORDER_NO
 ```
 
 ## GROUP BY and ORDER BY Lists

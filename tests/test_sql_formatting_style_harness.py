@@ -131,10 +131,38 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         self.assertFalse(result.success, result.to_dict())
         self.assertIn("query_list_unnecessary_verticalization", _issue_codes(result))
 
-    def test_inline_group_by_and_source_shaped_derived_join_are_allowed(self):
+    def test_inline_group_by_and_canonical_derived_join_are_allowed(self):
         sql = _fixture("derived_table_group_by_inline.sql")
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/main-and-summary-roles",
+                        "main",
+                        "summary",
+                    ),
+                    "roles": [
+                        {
+                            "name": "main",
+                            "kind": "main",
+                            "members": [
+                                {"source": "MA900T", "original_alias": "A", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "summary",
+                            "kind": "support",
+                            "members": [
+                                {"source": "(DERIVED)", "original_alias": "B", "alias": "B"}
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
 
-        result = verify_sql_formatting_style(sql, sql)
+        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
 
         self.assertTrue(result.success, result.to_dict())
         self.assertNotIn("join_indentation", _issue_codes(result))
@@ -178,13 +206,28 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         sql = (
             "SELECT A.ID\n"
             "FROM SOURCE_TABLE A\n"
-            "ORDER BY A.PRODUCTION_IDENTIFIER_ONE, A.PRODUCTION_IDENTIFIER_TWO\n"
-            "       , A.PRODUCTION_IDENTIFIER_THREE, A.PRODUCTION_IDENTIFIER_FOUR;\n"
+            "ORDER BY A.PRODUCTION_IDENTIFIER_ONE, A.PRODUCTION_IDENTIFIER_TWO, "
+            "A.PRODUCTION_IDENTIFIER_THREE\n"
+            "       , A.PRODUCTION_IDENTIFIER_FOUR;\n"
         )
 
         result = verify_sql_formatting_style(sql, sql)
 
         self.assertTrue(result.success, result.to_dict())
+
+    def test_long_simple_order_by_rejects_mixed_underpacked_continuation_rows(self):
+        sql = (
+            "SELECT A.ID\n"
+            "FROM SOURCE_TABLE A\n"
+            "ORDER BY A.PRODUCTION_IDENTIFIER_ONE, A.PRODUCTION_IDENTIFIER_TWO\n"
+            "       , A.PRODUCTION_IDENTIFIER_THREE\n"
+            "       , A.PRODUCTION_IDENTIFIER_FOUR;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("query_list_not_compact", _issue_codes(result))
 
     def test_long_simple_order_by_rejects_trailing_comma_line_breaks(self):
         sql = (
@@ -319,7 +362,36 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             "--AND A.FLAG_YN = 'Y'\n"
         )
 
-        result = verify_sql_formatting_style(original, formatted)
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/main-and-flow-roles",
+                        "main",
+                        "flow",
+                    ),
+                    "roles": [
+                        {
+                            "name": "main",
+                            "kind": "main",
+                            "members": [
+                                {"source": "T_MAIN", "original_alias": "A", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "flow",
+                            "kind": "support",
+                            "members": [
+                                {"source": "T_FLOW", "original_alias": "B", "alias": "B"}
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+
+        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
 
         self.assertTrue(result.success, result.to_dict())
         self.assertEqual(result.metadata["mechanical_checks"]["status"], "passed")
@@ -429,19 +501,48 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
     def test_verifier_allows_repeated_lookup_numbered_alias_family(self):
         sql = (
             "SELECT A.ITEMCD\n"
-            "     , ISNULL(E1.SUBNM, '') AS MNGITEM1NM\n"
-            "     , ISNULL(E2.SUBNM, '') AS OUTINSPECNM\n"
+            "     , ISNULL(B1.SUBNM, '') AS MNGITEM1NM\n"
+            "     , ISNULL(B2.SUBNM, '') AS OUTINSPECNM\n"
             "FROM SA220T A\n"
-            "        LEFT OUTER JOIN CODE_LOOKUP E1\n"
-            "                     ON E1.MAINCD = 'MA002'\n"
-            "                     AND E1.SUBCD = A.MNGITEM1\n"
+            "        LEFT OUTER JOIN CODE_LOOKUP B1\n"
+            "                     ON B1.MAINCD = 'MA002'\n"
+            "                     AND B1.SUBCD = A.MNGITEM1\n"
             "\n"
-            "        LEFT OUTER JOIN CODE_LOOKUP E2\n"
-            "                     ON E2.MAINCD = 'MA020'\n"
-            "                     AND E2.SUBCD = A.OUTINSPEC;\n"
+            "        LEFT OUTER JOIN CODE_LOOKUP B2\n"
+            "                     ON B2.MAINCD = 'MA020'\n"
+            "                     AND B2.SUBCD = A.OUTINSPEC;\n"
         )
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/item-and-lookup-roles",
+                        "item",
+                        "lookup",
+                    ),
+                    "roles": [
+                        {
+                            "name": "item",
+                            "kind": "main",
+                            "members": [
+                                {"source": "SA220T", "original_alias": "A", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "lookup",
+                            "kind": "support",
+                            "members": [
+                                {"source": "CODE_LOOKUP", "original_alias": "B1", "alias": "B1"},
+                                {"source": "CODE_LOOKUP", "original_alias": "B2", "alias": "B2"},
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
 
-        result = verify_sql_formatting_style(sql, sql)
+        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
 
         self.assertTrue(result.success, result.to_dict())
 
@@ -644,7 +745,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
 
         self.assertTrue(result.success, result.to_dict())
 
-    def test_verifier_preserves_nested_join_indentation_without_absolute_offset(self):
+    def test_verifier_accepts_nested_join_indentation_relative_to_nested_from(self):
         source_block = (
             "        IF EXISTS (\n"
             "                    SELECT 1\n"
@@ -660,14 +761,48 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             "        END\n"
         )
 
-        result = verify_sql_formatting_style(source_block, source_block)
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/program-and-input-roles",
+                        "program",
+                        "input",
+                    ),
+                    "roles": [
+                        {
+                            "name": "program",
+                            "kind": "main",
+                            "members": [
+                                {"source": "DEV000T", "original_alias": "A", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "input",
+                            "kind": "support",
+                            "members": [
+                                {"source": "@TMP", "original_alias": "B", "alias": "B"}
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+
+        result = verify_sql_formatting_style(
+            source_block,
+            source_block,
+            alias_role_plan=plan,
+        )
 
         self.assertTrue(result.success, result.to_dict())
         codes = {
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertNotIn("join_condition_indentation", codes)
+        self.assertNotIn("join_indentation_not_relative", codes)
+        self.assertNotIn("join_predicate_alignment_invalid", codes)
 
     def test_verifier_blocks_where_subquery_inside_if_exists(self):
         cases = [
@@ -1730,11 +1865,11 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
     def test_alias_roles_need_explicit_evidence_and_do_not_group_repeated_tables(self):
         result = verify_sql_formatting_style(self.CODE_LOOKUPS_EF, self.CODE_LOOKUPS_EF)
 
-        self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_verification"]["status"], "not_needed")
-        self.assertEqual(result.metadata["alias_role_verification"]["reason"], "no_alias_changed")
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(result.metadata["alias_role_verification"]["status"], "required")
+        self.assertIn("alias_role_plan_required", _issue_codes(result))
 
-    def test_alias_role_plan_is_not_needed_when_sql_aliases_are_unchanged(self):
+    def test_alias_role_plan_is_required_when_multi_source_aliases_are_unchanged(self):
         sql = (
             "SELECT A.ORDNUM\n"
             "     , B.ORDSEQ\n"
@@ -1747,53 +1882,57 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
             "                     ON A.CUSTCD = C.CUSTCD;\n"
         )
         plan = {
-            "roles": [
+            "scopes": [
                 {
-                    "name": "main",
-                    "kind": "main",
-                    "members": [
-                        {"source": "SA100T", "alias": "A"},
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/order-detail-customer-roles",
+                        "main",
+                        "order_detail",
+                        "customer",
+                    ),
+                    "roles": [
+                        {
+                            "name": "main",
+                            "kind": "main",
+                            "members": [
+                                {"source": "SA100T", "original_alias": "A", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "order_detail",
+                            "kind": "support",
+                            "members": [
+                                {"source": "SA110T", "original_alias": "B", "alias": "B"}
+                            ],
+                        },
+                        {
+                            "name": "customer",
+                            "kind": "support",
+                            "members": [
+                                {"source": "BA020T", "original_alias": "C", "alias": "C"}
+                            ],
+                        },
                     ],
-                },
-                {
-                    "name": "order_detail",
-                    "members": [{"source": "SA110T", "alias": "B"}],
-                },
-                {
-                    "name": "customer",
-                    "members": [{"source": "BA020T", "alias": "C"}],
-                },
+                }
             ]
         }
 
         result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_verification"]["status"], "not_needed")
+        self.assertEqual(result.metadata["alias_role_verification"]["status"], "verified")
 
-    def test_alias_role_plan_does_not_reclassify_unchanged_aliases(self):
-        plan = {
-            "roles": [
-                {
-                    "name": "code_lookup",
-                    "members": [
-                        {"source": "CODE_LOOKUP", "alias": "E1"},
-                        {"source": "CODE_LOOKUP", "alias": "E2"},
-                    ],
-                }
-            ]
-        }
-
+    def test_alias_role_plan_rejects_noncanonical_unchanged_support_aliases(self):
         result = verify_sql_formatting_style(
             self.CODE_LOOKUPS_EF,
             self.CODE_LOOKUPS_EF,
-            alias_role_plan=plan,
         )
 
-        self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_verification"]["status"], "not_needed")
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(result.metadata["alias_role_verification"]["status"], "required")
 
-    def test_alias_role_plan_is_not_normative_without_an_alias_change(self):
+    def test_alias_role_plan_is_normative_without_an_alias_change_in_multi_source_scope(self):
         sql = (
             "SELECT A.ORDNUM\n"
             "     , B.ORDSEQ\n"
@@ -1802,13 +1941,29 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
             "                     ON A.ORDNUM = B.ORDNUM;\n"
         )
         plan = {
-            "roles": [
+            "scopes": [
                 {
-                    "name": "main",
-                    "kind": "main",
-                    "members": [
-                        {"source": "SA100T", "alias": "A"},
-                        {"source": "SA110T", "alias": "B"},
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/order-and-detail-roles",
+                        "main",
+                        "detail",
+                    ),
+                    "roles": [
+                        {
+                            "name": "main",
+                            "kind": "main",
+                            "members": [
+                                {"source": "SA100T", "original_alias": "A", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "detail",
+                            "kind": "support",
+                            "members": [
+                                {"source": "SA110T", "original_alias": "B", "alias": "B"}
+                            ],
+                        },
                     ],
                 }
             ]
@@ -1817,7 +1972,7 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
         result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_verification"]["status"], "not_needed")
+        self.assertEqual(result.metadata["alias_role_verification"]["status"], "verified")
 
     def test_scalar_refactor_without_evidence_is_blocked(self):
         result = verify_sql_formatting_style(
@@ -2068,6 +2223,41 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
                         *(role["name"] for role in roles),
                     ),
                     "roles": roles,
+                }
+            ]
+        }
+
+    @staticmethod
+    def _lookup_refactor_alias_plan():
+        return {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/main-and-lookup-roles",
+                        "main",
+                        "lookup",
+                    ),
+                    "roles": [
+                        {
+                            "name": "main",
+                            "kind": "main",
+                            "members": [
+                                {"source": "T", "original_alias": "A", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "lookup",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "DBO.CODE_LOOKUP",
+                                    "original_alias": "B",
+                                    "alias": "B",
+                                }
+                            ],
+                        },
+                    ],
                 }
             ]
         }
@@ -2456,24 +2646,24 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
                 "DELETE X\n"
                 "FROM DBO.ORDER_HEADER AS X\n"
                 "        INNER JOIN DBO.STATUS_SOURCE AS Y\n"
-                "                     ON X.ID = Y.ID\n"
+                "                ON X.ID = Y.ID\n"
                 "WHERE Y.STATUS = 'D';\n",
                 "DELETE A\n"
                 "FROM DBO.ORDER_HEADER AS A\n"
                 "        INNER JOIN DBO.STATUS_SOURCE AS B\n"
-                "                     ON A.ID = B.ID\n"
+                "                ON A.ID = B.ID\n"
                 "WHERE B.STATUS = 'D';\n",
             ),
             "joined_delete_with_optional_from": (
                 "DELETE FROM X\n"
                 "FROM DBO.ORDER_HEADER AS X\n"
                 "        INNER JOIN DBO.STATUS_SOURCE AS Y\n"
-                "                     ON X.ID = Y.ID\n"
+                "                ON X.ID = Y.ID\n"
                 "WHERE Y.STATUS = 'D';\n",
                 "DELETE FROM A\n"
                 "FROM DBO.ORDER_HEADER AS A\n"
                 "        INNER JOIN DBO.STATUS_SOURCE AS B\n"
-                "                     ON A.ID = B.ID\n"
+                "                ON A.ID = B.ID\n"
                 "WHERE B.STATUS = 'D';\n",
             ),
             "merge": (
@@ -2550,21 +2740,21 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
                 "DELETE TOP (5) X\n"
                 "FROM DBO.ORDER_HEADER AS X\n"
                 "        INNER JOIN DBO.STATUS_SOURCE AS Y\n"
-                "                     ON X.ID = Y.ID;\n",
+                "                ON X.ID = Y.ID;\n",
                 "DELETE TOP (5) A\n"
                 "FROM DBO.ORDER_HEADER AS A\n"
                 "        INNER JOIN DBO.STATUS_SOURCE AS B\n"
-                "                     ON A.ID = B.ID;\n",
+                "                ON A.ID = B.ID;\n",
             ),
             "delete_percent_with_from": (
                 "DELETE TOP (25) PERCENT FROM X\n"
                 "FROM DBO.ORDER_HEADER AS X\n"
                 "        INNER JOIN DBO.STATUS_SOURCE AS Y\n"
-                "                     ON X.ID = Y.ID;\n",
+                "                ON X.ID = Y.ID;\n",
                 "DELETE TOP (25) PERCENT FROM A\n"
                 "FROM DBO.ORDER_HEADER AS A\n"
                 "        INNER JOIN DBO.STATUS_SOURCE AS B\n"
-                "                     ON A.ID = B.ID;\n",
+                "                ON A.ID = B.ID;\n",
             ),
             "merge": (
                 "MERGE TOP (20) PERCENT INTO DBO.ORDER_HEADER AS X\n"
@@ -3076,7 +3266,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
                 )
                 self.assertIn("alias_main_family_numbered_invalid", _issue_codes(result))
 
-    def test_unchanged_numbered_non_main_family_aliases_remain_valid(self):
+    def test_unchanged_numbered_non_main_family_aliases_require_sibling_plan(self):
         sql = (
             "SELECT A.ID\n"
             "     , B1.VALUE AS PRIMARY_VALUE\n"
@@ -3088,10 +3278,40 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "                     ON A.ID = B2.ID;\n"
         )
 
-        result = verify_sql_formatting_style(sql, sql)
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/header-and-detail-sibling-roles",
+                        "header",
+                        "detail",
+                    ),
+                    "roles": [
+                        {
+                            "name": "header",
+                            "kind": "main",
+                            "members": [
+                                {"source": "HEADER_TABLE", "original_alias": "A", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "detail",
+                            "kind": "support",
+                            "members": [
+                                {"source": "DETAIL_TABLE", "original_alias": "B1", "alias": "B1"},
+                                {"source": "DETAIL_TABLE", "original_alias": "B2", "alias": "B2"},
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+
+        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "not_needed")
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
         self.assertNotIn("alias_main_family_numbered_invalid", _issue_codes(result))
 
     def test_physical_table_named_a1_is_not_misclassified_as_an_alias(self):
@@ -3255,6 +3475,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
+            alias_role_plan=self._lookup_refactor_alias_plan(),
             scalar_function_refactor=self._complete_refactor_evidence(
                 original,
                 formatted,
@@ -3265,6 +3486,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
+            alias_role_plan=self._lookup_refactor_alias_plan(),
             scalar_function_refactor=self._complete_refactor_evidence(
                 original,
                 formatted,
@@ -3275,6 +3497,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             unqualified_formatted,
             operation="refactor",
+            alias_role_plan=self._lookup_refactor_alias_plan(),
             scalar_function_refactor=self._complete_refactor_evidence(
                 original,
                 unqualified_formatted,
@@ -3291,6 +3514,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
+            alias_role_plan=self._lookup_refactor_alias_plan(),
             scalar_function_refactor=definition_mismatch_evidence,
         )
 
@@ -3340,6 +3564,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
+            alias_role_plan=self._lookup_refactor_alias_plan(),
             scalar_function_refactor=evidence,
             runtime_receipt_authenticator=authenticate,
         )
@@ -3366,6 +3591,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
+            alias_role_plan=self._lookup_refactor_alias_plan(),
             scalar_function_refactor=evidence,
         )
 
@@ -3379,6 +3605,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
+            alias_role_plan=self._lookup_refactor_alias_plan(),
             scalar_function_refactor=tampered,
             runtime_receipt_authenticator=authenticate,
         )
@@ -3388,6 +3615,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
+            alias_role_plan=self._lookup_refactor_alias_plan(),
             scalar_function_refactor=missing_definition,
             runtime_receipt_authenticator=authenticate,
         )
@@ -3781,6 +4009,697 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         self.assertIn("style_lint", result.metadata)
         self.assertIn("alias_role_plan_validation", result.metadata)
         self.assertIn("semantic_refactor_evidence", result.metadata)
+
+
+class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
+    @staticmethod
+    def _role_plan(*, numbered_support: bool = False) -> dict[str, object]:
+        support_members = [
+            {
+                "source": "DETAIL_PRIMARY",
+                "original_alias": "B1" if numbered_support else "B",
+                "alias": "B1" if numbered_support else "B",
+            }
+        ]
+        if numbered_support:
+            support_members.append(
+                {
+                    "source": "DETAIL_SECONDARY",
+                    "original_alias": "B2",
+                    "alias": "B2",
+                }
+            )
+        return {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/header-and-detail-roles",
+                        "header",
+                        "detail",
+                    ),
+                    "roles": [
+                        {
+                            "name": "header",
+                            "kind": "main",
+                            "members": [
+                                {
+                                    "source": "HEADER_TABLE",
+                                    "original_alias": "A",
+                                    "alias": "A",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "detail",
+                            "kind": "support",
+                            "members": support_members,
+                        },
+                    ],
+                }
+            ]
+        }
+
+    @staticmethod
+    def _derived_role_plan(
+        *,
+        original_main_alias: str = "H",
+        original_summary_alias: str = "S",
+    ) -> dict[str, object]:
+        return {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/header-and-summary-roles",
+                        "header",
+                        "summary",
+                    ),
+                    "roles": [
+                        {
+                            "name": "header",
+                            "kind": "main",
+                            "members": [
+                                {
+                                    "source": "HEADER_TABLE",
+                                    "original_alias": original_main_alias,
+                                    "alias": "A",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "summary",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "(DERIVED)",
+                                    "original_alias": original_summary_alias,
+                                    "alias": "B",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+
+    def test_unaliased_multi_source_scope_blocks_instead_of_passing_without_role_evidence(self):
+        sql = (
+            "SELECT HEADER_TABLE.ID\n"
+            "     , DETAIL_PRIMARY.VALUE\n"
+            "FROM HEADER_TABLE\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY\n"
+            "                     ON HEADER_TABLE.ID = DETAIL_PRIMARY.ID;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("alias_missing_in_multi_source_scope", _issue_codes(result))
+        self.assertIn("alias_role_plan_required", _issue_codes(result))
+
+    def test_canonical_multi_source_aliases_still_require_complete_role_plan(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                     ON A.ID = B.ID;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "required")
+        self.assertIn("alias_role_plan_required", _issue_codes(result))
+
+    def test_multi_source_main_alias_must_be_a_even_when_aliases_are_unchanged(self):
+        sql = (
+            "SELECT B.ID\n"
+            "     , C.VALUE\n"
+            "FROM HEADER_TABLE B\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY C\n"
+            "                     ON B.ID = C.ID;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("alias_main_role_invalid", _issue_codes(result))
+
+    def test_comma_separated_from_sources_require_aliases_and_a_complete_role_plan(self):
+        unaliased = (
+            "SELECT HEADER_TABLE.ID\n"
+            "     , DETAIL_PRIMARY.VALUE\n"
+            "FROM HEADER_TABLE, DETAIL_PRIMARY\n"
+            "WHERE HEADER_TABLE.ID = DETAIL_PRIMARY.ID;\n"
+        )
+        canonical = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A, DETAIL_PRIMARY B\n"
+            "WHERE A.ID = B.ID;\n"
+        )
+
+        unaliased_result = verify_sql_formatting_style(unaliased, unaliased)
+        missing_plan = verify_sql_formatting_style(canonical, canonical)
+        approved = verify_sql_formatting_style(
+            canonical,
+            canonical,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertIn("alias_missing_in_multi_source_scope", _issue_codes(unaliased_result))
+        self.assertIn("alias_role_plan_required", _issue_codes(missing_plan))
+        self.assertTrue(approved.success, approved.to_dict())
+
+    def test_explicit_sole_source_requires_a_but_unaliased_source_remains_not_needed(self):
+        noncanonical = "SELECT B.ID\nFROM ONLY_TABLE B;\n"
+        unaliased = "SELECT ONLY_TABLE.ID\nFROM ONLY_TABLE;\n"
+
+        blocked = verify_sql_formatting_style(noncanonical, noncanonical)
+        unchanged = verify_sql_formatting_style(unaliased, unaliased)
+
+        self.assertFalse(blocked.success, blocked.to_dict())
+        self.assertIn("alias_main_role_invalid", _issue_codes(blocked))
+        self.assertTrue(unchanged.success, unchanged.to_dict())
+        self.assertEqual(
+            unchanged.metadata["alias_role_plan_validation"]["status"],
+            "not_needed",
+        )
+
+    def test_outer_alias_error_text_does_not_claim_a1_is_allowed(self):
+        sql = (
+            "SELECT HEADER_ALIAS.ID\n"
+            "     , DETAIL_ALIAS.VALUE\n"
+            "FROM HEADER_TABLE HEADER_ALIAS\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY DETAIL_ALIAS\n"
+            "                     ON HEADER_ALIAS.ID = DETAIL_ALIAS.ID;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+        messages = [
+            issue["message"]
+            for issue in result.metadata["mechanical_checks"]["style_issues"]
+            if issue["code"] == "ad_hoc_outer_alias"
+        ]
+
+        self.assertEqual(len(messages), 1, result.to_dict())
+        self.assertNotIn("A/A1", messages[0])
+        self.assertIn("A for the sole main source", messages[0])
+
+    def test_numbered_support_aliases_require_and_accept_declared_sibling_membership(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B1.VALUE AS PRIMARY_VALUE\n"
+            "     , B2.VALUE AS SECONDARY_VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B1\n"
+            "                     ON A.ID = B1.ID\n"
+            "        LEFT OUTER JOIN DETAIL_SECONDARY B2\n"
+            "                     ON A.ID = B2.ID;\n"
+        )
+
+        missing_plan = verify_sql_formatting_style(sql, sql)
+        approved = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(numbered_support=True),
+        )
+
+        self.assertFalse(missing_plan.success, missing_plan.to_dict())
+        self.assertIn("alias_role_plan_required", _issue_codes(missing_plan))
+        self.assertTrue(approved.success, approved.to_dict())
+        self.assertEqual(
+            approved.metadata["alias_role_plan_validation"]["status"],
+            "verified",
+        )
+
+    def test_nested_if_ordinary_join_uses_from_relative_indentation(self):
+        sql = (
+            "IF @ENABLED = 'Y'\n"
+            "BEGIN\n"
+            "    SELECT A.ID\n"
+            "         , B.VALUE\n"
+            "    FROM HEADER_TABLE A\n"
+            "            LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                         ON A.ID = B.ID\n"
+            "                         AND B.ACTIVE_YN = 'Y';\n"
+            "END;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["style_lint"]["status"], "passed")
+        self.assertEqual(
+            result.metadata["style_lint"]["join_layout_contract"]["join_indent_from_from"],
+            8,
+        )
+
+    def test_nested_if_join_rejects_absolute_instead_of_from_relative_indentation(self):
+        sql = (
+            "IF @ENABLED = 'Y'\n"
+            "BEGIN\n"
+            "    SELECT A.ID\n"
+            "         , B.VALUE\n"
+            "    FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                     ON A.ID = B.ID;\n"
+            "END;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("join_indentation_not_relative", _issue_codes(result))
+
+    def test_nested_if_join_rejects_wrong_on_and_same_join_and_columns(self):
+        correct_join_wrong_on = (
+            "IF @ENABLED = 'Y'\n"
+            "BEGIN\n"
+            "    SELECT A.ID\n"
+            "         , B.VALUE\n"
+            "    FROM HEADER_TABLE A\n"
+            "            LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                        ON A.ID = B.ID;\n"
+            "END;\n"
+        )
+        correct_on_wrong_and = (
+            "IF @ENABLED = 'Y'\n"
+            "BEGIN\n"
+            "    SELECT A.ID\n"
+            "         , B.VALUE\n"
+            "    FROM HEADER_TABLE A\n"
+            "            LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                         ON A.ID = B.ID\n"
+            "                        AND B.ACTIVE_YN = 'Y';\n"
+            "END;\n"
+        )
+
+        wrong_on = verify_sql_formatting_style(
+            correct_join_wrong_on,
+            correct_join_wrong_on,
+            alias_role_plan=self._role_plan(),
+        )
+        wrong_and = verify_sql_formatting_style(
+            correct_on_wrong_and,
+            correct_on_wrong_and,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertIn("join_predicate_alignment_invalid", _issue_codes(wrong_on))
+        self.assertIn("join_predicate_alignment_invalid", _issue_codes(wrong_and))
+
+    def test_tsql_join_hints_are_part_of_the_line_leading_join_clause(self):
+        cases = {
+            "loop": ("INNER LOOP JOIN", 21),
+            "hash": ("LEFT HASH JOIN", 20),
+            "merge": ("FULL MERGE JOIN", 21),
+            "remote": ("REMOTE JOIN", 17),
+        }
+        for label, (clause, on_column) in cases.items():
+            with self.subTest(label=label):
+                sql = (
+                    "SELECT A.ID\n"
+                    "     , B.VALUE\n"
+                    "FROM HEADER_TABLE A\n"
+                    f"        {clause} DETAIL_PRIMARY B\n"
+                    f"{' ' * on_column}ON A.ID = B.ID;\n"
+                )
+                result = verify_sql_formatting_style(
+                    sql,
+                    sql,
+                    alias_role_plan=self._role_plan(),
+                )
+
+                self.assertTrue(result.success, result.to_dict())
+
+    def test_join_alignment_ignores_inline_between_and_case_internal_and(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                     ON A.ID = B.ID AND B.TYPE_CD = 'X'\n"
+            "                     AND B.EVENT_DT BETWEEN A.START_DT\n"
+            "             AND A.END_DT\n"
+            "                     AND B.FLAG_YN = CASE WHEN A.MODE_CD = 'X'\n"
+            "          AND A.CODE = B.CODE THEN 'Y' ELSE 'N' END;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("join_predicate_alignment_invalid", _issue_codes(result))
+
+    def test_grouped_outer_join_continuation_and_must_align(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                     ON (\n"
+            "                         A.ID = B.ID\n"
+            "                    AND A.TYPE_CD = B.TYPE_CD\n"
+            "                        );\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("join_predicate_alignment_invalid", _issue_codes(result))
+
+    def test_nested_select_and_is_not_an_outer_join_continuation(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                     ON A.ID = B.ID\n"
+            "                     AND B.MATCH_ID = (\n"
+            "                             SELECT X.MATCH_ID\n"
+            "                             FROM MATCH_TABLE X\n"
+            "                             WHERE X.ID = B.ID\n"
+            "          AND X.ACTIVE_YN = 'Y'\n"
+            "                         );\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("join_predicate_alignment_invalid", _issue_codes(result))
+
+    def test_between_case_lower_operand_consumes_its_own_delimiter_and(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                     ON B.EVENT_DT BETWEEN CASE WHEN A.MODE_CD = 'X'\n"
+            "          AND A.START_DT IS NOT NULL THEN A.START_DT\n"
+            "                           ELSE A.DEFAULT_DT END\n"
+            "             AND A.END_DT\n"
+            "                     AND B.ACTIVE_YN = 'Y';\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("join_predicate_alignment_invalid", _issue_codes(result))
+
+    def test_unchanged_multi_source_derived_t_family_needs_only_outer_plan(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.ROW_COUNT\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN (\n"
+            "            SELECT T.HEADER_ID\n"
+            "                 , COUNT(*) AS ROW_COUNT\n"
+            "            FROM DETAIL_TABLE T\n"
+            "                    LEFT OUTER JOIN DETAIL_FLAG T1\n"
+            "                                 ON T.ID = T1.DETAIL_ID\n"
+            "            GROUP BY T.HEADER_ID\n"
+            "        ) B\n"
+            "                     ON A.ID = B.HEADER_ID;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._derived_role_plan(
+                original_main_alias="A",
+                original_summary_alias="B",
+            ),
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(
+            result.metadata["alias_role_plan_validation"]["verified_scopes"],
+            ["scope_1"],
+        )
+
+        changed = sql.replace("DETAIL_FLAG T1", "DETAIL_FLAG T2").replace(
+            "T1.DETAIL_ID",
+            "T2.DETAIL_ID",
+        )
+        changed_result = verify_sql_formatting_style(
+            sql,
+            changed,
+            alias_role_plan=self._derived_role_plan(
+                original_main_alias="A",
+                original_summary_alias="B",
+            ),
+        )
+
+        self.assertFalse(changed_result.success, changed_result.to_dict())
+        self.assertIn("alias_plan_incomplete", _issue_codes(changed_result))
+
+    def test_derived_join_uses_the_same_relative_contract_as_table_join(self):
+        original = (
+            "SELECT H.ID, S.ROW_COUNT\n"
+            "FROM HEADER_TABLE H\n"
+            "LEFT OUTER JOIN (\n"
+            "    SELECT T.HEADER_ID\n"
+            "         , COUNT(*) AS ROW_COUNT\n"
+            "    FROM DETAIL_TABLE T\n"
+            "    GROUP BY T.HEADER_ID\n"
+            ") S\n"
+            "ON H.ID = S.HEADER_ID;\n"
+        )
+        candidate = (
+            "    SELECT A.ID\n"
+            "         , B.ROW_COUNT\n"
+            "    FROM HEADER_TABLE A\n"
+            "            LEFT OUTER JOIN (\n"
+            "                SELECT T.HEADER_ID\n"
+            "                     , COUNT(*) AS ROW_COUNT\n"
+            "                FROM DETAIL_TABLE T\n"
+            "                GROUP BY T.HEADER_ID\n"
+            "            ) B\n"
+            "                         ON A.ID = B.HEADER_ID;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            original,
+            candidate,
+            alias_role_plan=self._derived_role_plan(),
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("join_indentation_not_relative", _issue_codes(result))
+        self.assertNotIn("join_predicate_alignment_invalid", _issue_codes(result))
+
+    def test_derived_join_blocks_noncanonical_outer_join_indentation(self):
+        original = (
+            "SELECT A.ID\n"
+            "     , B.ROW_COUNT\n"
+            "FROM HEADER_TABLE A\n"
+            "LEFT OUTER JOIN (\n"
+            "    SELECT T.HEADER_ID\n"
+            "         , COUNT(*) AS ROW_COUNT\n"
+            "    FROM DETAIL_TABLE T\n"
+            "    GROUP BY T.HEADER_ID\n"
+            ") B\n"
+            "ON A.ID = B.HEADER_ID;\n"
+        )
+        candidate = original
+
+        result = verify_sql_formatting_style(
+            original,
+            candidate,
+            alias_role_plan=self._derived_role_plan(
+                original_main_alias="A",
+                original_summary_alias="B",
+            ),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(result.metadata["formatting_preservation"]["status"], "verified")
+        self.assertIn("join_indentation_not_relative", _issue_codes(result))
+        self.assertIn("join_predicate_alignment_invalid", _issue_codes(result))
+
+    def test_derived_join_blocks_split_join_type_prefix(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.ROW_COUNT\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER\n"
+            "        JOIN (\n"
+            "            SELECT T.HEADER_ID\n"
+            "                 , COUNT(*) AS ROW_COUNT\n"
+            "            FROM DETAIL_TABLE T\n"
+            "            GROUP BY T.HEADER_ID\n"
+            "        ) B\n"
+            "         ON A.ID = B.HEADER_ID;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._derived_role_plan(
+                original_main_alias="A",
+                original_summary_alias="B",
+            ),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("join_clause_split_across_lines", _issue_codes(result))
+
+    def test_derived_join_blocks_hard_left_closing_alias(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.ROW_COUNT\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN (\n"
+            "            SELECT T.HEADER_ID\n"
+            "                 , COUNT(*) AS ROW_COUNT\n"
+            "            FROM DETAIL_TABLE T\n"
+            "            GROUP BY T.HEADER_ID\n"
+            ") B\n"
+            "                     ON A.ID = B.HEADER_ID;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._derived_role_plan(
+                original_main_alias="A",
+                original_summary_alias="B",
+            ),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn(
+            "derived_join_closing_alias_indentation_invalid",
+            _issue_codes(result),
+        )
+
+    def test_style_lint_rejects_leading_tab_indentation(self):
+        sql = (
+            "SELECT A.ID\n"
+            "FROM HEADER_TABLE A\n"
+            "\tLEFT OUTER JOIN DETAIL_TABLE B\n"
+            "             ON A.ID = B.HEADER_ID;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._derived_role_plan(
+                original_main_alias="A",
+                original_summary_alias="B",
+            ),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("tab_indentation_not_allowed", _issue_codes(result))
+
+    def test_derived_join_blocks_alias_on_a_separate_line(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.ROW_COUNT\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN (\n"
+            "            SELECT T.HEADER_ID\n"
+            "                 , COUNT(*) AS ROW_COUNT\n"
+            "            FROM DETAIL_TABLE T\n"
+            "            GROUP BY T.HEADER_ID\n"
+            "        )\n"
+            "B\n"
+            "                     ON A.ID = B.HEADER_ID;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._derived_role_plan(
+                original_main_alias="A",
+                original_summary_alias="B",
+            ),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("derived_join_alias_detached", _issue_codes(result))
+
+    def test_derived_join_blocks_hard_left_inner_query_clauses(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.ROW_COUNT\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN (\n"
+            "    SELECT T.HEADER_ID\n"
+            "         , COUNT(*) AS ROW_COUNT\n"
+            "    FROM DETAIL_TABLE T\n"
+            "    GROUP BY T.HEADER_ID\n"
+            "        ) B\n"
+            "                     ON A.ID = B.HEADER_ID;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._derived_role_plan(
+                original_main_alias="A",
+                original_summary_alias="B",
+            ),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("derived_query_clause_indentation_invalid", _issue_codes(result))
+
+    def test_full_candidate_preserves_tokens_and_alias_plan_but_blocks_bad_join_hierarchy(self):
+        original = (
+            "IF @ENABLED = 'Y'\n"
+            "BEGIN\n"
+            "    SELECT H.ID, D.VALUE\n"
+            "    FROM HEADER_TABLE H LEFT OUTER JOIN DETAIL_PRIMARY D ON H.ID = D.ID;\n"
+            "END;\n"
+        )
+        candidate = (
+            "IF @ENABLED = 'Y'\n"
+            "BEGIN\n"
+            "    SELECT A.ID\n"
+            "         , B.VALUE\n"
+            "    FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                     ON A.ID = B.ID;\n"
+            "END;\n"
+        )
+        plan = self._role_plan()
+        plan["scopes"][0]["roles"][0]["members"][0]["original_alias"] = "H"
+        plan["scopes"][0]["roles"][1]["members"][0]["original_alias"] = "D"
+
+        result = verify_sql_formatting_style(original, candidate, alias_role_plan=plan)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertEqual(result.metadata["formatting_preservation"]["status"], "verified")
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
+        self.assertIn("join_indentation_not_relative", _issue_codes(result))
 
 
 if __name__ == "__main__":

@@ -6,6 +6,8 @@ This file defines the runtime procedure for contract version `2.0`. Style rules 
 
 Use this harness after routing selects SQL formatting or a separately requested scalar-function refactor. It verifies the exact original/formatted SQL pair; it does not infer database semantics or replace the selected style contract.
 
+All line-leading indentation is spaces-only. A leading tab fails style verification. For a derived-table join, the closing parenthesis and alias must stay on the same physical line at the outer JOIN indentation; a detached hard-left alias fails verification.
+
 ## Inputs to collect
 
 Capture:

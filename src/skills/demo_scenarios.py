@@ -918,16 +918,16 @@ def _credential_safety_scenario(skill_name: str, output_dir: Path, repo_root: Pa
 
 def _sql_formatting_style_scenario(skill_name: str, output_dir: Path, repo_root: Path) -> Dict[str, Any]:
     original = (
-        "CREATE OR ALTER PROCEDURE [dbo].[sp_DEMO_SELECT] @WORKTYPE VARCHAR(20)=NULL\n"
+        "CREATE OR ALTER PROCEDURE [DBO].[SP_DEMO_SELECT] @WORKTYPE VARCHAR(20)=NULL\n"
         "AS\n"
         "BEGIN\n"
-        "SELECT a.ordnum, CASE WHEN a.chkyn = 'Y' THEN '확인' END AS chkynm\n"
+        "SELECT a.ordnum, (CASE WHEN a.chkyn = 'Y' THEN '확인' END) AS chkynm\n"
         "FROM DE100T a\n"
         "left outer join DE110T b\n"
         "on a.ordnum = b.ordnum\n"
         "and a.ordseq = b.ordseq\n"
         "WHERE a.status = '진행'\n"
-        "--AND a.status = '보류'\n"
+        "--AND A.STATUS = '보류'\n"
         "END\n"
     )
     formatted = (
@@ -938,16 +938,55 @@ def _sql_formatting_style_scenario(skill_name: str, output_dir: Path, repo_root:
         "    SELECT A.ORDNUM\n"
         "         , (CASE WHEN A.CHKYN = 'Y' THEN '확인' END) AS CHKYNM\n"
         "    FROM DE100T A\n"
-        "        LEFT OUTER JOIN DE110T B\n"
-        "                     ON A.ORDNUM = B.ORDNUM\n"
-        "                     AND A.ORDSEQ = B.ORDSEQ\n"
+        "            LEFT OUTER JOIN DE110T B\n"
+        "                         ON A.ORDNUM = B.ORDNUM\n"
+        "                         AND A.ORDSEQ = B.ORDSEQ\n"
         "    WHERE A.STATUS = '진행'\n"
         "--AND A.STATUS = '보류'\n"
         "END\n"
     )
     changed = formatted.replace("'진행'", "'완료'").replace("'확인'", "'완료'")
-    success_result = verify_sql_formatting_style(original, formatted)
-    blocked_result = verify_sql_formatting_style(original, changed)
+    alias_role_plan = {
+        "scopes": [
+            {
+                "scope_id": "scope_1",
+                "basis_references": [
+                    {
+                        "kind": "reviewer_approved_business_role",
+                        "source": "review://DEMO-SQL/main-and-detail-roles",
+                        "reviewer_approved": True,
+                        "role_names": ["main", "detail"],
+                    }
+                ],
+                "roles": [
+                    {
+                        "name": "main",
+                        "kind": "main",
+                        "members": [
+                            {"source": "DE100T", "original_alias": "a", "alias": "A"}
+                        ],
+                    },
+                    {
+                        "name": "detail",
+                        "kind": "support",
+                        "members": [
+                            {"source": "DE110T", "original_alias": "b", "alias": "B"}
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+    success_result = verify_sql_formatting_style(
+        original,
+        formatted,
+        alias_role_plan=alias_role_plan,
+    )
+    blocked_result = verify_sql_formatting_style(
+        original,
+        changed,
+        alias_role_plan=alias_role_plan,
+    )
     success_path = output_dir / "sql_formatting_success.json"
     blocked_path = output_dir / "sql_formatting_blocked.json"
     success_path.write_text(json.dumps(success_result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
@@ -962,6 +1001,7 @@ def _sql_formatting_style_scenario(skill_name: str, output_dir: Path, repo_root:
         success_evidence=[
             "mechanical preservation checks passed",
             "style checks passed",
+            "alias role plan verified",
             "semantic checks explicitly not_proven",
         ],
         success_behavior="Verify host-local sql-formatting output without replacing the host-local style skill.",

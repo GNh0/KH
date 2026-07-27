@@ -21,15 +21,19 @@ _CLAUSE_WORDS = {
     "EXCEPT",
     "FULL",
     "GROUP",
+    "HASH",
     "HAVING",
     "INNER",
     "INTERSECT",
     "JOIN",
     "LEFT",
+    "LOOP",
+    "MERGE",
     "ON",
     "OPTION",
     "ORDER",
     "OUTER",
+    "REMOTE",
     "RIGHT",
     "UNION",
     "WHERE",
@@ -38,6 +42,7 @@ _CLAUSE_WORDS = {
 }
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 _NUMBERED_MAIN_ALIAS_PATTERN = re.compile(r"^A[0-9]+$")
+_DERIVED_INTERNAL_ALIAS_PATTERN = re.compile(r"^(?:T\d*|T[A-Z]\d+)$")
 _ALIAS_BASIS_SOURCE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^\s]+$")
 _ALIAS_BASIS_SOURCE_SCHEMES = frozenset({"design", "review", "spec", "ticket"})
 _ALIAS_BASIS_EVIDENCE_CONTRACT = {
@@ -71,6 +76,51 @@ _QUERY_LIST_LAYOUT_CONTRACT = {
         "item_length_above_60",
     ],
     "window_order_by": "excluded_by_query_depth",
+}
+_JOIN_LAYOUT_CONTRACT = {
+    "join_indent_from_from": 8,
+    "join_prefix_and_token": "single_line",
+    "predicate_alignment": "ON and line-leading same-join continuation AND align to the I column of JOIN",
+    "indentation_basis": "current_query_scope_from_column",
+    "ordinary_table_joins": "enforced",
+    "derived_table_joins": "same_relative_contract_as_ordinary_joins",
+    "derived_inner_clause_indent_from_join": 4,
+    "derived_closing_alias_alignment": "outer_join_clause_start",
+    "join_hints": ["LOOP", "HASH", "MERGE", "REMOTE"],
+    "predicate_context": "ordered_group_subquery_case_between_stack",
+    "predicate_exclusions": [
+        "inline_AND",
+        "BETWEEN_AND",
+        "CASE_internal_AND",
+        "nested_subquery_AND",
+    ],
+}
+_JOIN_PREFIX_WORDS = {
+    "CROSS",
+    "FULL",
+    "HASH",
+    "INNER",
+    "LEFT",
+    "LOOP",
+    "MERGE",
+    "OUTER",
+    "REMOTE",
+    "RIGHT",
+}
+_FROM_SOURCE_LIST_BOUNDARIES = {
+    "EXCEPT",
+    "FOR",
+    "GROUP",
+    "HAVING",
+    "INTERSECT",
+    "OPTION",
+    "ORDER",
+    "OUTPUT",
+    "SET",
+    "UNION",
+    "VALUES",
+    "WHEN",
+    "WHERE",
 }
 
 
@@ -312,6 +362,7 @@ def verify_sql_formatting_style(
         _style_lint(
             original,
             formatted,
+            original_tokens,
             formatted_tokens,
             operation=operation_name,
             cte_temp_table_reason=cte_temp_table_reason,
@@ -325,6 +376,7 @@ def verify_sql_formatting_style(
         "contract_source": style_source,
         "insert_select_layout_contract": dict(_INSERT_SELECT_LAYOUT_CONTRACT),
         "query_list_layout_contract": dict(_QUERY_LIST_LAYOUT_CONTRACT),
+        "join_layout_contract": dict(_JOIN_LAYOUT_CONTRACT),
     }
 
     refactor_metadata, refactor_issues = _validate_scalar_function_refactor(
@@ -1034,8 +1086,11 @@ def _build_sql_scopes(tokens: Sequence[_SqlToken]) -> List[_SqlScope]:
 
 def _is_sql_scope_start(tokens: Sequence[_SqlToken], index: int) -> bool:
     keyword = tokens[index].normalized
-    if keyword in {"SELECT", "MERGE"}:
+    if keyword == "SELECT":
         return True
+    if keyword == "MERGE":
+        next_token = _next_code_token(tokens, index + 1, len(tokens))
+        return next_token is None or tokens[next_token].normalized != "JOIN"
     if keyword not in {"UPDATE", "DELETE"}:
         return False
 
@@ -1064,16 +1119,31 @@ def _parse_scope_declarations(
     declarations: List[_SourceDeclaration] = []
     statement_kind = tokens[start].normalized
     cursor = start if statement_kind == "MERGE" else start + 1
+    from_source_list_active = False
     while cursor < end:
         token = tokens[cursor]
         if token.kind in {"line_comment", "block_comment"}:
             cursor += 1
             continue
+        if token.depth == depth:
+            if token.normalized == "FROM":
+                from_source_list_active = True
+            elif token.normalized in _FROM_SOURCE_LIST_BOUNDARIES:
+                from_source_list_active = False
         source_markers = {"FROM", "JOIN", "APPLY"}
         if statement_kind == "MERGE":
             source_markers.add("USING")
         is_merge_target = statement_kind == "MERGE" and cursor == start
-        if token.depth != depth or (not is_merge_target and token.normalized not in source_markers):
+        is_comma_source = (
+            token.depth == depth
+            and token.text == ","
+            and from_source_list_active
+        )
+        if token.depth != depth or (
+            not is_merge_target
+            and token.normalized not in source_markers
+            and not is_comma_source
+        ):
             cursor += 1
             continue
         value_index = _next_code_token(tokens, cursor + 1, end)
@@ -1161,7 +1231,8 @@ def _parse_scope_declarations(
                 order=len(declarations) + 1,
             )
         )
-        cursor = max(cursor + 1, source_end + 1)
+        declaration_end = alias_end if alias_end is not None else source_end
+        cursor = max(cursor + 1, declaration_end + 1)
     return declarations
 
 
@@ -1236,59 +1307,146 @@ def _validate_alias_role_plan(
     changes: Sequence[_AliasChange],
     plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None,
 ) -> Tuple[Dict[str, Any], List[SqlFormattingIssue], bool]:
-    main_alias_conflicts = _numbered_main_alias_conflicts(formatted_scopes)
+    changed_scope_ids = {item.scope_id for item in changes}
+    derived_internal_exempt_scope_ids = {
+        scope.scope_id
+        for scope in formatted_scopes
+        if len(scope.declarations) > 1
+        and scope.scope_id not in changed_scope_ids
+        and _is_derived_internal_scope(scope, formatted_scopes)
+        and all(
+            declaration.alias_start is not None
+            and _DERIVED_INTERNAL_ALIAS_PATTERN.fullmatch(
+                declaration.effective_alias
+            )
+            for declaration in scope.declarations
+        )
+    }
+    multi_source_scope_ids = {
+        scope.scope_id
+        for scope in formatted_scopes
+        if len(scope.declarations) > 1
+        and scope.scope_id not in derived_internal_exempt_scope_ids
+    }
+    missing_alias_conflicts = [
+        f"{scope.scope_id}:{declaration.source} has no explicit alias"
+        for scope in formatted_scopes
+        if scope.scope_id in multi_source_scope_ids
+        for declaration in scope.declarations
+        if declaration.alias_start is None
+    ]
+    missing_alias_issues = (
+        [
+            SqlFormattingIssue(
+                code="alias_missing_in_multi_source_scope",
+                severity="error",
+                message="Every source in a multi-source formatted scope requires an explicit canonical alias.",
+                evidence=missing_alias_conflicts[:16],
+                check_kind="alias_role_plan",
+            )
+        ]
+        if missing_alias_conflicts
+        else []
+    )
+    canonical_main_conflicts = []
+    for scope in formatted_scopes:
+        if not scope.declarations:
+            continue
+        first = scope.declarations[0]
+        explicitly_aliased_sole_outer_source = (
+            len(scope.declarations) == 1
+            and first.alias_start is not None
+            and scope.depth == 0
+            and not _is_derived_internal_scope(scope, formatted_scopes)
+        )
+        if (
+            scope.scope_id in multi_source_scope_ids
+            or explicitly_aliased_sole_outer_source
+        ) and first.effective_alias != "A":
+            canonical_main_conflicts.append(
+                f"{scope.scope_id}:first structural source uses {first.effective_alias}; main must be A"
+            )
+    canonical_main_issues = (
+        [
+            SqlFormattingIssue(
+                code="alias_main_role_invalid",
+                severity="error",
+                message=(
+                    "The structural first FROM or target source must use alias A when the scope "
+                    "is multi-source or its sole non-derived source is explicitly aliased."
+                ),
+                evidence=canonical_main_conflicts[:16],
+                check_kind="alias_role_plan",
+            )
+        ]
+        if canonical_main_conflicts
+        else []
+    )
+    numbered_main_conflicts = _numbered_main_alias_conflicts(formatted_scopes)
     main_alias_issues = (
         [
             SqlFormattingIssue(
                 code="alias_main_family_numbered_invalid",
                 severity="error",
                 message="The main alias family contains a numbered alias; each scope permits only A.",
-                evidence=main_alias_conflicts[:16],
+                evidence=numbered_main_conflicts[:16],
                 check_kind="alias_role_plan",
             )
         ]
-        if main_alias_conflicts
+        if numbered_main_conflicts
         else []
     )
-    if not changes:
+    required_scope_ids = {
+        item.scope_id for item in changes
+    } | multi_source_scope_ids
+    pre_plan_issues = [*missing_alias_issues, *canonical_main_issues, *main_alias_issues]
+    pre_plan_conflicts = [
+        *missing_alias_conflicts,
+        *canonical_main_conflicts,
+        *numbered_main_conflicts,
+    ]
+    if not required_scope_ids:
         return (
             {
-                "status": "conflict" if main_alias_issues else "not_needed",
+                "status": "conflict" if pre_plan_issues else "not_needed",
                 "reason": (
-                    "numbered_main_family_alias_present"
-                    if main_alias_issues
+                    "canonical_main_alias_conflict"
+                    if pre_plan_issues
                     else "no_alias_changed"
                 ),
                 "plan_provided": plan is not None,
                 "verified_scopes": [],
-                "conflicts": main_alias_conflicts,
+                "conflicts": pre_plan_conflicts,
                 "basis_evidence_contract": dict(_ALIAS_BASIS_EVIDENCE_CONTRACT),
             },
-            main_alias_issues,
-            not main_alias_issues,
+            pre_plan_issues,
+            not pre_plan_issues,
         )
     if plan is None:
         issue = SqlFormattingIssue(
             code="alias_role_plan_required",
             severity="error",
-            message="Alias changes require a complete explicit per-scope role plan.",
-            evidence=[f"{item.scope_id}:{item.original_alias}->{item.formatted_alias}" for item in changes],
+            message="Alias changes and every multi-source formatted scope require a complete explicit per-scope role plan.",
+            evidence=(
+                [f"{item.scope_id}:{item.original_alias}->{item.formatted_alias}" for item in changes]
+                or [f"{scope_id}:multi-source scope" for scope_id in sorted(multi_source_scope_ids)]
+            ),
             check_kind="alias_role_plan",
         )
         return (
             {
-                "status": "conflict" if main_alias_issues else "required",
+                "status": "conflict" if pre_plan_issues else "required",
                 "reason": (
-                    "numbered_main_family_alias_present_and_plan_missing"
-                    if main_alias_issues
-                    else "alias_changed_without_plan"
+                    "alias_conflict_and_plan_missing"
+                    if pre_plan_issues
+                    else "complete_multi_source_or_changed_scope_plan_missing"
                 ),
                 "plan_provided": False,
                 "verified_scopes": [],
-                "conflicts": [*main_alias_conflicts, *issue.evidence],
+                "conflicts": [*pre_plan_conflicts, *issue.evidence],
                 "basis_evidence_contract": dict(_ALIAS_BASIS_EVIDENCE_CONTRACT),
             },
-            [*main_alias_issues, issue],
+            [*pre_plan_issues, issue],
             False,
         )
 
@@ -1297,10 +1455,8 @@ def _validate_alias_role_plan(
         raw_scopes = plan.get("scopes")
     else:
         raw_scopes = plan
-    conflicts: List[str] = list(main_alias_conflicts)
-    issue_codes: set[str] = (
-        {"alias_main_family_numbered_invalid"} if main_alias_conflicts else set()
-    )
+    conflicts: List[str] = list(pre_plan_conflicts)
+    issue_codes: set[str] = {item.code for item in pre_plan_issues}
     if not isinstance(raw_scopes, Sequence) or isinstance(raw_scopes, (str, bytes)):
         raw_scopes = []
         conflicts.append("alias_role_plan.scopes must be a sequence")
@@ -1308,10 +1464,9 @@ def _validate_alias_role_plan(
 
     original_by_id = {item.scope_id: item for item in original_scopes}
     formatted_by_id = {item.scope_id: item for item in formatted_scopes}
-    changed_scope_ids = {item.scope_id for item in changes}
     plan_scope_ids: set[str] = set()
     verified_scopes: List[str] = []
-    all_expected = _expected_alias_members(original_scopes, formatted_scopes, changed_scope_ids)
+    all_expected = _expected_alias_members(original_scopes, formatted_scopes, required_scope_ids)
 
     for raw_scope in raw_scopes:
         if not isinstance(raw_scope, Mapping):
@@ -1324,8 +1479,8 @@ def _validate_alias_role_plan(
             issue_codes.add("alias_plan_incomplete")
             continue
         plan_scope_ids.add(scope_id)
-        if scope_id not in changed_scope_ids:
-            conflicts.append(f"scope {scope_id!r} has no alias changes")
+        if scope_id not in required_scope_ids:
+            conflicts.append(f"scope {scope_id!r} is not a changed or multi-source scope")
             issue_codes.add("alias_plan_incomplete")
             continue
         roles = raw_scope.get("roles", [])
@@ -1438,10 +1593,11 @@ def _validate_alias_role_plan(
         if not any(f"scope {scope_id!r}" in value for value in conflicts):
             verified_scopes.append(scope_id)
 
-    if plan_scope_ids != changed_scope_ids:
+    if plan_scope_ids != required_scope_ids:
         conflicts.append(
-            f"plan scopes must exactly cover changed scopes: missing={sorted(changed_scope_ids - plan_scope_ids)!r}, "
-            f"extra={sorted(plan_scope_ids - changed_scope_ids)!r}"
+            f"plan scopes must exactly cover changed and multi-source scopes: "
+            f"missing={sorted(required_scope_ids - plan_scope_ids)!r}, "
+            f"extra={sorted(plan_scope_ids - required_scope_ids)!r}"
         )
         issue_codes.add("alias_plan_incomplete")
 
@@ -1480,25 +1636,51 @@ def _numbered_main_alias_conflicts(scopes: Sequence[_SqlScope]) -> List[str]:
     ]
 
 
+def _is_derived_internal_scope(
+    scope: _SqlScope,
+    scopes: Sequence[_SqlScope],
+) -> bool:
+    return any(
+        declaration.source == "(DERIVED)"
+        and declaration.source_start < scope.start < declaration.source_name_end
+        for candidate in scopes
+        for declaration in candidate.declarations
+    )
+
+
 def _expected_alias_members(
     original_scopes: Sequence[_SqlScope],
     formatted_scopes: Sequence[_SqlScope],
-    changed_scope_ids: set[str],
+    required_scope_ids: set[str],
 ) -> Dict[str, set[Tuple[str, str, str]]]:
     result: Dict[str, set[Tuple[str, str, str]]] = {}
     for original_scope, formatted_scope in zip(original_scopes, formatted_scopes):
-        if formatted_scope.scope_id not in changed_scope_ids:
+        if formatted_scope.scope_id not in required_scope_ids:
             continue
         values = set()
-        for original_decl, formatted_decl in zip(original_scope.declarations, formatted_scope.declarations):
-            if original_decl.source == formatted_decl.source:
-                values.add(
+        unmatched_original = list(original_scope.declarations)
+        for formatted_decl in formatted_scope.declarations:
+            original_decl = next(
+                (
+                    candidate
+                    for candidate in unmatched_original
+                    if candidate.source == formatted_decl.source
+                ),
+                None,
+            )
+            if original_decl is not None:
+                unmatched_original.remove(original_decl)
+            values.add(
+                (
+                    formatted_decl.source,
                     (
-                        formatted_decl.source,
-                        original_decl.effective_alias,
-                        formatted_decl.effective_alias,
-                    )
+                        original_decl.effective_alias
+                        if original_decl is not None
+                        else formatted_decl.effective_alias
+                    ),
+                    formatted_decl.effective_alias,
                 )
+            )
         result[formatted_scope.scope_id] = values
     return result
 
@@ -2398,12 +2580,14 @@ def _scalar_refactor_issue(code: str, evidence: Sequence[str]) -> SqlFormattingI
 def _style_lint(
     original: str,
     formatted: str,
+    original_tokens: Sequence[_SqlToken],
     formatted_tokens: Sequence[_SqlToken],
     *,
     operation: str,
     cte_temp_table_reason: str | None,
 ) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
+    issues.extend(_check_tab_indentation(formatted))
     lowercase = _lowercase_sql_tokens(formatted_tokens)
     if lowercase:
         issues.append(
@@ -2427,10 +2611,359 @@ def _style_lint(
         )
     )
     issues.extend(_check_if_exists_where_subquery(formatted_tokens))
+    issues.extend(
+        _check_join_layout(formatted, formatted_tokens)
+    )
     issues.extend(_check_query_list_layout(formatted, formatted_tokens))
     if operation != "formatting":
         issues.extend(_check_case_parentheses(formatted, formatted_tokens))
     return issues
+
+
+def _check_tab_indentation(formatted_sql: str) -> List[SqlFormattingIssue]:
+    conflicts = [
+        f"line {line_number}: tab used in leading indentation"
+        for line_number, line in enumerate(formatted_sql.splitlines(), start=1)
+        if "\t" in line[: len(line) - len(line.lstrip(" \t"))]
+    ]
+    if not conflicts:
+        return []
+    return [
+        SqlFormattingIssue(
+            code="tab_indentation_not_allowed",
+            severity="error",
+            message="SQL layout indentation must use spaces; leading tabs are not accepted.",
+            evidence=conflicts[:16],
+            check_kind="style",
+        )
+    ]
+
+
+def _check_join_layout(
+    formatted_sql: str,
+    formatted_tokens: Sequence[_SqlToken],
+) -> List[SqlFormattingIssue]:
+    issues: List[SqlFormattingIssue] = []
+    for scope in _build_sql_scopes(formatted_tokens):
+        if len(scope.declarations) < 2:
+            continue
+        from_index = _source_marker_before(
+            formatted_tokens,
+            scope.declarations[0].source_start,
+            scope.start,
+            scope.depth,
+            {"FROM"},
+        )
+        if from_index is None:
+            continue
+        _, from_column, _ = _token_line_position(
+            formatted_sql,
+            formatted_tokens[from_index],
+        )
+        for declaration in scope.declarations[1:]:
+            join_index = _source_marker_before(
+                formatted_tokens,
+                declaration.source_start,
+                scope.start,
+                scope.depth,
+                {"JOIN"},
+            )
+            if join_index is None:
+                continue
+            clause_start = _join_clause_start(
+                formatted_sql,
+                formatted_tokens,
+                join_index,
+            )
+            line, clause_column, clause_line_leading = _token_line_position(
+                formatted_sql,
+                formatted_tokens[clause_start],
+            )
+            expected_join_column = from_column + int(
+                _JOIN_LAYOUT_CONTRACT["join_indent_from_from"]
+            )
+            clause_line_numbers = {
+                _token_line_position(formatted_sql, formatted_tokens[index])[0]
+                for index in range(clause_start, join_index + 1)
+                if formatted_tokens[index].kind not in {"line_comment", "block_comment"}
+            }
+            if len(clause_line_numbers) != 1:
+                issues.append(
+                    SqlFormattingIssue(
+                        code="join_clause_split_across_lines",
+                        severity="error",
+                        message="JOIN type/hint prefixes and the JOIN token must stay on one line.",
+                        evidence=[f"{scope.scope_id}:lines={sorted(clause_line_numbers)}"],
+                        check_kind="style",
+                    )
+                )
+            if not clause_line_leading or clause_column != expected_join_column:
+                issues.append(
+                    SqlFormattingIssue(
+                        code="join_indentation_not_relative",
+                        severity="error",
+                        message="JOIN indentation must be relative to the current query scope's FROM column, including derived-table sources.",
+                        evidence=[
+                            f"{scope.scope_id}:line {line}:JOIN indent={clause_column}, "
+                            f"expected={expected_join_column}, FROM indent={from_column}"
+                        ],
+                        check_kind="style",
+                    )
+                )
+
+            _, join_column, _ = _token_line_position(
+                formatted_sql,
+                formatted_tokens[join_index],
+            )
+            expected_predicate_column = join_column + 2
+            predicate_indexes = _same_join_predicate_indexes(
+                formatted_sql,
+                formatted_tokens,
+                join_index,
+                scope.end,
+                scope.depth,
+            )
+            predicate_conflicts = []
+            for predicate_index in predicate_indexes:
+                predicate = formatted_tokens[predicate_index]
+                predicate_line, predicate_column, line_leading = _token_line_position(
+                    formatted_sql,
+                    predicate,
+                )
+                if line_leading and predicate_column == expected_predicate_column:
+                    continue
+                predicate_conflicts.append(
+                    f"{scope.scope_id}:line {predicate_line}:{predicate.normalized} "
+                    f"column={predicate_column}, expected={expected_predicate_column}"
+                )
+            if predicate_conflicts:
+                issues.append(
+                    SqlFormattingIssue(
+                        code="join_predicate_alignment_invalid",
+                        severity="error",
+                        message="ON and same-join AND keywords must align to the I column of JOIN.",
+                        evidence=predicate_conflicts[:16],
+                        check_kind="style",
+                    )
+                )
+            if declaration.source == "(DERIVED)":
+                issues.extend(
+                    _check_derived_source_block_layout(
+                        formatted_sql,
+                        formatted_tokens,
+                        declaration,
+                        scope.scope_id,
+                        expected_join_column,
+                    )
+                )
+    return issues
+
+
+def _check_derived_source_block_layout(
+    sql: str,
+    tokens: Sequence[_SqlToken],
+    declaration: _SourceDeclaration,
+    scope_id: str,
+    join_clause_column: int,
+) -> List[SqlFormattingIssue]:
+    issues: List[SqlFormattingIssue] = []
+    close_index = declaration.source_name_end
+    close_line, close_column, close_line_leading = _token_line_position(
+        sql,
+        tokens[close_index],
+    )
+    if not close_line_leading or close_column != join_clause_column:
+        issues.append(
+            SqlFormattingIssue(
+                code="derived_join_closing_alias_indentation_invalid",
+                severity="error",
+                message="A derived-table closing parenthesis and alias must align with the outer JOIN clause start.",
+                evidence=[
+                    f"{scope_id}:line {close_line}:close indent={close_column}, expected={join_clause_column}"
+                ],
+                check_kind="style",
+            )
+        )
+
+    if declaration.alias_start is not None:
+        alias_line, _, _ = _token_line_position(
+            sql,
+            tokens[declaration.alias_start],
+        )
+        if alias_line != close_line:
+            issues.append(
+                SqlFormattingIssue(
+                    code="derived_join_alias_detached",
+                    severity="error",
+                    message="A derived-table alias must remain on the same line as its closing parenthesis.",
+                    evidence=[
+                        f"{scope_id}:close line={close_line}, alias line={alias_line}"
+                    ],
+                    check_kind="style",
+                )
+            )
+
+    inner_depth = tokens[declaration.source_start].depth + 1
+    expected_inner_column = join_clause_column + int(
+        _JOIN_LAYOUT_CONTRACT["derived_inner_clause_indent_from_join"]
+    )
+    clause_keywords = {"SELECT", "FROM", "WHERE", "GROUP", "HAVING", "ORDER", "UNION", "EXCEPT", "INTERSECT"}
+    conflicts: List[str] = []
+    for index in range(declaration.source_start + 1, close_index):
+        token = tokens[index]
+        if token.depth != inner_depth or token.normalized not in clause_keywords:
+            continue
+        line, column, line_leading = _token_line_position(sql, token)
+        if line_leading and column == expected_inner_column:
+            continue
+        conflicts.append(
+            f"{scope_id}:line {line}:{token.normalized} column={column}, expected={expected_inner_column}"
+        )
+    if conflicts:
+        issues.append(
+            SqlFormattingIssue(
+                code="derived_query_clause_indentation_invalid",
+                severity="error",
+                message="Top-level clauses inside a derived table must align four columns inside the outer JOIN clause.",
+                evidence=conflicts[:16],
+                check_kind="style",
+            )
+        )
+    return issues
+
+
+def _source_marker_before(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    lower_bound: int,
+    depth: int,
+    markers: set[str],
+) -> int | None:
+    for index in range(start - 1, lower_bound - 1, -1):
+        token = tokens[index]
+        if token.depth == depth and token.normalized in markers:
+            return index
+    return None
+
+
+def _join_clause_start(
+    sql: str,
+    tokens: Sequence[_SqlToken],
+    join_index: int,
+) -> int:
+    start = join_index
+    join_token = tokens[join_index]
+    while start > 0:
+        candidate = tokens[start - 1]
+        if (
+            candidate.depth != join_token.depth
+            or candidate.normalized not in _JOIN_PREFIX_WORDS
+        ):
+            break
+        start -= 1
+    return start
+
+
+def _same_join_predicate_indexes(
+    sql: str,
+    tokens: Sequence[_SqlToken],
+    join_index: int,
+    scope_end: int,
+    depth: int,
+) -> List[int]:
+    predicate_indexes: List[int] = []
+    on_seen = False
+    contexts: List[str] = []
+    clause_boundaries = {"FROM", "JOIN", "WHERE", "GROUP", "HAVING", "ORDER", "UNION", "EXCEPT", "INTERSECT"}
+    for index in range(join_index + 1, scope_end):
+        token = tokens[index]
+        if token.kind in {"line_comment", "block_comment"}:
+            continue
+        if not on_seen:
+            if token.depth == depth and token.normalized == "ON":
+                predicate_indexes.append(index)
+                on_seen = True
+            continue
+        if token.depth < depth:
+            break
+        if token.depth == depth and token.normalized in clause_boundaries:
+            break
+        if token.text == "(":
+            contexts.append("group")
+            continue
+        if token.text == ")":
+            parenthesis_index = next(
+                (
+                    position
+                    for position in range(len(contexts) - 1, -1, -1)
+                    if contexts[position] in {"group", "subquery"}
+                ),
+                None,
+            )
+            if parenthesis_index is not None:
+                del contexts[parenthesis_index:]
+            continue
+        if token.normalized == "SELECT" and token.depth > depth:
+            parenthesis_index = next(
+                (
+                    position
+                    for position in range(len(contexts) - 1, -1, -1)
+                    if contexts[position] in {"group", "subquery"}
+                ),
+                None,
+            )
+            if parenthesis_index is not None:
+                contexts[parenthesis_index] = "subquery"
+            continue
+        if "subquery" in contexts:
+            continue
+        if token.normalized == "CASE":
+            contexts.append("case")
+            continue
+        if token.normalized == "END":
+            case_index = next(
+                (
+                    position
+                    for position in range(len(contexts) - 1, -1, -1)
+                    if contexts[position] == "case"
+                ),
+                None,
+            )
+            if case_index is not None:
+                del contexts[case_index]
+            continue
+        if token.normalized == "BETWEEN":
+            contexts.append("between")
+            continue
+        if token.normalized != "AND":
+            continue
+        last_case = max(
+            (position for position, context in enumerate(contexts) if context == "case"),
+            default=-1,
+        )
+        last_between = max(
+            (
+                position
+                for position, context in enumerate(contexts)
+                if context == "between"
+            ),
+            default=-1,
+        )
+        if last_between > last_case:
+            del contexts[last_between]
+            continue
+        if last_case >= 0:
+            continue
+        _, _, line_leading = _token_line_position(sql, token)
+        if line_leading:
+            predicate_indexes.append(index)
+    return predicate_indexes
+
+
+def _token_line_position(sql: str, token: _SqlToken) -> Tuple[int, int, bool]:
+    line_start = sql.rfind("\n", 0, token.start) + 1
+    prefix = sql[line_start:token.start]
+    return sql.count("\n", 0, token.start) + 1, len(prefix), not prefix.strip()
 
 
 def _preservation_diagnostics(
@@ -2550,7 +3083,10 @@ def _check_alias_style(tokens: Sequence[_SqlToken]) -> List[SqlFormattingIssue]:
             SqlFormattingIssue(
                 code=code,
                 severity="error",
-                message="Outer aliases must use A/A1, B/B1, C...; T families are derived-table internal.",
+                message=(
+                    "Outer aliases must use A for the sole main source and sequential B, C, D... "
+                    "support families; A1/A2 are forbidden and T families are derived-table internal."
+                ),
                 evidence=invalid[:8],
                 check_kind="style",
             )
@@ -3458,18 +3994,31 @@ def _check_query_list_layout(
             _sql_line_number(sql, next(token.start for token in item if token.text.strip()))
             for item in items
         ]
-        one_item_per_row = len(items) > 1 and len(set(item_start_lines)) == len(items)
-        continuation_prefix = indent + len(clause["name"]) + 1
-        adjacent_pair_fits = any(
-            continuation_prefix + len(item_text[index]) + 2 + len(item_text[index + 1])
-            <= preferred
-            for index in range(len(item_text) - 1)
-        )
+        physical_lines = sql.splitlines()
+        underpacked_boundaries: List[str] = []
+        for index in range(len(items) - 1):
+            current_line = item_start_lines[index]
+            next_line = item_start_lines[index + 1]
+            if current_line == next_line or current_line > len(physical_lines):
+                continue
+            current_item_end_line = max(
+                _sql_line_number(sql, token.start)
+                for token in items[index]
+                if token.text.strip()
+            )
+            if current_item_end_line != current_line:
+                continue
+            current_width = len(physical_lines[current_line - 1].expandtabs(4).rstrip())
+            packed_width = current_width + 2 + len(item_text[index + 1])
+            if packed_width <= preferred:
+                underpacked_boundaries.append(
+                    f"items={index + 1}/{index + 2}:lines={current_line}/{next_line}:"
+                    f"packed_width={packed_width}"
+                )
         if (
             all_simple
             and compact_width > preferred
-            and one_item_per_row
-            and adjacent_pair_fits
+            and underpacked_boundaries
         ):
             issues.append(
                 SqlFormattingIssue(
@@ -3479,7 +4028,7 @@ def _check_query_list_layout(
                         "Long simple GROUP BY/ORDER BY lists must pack adjacent items into "
                         "compact continuation rows when they fit."
                     ),
-                    evidence=evidence,
+                    evidence=[*evidence, *underpacked_boundaries],
                     check_kind="style",
                 )
             )
@@ -3498,7 +4047,6 @@ def _check_query_list_layout(
             )
         if all_simple and not is_inline:
             clause_end_line = max(item_start_lines, default=clause_line)
-            physical_lines = sql.splitlines()
             overlong_lines = [
                 line_number
                 for line_number in range(clause_line, clause_end_line + 1)

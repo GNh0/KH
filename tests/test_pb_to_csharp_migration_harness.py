@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import runpy
 import tempfile
 import unittest
@@ -7,6 +8,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
+from src.contracts import HarnessResult
 from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.request_classifier import classify_request
 from src.skills import pb_to_csharp_migration as pb_migration
@@ -36,7 +38,7 @@ from src.skills.pb_to_csharp_migration import (
     get_author_tagged_csharp_style_baseline,
     load_packaged_migration_profile,
     normalize_author_tagged_program_key,
-    orchestrate_pb_migration_validation,
+    orchestrate_pb_migration_validation as _orchestrate_pb_migration_validation,
     resolve_author_tagged_style_evidence,
     verify_migration_generated_csharp_style as _verify_migration_generated_csharp_style,
     verify_pb_migration_analysis_document,
@@ -46,16 +48,309 @@ from src.skills.pb_to_csharp_migration import (
     resolve_csharp_grid_column_prefix,
     resolve_csharp_control_stack,
 )
+from src.skills.sql_formatting_provider import (
+    attach_sql_provider_selection_runtime_receipt,
+    sql_provider_selection_sha256,
+)
 from src.skills.uaf_skill_catalog import read_packaged_skill
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SQL_PROVIDER_PATH = REPO_ROOT / "skills" / "sql_formatting" / "SKILL.md"
+
+
+def sql_final_response(sql_text):
+    return f"```sql\n{sql_text}\n```"
+
+
+def sql_provider_selection(provider_path=SQL_PROVIDER_PATH, *, source="packaged-kh-skill"):
+    resolved = str(Path(provider_path).resolve())
+    return attach_sql_provider_selection_runtime_receipt({
+        "schema_version": 1,
+        "front_door_status": "ok",
+        "host": "pb-test",
+        "project": str(REPO_ROOT),
+        "provider_id": "sql-formatting",
+        "provider_path": resolved,
+        "selected_active_provider_path": resolved,
+        "provider_source": source,
+        "compatibility": "compatible",
+        "selection_status": "selected",
+        "plugin_route": {
+            "route": "single",
+            "controller": {
+                "provider_id": "sql-formatting",
+                "capability": "sql_formatting",
+                "metadata": {
+                    "path": resolved,
+                    "source": source,
+                    "compatibility": "compatible",
+                },
+            },
+            "assistants": [],
+        },
+        "execution_gate": {
+            "can_execute": True,
+            "status": "execution_allowed_after_selected_skill_setup",
+            "reason": "SQL formatting provider selected after required skill setup.",
+        },
+    })
 
 
 def sp_metadata_header(description="Synthetic procedure contract"):
     return f"""-- =============================================
--- AUTHOR:      <maintainer>
--- CREATE DATE: 2026-06-15
 -- DESCRIPTION: {description}
 -- =============================================
-"""
+    """
+
+
+def write_test_artifact(name, text):
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    root = Path(tempfile.gettempdir()) / "kh-uaf-pb-migration-tests"
+    root.mkdir(parents=True, exist_ok=True)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", name)
+    path = root / f"{safe_name}-{digest[:12]}.txt"
+    path.write_text(text, encoding="utf-8")
+    return path, digest
+
+
+def complete_csharp_caller_artifact(method_body, *, class_name="CallerEvidence"):
+    return f'''public sealed class {class_name}
+{{
+    private object Execute()
+    {{
+{method_body}
+    }}
+}}'''
+
+
+def csharp_call_evidence(
+    parameters,
+    *,
+    artifact_name="ZX123456.cs",
+    target_procedure="SP_ZX123456_SELECT",
+    **extra,
+):
+    parameter_lines = "\n".join(
+        f'    , new DbParameter("{parameter}", value)' for parameter in parameters
+    )
+    method_body = (
+        f'return dbClient.GetDataSetFromSP("{target_procedure}"\n'
+        f'{parameter_lines}\n'
+        ');'
+    )
+    artifact_text = complete_csharp_caller_artifact(method_body)
+    path, digest = write_test_artifact(artifact_name, artifact_text)
+    return {
+        "kind": "csharp_call",
+        "verified": True,
+        "path": str(path),
+        "definition_text": artifact_text,
+        "sha256": digest,
+        "db_parameters": list(parameters),
+        "target_procedure": target_procedure,
+        **extra,
+    }
+
+
+def external_caller_evidence(
+    parameter_contract,
+    *,
+    caller_id="batch-a",
+    target_procedure="SP_ZX123456_SELECT",
+):
+    artifact_text = json.dumps(
+        {
+            "caller_id": caller_id,
+            "target_procedure": target_procedure,
+            "parameter_contract": parameter_contract,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    path, digest = write_test_artifact(f"external-{caller_id}", artifact_text)
+    return {
+        "kind": "external_caller",
+        "verified": True,
+        "caller_id": caller_id,
+        "target_procedure": target_procedure,
+        "path": str(path),
+        "artifact_text": artifact_text,
+        "sha256": digest,
+        "parameter_contract": parameter_contract,
+    }
+
+
+def branch_contract_evidence(
+    branch_sql,
+    *,
+    target_procedure="SP_ZX123456_SELECT",
+    artifact_name="branch-contract",
+):
+    artifact_text = json.dumps(
+        {
+            "target_procedure": target_procedure,
+            "branch_sql": str(branch_sql),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    path, digest = write_test_artifact(artifact_name, artifact_text)
+    return {
+        "kind": "branch_contract",
+        "verified": True,
+        "target_procedure": target_procedure,
+        "path": str(path),
+        "artifact_text": artifact_text,
+        "sha256": digest,
+        "branch_sql": str(branch_sql),
+    }
+
+
+def canonical_nonwrapper_trace_sha256(sql_text):
+    trace_keys = [
+        item["trace_key"]
+        for item in pb_migration._sql_hierarchical_trace(sql_text)
+        if not item["generated_wrapper"]
+    ]
+    payload = {
+        "schema_version": "kh.pb.nonwrapper-trace.v2",
+        "trace_keys": trace_keys,
+    }
+    canonical_json = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def composite_contract_evidence(
+    trace_sql,
+    source_lineage,
+    *,
+    target_procedure="SP_ZX123456_SELECT",
+    artifact_name="composite-contract",
+    trace_sha256=None,
+):
+    trace_sha256 = trace_sha256 or canonical_nonwrapper_trace_sha256(trace_sql)
+    artifact_text = json.dumps(
+        {
+            "target_procedure": target_procedure,
+            "trace_sql": str(trace_sql),
+            "trace_sha256": trace_sha256,
+            "source_lineage": list(source_lineage),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    path, digest = write_test_artifact(artifact_name, artifact_text)
+    return {
+        "kind": "composite_contract",
+        "verified": True,
+        "target_procedure": target_procedure,
+        "path": str(path),
+        "artifact_text": artifact_text,
+        "sha256": digest,
+        "trace_sql": str(trace_sql),
+        "trace_sha256": trace_sha256,
+        "source_lineage": list(source_lineage),
+    }
+
+
+def bound_source_evidence(kind, source_text, *, artifact_name="source-1", **extra):
+    path, digest = write_test_artifact(artifact_name, source_text)
+    return {
+        "kind": kind,
+        "verified": True,
+        "definition_path": str(path),
+        "definition_text": source_text,
+        "sha256": digest,
+        **extra,
+    }
+
+
+def pb_srd_sql_evidence(source_text="SELECT @WORKTYPE AS WORKTYPE;", **extra):
+    return bound_source_evidence(
+        "pb_srd_sql",
+        source_text,
+        artifact_name="synthetic-pb-query",
+        **extra,
+    )
+
+
+def existing_sp_evidence(source_text, object_name="SP_ZX123456_SELECT", **extra):
+    return bound_source_evidence(
+        "existing_sp",
+        source_text,
+        artifact_name=f"existing-{object_name.lower()}",
+        object=object_name,
+        **extra,
+    )
+
+
+def pasted_sql_evidence(source_text, evidence_role="body_fragment", **extra):
+    return bound_source_evidence(
+        "pasted_sql",
+        source_text,
+        artifact_name=f"pasted-{evidence_role}",
+        evidence_role=evidence_role,
+        **extra,
+    )
+
+
+def approved_alias_role_plan():
+    return {
+        "scopes": [
+            {
+                "scope_id": "scope_1",
+                "basis_references": [
+                    {
+                        "kind": "reviewer_approved_business_role",
+                        "source": "review://PB-MIGRATION/main-and-detail-roles",
+                        "reviewer_approved": True,
+                        "role_names": ["main", "detail"],
+                    }
+                ],
+                "roles": [
+                    {
+                        "name": "main",
+                        "kind": "main",
+                        "members": [
+                            {"source": "SYNTHETIC_RECORDS", "original_alias": "A", "alias": "A"}
+                        ],
+                    },
+                    {
+                        "name": "detail",
+                        "kind": "support",
+                        "members": [
+                            {"source": "SYNTHETIC_DETAILS", "original_alias": "B", "alias": "B"}
+                        ],
+                    },
+                ],
+            }
+        ]
+    }
+
+
+def passed_sql_formatting_result(original_sql="", formatted_sql=""):
+    original_sha256 = hashlib.sha256(str(original_sql).encode("utf-8")).hexdigest()
+    formatted_sha256 = hashlib.sha256(str(formatted_sql).encode("utf-8")).hexdigest()
+    return HarnessResult(
+        success=True,
+        stdout=json.dumps({"status": "passed"}, sort_keys=True),
+        stderr="",
+        exit_code=0,
+        metadata={
+            "mechanical_checks": {"status": "passed"},
+            "alias_role_plan_validation": {"status": "verified"},
+            "original_sha256": original_sha256,
+            "formatted_sha256": formatted_sha256,
+            "release_readiness": {"status": "ready"},
+            "verification_id": "test-verification-id",
+        },
+    )
 
 
 def packaged_profile_payload(
@@ -315,7 +610,22 @@ def verify_pb_migration_sp_generation_contract(*args, **kwargs):
 
 def verify_pb_migration_sp_with_sql_formatting(*args, **kwargs):
     kwargs.setdefault("profile_evidence", loaded_sp_test_profile())
+    formatted_sql = str(args[1] if len(args) > 1 else kwargs.get("formatted_sql_text") or "")
+    kwargs.setdefault("draft_final_response", sql_final_response(formatted_sql))
+    kwargs.setdefault("sql_provider_path", SQL_PROVIDER_PATH)
+    kwargs.setdefault("selected_active_sql_provider_path", SQL_PROVIDER_PATH)
+    kwargs.setdefault("sql_provider_selection", sql_provider_selection())
     return _verify_pb_migration_sp_with_sql_formatting(*args, **kwargs)
+
+
+def orchestrate_pb_migration_validation(*args, **kwargs):
+    kwargs.setdefault("caller_parameter_contract", ["@WORKTYPE"])
+    formatted_sql = str(kwargs.get("formatted_sql_text") or "")
+    kwargs.setdefault("draft_final_response", sql_final_response(formatted_sql))
+    kwargs.setdefault("sql_provider_path", SQL_PROVIDER_PATH)
+    kwargs.setdefault("selected_active_sql_provider_path", SQL_PROVIDER_PATH)
+    kwargs.setdefault("sql_provider_selection", sql_provider_selection())
+    return _orchestrate_pb_migration_validation(*args, **kwargs)
 
 
 class PbToCSharpMigrationHarnessTests(unittest.TestCase):
@@ -1210,7 +1520,12 @@ BEGIN
     SELECT @WORKTYPE AS WORKTYPE;
 END
 """
-        evidence = [{"kind": "pasted_sql", "summary": "Generalized source SQL"}]
+        evidence = [
+            pasted_sql_evidence(
+                "SELECT @WORKTYPE AS WORKTYPE;",
+                evidence_role="body_fragment",
+            )
+        ]
         csharp, designer = valid_csharp_contract_sources()
         with tempfile.TemporaryDirectory() as temp_dir:
             profile_path, profile_hash = write_packaged_profile(temp_dir)
@@ -1242,7 +1557,7 @@ END
 
         self.assertTrue(passed.success, passed.to_dict())
         self.assertEqual(
-            ["load-profile", "validate-csharp", "validate-sp", "formatting-evidence"],
+            ["load-profile", "validate-csharp", "validate-sp", "final-sql-binding"],
             passed.metadata["validation_contract"]["completed_stage_order"],
         )
         self.assertTrue(passed.metadata["validation_contract"]["completion_allowed"])
@@ -1250,6 +1565,52 @@ END
         self.assertFalse(mismatched.success)
         self.assertEqual(["load-profile"], mismatched.metadata["validation_contract"]["completed_stage_order"])
         self.assertFalse(mismatched.metadata["validation_contract"]["profile_identity_match"])
+
+    def test_orchestrated_validation_passes_alias_plan_to_sql_formatting_verifier(self):
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        alias_plan = approved_alias_role_plan()
+        csharp, designer = valid_csharp_contract_sources()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with (
+                patch_runtime_profile_path(profile_path),
+                mock.patch(
+                    "src.skills.sql_formatting_provider.verify_sql_formatting_style",
+                    return_value=passed_sql_formatting_result(sql, sql),
+                ) as formatting,
+            ):
+                result = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=[
+                        pasted_sql_evidence(
+                            "SELECT @WORKTYPE AS WORKTYPE;",
+                            evidence_role="body_fragment",
+                        )
+                    ],
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                    alias_role_plan=alias_plan,
+                    sql_formatting_verifier_kwargs={"operation": "formatting"},
+                )
+
+        self.assertTrue(result.success, result.to_dict())
+        formatting.assert_called_once()
+        self.assertIs(formatting.call_args.kwargs["alias_role_plan"], alias_plan)
+        self.assertEqual(formatting.call_args.kwargs["operation"], "formatting")
+        self.assertEqual(formatting.call_args.kwargs["cte_temp_table_reason"], "")
 
     def test_orchestrated_validation_rejects_non_code_csharp_evidence_and_accepts_real_code(self):
         sql = sp_metadata_header("Generalized screen") + """
@@ -1260,7 +1621,12 @@ BEGIN
     SELECT @WORKTYPE AS WORKTYPE;
 END
 """
-        evidence = [{"kind": "pasted_sql", "summary": "Generalized source SQL"}]
+        evidence = [
+            pasted_sql_evidence(
+                "SELECT @WORKTYPE AS WORKTYPE;",
+                evidence_role="body_fragment",
+            )
+        ]
         comment_only, string_literal_only = non_code_csharp_contract_sources()
         code_behind, designer = valid_csharp_contract_sources()
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1385,7 +1751,16 @@ END
                     designer_source_text=designer,
                     original_sql_text=sql,
                     formatted_sql_text=sql,
-                    source_evidence=[{"kind": "pasted_sql", "summary": "Master detail source"}],
+                    source_evidence=[
+                        pasted_sql_evidence(
+                            "SELECT 1 AS MASTER_ID;",
+                            evidence_role="body_fragment",
+                        ),
+                        branch_contract_evidence(
+                            "IF @WORKTYPE = 'LIST' BEGIN SELECT 1 AS MASTER_ID; END",
+                            target_procedure="SP_GENERALIZED_SELECT",
+                        ),
+                    ],
                     profile_id="pb-csharp-offline-generalized",
                     profile_version="1.0",
                     profile_hash=profile_hash,
@@ -1402,7 +1777,16 @@ END
                     ),
                     original_sql_text=sql,
                     formatted_sql_text=sql,
-                    source_evidence=[{"kind": "pasted_sql", "summary": "Master detail source"}],
+                    source_evidence=[
+                        pasted_sql_evidence(
+                            "SELECT 1 AS MASTER_ID;",
+                            evidence_role="body_fragment",
+                        ),
+                        branch_contract_evidence(
+                            "IF @WORKTYPE = 'LIST' BEGIN SELECT 1 AS MASTER_ID; END",
+                            target_procedure="SP_GENERALIZED_SELECT",
+                        ),
+                    ],
                     profile_id="pb-csharp-offline-generalized",
                     profile_version="1.0",
                     profile_hash=profile_hash,
@@ -1579,9 +1963,30 @@ END
 
         self.assertEqual("passed", evidence["runtime_validation"]["sp_generation_contract"])
         self.assertEqual([], evidence["runtime_validation"]["sp_issue_codes"])
+        self.assertEqual(
+            "bound",
+            evidence["runtime_validation"]["sql_final_response_binding"]["status"],
+        )
+        self.assertEqual(
+            "passed",
+            evidence["runtime_validation"]["sql_final_response_release"]["status"],
+        )
+        self.assertEqual(
+            evidence["runtime_validation"]["sql_final_response_binding"],
+            evidence["runtime_validation"]["sql_final_response_release"]["binding"],
+        )
+        self.assertEqual(
+            hashlib.sha256(sql_text.encode("utf-8")).hexdigest(),
+            evidence["runtime_validation"]["sql_final_response_binding"][
+                "formatted_sha256"
+            ],
+        )
         self.assertIn("@WORKTYPE", sql_text)
         self.assertRegex(sql_text, r"-- CREATE DATE: \d{4}-\d{2}-\d{2}")
-        self.assertIn("SP generation contract verified", sql_artifact["validation_evidence"])
+        self.assertIn(
+            "SP generation contract and final SQL response binding verified",
+            sql_artifact["validation_evidence"],
+        )
         self.assertIn("UTF-8 readable", sql_artifact["validation_evidence"])
 
     def test_migration_mode_does_not_require_local_tools(self):
@@ -4051,11 +4456,21 @@ BEGIN
     END
 END
 """,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_1.srd", "summary": "retrieve SQL"},
+            source_evidence=[
+                pb_srd_sql_evidence(),
+                csharp_call_evidence(["@WORKTYPE"]),
+            ],
         )
         self.assertFalse(no_header.success)
         self.assertIn("missing_sp_metadata_header", {issue["code"] for issue in no_header.metadata["issues"]})
 
+        existing_de_source = sp_metadata_header("Existing source") + """CREATE OR ALTER PROCEDURE [dbo].[sp_DE000600_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT 1 AS DWGNO;
+END
+"""
         copied_wrong_description = verify_pb_migration_sp_generation_contract(
             sp_metadata_header("총괄조회 조회")
             + """
@@ -4069,13 +4484,18 @@ BEGIN
     END
 END
 """,
-            source_evidence={
-                "kind": "existing_sp",
-                "object": "sp_DE000600_SELECT",
-                "verified": True,
-                "definition_hash": "18B35CA51C9BBBCC3F6C7EE0481799D5B8922CD58FEC20DCB3C07E673D0120A2",
-                "program_description": "설계조회",
-            },
+            source_evidence=[
+                existing_sp_evidence(
+                    existing_de_source,
+                    "sp_DE000600_SELECT",
+                    program_description="설계조회",
+                ),
+                branch_contract_evidence(
+                    "IF @WORKTYPE = 'LIST' BEGIN SELECT 1 AS DWGNO; END",
+                    target_procedure="sp_DE000600_SELECT",
+                ),
+            ],
+            caller_parameter_contract=["@WORKTYPE"],
         )
         copied_issue_codes = {issue["code"] for issue in copied_wrong_description.metadata["issues"]}
         self.assertFalse(copied_wrong_description.success)
@@ -4095,13 +4515,18 @@ BEGIN
     END
 END
 """,
-            source_evidence={
-                "kind": "existing_sp",
-                "object": "sp_DE000600_SELECT",
-                "verified": True,
-                "definition_hash": "18B35CA51C9BBBCC3F6C7EE0481799D5B8922CD58FEC20DCB3C07E673D0120A2",
-                "program_description": "설계조회",
-            },
+            source_evidence=[
+                existing_sp_evidence(
+                    existing_de_source,
+                    "sp_DE000600_SELECT",
+                    program_description="설계조회",
+                ),
+                branch_contract_evidence(
+                    "IF @WORKTYPE = 'LIST' BEGIN SELECT 1 AS DWGNO; END",
+                    target_procedure="sp_DE000600_SELECT",
+                ),
+            ],
+            caller_parameter_contract=["@WORKTYPE"],
         )
         self.assertTrue(matched_program_description.success, matched_program_description.metadata["issues"])
 
@@ -4118,7 +4543,13 @@ BEGIN
     END
 END
 """,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_1.srd", "summary": "retrieve SQL"},
+            source_evidence=[
+                pb_srd_sql_evidence("SELECT 1 AS DISPLAY_NAME"),
+                branch_contract_evidence(
+                    "IF @WORKTYPE = 'LIST' BEGIN SELECT 1 AS DISPLAY_NAME; END"
+                ),
+            ],
+            caller_parameter_contract=["@WORKTYPE"],
         )
         self.assertTrue(allowed.success, allowed.metadata["issues"])
 
@@ -4209,6 +4640,13 @@ END
             {issue["code"] for issue in excerpt_only_existing_sp.metadata["issues"]},
         )
 
+        verified_existing_source = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [dbo].[sp_ZX123456_SELECT]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT 1 AS DISPLAY_NAME;
+END
+"""
         verified_existing_sp = verify_pb_migration_sp_generation_contract(
             sp_metadata_header()
             + """
@@ -4222,12 +4660,13 @@ BEGIN
     END
 END
 """,
-            source_evidence={
-                "kind": "existing_sp",
-                "object": "sp_ZX123456_SELECT",
-                "verified": True,
-                "definition_hash": "954465F0F0D81341EF6527FC33A7B4CE916E4A86DAE4810E86A1301242609376",
-            },
+            source_evidence=[
+                existing_sp_evidence(verified_existing_source),
+                branch_contract_evidence(
+                    "IF @WORKTYPE = 'LIST' BEGIN SELECT 1 AS DISPLAY_NAME; END"
+                ),
+            ],
+            caller_parameter_contract=["@WORKTYPE"],
         )
         self.assertTrue(verified_existing_sp.success, verified_existing_sp.metadata["issues"])
 
@@ -4241,7 +4680,7 @@ BEGIN
     SELECT X FROM A
 END
 """,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_1.srd"},
+            source_evidence=pb_srd_sql_evidence(),
         )
         self.assertFalse(cte.success)
         self.assertIn("cte_in_generated_sp", {issue["code"] for issue in cte.metadata["issues"]})
@@ -4296,7 +4735,7 @@ BEGIN
     END
 END
 """,
-                    source_evidence={"kind": "pb_srd_sql", "path": "synthetic_detail.srd"},
+                    source_evidence=pb_srd_sql_evidence(),
                 )
                 self.assertFalse(if_exists_where_subquery.success)
                 self.assertIn(
@@ -4323,7 +4762,7 @@ BEGIN
     END
 END
 """,
-            source_evidence={"kind": "pb_srd_sql", "path": "synthetic_detail.srd"},
+            source_evidence=pb_srd_sql_evidence(),
         )
         self.assertNotIn(
             "if_exists_where_subquery_in_generated_sp",
@@ -4341,7 +4780,7 @@ BEGIN
          , CAST(0 AS DECIMAL(18, 4)) AS QTY;
 END
 """,
-            source_evidence={"kind": "pb_srd_sql", "path": "synthetic_detail.srd"},
+            source_evidence=pb_srd_sql_evidence(),
         )
         self.assertFalse(schema_fallback.success)
         self.assertIn(
@@ -4360,7 +4799,7 @@ BEGIN
          , TRY_CONVERT(DECIMAL(18, 4), 0) AS QTY;
 END
 """,
-            source_evidence={"kind": "pb_srd_sql", "path": "synthetic_detail.srd"},
+            source_evidence=pb_srd_sql_evidence(),
         )
         self.assertFalse(schema_fallback_convert.success)
         self.assertIn(
@@ -4460,7 +4899,10 @@ END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
+            source_evidence=[
+                pb_srd_sql_evidence("FROM ZX902T A"),
+                csharp_call_evidence(["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"]),
+            ],
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -4498,7 +4940,35 @@ END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
+            source_evidence=[
+                pb_srd_sql_evidence(
+                    """DECLARE @DERIVED_YEAR VARCHAR(4)
+      , @DERIVED_MONTH VARCHAR(2)
+      , @BASE_YEAR VARCHAR(4)
+      , @BOUNDARY_DATE VARCHAR(8);
+SET @DERIVED_YEAR = LEFT(@INPUT_DATE, 4);
+SET @DERIVED_MONTH = SUBSTRING(@INPUT_DATE, 5, 2);
+SET @BASE_YEAR = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+SET @BOUNDARY_DATE = CONVERT(VARCHAR(8), DATEADD(DAY, -DAY(GETDATE()), GETDATE()), 112);
+SELECT A.DISPLAY_NAME
+FROM ZX902T A;""",
+                ),
+                branch_contract_evidence(
+                    """DECLARE @DERIVED_YEAR VARCHAR(4)
+      , @DERIVED_MONTH VARCHAR(2)
+      , @BASE_YEAR VARCHAR(4)
+      , @BOUNDARY_DATE VARCHAR(8);
+SET @DERIVED_YEAR = LEFT(@INPUT_DATE, 4);
+SET @DERIVED_MONTH = SUBSTRING(@INPUT_DATE, 5, 2);
+SET @BASE_YEAR = CONVERT(VARCHAR(4), YEAR(GETDATE()));
+SET @BOUNDARY_DATE = CONVERT(VARCHAR(8), DATEADD(DAY, -DAY(GETDATE()), GETDATE()), 112);
+IF @WORKTYPE = 'LIST'
+BEGIN
+    SELECT A.DISPLAY_NAME FROM ZX902T A;
+END;"""
+                ),
+            ],
+            caller_parameter_contract=["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"],
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -4522,7 +4992,7 @@ END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
+            source_evidence=pb_srd_sql_evidence(),
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -4548,7 +5018,7 @@ END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
+            source_evidence=pb_srd_sql_evidence(),
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -4575,7 +5045,7 @@ END
 """
         result = verify_pb_migration_sp_generation_contract(
             generated,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
+            source_evidence=pb_srd_sql_evidence(),
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
@@ -4598,18 +5068,60 @@ END
         result = verify_pb_migration_sp_generation_contract(
             generated,
             source_evidence=[
-                {"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
-                {
-                    "kind": "csharp_call",
-                    "path": "ZX123456.cs",
-                    "db_parameters": ["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"],
-                },
+                pb_srd_sql_evidence(),
+                csharp_call_evidence(["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"]),
             ],
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
         self.assertFalse(result.success)
         self.assertIn("non_caller_procedure_parameter_detected", issue_codes)
+
+    def test_sp_generation_contract_requires_caller_contract_for_pb_only_generation(self):
+        generated = sp_metadata_header() + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @SCOPE_CODE VARCHAR(2)
+    , @ROWCNT INT
+AS
+BEGIN
+    SELECT A.DISPLAY_NAME
+    FROM ZX902T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence=pb_srd_sql_evidence(),
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("missing_caller_parameter_contract", issue_codes)
+
+    def test_sp_generation_contract_rejects_placeholder_author_when_present(self):
+        generated = """-- =============================================
+-- AUTHOR:      <maintainer>
+-- DESCRIPTION: Synthetic procedure contract
+-- =============================================
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT A.DISPLAY_NAME
+    FROM ZX902T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            generated,
+            source_evidence=[
+                pb_srd_sql_evidence(),
+                csharp_call_evidence(["@WORKTYPE"]),
+            ],
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("sp_metadata_author_placeholder", issue_codes)
 
     def test_sp_generation_contract_blocks_non_caller_parameters_with_broader_sql_types(self):
         generated = sp_metadata_header() + """
@@ -4630,12 +5142,8 @@ END
         result = verify_pb_migration_sp_generation_contract(
             generated,
             source_evidence=[
-                {"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
-                {
-                    "kind": "csharp_call",
-                    "path": "ZX123456.cs",
-                    "db_parameters": ["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"],
-                },
+                pb_srd_sql_evidence(),
+                csharp_call_evidence(["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"]),
             ],
         )
         non_caller_issue = next(
@@ -4669,18 +5177,2710 @@ END
         result = verify_pb_migration_sp_generation_contract(
             generated,
             source_evidence=[
-                {"kind": "pb_srd_sql", "path": "d_zx123456.srd", "summary": "retrieve SQL"},
-                {
-                    "kind": "csharp_call",
-                    "path": "ZX123456.cs",
-                    "db_parameters": ["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"],
-                },
+                pb_srd_sql_evidence(
+                    """DECLARE @ROWCNT INT;
+SET @ROWCNT = 0;
+SELECT A.DISPLAY_NAME
+FROM ZX902T A;"""
+                ),
+                csharp_call_evidence(["@WORKTYPE", "@SCOPE_CODE", "@INPUT_DATE"]),
             ],
         )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
         self.assertTrue(result.success, result.metadata["issues"])
         self.assertNotIn("non_caller_procedure_parameter_detected", issue_codes)
+
+    def test_sp_generation_contract_rejects_caller_fields_from_untrusted_evidence_kind(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_srd_sql_evidence(),
+                {"kind": "untrusted_blob", "caller_parameters": ["@WORKTYPE"]},
+            ],
+        )
+        codes = {item["code"] for item in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("untrusted_caller_evidence_kind", codes)
+        self.assertIn("missing_caller_parameter_contract", codes)
+
+    def test_pasted_sql_summary_does_not_authorize_generated_signature(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence={"kind": "pasted_sql", "summary": "claimed procedure"},
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "missing_pb_or_db_source_evidence_for_sp_generation",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_existing_sp_cleanup_preserves_exact_signature_and_existing_constructs(self):
+        original = sp_metadata_header() + """ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20) = ''
+    , @FILTER_TEXT VARCHAR(30) = '%' OUTPUT
+AS
+BEGIN
+    CREATE TABLE #KEEP_EXISTING (ID INT);
+    ;WITH KEEP_EXISTING AS (SELECT 1 AS ID)
+    SELECT ID FROM KEEP_EXISTING;
+END
+"""
+        preserved = verify_pb_migration_sp_generation_contract(
+            original,
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=existing_sp_evidence(original),
+        )
+        changed = verify_pb_migration_sp_generation_contract(
+            original.replace("@FILTER_TEXT VARCHAR(30)", "@FILTER_TEXT VARCHAR(40)"),
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=existing_sp_evidence(original),
+        )
+
+        self.assertTrue(preserved.success, preserved.metadata["issues"])
+        self.assertEqual("existing_sp_definition", preserved.metadata["signature_authority"])
+        self.assertFalse(changed.success)
+        self.assertIn(
+            "existing_sp_signature_changed",
+            {item["code"] for item in changed.metadata["issues"]},
+        )
+
+    def test_existing_sp_cleanup_requires_authenticated_original_artifact(self):
+        original = sp_metadata_header() + """ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @FILTER_TEXT VARCHAR(30)
+AS
+BEGIN
+    SELECT @FILTER_TEXT AS FILTER_TEXT;
+END
+"""
+        direct_only = verify_pb_migration_sp_generation_contract(
+            original,
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "SP_ZX123456_SELECT.sql"
+            source_path.write_text(original, encoding="utf-8")
+            authenticated = verify_pb_migration_sp_generation_contract(
+                original,
+                operation="existing_sp_cleanup",
+                original_sp_text=original,
+                source_evidence={
+                    "kind": "existing_sp",
+                    "verified": True,
+                    "object": "SP_ZX123456_SELECT",
+                    "definition_path": str(source_path),
+                    "sha256": hashlib.sha256(original.encode("utf-8")).hexdigest(),
+                },
+            )
+
+        self.assertFalse(direct_only.success)
+        self.assertIn(
+            "existing_sp_definition_missing",
+            {item["code"] for item in direct_only.metadata["issues"]},
+        )
+        self.assertTrue(authenticated.success, authenticated.metadata["issues"])
+
+        mismatched_direct_argument = verify_pb_migration_sp_generation_contract(
+            original,
+            operation="existing_sp_cleanup",
+            original_sp_text=original.replace("VARCHAR(30)", "VARCHAR(40)"),
+            source_evidence=existing_sp_evidence(original),
+        )
+        self.assertFalse(mismatched_direct_argument.success)
+        self.assertIn(
+            "original_sp_text_evidence_mismatch",
+            {item["code"] for item in mismatched_direct_argument.metadata["issues"]},
+        )
+
+    def test_sp_metadata_allows_use_go_without_author_but_rejects_unbacked_author_date(self):
+        body = """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        evidence = [
+            pb_srd_sql_evidence(),
+            csharp_call_evidence(["@WORKTYPE"]),
+        ]
+        accepted = verify_pb_migration_sp_generation_contract(
+            (
+                "USE [C_SAMPLE]\nGO\n"
+                "SET ANSI_NULLS ON\nGO\n"
+                "SET QUOTED_IDENTIFIER ON\nGO\n"
+                + sp_metadata_header("Inventory browse screen")
+                + body
+            ),
+            source_evidence=evidence,
+        )
+        unbacked = verify_pb_migration_sp_generation_contract(
+            """-- =============================================
+-- AUTHOR:      invented
+-- CREATE DATE: 2026-01-01
+-- DESCRIPTION: Inventory browse screen
+-- =============================================
+""" + body,
+            source_evidence=evidence,
+        )
+        codes = {item["code"] for item in unbacked.metadata["issues"]}
+
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+        self.assertFalse(unbacked.success)
+        self.assertIn("sp_metadata_author_not_source_backed", codes)
+        self.assertIn("sp_metadata_create_date_not_source_backed", codes)
+
+    def test_source_artifact_path_and_hash_are_verified_before_completion(self):
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT A.DISPLAY_NAME
+    FROM ZX902T A;
+END
+"""
+        source = "SELECT A.DISPLAY_NAME FROM ZX902T A;"
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "d_zx123456.srd"
+            source_path.write_text(source, encoding="utf-8")
+            accepted = verify_pb_migration_sp_generation_contract(
+                candidate,
+                source_evidence={
+                    "kind": "pb_srd_sql",
+                    "verified": True,
+                    "path": str(source_path),
+                    "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+                    "candidate_provenance": {
+                        "target_procedure": "SP_ZX123456_SELECT",
+                        "preserved_fragments": ["FROM ZX902T"],
+                    },
+                },
+                caller_parameter_contract=["@WORKTYPE"],
+            )
+            mismatched = verify_pb_migration_sp_generation_contract(
+                candidate,
+                source_evidence={
+                    "kind": "pb_srd_sql",
+                    "verified": True,
+                    "path": str(source_path),
+                    "sha256": "0" * 64,
+                    "candidate_provenance": {
+                        "target_procedure": "SP_ZX123456_SELECT",
+                        "preserved_fragments": ["FROM ZX902T"],
+                    },
+                },
+                caller_parameter_contract=["@WORKTYPE"],
+            )
+
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+        self.assertFalse(mismatched.success)
+        self.assertIn(
+            "source_artifact_hash_mismatch",
+            {item["code"] for item in mismatched.metadata["issues"]},
+        )
+
+    def test_source_artifact_rejects_unreadable_path_and_inline_path_spoofing(self):
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT A.DISPLAY_NAME FROM ZX902T A;
+END
+"""
+        fake_text = "SELECT DISPLAY_NAME FROM ZX902T"
+        result = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence={
+                "kind": "pb_srd_sql",
+                "verified": True,
+                "path": "does-not-exist.srd",
+                "definition_text": fake_text,
+                "sha256": hashlib.sha256(fake_text.encode("utf-8")).hexdigest(),
+            },
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "source_artifact_unreadable",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+        uri_only = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence={
+                "kind": "pb_srd_sql",
+                "verified": True,
+                "artifact_uri": "prompt://source-1",
+                "definition_text": fake_text,
+                "sha256": hashlib.sha256(fake_text.encode("utf-8")).hexdigest(),
+            },
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+        self.assertFalse(uri_only.success)
+        self.assertIn(
+            "source_artifact_uri_unresolved",
+            {item["code"] for item in uri_only.metadata["issues"]},
+        )
+
+    def test_candidate_cannot_authenticate_itself_as_source_evidence(self):
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT A.DISPLAY_NAME FROM ZX902T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=pasted_sql_evidence(
+                candidate,
+                evidence_role="existing_procedure",
+            ),
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "candidate_reused_as_source_evidence",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+        comment_changed = candidate.replace(
+            "-- DESCRIPTION:",
+            "-- source capture note\n-- DESCRIPTION:",
+        ).replace("CREATE OR ALTER", "create or alter").replace("SELECT", "select")
+        comment_result = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=pasted_sql_evidence(
+                comment_changed,
+                evidence_role="existing_procedure",
+            ),
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+        self.assertFalse(comment_result.success)
+        self.assertIn(
+            "candidate_reused_as_source_evidence",
+            {item["code"] for item in comment_result.metadata["issues"]},
+        )
+
+    def test_body_fragment_must_be_preserved_in_candidate(self):
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT A.DISPLAY_NAME FROM ZX902T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=pasted_sql_evidence(
+                "DELETE FROM ZX902T WHERE RECORD_ID = 1;",
+                evidence_role="body_fragment",
+            ),
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "body_fragment_not_present_in_candidate",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_schema_summary_alone_cannot_authorize_procedure_body(self):
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT A.DISPLAY_NAME FROM ZX902T A;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence={"kind": "db_schema", "summary": "ZX902T columns"},
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "missing_pb_or_db_source_evidence_for_sp_generation",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_verified_external_caller_requires_artifact_hash_and_typed_ordered_contract(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ROWCOUNT INT OUTPUT
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        pb_evidence = pb_srd_sql_evidence()
+        incomplete = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_evidence,
+                {
+                    "kind": "external_caller",
+                    "verified": True,
+                    "caller_id": "batch-a",
+                    "artifact_uri": "artifact://caller-a",
+                    "sha256": "short",
+                    "parameter_contract": [
+                        {"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"},
+                        {"name": "@ROWCOUNT", "type_spec": "INT", "output": True},
+                    ],
+                },
+            ],
+        )
+        accepted_contract = [
+            {"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"},
+            {"name": "@ROWCOUNT", "type_spec": "INT", "output": True},
+        ]
+        accepted = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_evidence,
+                external_caller_evidence(accepted_contract),
+            ],
+        )
+
+        self.assertFalse(incomplete.success)
+        self.assertIn(
+            "incomplete_external_caller_evidence",
+            {item["code"] for item in incomplete.metadata["issues"]},
+        )
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+
+    def test_inferred_draft_evidence_cannot_be_released_as_new_generation(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            sql,
+            operation="new_generation",
+            source_evidence={
+                "kind": "approved_inferred_draft",
+                "approved": True,
+                "approval_artifact": "approval://draft-escape",
+                "approved_parameters": ["@WORKTYPE"],
+            },
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "inferred_evidence_operation_mismatch",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_csharp_caller_requires_readable_hash_bound_artifact(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_srd_sql_evidence(),
+                {
+                    "kind": "csharp_call",
+                    "path": "does-not-exist.cs",
+                    "db_parameters": ["@WORKTYPE"],
+                    "target_procedure": "SP_ZX123456_SELECT",
+                },
+            ],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "caller_artifact_unreadable",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_csharp_caller_rejects_comment_only_parameter_mentions_and_unresolved_uri(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        comment_only = '// new DbParameter("@WORKTYPE", ignored)'
+        path, digest = write_test_artifact("comment-only-caller.cs", comment_only)
+        comment_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_srd_sql_evidence(),
+                {
+                    "kind": "csharp_call",
+                    "verified": True,
+                    "path": str(path),
+                    "sha256": digest,
+                    "db_parameters": ["@WORKTYPE"],
+                    "target_procedure": "SP_ZX123456_SELECT",
+                },
+            ],
+        )
+        uri_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_srd_sql_evidence(),
+                {
+                    "kind": "csharp_call",
+                    "verified": True,
+                    "artifact_uri": "prompt://caller-1",
+                    "definition_text": 'new DbParameter("@WORKTYPE", value)',
+                    "sha256": hashlib.sha256(
+                        'new DbParameter("@WORKTYPE", value)'.encode("utf-8")
+                    ).hexdigest(),
+                    "db_parameters": ["@WORKTYPE"],
+                    "target_procedure": "SP_ZX123456_SELECT",
+                },
+            ],
+        )
+
+        self.assertFalse(comment_result.success)
+        self.assertIn(
+            "csharp_caller_target_procedure_mismatch",
+            {item["code"] for item in comment_result.metadata["issues"]},
+        )
+        self.assertFalse(uri_result.success)
+        self.assertIn(
+            "caller_artifact_uri_unresolved",
+            {item["code"] for item in uri_result.metadata["issues"]},
+        )
+
+    def test_direct_external_contract_without_artifact_provenance_is_rejected(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=pb_srd_sql_evidence(),
+            external_caller_contract=[
+                {"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"}
+            ],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "external_caller_contract_without_provenance",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_existing_sp_signature_parser_preserves_comment_like_string_defaults(self):
+        original = sp_metadata_header() + """ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @FILTER_TEXT NVARCHAR(30) = N'-- AS /* keep */'
+AS
+BEGIN
+    SELECT @FILTER_TEXT AS FILTER_TEXT;
+END
+"""
+        unchanged = verify_pb_migration_sp_generation_contract(
+            original,
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=existing_sp_evidence(original),
+        )
+        changed = verify_pb_migration_sp_generation_contract(
+            original.replace("N'-- AS /* keep */'", "N'-- AS /* changed */'"),
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=existing_sp_evidence(original),
+        )
+
+        self.assertTrue(unchanged.success, unchanged.metadata["issues"])
+        self.assertFalse(changed.success)
+        self.assertIn(
+            "existing_sp_signature_changed",
+            {item["code"] for item in changed.metadata["issues"]},
+        )
+
+    def test_external_caller_output_and_readonly_contract_is_enforced(self):
+        contract = [
+            {"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"},
+            {"name": "@ROWCOUNT", "type_spec": "INT", "output": True},
+        ]
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ROWCOUNT INT
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_srd_sql_evidence(),
+                external_caller_evidence(contract),
+            ],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "caller_parameter_output_mismatch",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_external_caller_manifest_and_readonly_contract_are_enforced(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+    , @ROWS DBO.ROWTYPE
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        readonly_contract = [
+            {"name": "@ROWS", "type_spec": "DBO.ROWTYPE", "readonly": True},
+        ]
+        readonly_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_srd_sql_evidence(),
+                external_caller_evidence(readonly_contract),
+            ],
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+
+        manifest_text = json.dumps(
+            {
+                "caller_id": "batch-mismatch",
+                "parameter_contract": [
+                    {"name": "@ROWS", "type_spec": "INT", "readonly": True},
+                ],
+            },
+            sort_keys=True,
+        )
+        path, digest = write_test_artifact("external-mismatch.json", manifest_text)
+        manifest_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_srd_sql_evidence(),
+                {
+                    "kind": "external_caller",
+                    "verified": True,
+                    "caller_id": "batch-mismatch",
+                    "path": str(path),
+                    "sha256": digest,
+                    "parameter_contract": readonly_contract,
+                },
+            ],
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+
+        self.assertFalse(readonly_result.success)
+        self.assertIn(
+            "caller_parameter_readonly_mismatch",
+            {item["code"] for item in readonly_result.metadata["issues"]},
+        )
+        self.assertFalse(manifest_result.success)
+        self.assertIn(
+            "incomplete_external_caller_evidence",
+            {item["code"] for item in manifest_result.metadata["issues"]},
+        )
+
+    def test_existing_sp_cleanup_does_not_require_worktype(self):
+        original = sp_metadata_header() + """ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @FILTER_TEXT VARCHAR(30)
+AS
+BEGIN
+    SELECT @FILTER_TEXT AS FILTER_TEXT;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            original,
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=existing_sp_evidence(original),
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+
+    def test_approved_inferred_draft_never_becomes_release_ready(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            sql,
+            operation="approved_inferred_draft",
+            source_evidence={
+                "kind": "approved_inferred_draft",
+                "approved": True,
+                "approval_artifact": "approval://draft-1",
+                "approved_parameters": ["@WORKTYPE"],
+            },
+        )
+
+        self.assertFalse(result.success)
+        self.assertEqual("pending", result.metadata["status"])
+        self.assertEqual("pending", result.metadata["release_readiness"]["status"])
+
+    def test_existing_sp_cleanup_preserves_identity_comments_and_statements(self):
+        original = sp_metadata_header("Existing cleanup") + """ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    -- formatter-sensitive comment
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        formatting_only = sp_metadata_header("Existing cleanup") + """alter procedure [dbo].[sp_zx123456_select]
+    @worktype varchar(20)
+as
+begin
+        -- formatter-sensitive comment
+        select @worktype as worktype ;
+end ;
+"""
+        evidence = existing_sp_evidence(original)
+        accepted = verify_pb_migration_sp_generation_contract(
+            formatting_only,
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=evidence,
+        )
+        renamed = verify_pb_migration_sp_generation_contract(
+            formatting_only.replace("sp_zx123456_select", "sp_zx123456_save"),
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=evidence,
+        )
+        comment_changed = verify_pb_migration_sp_generation_contract(
+            formatting_only.replace("formatter-sensitive comment", "changed comment"),
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=evidence,
+        )
+        statement_changed = verify_pb_migration_sp_generation_contract(
+            formatting_only.replace(
+                "select @worktype as worktype ;",
+                "delete from ZX902T where WORKTYPE = @worktype ;",
+            ),
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=evidence,
+        )
+
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+        self.assertIn(
+            "existing_sp_identity_changed",
+            {item["code"] for item in renamed.metadata["issues"]},
+        )
+        self.assertIn(
+            "existing_sp_comments_changed",
+            {item["code"] for item in comment_changed.metadata["issues"]},
+        )
+        self.assertIn(
+            "existing_sp_body_or_statement_changed",
+            {item["code"] for item in statement_changed.metadata["issues"]},
+        )
+
+    def test_existing_sp_business_comments_remain_bound_to_code_position(self):
+        original = """USE [SYNTHETIC_DB]
+GO
+/****** Object: StoredProcedure [dbo].[SP_ZX123456_SELECT] Script Date: 2026-07-27 ******/
+SET ANSI_NULLS ON
+GO
+""" + sp_metadata_header("Existing cleanup") + """ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    -- Keep this rule adjacent to the guarded read.
+    SELECT @WORKTYPE AS WORKTYPE;
+
+    -- Delete only the matching work type.
+    DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;
+END;
+"""
+        formatting_only = original.replace("ALTER PROCEDURE", "alter procedure").replace(
+            "SELECT @WORKTYPE AS WORKTYPE;",
+            "select @worktype as worktype ;",
+        )
+        relocated = formatting_only.replace(
+            "    -- Keep this rule adjacent to the guarded read.\n    select @worktype as worktype ;",
+            "    select @worktype as worktype ;\n    -- Keep this rule adjacent to the guarded read.",
+        )
+        evidence = existing_sp_evidence(original)
+        accepted = verify_pb_migration_sp_generation_contract(
+            formatting_only,
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=evidence,
+        )
+        moved = verify_pb_migration_sp_generation_contract(
+            relocated,
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=evidence,
+        )
+
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+        self.assertFalse(moved.success)
+        self.assertIn(
+            "existing_sp_comment_binding_changed",
+            {item["code"] for item in moved.metadata["issues"]},
+        )
+
+    def test_new_generation_requires_correlated_independent_source_evidence(self):
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT A.DISPLAY_NAME FROM ZX902T A;
+END;
+"""
+        unrelated = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=pb_srd_sql_evidence("SELECT B.OTHER_NAME FROM OTHER_TABLE B;"),
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+        disguised_candidate = (
+            candidate.replace("CREATE OR ALTER", "create or alter")
+            .replace("SELECT", "select")
+            .replace("FROM", "from")
+            + "\n-- capture-only comment\n;;;"
+        )
+        self_evidence = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=pasted_sql_evidence(
+                disguised_candidate,
+                evidence_role="existing_procedure",
+            ),
+            caller_parameter_contract=["@WORKTYPE"],
+        )
+
+        self.assertIn(
+            "source_evidence_not_correlated_to_candidate",
+            {item["code"] for item in unrelated.metadata["issues"]},
+        )
+        self.assertIn(
+            "candidate_reused_as_source_evidence",
+            {item["code"] for item in self_evidence.metadata["issues"]},
+        )
+
+    def test_small_source_statement_cannot_authorize_unsupported_candidate_statements_or_clauses(self):
+        source = "SELECT @WORKTYPE AS WORKTYPE;"
+        base = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        mutations = {
+            "DELETE": base.replace(
+                "    SELECT @WORKTYPE AS WORKTYPE;",
+                "    SELECT @WORKTYPE AS WORKTYPE;\n    DELETE FROM ZX902T;",
+            ),
+            "DELETE_WITHOUT_TERMINATOR": base.replace(
+                "    SELECT @WORKTYPE AS WORKTYPE;",
+                "    SELECT @WORKTYPE AS WORKTYPE;\n    DELETE FROM ZX902T",
+            ),
+            "UPDATE": base.replace(
+                "    SELECT @WORKTYPE AS WORKTYPE;",
+                "    SELECT @WORKTYPE AS WORKTYPE;\n    UPDATE ZX902T SET DISPLAY_NAME = 'X';",
+            ),
+            "INSERT": base.replace(
+                "    SELECT @WORKTYPE AS WORKTYPE;",
+                "    SELECT @WORKTYPE AS WORKTYPE;\n    INSERT INTO ZX902T (DISPLAY_NAME) VALUES ('X');",
+            ),
+            "JOIN": base.replace(
+                "SELECT @WORKTYPE AS WORKTYPE",
+                "SELECT A.WORKTYPE FROM ZX902T A INNER JOIN ZX903T B ON A.ID = B.ID",
+            ),
+            "WHERE": base.replace(
+                "SELECT @WORKTYPE AS WORKTYPE",
+                "SELECT @WORKTYPE AS WORKTYPE WHERE @WORKTYPE = 'LIST'",
+            ),
+            "DUPLICATE_STATEMENT": base.replace(
+                "    SELECT @WORKTYPE AS WORKTYPE;",
+                "    SELECT @WORKTYPE AS WORKTYPE;\n    SELECT @WORKTYPE AS WORKTYPE;",
+            ),
+            "UNSUPPORTED_WORKTYPE_CONDITION": base.replace(
+                "    SELECT @WORKTYPE AS WORKTYPE;",
+                """    IF @WORKTYPE = 'LIST' OR 1 = 1
+    BEGIN
+        SELECT @WORKTYPE AS WORKTYPE;
+    END;""",
+            ),
+        }
+
+        accepted = verify_pb_migration_sp_generation_contract(
+            base,
+            source_evidence=[
+                pb_srd_sql_evidence(source),
+                csharp_call_evidence(["@WORKTYPE"]),
+            ],
+        )
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+        for label, candidate in mutations.items():
+            with self.subTest(mutation=label):
+                result = verify_pb_migration_sp_generation_contract(
+                    candidate,
+                    source_evidence=[
+                        pb_srd_sql_evidence(source),
+                        csharp_call_evidence(["@WORKTYPE"]),
+                    ],
+                )
+                self.assertFalse(result.success)
+                issue_codes = {item["code"] for item in result.metadata["issues"]}
+                if label == "JOIN":
+                    self.assertIn("source_evidence_not_correlated_to_candidate", issue_codes)
+                else:
+                    self.assertIn(
+                        "candidate_body_statement_not_covered_by_source",
+                        issue_codes,
+                    )
+
+    def test_source_covered_dml_is_not_globally_forbidden(self):
+        source = """SELECT @WORKTYPE AS WORKTYPE;
+DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;
+"""
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+
+    IF @WORKTYPE = 'DELETE'
+    BEGIN
+        DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;
+    END;
+END;
+"""
+
+        result = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[
+                pb_srd_sql_evidence(source),
+                csharp_call_evidence(["@WORKTYPE"]),
+                branch_contract_evidence(
+                    "SELECT @WORKTYPE AS WORKTYPE; "
+                    "IF @WORKTYPE = 'DELETE' BEGIN "
+                    "DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE; END"
+                ),
+            ],
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual(
+            {"generated_envelope", "branch_contract"},
+            {item["coverage"] for item in result.metadata["body_traceability"]},
+        )
+        self.assertTrue(
+            all(
+                item["coverage"] == "branch_contract"
+                for item in result.metadata["body_traceability"]
+                if item["kind"] not in {
+                    "PROCEDURE_BEGIN_SCOPE",
+                    "PROCEDURE_END_SCOPE",
+                }
+            )
+        )
+        self.assertEqual(
+            1,
+            len(
+                {
+                    item["authority_id"]
+                    for item in result.metadata["body_traceability"]
+                    if item["coverage"]
+                    not in {"generated_wrapper", "generated_envelope"}
+                }
+            ),
+        )
+
+    def test_worktype_branch_requires_source_or_bound_branch_contract(self):
+        source_dml = "DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;"
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE <> 'NEVER'
+    BEGIN
+        DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;
+    END;
+END;
+"""
+        caller = csharp_call_evidence(["@WORKTYPE"])
+        unbound = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[pb_srd_sql_evidence(source_dml), caller],
+        )
+        source_backed = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[
+                pb_srd_sql_evidence(
+                    "IF @WORKTYPE <> 'NEVER'\nBEGIN\n"
+                    + source_dml
+                    + "\nEND;"
+                ),
+                caller,
+            ],
+        )
+        contract_backed = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[
+                pb_srd_sql_evidence(source_dml),
+                caller,
+                branch_contract_evidence(
+                    "IF @WORKTYPE <> 'NEVER' BEGIN "
+                    "DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE; END"
+                ),
+            ],
+        )
+
+        self.assertFalse(unbound.success)
+        self.assertIn(
+            "candidate_body_statement_not_covered_by_source",
+            {item["code"] for item in unbound.metadata["issues"]},
+        )
+        self.assertTrue(source_backed.success, source_backed.metadata["issues"])
+        self.assertTrue(contract_backed.success, contract_backed.metadata["issues"])
+        self.assertIn(
+            "branch_contract",
+            {item["coverage"] for item in contract_backed.metadata["body_traceability"]},
+        )
+
+    def test_branch_traceability_binds_arm_nesting_and_statement_order(self):
+        source = """IF @WORKTYPE = 'LIST'
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+    UPDATE ZX902T SET DISPLAY_NAME = 'LIST' WHERE WORKTYPE = @WORKTYPE;
+
+    IF @WORKTYPE <> 'NEVER'
+    BEGIN
+        INSERT INTO ZX903T (WORKTYPE) VALUES (@WORKTYPE);
+    END
+    ELSE
+    BEGIN
+        DELETE FROM ZX903T WHERE WORKTYPE = @WORKTYPE;
+    END;
+END
+ELSE
+BEGIN
+    DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;
+END;
+"""
+        candidate_template = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+{body}
+END;
+"""
+        original = candidate_template.format(body=source)
+        arm_swapped = candidate_template.format(
+            body=source.replace(
+                "    SELECT @WORKTYPE AS WORKTYPE;\n"
+                "    UPDATE ZX902T SET DISPLAY_NAME = 'LIST' WHERE WORKTYPE = @WORKTYPE;",
+                "    DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;",
+            ).replace(
+                "ELSE\nBEGIN\n    DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;\nEND;",
+                "ELSE\nBEGIN\n    SELECT @WORKTYPE AS WORKTYPE;\n"
+                "    UPDATE ZX902T SET DISPLAY_NAME = 'LIST' WHERE WORKTYPE = @WORKTYPE;\nEND;",
+            )
+        )
+        same_arm_reordered = candidate_template.format(
+            body=source.replace(
+                "    SELECT @WORKTYPE AS WORKTYPE;\n"
+                "    UPDATE ZX902T SET DISPLAY_NAME = 'LIST' WHERE WORKTYPE = @WORKTYPE;",
+                "    UPDATE ZX902T SET DISPLAY_NAME = 'LIST' WHERE WORKTYPE = @WORKTYPE;\n"
+                "    SELECT @WORKTYPE AS WORKTYPE;",
+            )
+        )
+        nested_arms_swapped = candidate_template.format(
+            body=source.replace(
+                "        INSERT INTO ZX903T (WORKTYPE) VALUES (@WORKTYPE);",
+                "        __NESTED_BRANCH_TEMP__;",
+            ).replace(
+                "        DELETE FROM ZX903T WHERE WORKTYPE = @WORKTYPE;",
+                "        INSERT INTO ZX903T (WORKTYPE) VALUES (@WORKTYPE);",
+            ).replace(
+                "        __NESTED_BRANCH_TEMP__;",
+                "        DELETE FROM ZX903T WHERE WORKTYPE = @WORKTYPE;",
+            )
+        )
+        evidence = [pb_srd_sql_evidence(source), csharp_call_evidence(["@WORKTYPE"])]
+
+        accepted = verify_pb_migration_sp_generation_contract(
+            original,
+            source_evidence=evidence,
+        )
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+        self.assertTrue(
+            all(
+                item["order_kind"]
+                in {"envelope", "wrapper", "branch", "scope", "statement"}
+                for item in accepted.metadata["body_traceability"]
+            )
+        )
+        for label, candidate in {
+            "arm_swapped": arm_swapped,
+            "same_arm_reordered": same_arm_reordered,
+            "nested_arms_swapped": nested_arms_swapped,
+        }.items():
+            with self.subTest(case=label):
+                result = verify_pb_migration_sp_generation_contract(
+                    candidate,
+                    source_evidence=evidence,
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "candidate_body_statement_not_covered_by_source",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+    def test_branch_traceability_uses_one_total_sibling_execution_order(self):
+        branch_sql = """IF @WORKTYPE = 'LIST'
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+
+    IF @WORKTYPE = 'DELETE'
+    BEGIN
+        DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;
+    END;
+END;
+"""
+        moved_branch_sql = """IF @WORKTYPE = 'LIST'
+BEGIN
+    IF @WORKTYPE = 'DELETE'
+    BEGIN
+        DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;
+    END;
+
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        candidate_template = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+{body}
+END;
+"""
+        valid_candidate = candidate_template.format(body=branch_sql)
+        moved_candidate = candidate_template.format(body=moved_branch_sql)
+        caller = csharp_call_evidence(["@WORKTYPE"])
+        source_evidence = [pb_srd_sql_evidence(branch_sql), caller]
+        contract_evidence = [
+            pb_srd_sql_evidence(
+                "SELECT @WORKTYPE AS WORKTYPE;\n"
+                "DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;"
+            ),
+            caller,
+            branch_contract_evidence(branch_sql),
+        ]
+
+        valid_source = verify_pb_migration_sp_generation_contract(
+            valid_candidate,
+            source_evidence=source_evidence,
+        )
+        valid_contract = verify_pb_migration_sp_generation_contract(
+            valid_candidate,
+            source_evidence=contract_evidence,
+        )
+        moved_source = verify_pb_migration_sp_generation_contract(
+            moved_candidate,
+            source_evidence=source_evidence,
+        )
+        moved_contract = verify_pb_migration_sp_generation_contract(
+            moved_candidate,
+            source_evidence=contract_evidence,
+        )
+
+        self.assertTrue(valid_source.success, valid_source.metadata["issues"])
+        self.assertTrue(valid_contract.success, valid_contract.metadata["issues"])
+        wrapper_events = [
+            item
+            for item in valid_source.metadata["body_traceability"]
+            if item["order_kind"] == "wrapper"
+        ]
+        self.assertEqual([0], [item["ordinal"] for item in wrapper_events])
+        self.assertEqual(
+            1,
+            next(
+                item["ordinal"]
+                for item in valid_source.metadata["body_traceability"]
+                if item["order_kind"] not in {"envelope", "wrapper"}
+            ),
+        )
+        then_events = [
+            (item["kind"], item["order_in_path"])
+            for item in valid_source.metadata["body_traceability"]
+            if len(item["branch_path"]) == 1
+            and item["branch_path"][0]["arm"] == "then"
+        ]
+        self.assertEqual(
+            [("ARM_BEGIN", 1), ("SELECT", 2), ("IF", 3), ("ARM_END", 4)],
+            then_events,
+        )
+        for result in (moved_source, moved_contract):
+            self.assertFalse(result.success)
+            self.assertIn(
+                "candidate_body_statement_not_covered_by_source",
+                {item["code"] for item in result.metadata["issues"]},
+            )
+
+    def test_set_nocount_wrapper_is_only_the_first_root_event(self):
+        template = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+{body}
+END;
+"""
+        caller = csharp_call_evidence(["@WORKTYPE"])
+        source_select = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+        duplicate_candidate = template.format(
+            body="""    SET NOCOUNT ON;
+    SET NOCOUNT ON;
+    SELECT @WORKTYPE AS WORKTYPE;"""
+        )
+        later_candidate = template.format(
+            body="""    SELECT @WORKTYPE AS WORKTYPE;
+    SET NOCOUNT ON;"""
+        )
+        nested_candidate = template.format(
+            body="""    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SET NOCOUNT ON;
+        SELECT @WORKTYPE AS WORKTYPE;
+    END;"""
+        )
+        nested_source = """IF @WORKTYPE = 'LIST'
+BEGIN
+    SET NOCOUNT ON;
+    SELECT @WORKTYPE AS WORKTYPE;
+END;"""
+
+        duplicate = verify_pb_migration_sp_generation_contract(
+            duplicate_candidate,
+            source_evidence=[source_select, caller],
+        )
+        later = verify_pb_migration_sp_generation_contract(
+            later_candidate,
+            source_evidence=[source_select, caller],
+        )
+        nested_unbound = verify_pb_migration_sp_generation_contract(
+            nested_candidate,
+            source_evidence=[
+                pb_srd_sql_evidence(
+                    "IF @WORKTYPE = 'LIST' BEGIN "
+                    "SELECT @WORKTYPE AS WORKTYPE; END;"
+                ),
+                caller,
+            ],
+        )
+        nested_bound = verify_pb_migration_sp_generation_contract(
+            nested_candidate,
+            source_evidence=[pb_srd_sql_evidence(nested_source), caller],
+        )
+
+        for result in (duplicate, later, nested_unbound):
+            self.assertFalse(result.success)
+            self.assertIn(
+                "candidate_body_not_covered_by_single_authority",
+                {item["code"] for item in result.metadata["issues"]},
+            )
+        self.assertTrue(nested_bound.success, nested_bound.metadata["issues"])
+        nested_nocount = next(
+            item
+            for item in nested_bound.metadata["body_traceability"]
+            if item["preview"] == "SET NOCOUNT ON"
+        )
+        self.assertEqual("source_statement", nested_nocount["coverage"])
+        self.assertGreater(nested_nocount["ordinal"], 0)
+        self.assertNotEqual("wrapper", nested_nocount["order_kind"])
+
+    def test_body_traceability_rejects_cross_artifact_branch_splicing(self):
+        candidate_branch = """IF @WORKTYPE = 'LIST'
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+ELSE
+BEGIN
+    DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;
+END;
+"""
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+{body}
+END;
+""".format(body=candidate_branch)
+        source_a = """IF @WORKTYPE = 'LIST'
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        source_b = """IF @WORKTYPE = 'LIST'
+BEGIN
+    UPDATE ZX902T SET DISPLAY_NAME = 'OTHER' WHERE WORKTYPE = @WORKTYPE;
+END
+ELSE
+BEGIN
+    DELETE FROM ZX902T WHERE WORKTYPE = @WORKTYPE;
+END;
+"""
+        mismatched_branch_contract = branch_contract_evidence(
+            source_b,
+            artifact_name="splice-mismatched-branch",
+        )
+        complete_branch_contract = branch_contract_evidence(
+            candidate_branch,
+            artifact_name="splice-complete-branch",
+        )
+        composite_support_a = bound_source_evidence(
+            "pb_srd_sql",
+            candidate_branch,
+            artifact_name="splice-composite-support-a",
+        )
+        complete_composite_contract = composite_contract_evidence(
+            candidate,
+            [composite_support_a["sha256"]],
+            artifact_name="splice-complete-composite",
+        )
+        lineage = [composite_support_a["sha256"]]
+        composite_variants = {
+            "wrong_trace_hash": composite_contract_evidence(
+                candidate,
+                lineage,
+                artifact_name="splice-wrong-trace-hash",
+                trace_sha256="f" * 64,
+            ),
+            "partial_lineage": composite_contract_evidence(
+                candidate,
+                [],
+                artifact_name="splice-partial-lineage",
+            ),
+            "unknown_lineage": composite_contract_evidence(
+                candidate,
+                ["0" * 64],
+                artifact_name="splice-unknown-lineage",
+            ),
+            "duplicate_lineage": composite_contract_evidence(
+                candidate,
+                [lineage[0], lineage[0]],
+                artifact_name="splice-duplicate-lineage",
+            ),
+            "wrong_trace_sql": composite_contract_evidence(
+                candidate.replace("DELETE FROM", "UPDATE"),
+                lineage,
+                artifact_name="splice-wrong-trace-sql",
+            ),
+        }
+        unbound_composite_contract = composite_contract_evidence(
+            candidate,
+            ["0" * 64],
+            artifact_name="splice-unbound-composite",
+        )
+        caller = csharp_call_evidence(["@WORKTYPE"])
+
+        source_source = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[
+                bound_source_evidence(
+                    "pb_srd_sql", source_a, artifact_name="splice-source-a"
+                ),
+                bound_source_evidence(
+                    "pb_srd_sql", source_b, artifact_name="splice-source-b"
+                ),
+                caller,
+            ],
+        )
+        branch_source = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[
+                bound_source_evidence(
+                    "pb_srd_sql",
+                    source_a,
+                    artifact_name="splice-source-branch-a",
+                ),
+                caller,
+                mismatched_branch_contract,
+            ],
+        )
+        complete_source = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[
+                bound_source_evidence(
+                    "pb_srd_sql",
+                    candidate_branch,
+                    artifact_name="splice-complete-source",
+                ),
+                caller,
+            ],
+        )
+        complete_branch = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[
+                bound_source_evidence(
+                    "pb_srd_sql",
+                    "SELECT @WORKTYPE AS WORKTYPE;",
+                    artifact_name="splice-supporting-source",
+                ),
+                caller,
+                complete_branch_contract,
+            ],
+        )
+        complete_composite = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[
+                composite_support_a,
+                caller,
+                complete_composite_contract,
+            ],
+        )
+        unbound_composite = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[
+                composite_support_a,
+                caller,
+                unbound_composite_contract,
+            ],
+        )
+        composite_variant_results = {
+            name: verify_pb_migration_sp_generation_contract(
+                candidate,
+                source_evidence=[
+                    composite_support_a,
+                    caller,
+                    evidence,
+                ],
+            )
+            for name, evidence in composite_variants.items()
+        }
+
+        self.assertTrue(complete_source.success, complete_source.metadata["issues"])
+        self.assertTrue(complete_branch.success, complete_branch.metadata["issues"])
+        self.assertTrue(
+            complete_composite.success,
+            complete_composite.metadata["issues"],
+        )
+        self.assertEqual(
+            {"composite_contract"},
+            {
+                item["coverage"]
+                for item in complete_composite.metadata["body_traceability"]
+                if item["coverage"]
+                not in {"generated_wrapper", "generated_envelope"}
+            },
+        )
+        self.assertFalse(unbound_composite.success)
+        self.assertIn(
+            "composite_contract_source_lineage_mismatch",
+            {item["code"] for item in unbound_composite.metadata["issues"]},
+        )
+        expected_composite_issues = {
+            "wrong_trace_hash": "composite_contract_trace_sha256_mismatch",
+            "partial_lineage": "composite_contract_source_lineage_invalid",
+            "unknown_lineage": "composite_contract_source_lineage_mismatch",
+            "duplicate_lineage": "composite_contract_source_lineage_duplicate",
+            "wrong_trace_sql": "composite_contract_candidate_trace_mismatch",
+        }
+        for name, expected_issue in expected_composite_issues.items():
+            with self.subTest(composite_case=name):
+                result = composite_variant_results[name]
+                self.assertFalse(result.success)
+                self.assertIn(
+                    expected_issue,
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+        for result in (source_source, branch_source):
+            self.assertFalse(result.success)
+            self.assertIn(
+                "candidate_body_not_covered_by_single_authority",
+                {item["code"] for item in result.metadata["issues"]},
+            )
+
+    def test_structural_trace_preserves_try_loop_scope_and_transaction_boundaries(self):
+        caller = csharp_call_evidence(["@WORKTYPE"])
+
+        def procedure(body):
+            return sp_metadata_header() + f"""CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+{body}
+END;
+"""
+
+        select_sql = "SELECT @WORKTYPE AS WORKTYPE;"
+        try_sql = """BEGIN TRY
+    SELECT @WORKTYPE AS WORKTYPE;
+END TRY
+BEGIN CATCH
+END CATCH;"""
+        loop_sql = """WHILE @WORKTYPE = 'LIST'
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;"""
+        nested_scope_sql = """BEGIN
+    BEGIN
+        SELECT @WORKTYPE AS WORKTYPE;
+    END;
+END;"""
+        adjacent_sql = """IF @WORKTYPE = 'LIST'
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+ELSE
+BEGIN
+    WHILE @WORKTYPE = 'SAVE'
+    BEGIN
+        BEGIN TRANSACTION;
+        UPDATE ZX902T SET WORKTYPE = @WORKTYPE;
+        COMMIT TRANSACTION;
+    END;
+END;"""
+        adjacent_moved = """IF @WORKTYPE = 'LIST'
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+ELSE
+BEGIN
+    WHILE @WORKTYPE = 'SAVE'
+    BEGIN
+    END;
+    BEGIN TRANSACTION;
+    UPDATE ZX902T SET WORKTYPE = @WORKTYPE;
+    COMMIT TRANSACTION;
+END;"""
+
+        exact_cases = (try_sql, loop_sql, nested_scope_sql, adjacent_sql)
+        for index, source_sql in enumerate(exact_cases):
+            with self.subTest(exact_structure=index):
+                result = verify_pb_migration_sp_generation_contract(
+                    procedure(source_sql),
+                    source_evidence=[pb_srd_sql_evidence(source_sql), caller],
+                )
+                self.assertTrue(result.success, result.metadata["issues"])
+
+        unauthorized_variants = {
+            "try_catch_added": (select_sql, try_sql),
+            "try_catch_omitted": (try_sql, select_sql),
+            "while_body_moved_to_root": (
+                loop_sql,
+                """WHILE @WORKTYPE = 'LIST'
+BEGIN
+END;
+SELECT @WORKTYPE AS WORKTYPE;""",
+            ),
+            "nested_begin_omitted": (nested_scope_sql, select_sql),
+            "transaction_before_nocount": (
+                select_sql,
+                """BEGIN TRANSACTION;
+SET NOCOUNT ON;
+SELECT @WORKTYPE AS WORKTYPE;""",
+            ),
+            "else_loop_transaction_moved": (adjacent_sql, adjacent_moved),
+        }
+        for label, (source_sql, candidate_body) in unauthorized_variants.items():
+            with self.subTest(structural_bypass=label):
+                result = verify_pb_migration_sp_generation_contract(
+                    procedure(candidate_body),
+                    source_evidence=[pb_srd_sql_evidence(source_sql), caller],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "candidate_body_not_covered_by_single_authority",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+        transaction_trace = pb_migration._sql_hierarchical_trace(
+            procedure("""BEGIN TRANSACTION;
+SET NOCOUNT ON;
+SELECT @WORKTYPE AS WORKTYPE;""")
+        )
+        transaction_nocount = [
+            item for item in transaction_trace if item["preview"] == "SET NOCOUNT ON"
+        ]
+        self.assertEqual(len(transaction_nocount), 1)
+        self.assertFalse(transaction_nocount[0]["generated_wrapper"])
+        self.assertGreater(transaction_nocount[0]["order_in_path"], 0)
+
+        composite_without_try = composite_contract_evidence(
+            select_sql,
+            [pb_srd_sql_evidence(try_sql)["sha256"]],
+            artifact_name="composite-omits-try-catch",
+        )
+        composite_result = verify_pb_migration_sp_generation_contract(
+            procedure(try_sql),
+            source_evidence=[pb_srd_sql_evidence(try_sql), caller, composite_without_try],
+        )
+        self.assertFalse(composite_result.success)
+        self.assertIn(
+            "composite_contract_candidate_trace_mismatch",
+            {item["code"] for item in composite_result.metadata["issues"]},
+        )
+
+    def test_csharp_caller_requires_one_complete_executable_exact_case_call(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+
+        def evidence_from_text(name, artifact_text):
+            artifact_text = complete_csharp_caller_artifact(artifact_text)
+            path, digest = write_test_artifact(name, artifact_text)
+            return {
+                "kind": "csharp_call",
+                "verified": True,
+                "path": str(path),
+                "definition_text": artifact_text,
+                "sha256": digest,
+                "db_parameters": ["@WORKTYPE"],
+                "target_procedure": "SP_ZX123456_SELECT",
+            }
+
+        forgeries = {
+            "raw_string_parameter": '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , """new DbParameter("@WORKTYPE", value)"""
+);''',
+            "inactive_preprocessor": '''#if false
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", value)
+);
+#endif''',
+            "unterminated_call": '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", value)''',
+            "wrong_receiver_case": '''return DBCLIENT.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", value)
+);''',
+        }
+        valid = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[body, csharp_call_evidence(["@WORKTYPE"])],
+        )
+        valid_with_raw_directive_text = '''string documentation = """
+#if false
+not a preprocessor directive here
+#endif
+""";
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", value)
+);'''
+        valid_with_raw_directive = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                body,
+                evidence_from_text("valid-raw-directive", valid_with_raw_directive_text),
+            ],
+        )
+        self.assertTrue(valid.success, valid.metadata["issues"])
+        self.assertTrue(
+            valid_with_raw_directive.success,
+            valid_with_raw_directive.metadata["issues"],
+        )
+        for label, artifact_text in forgeries.items():
+            with self.subTest(forgery=label):
+                result = verify_pb_migration_sp_generation_contract(
+                    sql,
+                    source_evidence=[body, evidence_from_text(label, artifact_text)],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "csharp_caller_target_procedure_mismatch",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+    def test_csharp_caller_rejects_nested_arguments_unknown_symbols_and_global_imbalance(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+
+        def evidence_from_text(name, artifact_text):
+            artifact_text = complete_csharp_caller_artifact(artifact_text)
+            path, digest = write_test_artifact(name, artifact_text)
+            return {
+                "kind": "csharp_call",
+                "verified": True,
+                "path": str(path),
+                "definition_text": artifact_text,
+                "sha256": digest,
+                "db_parameters": ["@WORKTYPE"],
+                "target_procedure": "SP_ZX123456_SELECT",
+            }
+
+        invalid_artifacts = {
+            "nested_lambda": '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new Func<DbParameter>(() => new DbParameter("@WORKTYPE", value))
+);''',
+            "nested_array": '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new[] { new DbParameter("@WORKTYPE", value) }
+);''',
+            "unknown_symbol_else": '''#if FEATURE_X
+return null;
+#else
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", value)
+);
+#endif''',
+            "globally_unbalanced": '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", value)
+);
+if (enabled) {''',
+        }
+        literal_false_else = '''#if false
+return null;
+#else
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", value)
+);
+#endif'''
+        literal_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                body,
+                evidence_from_text("literal-false-else", literal_false_else),
+            ],
+        )
+        self.assertTrue(literal_result.success, literal_result.metadata["issues"])
+
+        for label, artifact_text in invalid_artifacts.items():
+            with self.subTest(case=label):
+                result = verify_pb_migration_sp_generation_contract(
+                    sql,
+                    source_evidence=[body, evidence_from_text(label, artifact_text)],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "csharp_caller_target_procedure_mismatch",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+    def test_csharp_caller_value_expression_grammar_is_fail_closed(self):
+        parameters = [
+            "@WORKTYPE",
+            "@ORGDIV",
+            "@ITEMCD",
+            "@SELECTTYPE",
+            "@CUSTCD",
+            "@OPTION",
+            "@GIJUNDT",
+        ]
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE  VARCHAR(20)
+    , @ORGDIV    VARCHAR(2)
+    , @ITEMCD    VARCHAR(30)
+    , @SELECTTYPE VARCHAR(20)
+    , @CUSTCD    VARCHAR(20)
+    , @OPTION    VARCHAR(20)
+    , @GIJUNDT   VARCHAR(8)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+
+        def evidence_from_text(name, artifact_text, expected_parameters):
+            artifact_text = complete_csharp_caller_artifact(artifact_text)
+            path, digest = write_test_artifact(name, artifact_text)
+            return {
+                "kind": "csharp_call",
+                "verified": True,
+                "path": str(path),
+                "definition_text": artifact_text,
+                "sha256": digest,
+                "db_parameters": list(expected_parameters),
+                "target_procedure": "SP_ZX123456_SELECT",
+            }
+
+        realistic = '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+    , new DbParameter("@ORGDIV", userInfo.Orgdiv)
+    , new DbParameter("@ITEMCD", row["ITEMCD"])
+    , new DbParameter("@SELECTTYPE", _selectType.ToString())
+    , new DbParameter("@CUSTCD", (string)row["CUSTCD"])
+    , new DbParameter("@OPTION", _option ?? string.Empty)
+    , new DbParameter("@GIJUNDT", ymdGIJUN.YYYYMMDD())
+);'''
+        accepted = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                body,
+                evidence_from_text("realistic-values", realistic, parameters),
+            ],
+        )
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+
+        single_parameter_sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        invalid_values = {
+            "lambda": "() => value",
+            "async_lambda": "async () => value",
+            "delegate": "delegate { return value; }",
+            "array_creation": "new[] { value }",
+            "collection_expression": "[value]",
+            "object_initializer": "new Holder { Value = value }",
+            "collection_initializer": "new List<string> { value }",
+            "conditional": "flag ? left : right",
+        }
+        for label, value_expression in invalid_values.items():
+            artifact_text = (
+                'return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"\n'
+                f'    , new DbParameter("@WORKTYPE", {value_expression})\n'
+                ');'
+            )
+            with self.subTest(value_expression=label):
+                result = verify_pb_migration_sp_generation_contract(
+                    single_parameter_sql,
+                    source_evidence=[
+                        body,
+                        evidence_from_text(label, artifact_text, ["@WORKTYPE"]),
+                    ],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "csharp_caller_target_procedure_mismatch",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+    def test_csharp_caller_requires_one_direct_method_body_call(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+
+        def evidence_from_text(name, artifact_text):
+            path, digest = write_test_artifact(name, artifact_text)
+            return {
+                "kind": "csharp_call",
+                "verified": True,
+                "path": str(path),
+                "definition_text": artifact_text,
+                "sha256": digest,
+                "db_parameters": ["@WORKTYPE"],
+                "target_procedure": "SP_ZX123456_SELECT",
+            }
+
+        valid_method = complete_csharp_caller_artifact(
+            '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);'''
+        )
+        accepted = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[body, evidence_from_text("direct-method", valid_method)],
+        )
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+
+        invalid_contexts = {
+            "bare_fragment": '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+            "top_level_local_function": '''private DataSet LocalLoad()
+{
+    return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+        , new DbParameter("@WORKTYPE", workType)
+    );
+}''',
+            "expression_lambda": '''Func<DataSet> load = () => dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+            "block_lambda": '''Func<DataSet> load = () =>
+{
+    return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+        , new DbParameter("@WORKTYPE", workType)
+    );
+};''',
+            "anonymous_delegate": '''Func<DataSet> load = delegate
+{
+    return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+        , new DbParameter("@WORKTYPE", workType)
+    );
+};''',
+            "local_function": '''private DataSet LoadRows()
+{
+    DataSet LocalLoad()
+    {
+        return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+            , new DbParameter("@WORKTYPE", workType)
+        );
+    }
+
+    return LocalLoad();
+}''',
+            "mixed_correct_and_wrong": '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);
+dbClient.ExecSP("SP_OTHER_SAVE"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+            "whitespace_comment_second_unsupported_call": '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);
+dbClient /* count every active receiver call */
+    . ExecuteOther();''',
+            "constructor": '''public sealed class CallerEvidence
+{
+    public CallerEvidence()
+    {
+        dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+            , new DbParameter("@WORKTYPE", workType)
+        );
+    }
+}''',
+            "static_constructor": '''public sealed class CallerEvidence
+{
+    static CallerEvidence()
+    {
+        dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+            , new DbParameter("@WORKTYPE", workType)
+        );
+    }
+}''',
+            "destructor": '''public sealed class CallerEvidence
+{
+    ~CallerEvidence()
+    {
+        dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+            , new DbParameter("@WORKTYPE", workType)
+        );
+    }
+}''',
+            "operator": '''public sealed class CallerEvidence
+{
+    public static object operator +(CallerEvidence left, CallerEvidence right)
+    {
+        return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+            , new DbParameter("@WORKTYPE", workType)
+        );
+    }
+}''',
+            "conversion_operator": '''public sealed class CallerEvidence
+{
+    public static implicit operator object(CallerEvidence value)
+    {
+        return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+            , new DbParameter("@WORKTYPE", workType)
+        );
+    }
+}''',
+            "accessor": '''public sealed class CallerEvidence
+{
+    public object Value
+    {
+        get
+        {
+            return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+                , new DbParameter("@WORKTYPE", workType)
+            );
+        }
+    }
+}''',
+        }
+        for label in {
+            "expression_lambda",
+            "block_lambda",
+            "anonymous_delegate",
+            "local_function",
+            "mixed_correct_and_wrong",
+            "whitespace_comment_second_unsupported_call",
+        }:
+            invalid_contexts[label] = complete_csharp_caller_artifact(
+                invalid_contexts[label]
+            )
+        for label, artifact_text in invalid_contexts.items():
+            with self.subTest(context=label):
+                result = verify_pb_migration_sp_generation_contract(
+                    sql,
+                    source_evidence=[body, evidence_from_text(label, artifact_text)],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "csharp_caller_target_procedure_mismatch",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+    def test_csharp_caller_counts_conditional_parenthesized_and_interpolated_invocations(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+
+        def evidence_from_text(name, artifact_text):
+            path, digest = write_test_artifact(name, artifact_text)
+            return {
+                "kind": "csharp_call",
+                "verified": True,
+                "path": str(path),
+                "definition_text": artifact_text,
+                "sha256": digest,
+                "db_parameters": ["@WORKTYPE"],
+                "target_procedure": "SP_ZX123456_SELECT",
+            }
+
+        positive_calls = {
+            "conditional_receiver": '''return dbClient?.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+            "parenthesized_null_forgiving_receiver": '''return ((dbClient!)).GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+            "interpolated_literal_is_not_a_call": '''string label = $"dbClient.ExecuteOther()";
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+        }
+        for label, call_text in positive_calls.items():
+            with self.subTest(valid_receiver=label):
+                artifact = complete_csharp_caller_artifact(call_text)
+                result = verify_pb_migration_sp_generation_contract(
+                    sql,
+                    source_evidence=[body, evidence_from_text(label, artifact)],
+                )
+                self.assertTrue(result.success, result.metadata["issues"])
+
+        second_calls = {
+            "interpolated_expression": '''string audit = $"{dbClient.ExecuteOther()}";
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+            "conditional_receiver": '''dbClient /* conditional */ ? . ExecuteOther();
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+            "parenthesized_null_forgiving_receiver": '''((dbClient /* receiver */ !)) . ExecuteOther();
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+        }
+        for label, method_body in second_calls.items():
+            with self.subTest(hidden_second_call=label):
+                artifact = complete_csharp_caller_artifact(method_body)
+                result = verify_pb_migration_sp_generation_contract(
+                    sql,
+                    source_evidence=[body, evidence_from_text(label, artifact)],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "csharp_caller_target_procedure_mismatch",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+    def test_csharp_caller_requires_plausible_ordinary_method_return_type(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+        call_return = '''return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);'''
+
+        def artifact(return_type, *, returns=True):
+            call = call_return if returns else call_return.replace("return ", "", 1)
+            return f'''public sealed class CallerEvidence
+{{
+    private {return_type} Execute()
+    {{
+{call}
+    }}
+}}'''
+
+        def evidence_from_text(name, artifact_text):
+            path, digest = write_test_artifact(name, artifact_text)
+            return {
+                "kind": "csharp_call",
+                "verified": True,
+                "path": str(path),
+                "definition_text": artifact_text,
+                "sha256": digest,
+                "db_parameters": ["@WORKTYPE"],
+                "target_procedure": "SP_ZX123456_SELECT",
+            }
+
+        valid_return_types = {
+            "void": ("void", False),
+            "builtin": ("object", True),
+            "qualified": ("System.Data.DataSet", True),
+            "generic": ("System.Threading.Tasks.Task<System.Data.DataSet>", True),
+            "nullable": ("System.Data.DataSet?", True),
+            "array": ("System.Data.DataSet[]", True),
+            "tuple": ("(System.Data.DataSet Rows, int Count)", True),
+        }
+        for label, (return_type, returns) in valid_return_types.items():
+            with self.subTest(valid_return_type=label):
+                source = artifact(return_type, returns=returns)
+                result = verify_pb_migration_sp_generation_contract(
+                    sql,
+                    source_evidence=[body, evidence_from_text(label, source)],
+                )
+                self.assertTrue(result.success, result.metadata["issues"])
+
+        for return_type in ("return", "if", "while", "throw", "private"):
+            with self.subTest(invalid_return_type=return_type):
+                source = artifact(return_type)
+                result = verify_pb_migration_sp_generation_contract(
+                    sql,
+                    source_evidence=[body, evidence_from_text(return_type, source)],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "csharp_caller_target_procedure_mismatch",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+    def test_trace_v2_preserves_procedure_and_control_arm_braces(self):
+        source = sp_metadata_header() + """ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    IF @WORKTYPE = 'LIST'
+    BEGIN
+        SELECT @WORKTYPE AS WORKTYPE;
+    END
+    ELSE
+    BEGIN
+        UPDATE ZX902T SET WORKTYPE = @WORKTYPE;
+    END;
+END;
+"""
+        exact_candidate = source.replace(
+            "ALTER PROCEDURE", "CREATE OR ALTER PROCEDURE", 1
+        )
+        without_procedure_braces = exact_candidate.replace(
+            "AS\nBEGIN\n    IF", "AS\n    IF", 1
+        ).rsplit("\nEND;", 1)[0] + "\n"
+        without_arm_braces = exact_candidate.replace(
+            "    BEGIN\n        SELECT @WORKTYPE AS WORKTYPE;\n    END\n    ELSE\n    BEGIN\n        UPDATE ZX902T SET WORKTYPE = @WORKTYPE;\n    END;",
+            "        SELECT @WORKTYPE AS WORKTYPE;\n    ELSE\n        UPDATE ZX902T SET WORKTYPE = @WORKTYPE;",
+        )
+        complete_source = existing_sp_evidence(
+            source,
+            object_name="SP_ZX123456_SELECT",
+        )
+        caller = csharp_call_evidence(["@WORKTYPE"])
+
+        exact = verify_pb_migration_sp_generation_contract(
+            exact_candidate,
+            source_evidence=[complete_source, caller],
+        )
+        self.assertTrue(exact.success, exact.metadata["issues"])
+
+        for label, candidate in {
+            "procedure_braces_removed": without_procedure_braces,
+            "control_arm_braces_removed": without_arm_braces,
+        }.items():
+            with self.subTest(structural_removal=label):
+                result = verify_pb_migration_sp_generation_contract(
+                    candidate,
+                    source_evidence=[complete_source, caller],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "candidate_body_not_covered_by_single_authority",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+        generated_wrapper = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        wrapper_result = verify_pb_migration_sp_generation_contract(
+            generated_wrapper,
+            source_evidence=[
+                pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;"),
+                caller,
+            ],
+        )
+        self.assertTrue(wrapper_result.success, wrapper_result.metadata["issues"])
+
+    def test_body_authority_requires_exhaustive_full_trace_equality(self):
+        complete_body = """SELECT @WORKTYPE AS WORKTYPE;
+UPDATE ZX902T SET WORKTYPE = @WORKTYPE;
+"""
+        candidate = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        source = bound_source_evidence(
+            "pb_srd_sql",
+            complete_body,
+            artifact_name="exhaustive-source-select-update",
+        )
+        caller = csharp_call_evidence(["@WORKTYPE"])
+
+        source_subset = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[source, caller],
+        )
+        self.assertFalse(source_subset.success)
+        self.assertIn(
+            "candidate_body_not_covered_by_single_authority",
+            {item["code"] for item in source_subset.metadata["issues"]},
+        )
+
+        composite_subset = composite_contract_evidence(
+            candidate,
+            [source["sha256"]],
+            artifact_name="exhaustive-composite-subset",
+        )
+        composite_result = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=[source, caller, composite_subset],
+        )
+        self.assertFalse(composite_result.success)
+        self.assertIn(
+            "composite_contract_source_trace_mismatch",
+            {item["code"] for item in composite_result.metadata["issues"]},
+        )
+
+    def test_csharp_caller_counts_verbatim_and_nested_literal_interpolation_calls(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+
+        def evidence_from_text(name, method_body):
+            artifact_text = complete_csharp_caller_artifact(method_body)
+            path, digest = write_test_artifact(name, artifact_text)
+            return {
+                "kind": "csharp_call",
+                "verified": True,
+                "path": str(path),
+                "definition_text": artifact_text,
+                "sha256": digest,
+                "db_parameters": ["@WORKTYPE"],
+                "target_procedure": "SP_ZX123456_SELECT",
+            }
+
+        cases = {
+            "verbatim_method_identifier": '''dbClient.@ExecuteOther();
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+            "interpolation_nested_char_literal": '''string audit = $"{Format('}', dbClient.ExecuteOther())}";
+return dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", workType)
+);''',
+        }
+        for label, method_body in cases.items():
+            with self.subTest(hidden_call=label):
+                result = verify_pb_migration_sp_generation_contract(
+                    sql,
+                    source_evidence=[body, evidence_from_text(label, method_body)],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "csharp_caller_target_procedure_mismatch",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+    def test_csharp_caller_rejects_illegal_void_and_var_return_types(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+
+        def evidence_from_type(return_type):
+            returns = return_type != "void"
+            call = ('return ' if returns else '') + '''dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+        , new DbParameter("@WORKTYPE", workType)
+    );'''
+            artifact_text = f'''public sealed class CallerEvidence
+{{
+    private {return_type} Execute()
+    {{
+        {call}
+    }}
+}}'''
+            path, digest = write_test_artifact(
+                "invalid-return-" + re.sub(r"[^A-Za-z0-9]+", "-", return_type),
+                artifact_text,
+            )
+            return {
+                "kind": "csharp_call",
+                "verified": True,
+                "path": str(path),
+                "definition_text": artifact_text,
+                "sha256": digest,
+                "db_parameters": ["@WORKTYPE"],
+                "target_procedure": "SP_ZX123456_SELECT",
+            }
+
+        for return_type in (
+            "var",
+            "void?",
+            "void[]",
+            "System.Threading.Tasks.Task<void>",
+            "(void Value, int Count)",
+        ):
+            with self.subTest(invalid_return_type=return_type):
+                result = verify_pb_migration_sp_generation_contract(
+                    sql,
+                    source_evidence=[body, evidence_from_type(return_type)],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(
+                    "csharp_caller_target_procedure_mismatch",
+                    {item["code"] for item in result.metadata["issues"]},
+                )
+
+    def test_malformed_procedure_identity_is_rejected_before_normalization(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+        malformed_csharp = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                body,
+                csharp_call_evidence(
+                    ["@WORKTYPE"],
+                    target_procedure="DBO..SP_ZX123456_SELECT",
+                ),
+            ],
+        )
+        malformed_external = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                body,
+                external_caller_evidence(
+                    [{"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"}],
+                    target_procedure="DBO..SP_ZX123456_SELECT",
+                ),
+            ],
+        )
+
+        self.assertFalse(malformed_csharp.success)
+        self.assertIn(
+            "csharp_caller_target_procedure_invalid",
+            {item["code"] for item in malformed_csharp.metadata["issues"]},
+        )
+        self.assertFalse(malformed_external.success)
+        self.assertIn(
+            "external_caller_target_procedure_invalid",
+            {item["code"] for item in malformed_external.metadata["issues"]},
+        )
+
+    def test_caller_evidence_must_bind_exact_target_procedure(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+        wrong_csharp = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                body,
+                csharp_call_evidence(
+                    ["@WORKTYPE"],
+                    target_procedure="SP_OTHER_SELECT",
+                ),
+            ],
+        )
+        wrong_schema_csharp = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                body,
+                csharp_call_evidence(
+                    ["@WORKTYPE"],
+                    target_procedure="OTHER.SP_ZX123456_SELECT",
+                ),
+            ],
+        )
+        declared_target_but_wrong_artifact = csharp_call_evidence(["@WORKTYPE"])
+        wrong_artifact_text = declared_target_but_wrong_artifact["definition_text"].replace(
+            "SP_ZX123456_SELECT",
+            "SP_OTHER_SELECT",
+        )
+        wrong_artifact_path, wrong_artifact_hash = write_test_artifact(
+            "csharp-wrong-target-call",
+            wrong_artifact_text,
+        )
+        declared_target_but_wrong_artifact["definition_text"] = wrong_artifact_text
+        declared_target_but_wrong_artifact["path"] = str(wrong_artifact_path)
+        declared_target_but_wrong_artifact["sha256"] = wrong_artifact_hash
+        wrong_csharp_artifact = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[body, declared_target_but_wrong_artifact],
+        )
+        raw_string_spoof = csharp_call_evidence(["@WORKTYPE"])
+        raw_string_spoof_text = '''string sample = """dbClient.GetDataSetFromSP("SP_ZX123456_SELECT"
+    , new DbParameter("@WORKTYPE", value)
+);""";
+return dbClient.GetDataSetFromSP("SP_OTHER_SELECT"
+    , new DbParameter("@WORKTYPE", value)
+);'''
+        raw_string_spoof_path, raw_string_spoof_hash = write_test_artifact(
+            "csharp-raw-string-spoof",
+            raw_string_spoof_text,
+        )
+        raw_string_spoof["definition_text"] = raw_string_spoof_text
+        raw_string_spoof["path"] = str(raw_string_spoof_path)
+        raw_string_spoof["sha256"] = raw_string_spoof_hash
+        raw_string_spoof_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[body, raw_string_spoof],
+        )
+        missing_csharp_target = csharp_call_evidence(["@WORKTYPE"])
+        missing_csharp_target.pop("target_procedure")
+        missing_csharp_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[body, missing_csharp_target],
+        )
+        missing_external_declaration = external_caller_evidence(
+            [{"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"}],
+        )
+        missing_external_declaration.pop("target_procedure")
+        missing_declaration_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[body, missing_external_declaration],
+        )
+        missing_external_artifact = external_caller_evidence(
+            [{"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"}],
+        )
+        missing_payload = json.loads(missing_external_artifact["artifact_text"])
+        missing_payload.pop("target_procedure")
+        missing_external_artifact["artifact_text"] = json.dumps(
+            missing_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        missing_path, missing_hash = write_test_artifact(
+            "external-missing-target",
+            missing_external_artifact["artifact_text"],
+        )
+        missing_external_artifact["path"] = str(missing_path)
+        missing_external_artifact["sha256"] = missing_hash
+        missing_artifact_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[body, missing_external_artifact],
+        )
+        wrong_external = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                body,
+                external_caller_evidence(
+                    [{"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"}],
+                    target_procedure="SP_OTHER_SELECT",
+                ),
+            ],
+        )
+        declared_target_but_wrong_external_artifact = external_caller_evidence(
+            [{"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"}],
+        )
+        wrong_external_payload = json.loads(
+            declared_target_but_wrong_external_artifact["artifact_text"]
+        )
+        wrong_external_payload["target_procedure"] = "SP_OTHER_SELECT"
+        wrong_external_text = json.dumps(
+            wrong_external_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        wrong_external_path, wrong_external_hash = write_test_artifact(
+            "external-wrong-target-artifact",
+            wrong_external_text,
+        )
+        declared_target_but_wrong_external_artifact["artifact_text"] = wrong_external_text
+        declared_target_but_wrong_external_artifact["path"] = str(wrong_external_path)
+        declared_target_but_wrong_external_artifact["sha256"] = wrong_external_hash
+        wrong_external_artifact = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[body, declared_target_but_wrong_external_artifact],
+        )
+
+        self.assertIn(
+            "csharp_caller_target_procedure_mismatch",
+            {item["code"] for item in wrong_csharp.metadata["issues"]},
+        )
+        self.assertIn(
+            "csharp_caller_target_procedure_mismatch",
+            {item["code"] for item in wrong_schema_csharp.metadata["issues"]},
+        )
+        self.assertIn(
+            "csharp_caller_target_procedure_mismatch",
+            {item["code"] for item in wrong_csharp_artifact.metadata["issues"]},
+        )
+        self.assertIn(
+            "csharp_caller_target_procedure_mismatch",
+            {item["code"] for item in raw_string_spoof_result.metadata["issues"]},
+        )
+        self.assertIn(
+            "csharp_caller_target_procedure_missing",
+            {item["code"] for item in missing_csharp_result.metadata["issues"]},
+        )
+        self.assertIn(
+            "external_caller_target_procedure_missing",
+            {item["code"] for item in missing_declaration_result.metadata["issues"]},
+        )
+        self.assertIn(
+            "external_caller_target_procedure_missing",
+            {item["code"] for item in missing_artifact_result.metadata["issues"]},
+        )
+        self.assertIn(
+            "external_caller_target_procedure_mismatch",
+            {item["code"] for item in wrong_external.metadata["issues"]},
+        )
+        self.assertIn(
+            "external_caller_target_procedure_mismatch",
+            {item["code"] for item in wrong_external_artifact.metadata["issues"]},
+        )
+
+    def test_sp_parameter_options_ignore_output_and_readonly_inside_string_defaults(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @FILTER_TEXT NVARCHAR(50) = N'A OUTPUT READONLY B'
+    , @ROWS DBO.ROWTYPE READONLY
+    , @ROWCOUNT INT OUTPUT
+AS
+BEGIN
+    SELECT @FILTER_TEXT AS FILTER_TEXT;
+END;
+"""
+        contract = pb_migration._extract_sp_parameter_contract(sql)
+
+        self.assertEqual("N'A OUTPUT READONLY B'", contract[0]["default"])
+        self.assertFalse(contract[0]["output"])
+        self.assertFalse(contract[0]["readonly"])
+        self.assertTrue(contract[1]["readonly"])
+        self.assertTrue(contract[2]["output"])
+
+    def test_caller_evidence_cannot_claim_unobserved_metadata_or_mismatched_identity(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        body_evidence = pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;")
+        csharp_overclaim = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                body_evidence,
+                csharp_call_evidence(
+                    ["@WORKTYPE"],
+                    parameter_contract=[
+                        {
+                            "name": "@WORKTYPE",
+                            "type_spec": "VARCHAR(20)",
+                            "default": "NULL",
+                            "output": True,
+                        }
+                    ],
+                ),
+            ],
+        )
+        mismatched_external = external_caller_evidence(
+            [{"name": "@WORKTYPE", "type_spec": "VARCHAR(20)"}],
+            caller_id="artifact-caller",
+        )
+        mismatched_external["caller_id"] = "declared-caller"
+        external_result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[body_evidence, mismatched_external],
+        )
+
+        self.assertIn(
+            "csharp_caller_parameter_metadata_not_proven_by_artifact",
+            {item["code"] for item in csharp_overclaim.metadata["issues"]},
+        )
+        self.assertIn(
+            "external_caller_id_mismatch",
+            {item["code"] for item in external_result.metadata["issues"]},
+        )
+
+    def test_sp_metadata_header_accepts_normal_ssms_object_preamble(self):
+        sql = """USE [C_SAMPLE]
+GO
+/****** Object: StoredProcedure [dbo].[SP_ZX123456_SELECT] Script Date: 2026-07-23 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+-- =============================================
+-- DESCRIPTION: Synthetic procedure contract
+-- =============================================
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[
+                pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;"),
+                csharp_call_evidence(["@WORKTYPE"]),
+            ],
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+
+    def test_pb_sql_emission_uses_actual_provider_guard_and_final_response_binder(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END;
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            provider_path = Path(temp_dir) / "skills" / "sql-formatting" / "SKILL.md"
+            provider_path.parent.mkdir(parents=True)
+            provider_path.write_text(
+                """---
+name: sql-formatting
+description: Format SQL/T-SQL while preserving query behavior and semantics.
+---
+
+# SQL Formatting
+
+Do not change query behavior. Preserve table names, predicates, expressions, and results.
+Convert a scalar lookup to a JOIN only when its implementation and relational equivalence are verified.
+Run the packaged `sql-formatting-style-harness` deterministic verifier and accept output only when it passes.
+""",
+                encoding="utf-8",
+            )
+            selection = sql_provider_selection(provider_path, source="host-local-skill")
+            passed = _verify_pb_migration_sp_with_sql_formatting(
+                sql,
+                sql,
+                source_evidence=[
+                    pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;"),
+                    csharp_call_evidence(["@WORKTYPE"]),
+                ],
+                profile_evidence=loaded_sp_test_profile(),
+                draft_final_response=sql_final_response(sql),
+                sql_provider_path=provider_path,
+                selected_active_sql_provider_path=provider_path,
+                sql_provider_selection=selection,
+            )
+            missing_response = _verify_pb_migration_sp_with_sql_formatting(
+                sql,
+                sql,
+                source_evidence=[
+                    pb_srd_sql_evidence("SELECT @WORKTYPE AS WORKTYPE;"),
+                    csharp_call_evidence(["@WORKTYPE"]),
+                ],
+                profile_evidence=loaded_sp_test_profile(),
+                draft_final_response="",
+                sql_provider_path=provider_path,
+                selected_active_sql_provider_path=provider_path,
+                sql_provider_selection=selection,
+            )
+
+        self.assertTrue(passed.success, passed.to_dict())
+        binding = passed.metadata["sql_final_response_binding"]
+        release = passed.metadata["sql_final_response_release"]
+        self.assertEqual("passed", release["status"])
+        self.assertEqual("bound", release["binding"]["status"])
+        self.assertEqual("bound", binding["status"])
+        self.assertEqual(binding, release["binding"])
+        self.assertEqual("accepted", release["provider_path_guard"]["status"])
+        self.assertEqual(
+            release["provider_path_guard"]["provider_selection_sha256"],
+            sql_provider_selection_sha256(selection),
+        )
+        self.assertEqual(
+            release["verification"]["metadata"]["verification_id"],
+            binding["verification_id"],
+        )
+        self.assertEqual(
+            hashlib.sha256(sql.encode("utf-8")).hexdigest(),
+            binding["formatted_sha256"],
+        )
+        self.assertFalse(missing_response.success)
+        self.assertEqual(
+            "sql_final_response_missing",
+            missing_response.metadata["sql_final_response_binding"]["code"],
+        )
 
     def test_composed_sp_and_sql_formatting_verifier_requires_both_gates(self):
         sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
@@ -4696,12 +7896,72 @@ END
         result = verify_pb_migration_sp_with_sql_formatting(
             sql,
             sql,
-            source_evidence={"kind": "pb_srd_sql", "path": "d_saoth_070_a_1.srd"},
+            source_evidence=[
+                pb_srd_sql_evidence(
+                    """SELECT A.RECORD_ID
+FROM SYNTHETIC_RECORDS A
+WHERE A.SCOPE_CODE = @SCOPE_CODE;"""
+                ),
+                csharp_call_evidence(["@WORKTYPE", "@SCOPE_CODE"]),
+            ],
         )
 
         self.assertTrue(result.success, result.to_dict())
         self.assertEqual(result.metadata["sp_generation_contract"]["status"], "passed")
-        self.assertEqual(result.metadata["sql_formatting_style"]["mechanical_checks"]["status"], "passed")
+        self.assertEqual(result.metadata["sql_formatting_style"]["status"], "passed")
+        self.assertEqual(result.metadata["sql_final_response_binding"]["status"], "bound")
+        self.assertEqual(result.metadata["sql_final_response_release"]["status"], "passed")
+        self.assertEqual(
+            result.metadata["sql_final_response_release"]["binding"]["status"],
+            "bound",
+        )
+        self.assertEqual(
+            result.metadata["sql_final_response_binding"],
+            result.metadata["sql_final_response_release"]["binding"],
+        )
+
+    def test_composed_sp_and_sql_formatting_verifier_passes_alias_plan_kwargs(self):
+        sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
+      @WORKTYPE    VARCHAR(20) = NULL
+    , @SCOPE_CODE      VARCHAR(2)  = NULL
+AS
+BEGIN
+    SELECT A.RECORD_ID
+         , B.DETAIL_STATUS
+    FROM SYNTHETIC_RECORDS A
+        LEFT OUTER JOIN SYNTHETIC_DETAILS B
+                     ON A.RECORD_ID = B.RECORD_ID
+    WHERE A.SCOPE_CODE = @SCOPE_CODE;
+END
+"""
+        alias_plan = approved_alias_role_plan()
+        with mock.patch(
+            "src.skills.sql_formatting_provider.verify_sql_formatting_style",
+            return_value=passed_sql_formatting_result(sql, sql),
+        ) as formatting:
+            result = verify_pb_migration_sp_with_sql_formatting(
+                sql,
+                sql,
+                source_evidence=[
+                    pb_srd_sql_evidence(
+                        """SELECT A.RECORD_ID
+     , B.DETAIL_STATUS
+FROM SYNTHETIC_RECORDS A
+    LEFT OUTER JOIN SYNTHETIC_DETAILS B
+                 ON A.RECORD_ID = B.RECORD_ID
+WHERE A.SCOPE_CODE = @SCOPE_CODE;"""
+                    ),
+                    csharp_call_evidence(["@WORKTYPE", "@SCOPE_CODE"]),
+                ],
+                alias_role_plan=alias_plan,
+                sql_formatting_verifier_kwargs={"operation": "formatting"},
+            )
+
+        self.assertTrue(result.success, result.to_dict())
+        formatting.assert_called_once()
+        self.assertIs(formatting.call_args.kwargs["alias_role_plan"], alias_plan)
+        self.assertEqual(formatting.call_args.kwargs["operation"], "formatting")
+        self.assertEqual(formatting.call_args.kwargs["cte_temp_table_reason"], "")
 
     def test_datawindow_layout_blocks_when_no_columns_exist(self):
         result = build_datawindow_grid_layout("datawindow(units=0)")

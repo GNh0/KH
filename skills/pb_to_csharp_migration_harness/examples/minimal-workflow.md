@@ -25,9 +25,10 @@ A user describes a browse-and-edit PowerBuilder screen, supplies a field list an
 9. Generate Designer members, controls, explicit grid columns, `Columns.AddRange`, and repository wiring.
    - Put construction, names, layout, `TabIndex`, binding fields, columns, repositories, `Appearance`, `Options`, and static design properties in `.Designer.cs`.
    - Keep code-behind to runtime behavior, event handlers, result binding, and evidence-backed dynamic state changes.
-10. Generate a complete procedure only when the request supplies the result/write contract or explicitly approves an inferred draft.
-11. Run migration C#/SP verifiers when available, then compose SQL formatting through `sql-formatting-bridge.md`.
-12. Finish with `migration-output-checklist.md`.
+10. Generate a release-ready procedure only from verified, readable-path (or host-resolved URI), SHA-256-bound PB/DataWindow SQL, existing-SP, or pasted-SQL body evidence plus an authoritative caller contract. Require same-procedure or meaningful shared-fragment correlation. Bind statements plus IF/ELSE, WHILE, nested BEGIN/END, TRY/CATCH, and transaction events to one unified hierarchical trace. Only the first root-level pre-body `SET NOCOUNT ON` is wrapper ordinal `0`; all other occurrences require authority. Require one source artifact or one complete branch/composite artifact to cover the entire non-wrapper trace. A composite binds exact target, v2 canonical full-trace hash, and every correlated source hash in evidence order. Do not splice events or move them between scopes.
+11. An explicitly approved inferred draft remains `pending` and non-release-ready. It may be handed off as a proposal with blockers, but it must not satisfy completion until authoritative body and caller artifacts are supplied.
+12. Run migration C#/SP verifiers, then compose SQL formatting and the actual final-response binder through `sql-formatting-bridge.md`. Supply the exact final response, authoritative and selected-active provider paths, and correlated front-door provider-selection evidence.
+13. Finish with `migration-output-checklist.md`.
 
 The maintenance-only `profile-update-workflow.md` never runs in this scenario.
 
@@ -54,7 +55,12 @@ The maintenance-only `profile-update-workflow.md` never runs in this scenario.
 - Invents private-looking identifiers instead of preserving supplied names or using placeholders.
 - Adds context DTOs, generic value helpers, parallel call paths, or runtime grid factories.
 - Adds C# wildcard/date shaping or SP helper parameters absent from the caller matrix.
-- Presents a complete procedure without result/write evidence or approved inferred-draft scope.
+- Presents a complete procedure without full per-statement source coverage and target-bound caller evidence, or presents an approved inferred draft as complete.
+- Accepts a missing/unreadable source path, a mismatched SHA-256, or the generated candidate itself as source evidence.
+- Treats `OUTPUT`/`READONLY` inside a default string literal as a parameter option; accepts C#-claimed SQL metadata absent from the artifact; counts a nested `DbParameter`; accepts a `DbParameter` value containing a lambda, delegate, `new` array/collection/object initializer, collection expression, assignment, binary/logical expression, or ternary; accepts a constructor/static constructor/destructor/operator/conversion/accessor, reserved-keyword return type, bare caller fragment, top-level/local function, lambda/delegate/initializer; ignores another active or unsupported `dbClient` call hidden by interpolation, conditional access, parentheses, null-forgiving syntax, comments, or whitespace; accepts caller evidence from an unknown-symbol preprocessor branch; or accepts a globally unbalanced artifact, incomplete call, wrong-case receiver, malformed procedure identity, another SP, or missing/mismatched external identity.
+- Omits or inserts TRY/CATCH, moves a WHILE body to root, removes nested BEGIN/END scope, treats transaction-following `SET NOCOUNT ON` as a generated wrapper, or supplies composite `trace_sql` that omits structural events.
+- Accepts a flat or cross-artifact pool of matching SQL statements after splicing source-source or branch-source arms, swapping a sibling statement with a nested branch opening, swapping `then`/`else` arms, nested arms, or same-arm statement order, or accepts a partial authority that omits events needed to prove the complete trace.
+- Changes identity, comment payload or relative code position, statements, literals, or terminators during `existing_sp_cleanup` and calls it formatting-only.
 - Claims PB parity, UI fidelity, or database equivalence from offline generation.
 - Accepts empty C# or an arbitrary class that lacks a form, initialization, migration method, and UI binding shape required by the packaged contract.
 - Creates controls, sets static layout/name/`TabIndex`/binding properties, registers fixed columns or repositories, or assigns static `Appearance`/`Options` in code-behind without dynamic-state evidence.
@@ -65,6 +71,8 @@ The maintenance-only `profile-update-workflow.md` never runs in this scenario.
 - No maintenance discovery workflow ran.
 - C#, Designer, and SP boundaries are internally consistent.
 - All unsupported semantics and verification gaps are visible.
+- Every completed SP claim names independently captured source artifacts and matching SHA-256 values, has complete per-statement and per-branch traceability, and binds caller evidence to the exact strict target procedure; inferred drafts remain pending.
+- The exact final SQL response is bound to the verified original/candidate/provider receipt before delivery.
 - The packaged required C# structural patterns accept the synthetic mapped form and reject empty or unrelated class text.
 - The synthetic Designer file owns static UI configuration; the synthetic code-behind owns only behavior, events, runtime data binding, and approved dynamic state.
 - Misplaced static UI examples are rejected unless their evidence ledger records a runtime reason and targeted verification.

@@ -25,6 +25,8 @@ Use this harness when a request needs an offline PB-to-C# plan, C#/Designer gene
 - SELECT result fields or SAVE write/payload contract.
 - Error, transaction, logging, and popup-return expectations.
 - Evidence limitations and explicitly approved inferred-draft boundaries.
+- SP operation: `new_generation`, `pb_srd_generation`, `existing_sp_cleanup`, or `approved_inferred_draft`.
+- For pasted SQL, an explicit evidence role: `existing_procedure`, `pb_query`, or `body_fragment`.
 
 Mark PB, C#, Designer, and SQL source as `token_optimizer_status=passthrough`.
 
@@ -46,9 +48,10 @@ Mark PB, C#, Designer, and SQL source as `token_optimizer_status=passthrough`.
 8. Generate C# and Designer output in the selected family. Use one query path and one save path.
    - Write control construction and static design properties to `.Designer.cs` by default.
    - Keep code-behind limited to runtime behavior, event handlers, data binding, and evidence-backed dynamic state changes.
-9. Generate a complete SP only from a supplied result/write contract or explicit inferred-draft approval.
-10. Run migration C#/SP verifiers when available and compose SQL formatting through `sql-formatting-bridge.md`.
-11. Complete `migration-output-checklist.md` and report blocked assumptions.
+9. For an existing-SP cleanup, compare the ordered typed candidate signature exactly with the original, including defaults, `OUTPUT`, and `READONLY`. For new generation, accept parameters only from actual C# caller evidence or a direct ordered caller contract; enforce SQL types whenever that caller contract supplies them. Bind caller evidence to the exact candidate `target_procedure` and program key.
+10. Generate a complete SP only from authoritative SQL/body evidence. An approved inferred draft remains pending and must not be reported as release-ready.
+11. Run migration C#/SP verifiers when available and compose SQL formatting through `sql-formatting-bridge.md`.
+12. Complete `migration-output-checklist.md` and report blocked assumptions.
 
 ## C# Generation
 
@@ -99,11 +102,21 @@ Do not inspect local references during normal generation. Do not add or upgrade 
 ## Stored Procedure Generation
 
 - Build the caller-parameter matrix first. No generated SP parameter may exist outside it unless a separate external caller is documented.
+- Treat PB/DataWindow SQL, current SP text, and pasted SQL as final-completion evidence only after the host persists them to a readable artifact and records a matching SHA-256. A host-resolved URI may identify the artifact, but an unresolved URI or inline text alone remains non-authoritative.
+- A C# caller artifact proves only the ordered parameter names inside exactly one active executable call that names the exact candidate `target_procedure`. Procedure identity must be a strict one-part or two-part identifier; empty or extra qualifiers are rejected before default-`DBO` normalization. The parser masks comments, non-interpolated strings, and character payloads, conservatively includes interpolated-string payloads in invocation counting, validates balanced active-code `()[]{}` delimiters, and tokenizes direct, `?.`, parenthesized, and null-forgiving `dbClient` receivers even when whitespace/comments separate tokens. Exactly one total invocation is allowed; unsupported methods count toward cardinality and the sole call must be a case-sensitive supported SP method. The artifact requires a complete containing `class`/`struct`/`record` and one complete ordinary method with a plausible built-in, qualified, generic, nullable, array, tuple, or task-like return type. Reserved control keywords and unsupported ambiguous type syntax are rejected. Constructors, static constructors, destructors, operators/conversions, accessors, bare fragments, top-level/local functions, lambdas, delegates, anonymous contexts, type-level initializers, and nested calls are rejected. The parser structurally splits top-level call arguments: argument 1 is the direct SP string and every later argument is a direct top-level `new DbParameter("@NAME", value)` constructor. The value grammar permits literals, identifiers, member chains, indexers, method calls with restricted scalar arguments, simple casts/grouping/unary values, and `??`; it rejects lambdas/delegates/anonymous functions, `new`, arrays, collection/object initializers, collection expressions, assignment, general binary/logical expressions, and ternary conditionals. Literal `#if true`/`#if false` is evaluated; an unknown-symbol conditional containing caller evidence is ambiguous and rejected unless a future artifact-bound symbol contract explicitly supports it. It cannot assert SQL type, default, `OUTPUT`, or `READONLY` metadata that the artifact does not contain.
+- A documented external caller is valid only when it is verified and includes caller identity, strict `target_procedure`, a readable artifact path (or host-resolved URI), SHA-256, and an ordered typed parameter contract. The evidence `caller_id` and `target_procedure` must equal the artifact values and the artifact target must equal the candidate SP. Malformed identities such as an empty or third qualifier fail closed rather than collapsing during normalization.
+- Do not accept caller-like fields attached to `pasted_sql`, `described_behavior`, or another unrelated evidence kind.
+- In `existing_sp_cleanup`, allow only whitespace and case formatting. Preserve procedure identity, comment payloads and their relative executable-token positions, statements, operators, literals, terminators, the exact original signature, CTEs, temporary tables, and normalization. Keep the ordinary SSMS Object preamble in its original relative order. Route any requested semantic change through a separate operation.
+- Require every executable new-generation statement and every relevant structural event to consume one matching event in a unified hierarchical stream. IF/ELSE, WHILE body scope, generic nested BEGIN/END, TRY/CATCH openings and closings, and transaction-control statements are canonical events; moving a statement across those scopes changes its path and trace key. Exact duplicate source artifact text is deduplicated, and duplicate candidate execution requires duplicate source occurrences. Trace otherwise unclassified residual executable/control tokens as semantic units instead of ignoring them. Only the first root-level `SET NOCOUNT ON` in a procedure envelope before any non-wrapper event is generated wrapper ordinal `0`; transaction, TRY/CATCH, loop, branch, nested, later, or fragment-level occurrences consume normal ordinals and require authority. Require one single independently bound source artifact or one complete SHA-bound branch/composite artifact to cover the full non-wrapper trace. Never pool disjoint trace-key counts from separate authorities. A `composite_contract` is complete only when evidence and JSON have identical exact target, complete `trace_sql`, `trace_sha256`, and nonempty ordered `source_lineage`. Compute `trace_sha256` as SHA-256 of UTF-8 compact sorted-key JSON `{"schema_version":"kh.pb.nonwrapper-trace.v2","trace_keys":[...]}`, where trace keys are all non-wrapper executable and structural candidate events in traversal order. The trace hash must equal both `trace_sql` and candidate canonical hashes. Lineage must exactly equal every correlated source artifact SHA-256 in evidence order; subsets, unknowns, duplicates, and reordering fail closed. Reject TRY/CATCH omission, scope insertion/removal, loop-body extraction, source-source or branch-source arm splicing, branch/statement sibling swaps, arm swaps, nested-arm swaps, per-arm reordering, partial branch artifacts, unrelated SQL, and candidate self-evidence even when case, comments, whitespace, or terminators differ.
+- Parse SQL parameter defaults before interpreting `OUTPUT`/`READONLY`; those words inside string literals remain literal data.
 - Use local `DECLARE` variables for derived and calculation values.
 - Keep raw search/date inputs at the caller boundary; SQL owns wildcard and date derivation.
 - Preserve supplied branch values, predicates, literals, comments, result order, writes, and transaction behavior.
 - Mark schema-dependent relationships and semantic equivalence as unproven offline.
 - Do not invent a complete body from only control names, parameter names, or expected columns.
+- Require a concrete `DESCRIPTION`. Include `AUTHOR` or `CREATE DATE` only when authoritative source evidence provides the exact value.
+- Permit the standard SSMS `USE`/`GO`, Object comment, ANSI settings, and `GO` preamble before the metadata header.
+- Before delivering emitted SQL, require `verify_pb_migration_sp_with_sql_formatting` or `orchestrate_pb_migration_validation` to return `sql_final_response_binding.status=bound` for the exact nested binding and `sql_final_response_release.status=passed` for the full correlated provider-guard, verifier, and binding envelope. The release's nested `binding` must equal `sql_final_response_binding`; do not conflate release status with binding status.
 
 ## Evidence to produce
 
@@ -114,6 +127,7 @@ Do not inspect local references during normal generation. Do not add or upgrade 
 - Designer/grid/repository plan.
 - Designer ownership inventory, code-behind static UI scan, and any approved dynamic-state exceptions.
 - SP result/write/transaction/error plan.
+- Per-statement body traceability showing `branch_path`, `order_kind`, `order_in_path`, and `source_statement`, `branch_contract`, `generated_wrapper`, or `missing` coverage for every executable candidate unit.
 - Forbidden-pattern scan and verifier results.
 - Manual tests and residual risk.
 - Cross-agent handoff with no hidden chat dependency.
@@ -123,7 +137,7 @@ Do not inspect local references during normal generation. Do not add or upgrade 
 - Missing behavior evidence: generate a contract-level plan or request the exact missing behavior; do not discover local source.
 - Missing dependency evidence: use WinForms fallback and mark provider confidence lower.
 - Missing layout evidence: generate a stable layout plan, not a fidelity claim.
-- Missing result/write contract: block the complete SP or label it as an explicitly approved inferred draft.
+- Missing authenticated result/write/body contract: block the complete SP or label it as an explicitly approved pending inferred draft.
 - SQL formatter unavailable: preserve SQL text and report formatting verification blocked.
 - Verifier unavailable: perform the packaged checklist and state that deterministic verification did not run.
 - Static UI found in code-behind: block completion and move it to `.Designer.cs`, unless the evidence ledger proves and tests a runtime state change.
@@ -143,5 +157,7 @@ A valid run is self-contained and offline. It records the packaged contract vers
   - `src.skills.pb_to_csharp_migration.verify_migration_generated_csharp_style`
   - `src.skills.pb_to_csharp_migration.verify_devexpress_grid_xml_contract`
   - `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_generation_contract`
+  - `src.skills.pb_to_csharp_migration.verify_pb_migration_sp_with_sql_formatting`
+  - `src.skills.pb_to_csharp_migration.orchestrate_pb_migration_validation`
 - Actual runtime path: from the repository root, run `python -m skills.pb_to_csharp_migration_harness.scripts.demo --output-dir <tmp>` for the packaged offline scenario, or call the listed Python targets with the exact packaged contract identity during a real migration.
 - Completion rule: withhold completion when structural validation, source evidence, caller/SP mapping, or offline verification remains blocked.

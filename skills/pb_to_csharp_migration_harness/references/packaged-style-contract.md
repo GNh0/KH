@@ -315,8 +315,6 @@ Rules:
 
 ```sql
 -- =============================================
--- AUTHOR:      <maintainer>
--- CREATE DATE: <yyyy-mm-dd>
 -- DESCRIPTION: <purpose>
 -- =============================================
 CREATE OR ALTER PROCEDURE [dbo].[usp_<Feature>_<Operation>]
@@ -327,7 +325,20 @@ BEGIN
     SET NOCOUNT ON;
 ```
 
-Placeholders must be replaced from the request or left visibly unresolved in a draft. Never substitute packaged identities.
+`DESCRIPTION` is required and must be concrete. `AUTHOR` and `CREATE DATE` are optional lines placed above `DESCRIPTION` only when authoritative supplied source contains their exact values. Unresolved placeholders, inferred people, and invented dates block output.
+
+Operation boundaries:
+
+- `new_generation`: signature parameters come only from actual C# caller evidence or a direct ordered caller contract; supplied SQL types must match exactly.
+- `pb_srd_generation`: the new-generation rule applies and explicit PB/DataWindow SQL evidence is additionally required.
+- `existing_sp_cleanup`: formatting-only equivalence allows whitespace and keyword/identifier case changes. Procedure identity, comment payloads and their relative executable-token positions, statements, operators, literals, terminators, and the ordered typed signature including defaults, `OUTPUT`, and `READONLY` must remain exact. An unchanged ordinary SSMS Object preamble is supported. A requested semantic change is a separate operation.
+- `approved_inferred_draft`: requires a traceable approval artifact and approved parameter list, remains pending, and cannot be released as complete.
+
+Pasted SQL declares one role: `existing_procedure`, `pb_query`, or `body_fragment`. A summary or object name without a readable, SHA-256-matched source artifact is not body or signature authority. Every executable candidate statement and structural control event consumes one matching event in a unified hierarchical stream. IF/ELSE, WHILE body scope, generic nested BEGIN/END, BEGIN TRY/END TRY, BEGIN CATCH/END CATCH, and transaction-control statements preserve scope and deterministic order. Duplicate execution requires duplicate source occurrences, and unclassified residual executable/control tokens remain traceable semantic units. A contained fragment cannot authorize an additional scope, branch, transaction, DML, JOIN, predicate, declaration, assignment, or error/control statement. Only the first root-level `SET NOCOUNT ON` in a real procedure envelope before every non-wrapper event is generated wrapper ordinal `0`. Every transaction-following, duplicate, later, nested, branch-path, or fragment-level occurrence is an ordinary traced event. One independently bound source artifact or one complete SHA-bound branch/composite artifact must cover the whole non-wrapper stream. Independent authorities are never pooled. A complete composite binds exact target, complete `trace_sql`, canonical `trace_sha256`, and ordered lineage equal to all correlated source hashes. The hash is SHA-256 over UTF-8 compact sorted-key JSON with schema `kh.pb.nonwrapper-trace.v2` and ordered non-wrapper executable and structural `trace_keys`. TRY/CATCH omission, loop-body extraction, scope movement, branch/statement swaps, source-source and branch-source splicing, partial/unknown/duplicate/reordered lineage, wrong hashes, arm swaps, nested-arm swaps, per-arm reordering, unrelated source SQL, and generated-candidate reuse after case/comment/terminator-only disguise are rejected.
+
+A C# caller artifact must use a strict one-part or two-part identity for the exact candidate `target_procedure`; empty or extra qualifiers fail before normalization. The parser masks comments and non-interpolated string/character payloads, conservatively exposes interpolated payloads for invocation counting, validates globally balanced active-code delimiters, then tokenizes direct, conditional-access, parenthesized, and null-forgiving receivers across whitespace/comments. Every active `dbClient` invocation counts, including unsupported methods; exactly one total is allowed and it must be a case-sensitive supported SP method. The artifact requires a complete containing `class`/`struct`/`record` and one complete ordinary method with a plausible built-in, qualified, generic, nullable, array, tuple, or task-like return type. Reserved control keywords and ambiguous unsupported type syntax fail closed. Constructors, static constructors, destructors, operators/conversions, accessors, bare fragments, top-level/local functions, lambdas, delegates, anonymous contexts, type-level initializers, and nested calls are rejected. The parser structurally splits top-level arguments: the first is the direct SP string and every later argument is a direct supported `new DbParameter` constructor. Parameter values are limited to scalar literals, identifiers, member access, indexers, method calls using the same restricted argument grammar, simple casts/grouping/unary values, and `??`. Lambdas, delegates, anonymous functions, `new`, arrays, collection/object initializers, collection expressions, assignments, general binary/logical expressions, and ternary conditionals do not count. Literal preprocessor conditions are evaluated; caller evidence in an unknown-symbol conditional is rejected without artifact-bound symbol evidence. It proves ordered direct `DbParameter` names only. SQL types, defaults, `OUTPUT`, and `READONLY` require a direct trusted contract or a verified external-caller JSON artifact.
+
+The metadata parser accepts the normal SSMS `USE`/`GO`, Object block comment, `SET ANSI_NULLS`/`GO`, and `SET QUOTED_IDENTIFIER`/`GO` preamble. SQL delivery additionally requires the actual final-response binder receipt for the exact fenced candidate and correlated provider selection.
 
 ### Select Family
 

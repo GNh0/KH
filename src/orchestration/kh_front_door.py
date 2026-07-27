@@ -23,6 +23,8 @@ from src.skills.uaf_skill_validator import (
     validate_skill_file,
 )
 from src.skills.sql_formatting_provider import (
+    SQL_PROVIDER_SELECTION_SCHEMA_VERSION,
+    attach_sql_provider_selection_runtime_receipt,
     inspect_host_sql_formatting_provider,
     packaged_sql_formatting_provider,
 )
@@ -2172,7 +2174,7 @@ def _required_next_actions(
         if immediate_next_skills[-1] == "sql-formatting-style-harness":
             actions.insert(
                 0,
-                "NEXT SKILL EXECUTION: apply the selected SQL formatting provider first, then run `sql-formatting-style-harness` verifier or record a blocked reason before SQL output, DB writes, or final claims.",
+                "NEXT SKILL EXECUTION: guard and apply the selected SQL formatting provider first, run `sql-formatting-style-harness` against the complete candidate, then bind the exact verified candidate hash to one complete SQL fence or record a blocked reason before SQL output, DB writes, or final claims. Every SQL correction invalidates the prior verifier receipt.",
             )
         else:
             actions.insert(
@@ -2198,7 +2200,7 @@ def _required_next_actions(
     if sql_role_ids:
         formatted_roles = ", ".join(f"`{role_id}`" for role_id in _dedupe(sql_role_ids))
         actions.append(
-            f"SQL PRE-OUTPUT GATE: before emitting, rewriting, or correcting any SQL/T-SQL, apply selected provider {formatted_roles}; read the selected provider SKILL.md from its recorded provenance, preserve literals/comments/localized business text, and record sql-formatting-style-harness verifier evidence or an explicit blocked reason."
+            f"SQL PRE-OUTPUT GATE: before emitting, rewriting, or correcting any SQL/T-SQL, apply selected provider {formatted_roles} from its exact recorded path and reject disabled, backup, staging, stale-cache, or arbitrary copies; preserve literals/comments/localized business text; verify the complete candidate; invalidate old evidence after every correction; and release only one complete SQL fence whose text matches the successful formatted_sha256, otherwise record an explicit blocked reason."
         )
     if controller_id and controller_id not in {"kh", "none"}:
         actions.append(
@@ -2675,6 +2677,37 @@ def main() -> int:
         payload = result.to_compact_summary_dict()
     else:
         payload = result.to_dict()
+    selected_sql_provider = _selected_sql_formatting_provider_skill(
+        result.plugin_route
+    )
+    if selected_sql_provider and not args.micro_summary:
+        payload["plugin_route"] = dict(result.plugin_route)
+        selected_roles = [result.plugin_route.get("controller", {}) or {}]
+        selected_roles.extend(result.plugin_route.get("assistants", []) or [])
+        selected_role = next(
+            role
+            for role in selected_roles
+            if isinstance(role, dict)
+            and role.get("provider_id") == selected_sql_provider
+            and role.get("capability") == "sql_formatting"
+        )
+        metadata = selected_role.get("metadata", {}) or {}
+        provider_path = str(Path(metadata["path"]).expanduser().resolve())
+        payload.update(
+            {
+                "schema_version": SQL_PROVIDER_SELECTION_SCHEMA_VERSION,
+                "host": args.host,
+                "project": str(Path(args.project or Path.cwd()).expanduser().resolve()),
+                "provider_id": selected_sql_provider,
+                "provider_path": provider_path,
+                "selected_active_provider_path": provider_path,
+                "provider_source": metadata["source"],
+                "compatibility": metadata["compatibility"],
+                "selection_status": "selected",
+                "execution_gate": dict(result.execution_gate),
+            }
+        )
+        payload = attach_sql_provider_selection_runtime_receipt(payload)
     if args.summary or args.micro_summary:
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     else:

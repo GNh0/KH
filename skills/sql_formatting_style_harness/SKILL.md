@@ -23,7 +23,7 @@ Use this harness after selecting the host-local `sql-formatting` contract or the
 2. Select one style contract and record its path and SHA-256. Prefer the host-local skill when present; otherwise use `references/style-contract.md` as a standalone fallback.
 3. Declare `operation="formatting"` or `operation="refactor"`.
 4. For formatting, preserve every token except whitespace, safe case normalization, and substitutions from a complete verified alias plan. Every scalar function remains present.
-5. Before changing aliases, create a complete per-scope role plan from concrete source/reviewer evidence.
+5. For every outer multi-source formatted scope, create a complete per-scope role plan from concrete source/reviewer evidence before emitting the candidate. An unchanged derived-internal multi-source scope whose explicit aliases stay in the documented `T` family is exempt; alias changes in any scope still require a complete plan.
 6. For a scalar-function-to-join request, inspect the actual function definition through DB/MCP/project source when available. Supply `scalar_function_refactor`; never infer behavior from a function or table name.
 7. Run `verify_sql_formatting_style(...)` or the module CLI against the exact pair. Skill selection or file reads are not verifier evidence.
 
@@ -41,13 +41,17 @@ Use this harness after selecting the host-local `sql-formatting` contract or the
 
 ## Alias Plan
 
-- No alias change: state is `not_needed`.
+- An unchanged unaliased single-source scope is `not_needed`. If the sole source in an outer statement scope is explicitly aliased, its main alias is `A`; another alias blocks even when unchanged. Existing nested/CTE internal alias conventions remain separate.
+- Every source in a multi-source formatted scope has an explicit alias. Unaliased multi-source output blocks even when the original was also unaliased.
+- Comma-separated `FROM` sources count as multi-source exactly like explicit joins.
+- Every non-exempt multi-source formatted scope requires a complete source-bound, reviewer-approved role plan even when its aliases are unchanged. Missing role evidence blocks; it never permits the unaliased or non-canonical candidate to pass.
+- An unchanged multi-source scope inside a derived table is exempt from the outer A/B plan only when every declaration is explicitly aliased with the documented `T`, `T1`, or related internal family. Any alias change removes that exemption and requires a scope plan.
 - Alias change without a complete plan: block.
 - In every parsed scope, reject declaration aliases `A1`, `A2`, and later numbered `A` aliases even when source and candidate aliases are unchanged. Numbered non-main families such as `B1`/`B2` remain valid.
 - Every changed scope requires exactly one first `main` role containing exactly one source; all-support and multi-source main plans block.
-- The one main source is `A`. Generated `A1`, `A2`, and later main aliases are invalid.
+- The structural first `FROM` source, or parsed DML target source, is the one main source and uses `A`. This structural choice does not infer semantic support-family grouping from later source order. Generated `A1`, `A2`, and later main aliases are invalid.
 - Each subsequent distinct business-role family advances sequentially through `B`, `C`, `D`, and so on.
-- A singleton non-main family uses its letter without a suffix. Multiple siblings in one non-main family use suffixes from the first member, for example `B1`, `B2`; the next distinct family is `C`.
+- A singleton non-main family starts at `B` and uses its letter without a suffix. Multiple siblings in one non-main family use suffixes from the first member, for example `B1`, `B2`; numbered aliases are valid only when the approved role plan declares those members as siblings. The next distinct family is `C`.
 - Family grouping comes from structured `reviewer_approved_business_role` evidence, not table identity, repetition, or source order alone. Each evidence object must name a controlled reviewer artifact URI using `review`, `spec`, `ticket`, or `design`, set `reviewer_approved=true`, and exactly cover the declared role names. The compatibility form is limited to `review://<review-id>/<declared-role-names>-roles`.
 - Every changed scope must be present. Every declaration and changed reference must be covered. Cross-scope members, skipped role letters, missing aliases, and vague/empty basis references block.
 - Scope-aware binding applies to nested/correlated queries and to `UPDATE ... FROM`, joined `DELETE`, and `MERGE`; an outer rename never owns a reference shadowed by an inner declaration.
@@ -66,7 +70,7 @@ For mappings with eight or more items, canonical non-comment expression text of 
 
 ## Query Layout Contract
 
-`JOIN` layout is source-authoritative. The verifier does not require eight spaces before `JOIN` or a fixed offset for `ON`/`AND`; derived-table indentation is preserved rather than inferred from generated output. For new SQL only, one query indentation level below `FROM` is fallback authoring guidance, with same-block `ON`/`AND` terms aligned.
+For every join, including one whose source is a derived table, use spaces only: leading tabs are invalid. The complete join type/hint prefix and `JOIN` token stay on one line starting eight columns to the right of the current query scope's `FROM` column. `ON` and each actual line-leading same-join continuation `AND` align to the `I` column of that join's `JOIN` token. For a derived source, its top-level `SELECT`, `FROM`, `WHERE`, `GROUP`, `HAVING`, `ORDER`, and set-operator clauses start four columns inside the outer join clause, while the closing parenthesis and alias realign with the outer join clause and remain on the same physical line. Inline `AND`, `BETWEEN` delimiters, `CASE`-internal `AND`, and nested-query predicates are not outer alignment targets.
 
 Query-level `GROUP BY` and `ORDER BY` lists use a 100-column preferred width and 120-column hard ceiling. Short simple lists stay inline. Long lists split only at top-level commas and pack compactly across continuation rows; complex items stay atomic. Direction and collation modifiers stay attached. Window `ORDER BY` is excluded by query-depth detection. The exact policy is emitted as `style_lint.query_list_layout_contract`.
 
@@ -90,7 +94,7 @@ Query-level `GROUP BY` and `ORDER BY` lists use a 100-column preferred width and
 
 ## Required outputs
 
-- Correlated verifier call/output evidence, using call IDs when available.
+- Correlated verifier call/output evidence, using call IDs when available. Before final SQL delivery, require the combined provider-path and final-response release receipt from `guard_and_bind_verified_sql_final_response`.
 - `success`, `status`, `exit_code`, and a non-empty `verification_id`.
 - `release_readiness.status=ready|pending|blocked`; pending refactors must have `success=false` and non-zero `exit_code`.
 - Valid `original_sha256`, `formatted_sha256`, and `style_contract_sha256` values.

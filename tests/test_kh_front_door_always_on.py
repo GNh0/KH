@@ -10,6 +10,9 @@ from src.orchestration.kh_front_door import SkillSource, build_kh_front_door
 from src.orchestration.plugin_composition import compose_plugin_route
 from src.orchestration.request_classifier import classify_request
 from src.orchestration.session_skill_audit import analyze_session_skills
+from src.skills.sql_formatting_provider import (
+    validate_sql_provider_selection_runtime_receipt,
+)
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 
 
@@ -411,7 +414,7 @@ Do not claim unexecuted work.
         collect_catalog.assert_not_called()
         discover_host_skills.assert_not_called()
         packet = result.to_micro_summary_dict()
-        self.assertEqual(packet["src"]["v"], "2.9.135")
+        self.assertEqual(packet["src"]["v"], "2.9.136")
         self.assertEqual(packet["cls"], {"c": "l", "x": "direct"})
         self.assertNotIn("next", packet)
 
@@ -436,6 +439,36 @@ Do not claim unexecuted work.
         self.assertEqual(
             result.immediate_next_skills,
             ["sql-formatting", "sql-formatting-style-harness"],
+        )
+
+    def test_front_door_cli_signs_sql_provider_selection(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "src.orchestration.kh_front_door",
+                "--prompt",
+                "Format this SQL: SELECT ORDER_ID FROM ORDER_HEADER",
+                "--project",
+                str(repo_root),
+                "--host",
+                "local",
+                "--summary",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            encoding="utf-8",
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(validate_sql_provider_selection_runtime_receipt(payload), [])
+        self.assertEqual(
+            payload["provider_selection_receipt"]["external_authenticity"],
+            "unverified",
         )
 
     def test_micro_sql_path_prefers_canonical_host_local_provider(self):

@@ -4,7 +4,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -291,9 +291,12 @@ PB_MIGRATION_DEVELOPMENT_SPEC_RULES = {
     ),
 }
 SP_METADATA_HEADER_PATTERN = re.compile(
-    r"^\s*--\s*=+\s*\r?\n"
-    r"--\s*AUTHOR\s*:\s*.*\r?\n"
-    r"--\s*CREATE\s+DATE\s*:\s*\d{4}-\d{2}-\d{2}\s*\r?\n"
+    r"^\s*(?:USE\s+(?:\[[^\]]+\]|\S+)\s*\r?\n\s*GO\s*\r?\n\s*)?"
+    r"(?:/\*+[\s\S]*?\bObject\s*:\s*StoredProcedure\b[\s\S]*?\*+/\s*)?"
+    r"(?:(?:SET\s+(?:ANSI_NULLS|QUOTED_IDENTIFIER)\s+(?:ON|OFF)\s*\r?\n\s*GO\s*\r?\n\s*){0,2})"
+    r"--\s*=+\s*\r?\n"
+    r"(?:--\s*AUTHOR\s*:\s*(?P<author>.*)\r?\n)?"
+    r"(?:--\s*CREATE\s+DATE\s*:\s*(?P<create_date>\d{4}-\d{2}-\d{2})\s*\r?\n)?"
     r"--\s*DESCRIPTION\s*:\s*(?P<description>\S.*)\r?\n"
     r"--\s*=+\s*\r?\n"
     r"\s*(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE\b",
@@ -1229,6 +1232,7 @@ def _apply_consumed_profile_rules(
     domain: str,
     procedure_name: str = "",
     required_source_text: str | None = None,
+    preserve_existing: bool = False,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if not profile_context.get("consumption"):
         return [], profile_context
@@ -1270,7 +1274,9 @@ def _apply_consumed_profile_rules(
         else:
             matched_required_pattern_ids.append(item["id"])
 
-    forbidden_patterns = _normalized_profile_patterns(rules.get("forbidden_patterns"))
+    forbidden_patterns = (
+        [] if preserve_existing else _normalized_profile_patterns(rules.get("forbidden_patterns"))
+    )
     if forbidden_patterns:
         applied.append(f"{domain}.forbidden_patterns")
     for item in forbidden_patterns:
@@ -6060,16 +6066,2930 @@ def verify_migration_generated_csharp_style(
         metadata=metadata,
     )
 
+def _split_sp_parameter_list(text: str) -> List[str]:
+    parts: List[str] = []
+    start = 0
+    depth = 0
+    in_string = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "'":
+            if in_string and index + 1 < len(text) and text[index + 1] == "'":
+                index += 2
+                continue
+            in_string = not in_string
+        elif not in_string:
+            if char == "(":
+                depth += 1
+            elif char == ")" and depth > 0:
+                depth -= 1
+            elif char == "," and depth == 0:
+                part = text[start:index].strip()
+                if part:
+                    parts.append(part)
+                start = index + 1
+        index += 1
+    tail = text[start:].strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _mask_sql_comments_and_strings(sql_text: str, *, mask_strings: bool) -> str:
+    text = str(sql_text or "")
+    result = list(text)
+    state = "code"
+    index = 0
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if state == "code":
+            if char == "'":
+                state = "string"
+                if mask_strings:
+                    result[index] = " "
+            elif char == "-" and next_char == "-":
+                state = "line_comment"
+                result[index] = result[index + 1] = " "
+                index += 1
+            elif char == "/" and next_char == "*":
+                state = "block_comment"
+                result[index] = result[index + 1] = " "
+                index += 1
+        elif state == "string":
+            if mask_strings:
+                result[index] = " "
+            if char == "'" and next_char == "'":
+                if mask_strings:
+                    result[index + 1] = " "
+                index += 1
+            elif char == "'":
+                state = "code"
+        elif state == "line_comment":
+            if char not in "\r\n":
+                result[index] = " "
+            else:
+                state = "code"
+        elif state == "block_comment":
+            if char == "*" and next_char == "/":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "code"
+            elif char not in "\r\n":
+                result[index] = " "
+        index += 1
+    return "".join(result)
+
+
+def _extract_sp_parameter_text(sql_text: str) -> str:
+    source = str(sql_text or "")
+    searchable = _mask_sql_comments_and_strings(source, mask_strings=True)
+    match = re.search(
+        r"(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE\s+"
+        r"(?:\[[^\]]+\]|[A-Z0-9_]+)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z0-9_]+))?",
+        searchable,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return ""
+    depth = 0
+    index = match.end()
+    while index < len(searchable):
+        char = searchable[index]
+        if char == "(":
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+        elif depth == 0 and searchable[index : index + 2].upper() == "AS":
+            before = searchable[index - 1] if index > 0 else " "
+            after = searchable[index + 2] if index + 2 < len(searchable) else " "
+            if not (before.isalnum() or before in "_@") and not (
+                after.isalnum() or after == "_"
+            ):
+                return source[match.end() : index]
+        index += 1
+    return ""
+
+
+def _normalize_sp_default(value: str) -> str:
+    result: List[str] = []
+    pending_space = False
+    in_string = False
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == "'":
+            if pending_space and result and not result[-1].isspace():
+                result.append(" ")
+            pending_space = False
+            result.append(char)
+            if in_string and index + 1 < len(value) and value[index + 1] == "'":
+                result.append("'")
+                index += 2
+                continue
+            in_string = not in_string
+        elif not in_string and char.isspace():
+            pending_space = True
+        else:
+            if pending_space and result and not result[-1].isspace():
+                result.append(" ")
+            pending_space = False
+            result.append(char)
+        index += 1
+    return "".join(result).strip()
+
+
+def _extract_sp_parameter_contract(sql_text: str) -> List[Dict[str, Any]]:
+    parameter_text = _extract_sp_parameter_text(sql_text)
+    if not parameter_text:
+        return []
+    parameter_text = _mask_sql_comments_and_strings(
+        parameter_text,
+        mask_strings=False,
+    )
+    parameters: List[Dict[str, Any]] = []
+    for ordinal, raw in enumerate(_split_sp_parameter_list(parameter_text)):
+        parameter = re.match(
+            r"^\s*@(?P<name>[A-Z][A-Z0-9_]*)\s+"
+            r"(?P<type>(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*))?)"
+            r"(?P<type_args>\s*\([^)]*\))?(?P<rest>[\s\S]*)$",
+            raw,
+            flags=re.IGNORECASE,
+        )
+        if not parameter:
+            continue
+        rest = parameter.group("rest").strip()
+        searchable_rest = _mask_sql_comments_and_strings(rest, mask_strings=True)
+        option_matches = list(
+            re.finditer(r"\b(?:OUT(?:PUT)?|READONLY)\b", searchable_rest, flags=re.IGNORECASE)
+        )
+        output = any(match.group(0).upper() in {"OUT", "OUTPUT"} for match in option_matches)
+        readonly = any(match.group(0).upper() == "READONLY" for match in option_matches)
+        default_index = searchable_rest.find("=")
+        default_end = len(rest)
+        if default_index >= 0:
+            trailing_options = [match.start() for match in option_matches if match.start() > default_index]
+            if trailing_options:
+                default_end = min(trailing_options)
+        default_value = (
+            _normalize_sp_default(rest[default_index + 1 : default_end].strip())
+            if default_index >= 0
+            else ""
+        )
+        type_name = re.sub(r"\s*\.\s*", ".", parameter.group("type")).upper()
+        type_args = re.sub(r"\s+", "", parameter.group("type_args") or "").upper()
+        parameters.append(
+            {
+                "ordinal": ordinal,
+                "name": f"@{parameter.group('name').upper()}",
+                "type": type_name,
+                "type_args": type_args,
+                "type_spec": f"{type_name}{type_args}",
+                "default_present": default_index >= 0,
+                "default": default_value,
+                "output": output,
+                "readonly": readonly,
+            }
+        )
+    return parameters
+
+
+def _normalize_caller_parameter_contract(value: Any) -> List[Dict[str, Any]]:
+    if isinstance(value, str):
+        value = re.findall(r"@[A-Za-z][A-Za-z0-9_]*", value)
+    if not isinstance(value, (list, tuple)):
+        return []
+    result: List[Dict[str, Any]] = []
+    for ordinal, item in enumerate(value):
+        if isinstance(item, dict):
+            raw_name = item.get("name") or item.get("parameter") or item.get("parameter_name")
+            match = re.fullmatch(r"@?([A-Za-z][A-Za-z0-9_]*)", str(raw_name or "").strip())
+            if not match:
+                continue
+            type_spec = re.sub(r"\s+", "", str(item.get("type_spec") or item.get("sql_type") or "")).upper()
+            result.append(
+                {
+                    "ordinal": ordinal,
+                    "name": f"@{match.group(1).upper()}",
+                    "type_spec": type_spec,
+                    "type_specified": bool(type_spec),
+                    "default_present": bool(item.get("default_present", "default" in item)),
+                    "default_specified": "default_present" in item or "default" in item,
+                    "default": _normalize_sp_default(str(item.get("default") or "").strip()),
+                    "output": bool(item.get("output")),
+                    "output_specified": "output" in item,
+                    "readonly": bool(item.get("readonly")),
+                    "readonly_specified": "readonly" in item,
+                }
+            )
+            continue
+        match = re.search(r"@?([A-Za-z][A-Za-z0-9_]*)", str(item or ""))
+        if match:
+            result.append(
+                {
+                    "ordinal": ordinal,
+                    "name": f"@{match.group(1).upper()}",
+                    "type_spec": "",
+                    "type_specified": False,
+                    "default_present": False,
+                    "default_specified": False,
+                    "default": "",
+                    "output": False,
+                    "output_specified": False,
+                    "readonly": False,
+                    "readonly_specified": False,
+                }
+            )
+    return result
+
+
+def _sp_signatures_equal(
+    candidate: List[Dict[str, Any]],
+    original: List[Dict[str, Any]],
+) -> bool:
+    fields = ["name", "type_spec", "default_present", "default", "output", "readonly"]
+    return len(candidate) == len(original) and all(
+        all(candidate[index].get(field) == original[index].get(field) for field in fields)
+        for index in range(len(candidate))
+    )
+
+
+def _sql_contract_tokens(
+    sql_text: str,
+    *,
+    include_comments: bool,
+    ignore_statement_terminators: bool = False,
+) -> List[tuple[str, str]]:
+    """Tokenize SQL for preservation checks without changing string/comment payloads."""
+    text = str(sql_text or "")
+    tokens: List[tuple[str, str]] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if char.isspace():
+            index += 1
+            continue
+        if char == "-" and next_char == "-":
+            end = text.find("\n", index + 2)
+            if end < 0:
+                end = len(text)
+            if include_comments:
+                tokens.append(("comment", text[index:end].rstrip("\r")))
+            index = end
+            continue
+        if char == "/" and next_char == "*":
+            end = text.find("*/", index + 2)
+            end = len(text) if end < 0 else end + 2
+            if include_comments:
+                tokens.append(("comment", text[index:end].replace("\r\n", "\n")))
+            index = end
+            continue
+        if char == "'" or (char in "Nn" and next_char == "'"):
+            start = index
+            if char in "Nn":
+                index += 1
+            index += 1
+            while index < len(text):
+                if text[index] == "'":
+                    if index + 1 < len(text) and text[index + 1] == "'":
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            tokens.append(("string", text[start:index]))
+            continue
+        if char == "[":
+            start = index
+            index += 1
+            while index < len(text):
+                if text[index] == "]":
+                    if index + 1 < len(text) and text[index + 1] == "]":
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                index += 1
+            tokens.append(("identifier", text[start:index].upper()))
+            continue
+        if char.isalpha() or char in "_@#$":
+            start = index
+            index += 1
+            while index < len(text) and (text[index].isalnum() or text[index] in "_@#$"):
+                index += 1
+            tokens.append(("word", text[start:index].upper()))
+            continue
+        if char.isdigit():
+            start = index
+            index += 1
+            while index < len(text) and (text[index].isalnum() or text[index] in ".xX"):
+                index += 1
+            tokens.append(("number", text[start:index].upper()))
+            continue
+        if char == ";" and ignore_statement_terminators:
+            index += 1
+            continue
+        if text[index : index + 2] in {"<=", ">=", "<>", "!=", "!<", "!>", "+=", "-=", "*=", "/=", "%="}:
+            tokens.append(("symbol", text[index : index + 2]))
+            index += 2
+            continue
+        tokens.append(("symbol", char))
+        index += 1
+    return tokens
+
+
+def _sql_code_tokens(sql_text: str, *, ignore_statement_terminators: bool = False) -> List[tuple[str, str]]:
+    return _sql_contract_tokens(
+        sql_text,
+        include_comments=False,
+        ignore_statement_terminators=ignore_statement_terminators,
+    )
+
+
+def _sql_comment_tokens(sql_text: str) -> List[str]:
+    return [
+        value
+        for kind, value in _sql_contract_tokens(sql_text, include_comments=True)
+        if kind == "comment"
+    ]
+
+
+def _contains_token_sequence(haystack: Sequence[tuple[str, str]], needle: Sequence[tuple[str, str]]) -> bool:
+    if not needle or len(needle) > len(haystack):
+        return False
+    limit = len(haystack) - len(needle) + 1
+    return any(list(haystack[index : index + len(needle)]) == list(needle) for index in range(limit))
+
+
+def _meaningful_sql_fragment_tokens(sql_text: str) -> List[tuple[str, str]]:
+    tokens = _sql_code_tokens(sql_text, ignore_statement_terminators=True)
+    structural_keywords = {"SELECT", "FROM", "WHERE", "JOIN", "INSERT", "UPDATE", "DELETE", "EXEC", "EXECUTE"}
+    significant = [
+        value
+        for kind, value in tokens
+        if kind in {"identifier", "word", "number"}
+        and value not in structural_keywords | {"INNER", "LEFT", "OUTER", "AS", "ON"}
+    ]
+    has_structure = any(value in structural_keywords for _, value in tokens)
+    return tokens if len(tokens) >= 2 and has_structure and significant else []
+
+
+def _source_correlates_to_candidate(
+    item: Dict[str, Any],
+    source_text: str,
+    candidate_sql: str,
+) -> tuple[bool, str]:
+    candidate_name = _extract_sp_procedure_name(candidate_sql)
+    source_name = _extract_sp_procedure_name(source_text)
+    kind = str(item.get("kind") or "")
+    role = str(item.get("evidence_role") or "")
+    source_tokens = _meaningful_sql_fragment_tokens(source_text)
+    candidate_tokens = _sql_code_tokens(candidate_sql, ignore_statement_terminators=True)
+
+    if kind == "pasted_sql" and role == "body_fragment":
+        return (
+            bool(source_tokens and _contains_token_sequence(candidate_tokens, source_tokens)),
+            "body_fragment",
+        )
+    if source_name and candidate_name and source_name == candidate_name:
+        return True, "same_procedure_identity"
+    source_statement_fingerprints = {
+        unit["fingerprint"] for unit in _sql_traceability_units(source_text)
+    }
+    candidate_statement_fingerprints = {
+        unit["fingerprint"] for unit in _sql_traceability_units(candidate_sql)
+    }
+    if source_statement_fingerprints & candidate_statement_fingerprints:
+        return True, "source_statement_preserved"
+    if source_tokens and _contains_token_sequence(candidate_tokens, source_tokens):
+        return True, "source_sql_preserved_verbatim"
+
+    provenance = item.get("candidate_provenance")
+    if not isinstance(provenance, Mapping):
+        return False, "candidate_provenance_missing"
+    target_name = _normalized_sp_object_name(provenance.get("target_procedure"))
+    if not candidate_name or target_name != candidate_name:
+        return False, "candidate_provenance_target_mismatch"
+    fragments = provenance.get("preserved_fragments")
+    if not isinstance(fragments, (list, tuple)) or not fragments:
+        return False, "candidate_provenance_fragments_missing"
+    source_all_tokens = _sql_code_tokens(source_text, ignore_statement_terminators=True)
+    for fragment in fragments:
+        fragment_tokens = _meaningful_sql_fragment_tokens(str(fragment or ""))
+        if not fragment_tokens:
+            return False, "candidate_provenance_fragment_too_weak"
+        if not _contains_token_sequence(source_all_tokens, fragment_tokens):
+            return False, "candidate_provenance_fragment_missing_from_source"
+        if not _contains_token_sequence(candidate_tokens, fragment_tokens):
+            return False, "candidate_provenance_fragment_missing_from_candidate"
+    return True, "explicit_preserved_fragments"
+
+
+_SQL_TRACEABLE_STATEMENT_STARTS = {
+    "DECLARE",
+    "DELETE",
+    "EXEC",
+    "EXECUTE",
+    "IF",
+    "INSERT",
+    "MERGE",
+    "PRINT",
+    "RAISERROR",
+    "RETURN",
+    "SELECT",
+    "SET",
+    "THROW",
+    "TRUNCATE",
+    "UPDATE",
+    "WHILE",
+}
+def _extract_sp_body_or_sql_fragment(sql_text: str) -> str:
+    source = str(sql_text or "")
+    searchable = _mask_sql_comments_and_strings(source, mask_strings=True)
+    match = re.search(
+        r"(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE\s+"
+        r"(?:\[[^\]]+\]|[A-Z0-9_]+)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z0-9_]+))?",
+        searchable,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return source
+    depth = 0
+    index = match.end()
+    while index < len(searchable):
+        char = searchable[index]
+        if char == "(":
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+        elif depth == 0 and searchable[index : index + 2].upper() == "AS":
+            before = searchable[index - 1] if index > 0 else " "
+            after = searchable[index + 2] if index + 2 < len(searchable) else " "
+            if not (before.isalnum() or before in "_@") and not (
+                after.isalnum() or after == "_"
+            ):
+                return source[index + 2 :]
+        index += 1
+    return source
+
+
+def _trim_sql_unit_tokens(tokens: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    result = list(tokens)
+    while result and result[-1] == ("symbol", ";"):
+        result.pop()
+    return tuple(result)
+
+
+def _sql_traceability_units(sql_text: str) -> List[Dict[str, Any]]:
+    """Extract executable units while treating only the procedure envelope as generated structure."""
+    tokens = _sql_code_tokens(
+        _extract_sp_body_or_sql_fragment(sql_text),
+        ignore_statement_terminators=False,
+    )
+    units: List[Dict[str, Any]] = []
+    index = 0
+    while index < len(tokens):
+        kind, value = tokens[index]
+        if kind != "word" or value not in _SQL_TRACEABLE_STATEMENT_STARTS:
+            index += 1
+            continue
+
+        start = index
+        statement_kind = value
+        paren_depth = 0
+        case_depth = 0
+        index += 1
+        while index < len(tokens):
+            token_kind, token_value = tokens[index]
+            if token_kind == "symbol":
+                if token_value == "(":
+                    paren_depth += 1
+                elif token_value == ")" and paren_depth > 0:
+                    paren_depth -= 1
+                elif token_value == ";" and paren_depth == 0 and case_depth == 0:
+                    index += 1
+                    break
+            elif token_kind == "word":
+                if token_value == "CASE":
+                    case_depth += 1
+                elif token_value == "END" and case_depth > 0:
+                    case_depth -= 1
+                elif paren_depth == 0 and case_depth == 0:
+                    if statement_kind in {"IF", "WHILE"} and token_value == "BEGIN":
+                        break
+                    if token_value in {"END", "ELSE"}:
+                        break
+                    if token_value in _SQL_TRACEABLE_STATEMENT_STARTS:
+                        insert_select = statement_kind == "INSERT" and token_value == "SELECT"
+                        merge_action = statement_kind == "MERGE" and token_value in {
+                            "DELETE",
+                            "INSERT",
+                            "UPDATE",
+                        }
+                        update_set = statement_kind == "UPDATE" and token_value == "SET"
+                        if not (insert_select or merge_action or update_set):
+                            break
+            index += 1
+
+        unit_tokens = _trim_sql_unit_tokens(tokens[start:index])
+        if unit_tokens:
+            units.append(
+                {
+                    "kind": statement_kind,
+                    "tokens": unit_tokens,
+                    "fingerprint": hashlib.sha256(
+                        json.dumps(
+                            unit_tokens,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                    "preview": " ".join(token_value for _, token_value in unit_tokens)[:240],
+                    "start_index": start,
+                    "end_index": index,
+                }
+            )
+        if index == start:
+            index += 1
+
+    consumed_indexes = {
+        token_index
+        for unit in units
+        for token_index in range(unit["start_index"], unit["end_index"])
+    }
+    residual_start = -1
+    residual_tokens: List[tuple[str, str]] = []
+
+    def append_residual(end_index: int) -> None:
+        nonlocal residual_start, residual_tokens
+        unit_tokens = _trim_sql_unit_tokens(residual_tokens)
+        if unit_tokens:
+            units.append(
+                {
+                    "kind": "RESIDUAL",
+                    "tokens": unit_tokens,
+                    "fingerprint": hashlib.sha256(
+                        json.dumps(
+                            unit_tokens,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                    "preview": " ".join(token_value for _, token_value in unit_tokens)[:240],
+                    "start_index": residual_start,
+                    "end_index": end_index,
+                }
+            )
+        residual_start = -1
+        residual_tokens = []
+
+    for token_index, token in enumerate(tokens):
+        if token_index in consumed_indexes:
+            append_residual(token_index)
+            continue
+        token_kind, token_value = token
+        structural = token == ("symbol", ";") or (
+            token_kind == "word" and token_value in {"BEGIN", "END"}
+        )
+        next_token = tokens[token_index + 1] if token_index + 1 < len(tokens) else ("", "")
+        structural_qualifier = (
+            token_kind == "word"
+            and token_value in {"BEGIN", "END"}
+            and next_token[0] == "word"
+            and next_token[1] in {"CATCH", "DISTRIBUTED", "TRAN", "TRANSACTION", "TRY"}
+            and token_index + 1 not in consumed_indexes
+        )
+        if structural and not structural_qualifier:
+            append_residual(token_index)
+            continue
+        if residual_start < 0:
+            residual_start = token_index
+        residual_tokens.append(token)
+    append_residual(len(tokens))
+    units.sort(key=lambda unit: unit["start_index"])
+    return units
+
+
+def _is_generated_wrapper_unit(unit: Dict[str, Any]) -> bool:
+    tokens = list(unit.get("tokens") or [])
+    values = [value for _, value in tokens]
+    return values == ["SET", "NOCOUNT", "ON"]
+
+
+def _sql_hierarchical_trace(sql_text: str) -> List[Dict[str, Any]]:
+    """Bind executable and structural units to scope, arm, and deterministic order."""
+    body = _extract_sp_body_or_sql_fragment(sql_text)
+    has_procedure_envelope = bool(_extract_sp_procedure_name(sql_text))
+    tokens = _sql_code_tokens(body, ignore_statement_terminators=False)
+    units = _sql_traceability_units(sql_text)
+    units_by_start = {unit["start_index"]: unit for unit in units}
+    trace: List[Dict[str, Any]] = []
+    event_order_by_path: Dict[tuple[tuple[str, int, str], ...], int] = {}
+    generated_nocount_consumed = False
+    nonwrapper_event_seen = False
+
+    def skip_terminators(index: int) -> int:
+        while index < len(tokens) and tokens[index] == ("symbol", ";"):
+            index += 1
+        return index
+
+    def token_values(start: int, end: int) -> tuple[tuple[str, str], ...]:
+        return _trim_sql_unit_tokens(tokens[start:end])
+
+    def structural_unit(
+        kind: str,
+        start: int,
+        end: int,
+        preview: str,
+    ) -> Dict[str, Any]:
+        unit_tokens = token_values(start, end)
+        fingerprint_payload: Any = unit_tokens or (("structure", kind),)
+        return {
+            "kind": kind,
+            "tokens": unit_tokens,
+            "fingerprint": hashlib.sha256(
+                json.dumps(
+                    fingerprint_payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+            "preview": preview,
+            "start_index": start,
+            "end_index": end,
+        }
+
+    def is_word(index: int, value: str) -> bool:
+        return index < len(tokens) and tokens[index] == ("word", value)
+
+    def is_generic_begin(index: int) -> bool:
+        if not is_word(index, "BEGIN"):
+            return False
+        next_value = tokens[index + 1][1] if index + 1 < len(tokens) else ""
+        return next_value not in {
+            "CATCH",
+            "DISTRIBUTED",
+            "TRAN",
+            "TRANSACTION",
+            "TRY",
+        }
+
+    def transaction_begin_end(index: int) -> int:
+        unit = units_by_start.get(index)
+        if unit and unit["end_index"] > index:
+            return int(unit["end_index"])
+        cursor = index + 1
+        while cursor < len(tokens):
+            if tokens[cursor] == ("symbol", ";"):
+                return cursor + 1
+            if (
+                cursor > index + 1
+                and tokens[cursor][0] == "word"
+                and tokens[cursor][1]
+                in _SQL_TRACEABLE_STATEMENT_STARTS
+                | {"BEGIN", "COMMIT", "ROLLBACK", "SAVE"}
+            ):
+                break
+            cursor += 1
+        return cursor
+
+    def add_unit(
+        unit: Dict[str, Any],
+        path: tuple[tuple[str, int, str], ...],
+        *,
+        generated_envelope: bool = False,
+    ) -> Dict[str, Any]:
+        nonlocal generated_nocount_consumed, nonwrapper_event_seen
+        wrapper = bool(
+            _is_generated_wrapper_unit(unit)
+            and has_procedure_envelope
+            and not path
+            and not generated_nocount_consumed
+            and not nonwrapper_event_seen
+        )
+        if generated_envelope:
+            order = 0
+            order_kind = "envelope"
+        elif wrapper:
+            generated_nocount_consumed = True
+            order = 0
+            order_kind = "wrapper"
+        else:
+            nonwrapper_event_seen = True
+            order = event_order_by_path.get(path, 0) + 1
+            event_order_by_path[path] = order
+            if unit["kind"] == "IF":
+                order_kind = "branch"
+            elif unit["kind"] in {
+                "BEGIN_SCOPE",
+                "END_SCOPE",
+                "TRY_BEGIN",
+                "TRY_END",
+                "CATCH_BEGIN",
+                "CATCH_END",
+                "ELSE",
+                "ARM_BEGIN",
+                "ARM_END",
+                "UNMATCHED_END",
+            }:
+                order_kind = "scope"
+            else:
+                order_kind = "statement"
+        path_payload = [
+            {
+                "condition_fingerprint": condition_fingerprint,
+                "branch_order": branch_order,
+                "arm": arm,
+            }
+            for condition_fingerprint, branch_order, arm in path
+        ]
+        trace_key_payload = {
+            "path": list(path),
+            "order": order,
+            "order_kind": order_kind,
+            "kind": unit["kind"],
+            "fingerprint": unit["fingerprint"],
+        }
+        item = {
+            "kind": unit["kind"],
+            "fingerprint": unit["fingerprint"],
+            "preview": unit["preview"],
+            "path": path_payload,
+            "order_in_path": order,
+            "order_kind": order_kind,
+            "generated_wrapper": wrapper,
+            "generated_envelope": generated_envelope,
+            "trace_key": hashlib.sha256(
+                json.dumps(
+                    trace_key_payload,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest(),
+        }
+        trace.append(item)
+        return item
+
+    def parse_arm(
+        index: int,
+        path: tuple[tuple[str, int, str], ...],
+    ) -> int:
+        index = skip_terminators(index)
+        if is_generic_begin(index):
+            add_unit(
+                structural_unit("ARM_BEGIN", index, index + 1, "BEGIN"),
+                path,
+            )
+            index = parse_sequence(index + 1, path, stop_kind="END")
+            if is_word(index, "END"):
+                add_unit(
+                    structural_unit("ARM_END", index, index + 1, "END"),
+                    path,
+                )
+                index += 1
+            return skip_terminators(index)
+        return parse_one(index, path)
+
+    def parse_try_catch(
+        index: int,
+        path: tuple[tuple[str, int, str], ...],
+    ) -> int:
+        try_item = add_unit(
+            structural_unit("TRY_BEGIN", index, index + 2, "BEGIN TRY"),
+            path,
+        )
+        try_path = path + (
+            (try_item["fingerprint"], try_item["order_in_path"], "try"),
+        )
+        cursor = parse_sequence(index + 2, try_path, stop_kind="END_TRY")
+        if is_word(cursor, "END") and is_word(cursor + 1, "TRY"):
+            add_unit(
+                structural_unit("TRY_END", cursor, cursor + 2, "END TRY"),
+                path,
+            )
+            cursor = skip_terminators(cursor + 2)
+        if is_word(cursor, "BEGIN") and is_word(cursor + 1, "CATCH"):
+            add_unit(
+                structural_unit(
+                    "CATCH_BEGIN",
+                    cursor,
+                    cursor + 2,
+                    "BEGIN CATCH",
+                ),
+                path,
+            )
+            catch_path = path + (
+                (try_item["fingerprint"], try_item["order_in_path"], "catch"),
+            )
+            cursor = parse_sequence(
+                cursor + 2,
+                catch_path,
+                stop_kind="END_CATCH",
+            )
+            if is_word(cursor, "END") and is_word(cursor + 1, "CATCH"):
+                add_unit(
+                    structural_unit(
+                        "CATCH_END",
+                        cursor,
+                        cursor + 2,
+                        "END CATCH",
+                    ),
+                    path,
+                )
+                cursor = skip_terminators(cursor + 2)
+        return cursor
+
+    def parse_one(
+        index: int,
+        path: tuple[tuple[str, int, str], ...],
+    ) -> int:
+        index = skip_terminators(index)
+        if is_word(index, "BEGIN") and is_word(index + 1, "TRY"):
+            return parse_try_catch(index, path)
+        if is_word(index, "BEGIN") and (
+            is_word(index + 1, "TRAN")
+            or is_word(index + 1, "TRANSACTION")
+            or (
+                is_word(index + 1, "DISTRIBUTED")
+                and (
+                    is_word(index + 2, "TRAN")
+                    or is_word(index + 2, "TRANSACTION")
+                )
+            )
+        ):
+            end = transaction_begin_end(index)
+            unit = units_by_start.get(index) or structural_unit(
+                "BEGIN_TRANSACTION",
+                index,
+                end,
+                " ".join(value for _, value in tokens[index:end]),
+            )
+            add_unit(unit, path)
+            return skip_terminators(end)
+        if is_generic_begin(index):
+            scope_item = add_unit(
+                structural_unit("BEGIN_SCOPE", index, index + 1, "BEGIN"),
+                path,
+            )
+            scope_path = path + (
+                (
+                    scope_item["fingerprint"],
+                    scope_item["order_in_path"],
+                    "scope",
+                ),
+            )
+            cursor = parse_sequence(index + 1, scope_path, stop_kind="END")
+            if is_word(cursor, "END"):
+                add_unit(
+                    structural_unit("END_SCOPE", cursor, cursor + 1, "END"),
+                    path,
+                )
+                cursor += 1
+            return skip_terminators(cursor)
+        unit = units_by_start.get(index)
+        if not unit:
+            return min(index + 1, len(tokens))
+        if unit["kind"] not in {"IF", "WHILE"}:
+            add_unit(unit, path)
+            return skip_terminators(unit["end_index"])
+
+        control_item = add_unit(unit, path)
+        branch_order = control_item["order_in_path"]
+        if unit["kind"] == "WHILE":
+            return parse_arm(
+                unit["end_index"],
+                path + ((unit["fingerprint"], branch_order, "loop"),),
+            )
+        index = parse_arm(
+            unit["end_index"],
+            path + ((unit["fingerprint"], branch_order, "then"),),
+        )
+        index = skip_terminators(index)
+        if is_word(index, "ELSE"):
+            add_unit(
+                structural_unit("ELSE", index, index + 1, "ELSE"),
+                path,
+            )
+            index = parse_arm(
+                index + 1,
+                path + ((unit["fingerprint"], branch_order, "else"),),
+            )
+        return skip_terminators(index)
+
+    def parse_sequence(
+        index: int,
+        path: tuple[tuple[str, int, str], ...],
+        *,
+        stop_kind: str | None,
+    ) -> int:
+        while index < len(tokens):
+            index = skip_terminators(index)
+            if index >= len(tokens):
+                break
+            if stop_kind == "END" and is_word(index, "END") and not (
+                is_word(index + 1, "TRY") or is_word(index + 1, "CATCH")
+            ):
+                break
+            if stop_kind == "END_TRY" and is_word(index, "END") and is_word(
+                index + 1, "TRY"
+            ):
+                break
+            if stop_kind == "END_CATCH" and is_word(index, "END") and is_word(
+                index + 1, "CATCH"
+            ):
+                break
+            if is_word(index, "ELSE"):
+                break
+            if is_word(index, "END"):
+                end = index + 1
+                if is_word(end, "TRY") or is_word(end, "CATCH"):
+                    end += 1
+                add_unit(
+                    structural_unit(
+                        "UNMATCHED_END",
+                        index,
+                        end,
+                        " ".join(value for _, value in tokens[index:end]),
+                    ),
+                    path,
+                )
+                index = end
+                continue
+            next_index = parse_one(index, path)
+            index = next_index if next_index > index else index + 1
+        return index
+
+    start = skip_terminators(0)
+    if has_procedure_envelope and is_generic_begin(start):
+        add_unit(
+            structural_unit(
+                "PROCEDURE_BEGIN_SCOPE",
+                start,
+                start + 1,
+                "BEGIN",
+            ),
+            tuple(),
+            generated_envelope=True,
+        )
+        end = parse_sequence(start + 1, tuple(), stop_kind="END")
+        if is_word(end, "END"):
+            add_unit(
+                structural_unit(
+                    "PROCEDURE_END_SCOPE",
+                    end,
+                    end + 1,
+                    "END",
+                ),
+                tuple(),
+                generated_envelope=True,
+            )
+            end += 1
+        parse_sequence(end, tuple(), stop_kind=None)
+    else:
+        parse_sequence(0, tuple(), stop_kind=None)
+    return trace
+
+
+def _canonical_nonwrapper_trace_payload(sql_text: str) -> Dict[str, Any]:
+    return {
+        "schema_version": "kh.pb.nonwrapper-trace.v2",
+        "trace_keys": [
+            item["trace_key"]
+            for item in _sql_hierarchical_trace(sql_text)
+            if not item["generated_wrapper"]
+        ],
+    }
+
+
+def _canonical_nonwrapper_trace_sha256(sql_text: str) -> str:
+    canonical_json = json.dumps(
+        _canonical_nonwrapper_trace_payload(sql_text),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def _candidate_body_traceability(
+    candidate_sql: str,
+    source_authorities: Sequence[Dict[str, Any]],
+    branch_contract_authorities: Sequence[Dict[str, Any]] | None = None,
+) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    candidate_trace = _sql_hierarchical_trace(candidate_sql)
+
+    def trace_key_counts(
+        trace_items: Sequence[Dict[str, Any]],
+        *,
+        include_envelope: bool,
+    ) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for trace_item in trace_items:
+            if trace_item["generated_wrapper"]:
+                continue
+            if trace_item.get("generated_envelope") and not include_envelope:
+                continue
+            trace_key = trace_item["trace_key"]
+            counts[trace_key] = counts.get(trace_key, 0) + 1
+        return counts
+
+    candidate_full_trace_key_counts = trace_key_counts(
+        candidate_trace,
+        include_envelope=True,
+    )
+    candidate_body_trace_key_counts = trace_key_counts(
+        candidate_trace,
+        include_envelope=False,
+    )
+
+    authorities: List[Dict[str, Any]] = []
+    for authority in source_authorities:
+        authority_text = str(authority.get("text") or "")
+        authority_has_envelope = bool(_extract_sp_procedure_name(authority_text))
+        authority_trace_key_counts = trace_key_counts(
+            _sql_hierarchical_trace(authority_text),
+            include_envelope=authority_has_envelope,
+        )
+        expected_trace_key_counts = (
+            candidate_full_trace_key_counts
+            if authority_has_envelope
+            else candidate_body_trace_key_counts
+        )
+        if authority_trace_key_counts:
+            authorities.append(
+                {
+                    "authority_id": str(authority.get("authority_id") or "source"),
+                    "authority_kind": "source_artifact",
+                    "coverage": "source_statement",
+                    "trace_key_counts": authority_trace_key_counts,
+                    "expected_trace_key_counts": expected_trace_key_counts,
+                    "covers_envelope": authority_has_envelope,
+                }
+            )
+    for authority in branch_contract_authorities or []:
+        trace_key_counts = dict(authority.get("trace_key_counts") or {})
+        authority_kind = str(
+            authority.get("authority_kind") or "branch_contract"
+        )
+        if trace_key_counts:
+            covers_envelope = authority_kind == "composite_contract"
+            authorities.append(
+                {
+                    "authority_id": str(
+                        authority.get("authority_id") or "branch_contract"
+                    ),
+                    "authority_kind": authority_kind,
+                    "coverage": authority_kind,
+                    "trace_key_counts": trace_key_counts,
+                    "expected_trace_key_counts": (
+                        candidate_full_trace_key_counts
+                        if covers_envelope
+                        else candidate_body_trace_key_counts
+                    ),
+                    "covers_envelope": covers_envelope,
+                }
+            )
+
+    def authority_coverage_count(authority: Dict[str, Any]) -> int:
+        counts = authority["trace_key_counts"]
+        expected_counts = authority["expected_trace_key_counts"]
+        return sum(
+            min(required, int(counts.get(trace_key, 0)))
+            for trace_key, required in expected_counts.items()
+        )
+
+    matching_authorities = [
+        authority
+        for authority in authorities
+        if authority["trace_key_counts"]
+        == authority["expected_trace_key_counts"]
+    ]
+    authority_priority = {
+        "composite_contract": 0,
+        "branch_contract": 1,
+        "source_artifact": 2,
+    }
+    selected_authority = min(
+        matching_authorities,
+        key=lambda authority: authority_priority.get(
+            str(authority.get("authority_kind") or ""),
+            99,
+        ),
+        default=None,
+    )
+    authority_summaries = [
+        {
+            "authority_id": authority["authority_id"],
+            "authority_kind": authority["authority_kind"],
+            "covered_event_count": authority_coverage_count(authority),
+            "required_event_count": sum(
+                authority["expected_trace_key_counts"].values()
+            ),
+            "authority_event_count": sum(authority["trace_key_counts"].values()),
+        }
+        for authority in authorities
+    ]
+    trace: List[Dict[str, Any]] = []
+    issues: List[Dict[str, Any]] = []
+    executable_ordinal = 0
+    if candidate_body_trace_key_counts and selected_authority is None:
+        issues.append(
+            {
+                "code": "candidate_body_not_covered_by_single_authority",
+                "severity": "error",
+                "message": (
+                    "One independently SHA-256-bound body authority must cover the candidate's complete "
+                    "non-wrapper executable event stream and branch topology. Independent source and branch "
+                    "artifacts are not pooled to authorize disjoint pieces."
+                ),
+                "authority_coverage": authority_summaries,
+            }
+        )
+    for unit in candidate_trace:
+        wrapper = bool(unit["generated_wrapper"])
+        envelope = bool(unit.get("generated_envelope"))
+        generated_envelope = bool(
+            envelope
+            and (
+                selected_authority is None
+                or not bool(selected_authority.get("covers_envelope"))
+            )
+        )
+        if wrapper or generated_envelope:
+            ordinal = 0
+        else:
+            executable_ordinal += 1
+            ordinal = executable_ordinal
+        covered = wrapper or generated_envelope or selected_authority is not None
+        coverage = (
+            "generated_wrapper"
+            if wrapper
+            else "generated_envelope"
+            if generated_envelope
+            else str(selected_authority["coverage"])
+            if selected_authority is not None
+            else "missing"
+        )
+        trace.append(
+            {
+                "ordinal": ordinal,
+                "kind": unit["kind"],
+                "fingerprint": unit["fingerprint"],
+                "trace_key": unit["trace_key"],
+                "branch_path": unit["path"],
+                "order_kind": unit["order_kind"],
+                "order_in_path": unit["order_in_path"],
+                "coverage": coverage,
+                "authority_id": (
+                    str(selected_authority["authority_id"])
+                    if selected_authority is not None
+                    and not wrapper
+                    and not generated_envelope
+                    else ""
+                ),
+                "authority_kind": (
+                    str(selected_authority["authority_kind"])
+                    if selected_authority is not None
+                    and not wrapper
+                    and not generated_envelope
+                    else "generated_wrapper"
+                    if wrapper
+                    else "generated_envelope"
+                    if generated_envelope
+                    else ""
+                ),
+                "preview": unit["preview"],
+            }
+        )
+        if covered:
+            continue
+        issues.append(
+            {
+                "code": "candidate_body_statement_not_covered_by_source",
+                "severity": "error",
+                "message": (
+                    "Every non-wrapper executable candidate event must be covered by the same independently "
+                    "bound source or complete branch authority. Smaller or disjoint fragments cannot collectively "
+                    "authorize candidate behavior."
+                ),
+                "ordinal": ordinal,
+                "statement_kind": unit["kind"],
+                "statement_fingerprint": unit["fingerprint"],
+                "statement_trace_key": unit["trace_key"],
+                "branch_path": unit["path"],
+                "order_in_path": unit["order_in_path"],
+                "statement_preview": unit["preview"],
+            }
+        )
+    return trace, issues
+
+
+def _existing_sp_cleanup_preservation_issues(
+    original_sql: str,
+    candidate_sql: str,
+) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    original_name = _extract_sp_procedure_name(original_sql)
+    candidate_name = _extract_sp_procedure_name(candidate_sql)
+    if not original_name or not candidate_name or original_name != candidate_name:
+        issues.append(
+            {
+                "code": "existing_sp_identity_changed",
+                "severity": "error",
+                "message": "Existing-SP cleanup must preserve the exact procedure identity.",
+                "original_procedure": original_name,
+                "candidate_procedure": candidate_name,
+            }
+        )
+    if _sql_comment_tokens(original_sql) != _sql_comment_tokens(candidate_sql):
+        issues.append(
+            {
+                "code": "existing_sp_comments_changed",
+                "severity": "error",
+                "message": "Formatting-only cleanup must preserve every original SQL comment payload and order.",
+            }
+        )
+    elif _sql_contract_tokens(
+        original_sql,
+        include_comments=True,
+    ) != _sql_contract_tokens(candidate_sql, include_comments=True):
+        issues.append(
+            {
+                "code": "existing_sp_comment_binding_changed",
+                "severity": "error",
+                "message": (
+                    "Formatting-only cleanup must preserve each business comment at the same relative "
+                    "executable-token position. The ordinary SSMS object preamble remains valid when its "
+                    "comment and surrounding executable order are unchanged."
+                ),
+            }
+        )
+    if _sql_code_tokens(original_sql) != _sql_code_tokens(candidate_sql):
+        issues.append(
+            {
+                "code": "existing_sp_body_or_statement_changed",
+                "severity": "error",
+                "message": (
+                    "Formatting-only cleanup may change whitespace and keyword/identifier case only; "
+                    "procedure statements, operators, literals, terminators, and body tokens must remain unchanged."
+                ),
+            }
+        )
+    return issues
+
+
+def _source_definition_text(item: Dict[str, Any]) -> tuple[str, str]:
+    text = str(item.get("definition_text") or "")
+    path = str(
+        item.get("resolved_path")
+        or item.get("definition_path")
+        or item.get("path")
+        or ""
+    ).strip()
+    if not text and path:
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except OSError:
+            return "", "existing_sp_definition_unreadable"
+    if not text:
+        return "", "existing_sp_definition_missing"
+    expected_hash = str(item.get("sha256") or item.get("definition_hash") or "").strip().lower()
+    if expected_hash and hashlib.sha256(text.encode("utf-8")).hexdigest() != expected_hash:
+        return "", "existing_sp_definition_hash_mismatch"
+    return text, ""
+
+
+def _bound_source_artifact_text(item: Dict[str, Any]) -> tuple[str, str, str]:
+    """Return source text only when host evidence binds it to a locator and SHA-256."""
+    if not bool(item.get("verified")):
+        return "", "source_artifact_unverified", ""
+
+    artifact_uri = str(item.get("artifact_uri") or "").strip()
+    definition_path = str(
+        item.get("resolved_path")
+        or item.get("definition_path")
+        or item.get("path")
+        or ""
+    ).strip()
+    locator = artifact_uri or definition_path
+    if not locator:
+        return "", "source_artifact_locator_missing", ""
+    if not definition_path:
+        return "", "source_artifact_uri_unresolved", locator
+
+    declared_text = str(item.get("definition_text") or item.get("artifact_text") or "")
+    text = declared_text
+    try:
+        path_text = Path(definition_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return "", "source_artifact_unreadable", locator
+    if declared_text and declared_text != path_text:
+        return "", "source_artifact_text_path_mismatch", locator
+    text = path_text
+
+    if not text:
+        return "", "source_artifact_text_missing", locator
+    expected_hash = str(item.get("sha256") or item.get("definition_hash") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        return "", "source_artifact_hash_missing_or_invalid", locator
+    if hashlib.sha256(text.encode("utf-8")).hexdigest() != expected_hash:
+        return "", "source_artifact_hash_mismatch", locator
+    return text, "", locator
+
+
+def _sql_evidence_fingerprint(sql_text: str) -> str:
+    tokens = _sql_code_tokens(sql_text, ignore_statement_terminators=True)
+    canonical = json.dumps(tokens, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest() if tokens else ""
+
+
+def _normalized_sp_object_name(value: Any) -> str:
+    parts = [part.strip().strip("[]") for part in str(value or "").split(".")]
+    return parts[-1].upper() if parts and parts[-1] else ""
+
+
+def _normalized_sp_identity(value: Any) -> str:
+    raw = str(value or "").strip()
+    identifier = r"(?:\[[^\]\r\n]+\]|[A-Za-z_][A-Za-z0-9_#$@]*)"
+    match = re.fullmatch(
+        rf"\s*(?:(?P<schema>{identifier})\s*\.\s*)?(?P<procedure>{identifier})\s*",
+        raw,
+    )
+    if not match:
+        return ""
+    schema = str(match.group("schema") or "DBO").strip().strip("[]").upper()
+    procedure = str(match.group("procedure") or "").strip().strip("[]").upper()
+    if not schema or not procedure:
+        return ""
+    return f"{schema}.{procedure}"
+
+
+def _extract_sp_procedure_identity(sql_text: str) -> str:
+    match = re.search(
+        r"\b(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE\s+"
+        r"(?P<identity>(?:\[[^\]]+\]|[A-Z0-9_]+)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z0-9_]+))?)",
+        _strip_sql_literals_and_comments_for_pb_contract(sql_text),
+        flags=re.IGNORECASE,
+    )
+    return _normalized_sp_identity(match.group("identity")) if match else ""
+
+
+def _bound_caller_artifact_text(item: Dict[str, Any]) -> tuple[str, str]:
+    declared_text = str(item.get("definition_text") or item.get("artifact_text") or "")
+    path = str(
+        item.get("resolved_path")
+        or item.get("definition_path")
+        or item.get("path")
+        or ""
+    ).strip()
+    artifact_uri = str(item.get("artifact_uri") or "").strip()
+    if not path and not artifact_uri:
+        return "", "caller_artifact_locator_missing"
+    if not path:
+        return "", "caller_artifact_uri_unresolved"
+    text = declared_text
+    if path:
+        try:
+            path_text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return "", "caller_artifact_unreadable"
+        if declared_text and declared_text != path_text:
+            return "", "caller_artifact_text_path_mismatch"
+        text = path_text
+    if not text:
+        return "", "caller_artifact_missing"
+    expected_hash = str(item.get("sha256") or item.get("definition_hash") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        return "", "caller_artifact_hash_missing_or_invalid"
+    if hashlib.sha256(text.encode("utf-8")).hexdigest() != expected_hash:
+        return "", "caller_artifact_hash_mismatch"
+    return text, ""
+
+
+def _bound_branch_contract_trace_keys(
+    item: Dict[str, Any],
+    candidate_target_procedure: str,
+    candidate_sql: str,
+) -> tuple[Dict[str, int], str, Dict[str, Any]]:
+    artifact_text, artifact_error = _bound_caller_artifact_text(item)
+    if artifact_error:
+        return {}, artifact_error, {}
+    if not bool(item.get("verified")):
+        return {}, "branch_contract_unverified", {}
+    try:
+        payload = json.loads(artifact_text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}, "branch_contract_artifact_invalid", {}
+    if not isinstance(payload, dict):
+        return {}, "branch_contract_artifact_invalid", {}
+
+    declared_target_raw = str(item.get("target_procedure") or "").strip()
+    artifact_target_raw = str(payload.get("target_procedure") or "").strip()
+    declared_target = _normalized_sp_identity(declared_target_raw)
+    artifact_target = _normalized_sp_identity(artifact_target_raw)
+    if not declared_target or not artifact_target:
+        return {}, "branch_contract_target_procedure_invalid", {}
+    if (
+        declared_target != candidate_target_procedure
+        or artifact_target != candidate_target_procedure
+    ):
+        return {}, "branch_contract_target_procedure_mismatch", {}
+
+    contract_kind = str(item.get("kind") or "branch_contract")
+    is_composite = contract_kind == "composite_contract"
+    sql_field = "trace_sql" if is_composite else "branch_sql"
+    declared_branch_sql = str(item.get(sql_field) or "").strip()
+    artifact_branch_sql = str(payload.get(sql_field) or "").strip()
+    if (
+        not declared_branch_sql
+        or not artifact_branch_sql
+        or declared_branch_sql != artifact_branch_sql
+    ):
+        return (
+            {},
+            "composite_contract_sql_mismatch"
+            if is_composite
+            else "branch_contract_sql_mismatch",
+            {},
+        )
+
+    authority_metadata: Dict[str, Any] = {}
+    if is_composite:
+        declared_lineage = item.get("source_lineage")
+        artifact_lineage = payload.get("source_lineage")
+        if (
+            not isinstance(declared_lineage, list)
+            or not declared_lineage
+            or declared_lineage != artifact_lineage
+            or not all(str(value or "").strip() for value in declared_lineage)
+        ):
+            return {}, "composite_contract_source_lineage_invalid", {}
+        declared_trace_sha256 = str(item.get("trace_sha256") or "").strip().lower()
+        artifact_trace_sha256 = str(payload.get("trace_sha256") or "").strip().lower()
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", declared_trace_sha256)
+            or declared_trace_sha256 != artifact_trace_sha256
+        ):
+            return {}, "composite_contract_trace_sha256_invalid", {}
+        computed_trace_sha256 = _canonical_nonwrapper_trace_sha256(declared_branch_sql)
+        if computed_trace_sha256 != declared_trace_sha256:
+            return {}, "composite_contract_trace_sha256_mismatch", {}
+        candidate_trace_sha256 = _canonical_nonwrapper_trace_sha256(candidate_sql)
+        if declared_trace_sha256 != candidate_trace_sha256:
+            return {}, "composite_contract_candidate_trace_mismatch", {}
+        authority_metadata = {
+            "source_lineage": [str(value).strip().lower() for value in declared_lineage],
+            "trace_sha256": declared_trace_sha256,
+            "trace_schema_version": "kh.pb.nonwrapper-trace.v2",
+        }
+
+    branch_trace = _sql_hierarchical_trace(declared_branch_sql)
+    if not branch_trace or (
+        not is_composite and not any(item["kind"] == "IF" for item in branch_trace)
+    ):
+        return {}, "branch_contract_topology_invalid", {}
+
+    trace_key_counts: Dict[str, int] = {}
+    lineage_trace_keys: List[str] = []
+    for trace_item in branch_trace:
+        if trace_item["generated_wrapper"]:
+            continue
+        trace_key = trace_item["trace_key"]
+        trace_key_counts[trace_key] = trace_key_counts.get(trace_key, 0) + 1
+        if not trace_item.get("generated_envelope"):
+            lineage_trace_keys.append(trace_key)
+    authority_metadata["lineage_trace_keys"] = lineage_trace_keys
+    return trace_key_counts, "", authority_metadata
+
+
+def _csharp_preprocessor_active_positions(
+    source_text: str,
+    lexical_code_positions: Sequence[bool],
+) -> tuple[List[bool], List[bool], bool]:
+    """Mark directives and branches that cannot be proven active without build symbols."""
+    text = str(source_text or "")
+    active_positions = [True] * len(text)
+    ambiguous_positions = [False] * len(text)
+    stack: List[Dict[str, Any]] = []
+    active = True
+    ambiguous = False
+    preprocessor_valid = True
+    offset = 0
+
+    def condition_value(expression: str) -> bool | None:
+        normalized = re.sub(r"\s+", "", expression).lower()
+        if normalized in {"true", "1"}:
+            return True
+        if normalized in {"false", "0"}:
+            return False
+        if normalized in {"!false", "!0"}:
+            return True
+        if normalized in {"!true", "!1"}:
+            return False
+        return None
+
+    for line in text.splitlines(keepends=True):
+        line_end = offset + len(line)
+        directive = re.match(r"\s*#\s*(?P<name>[A-Za-z]+)(?P<body>.*)", line)
+        hash_index = line.find("#")
+        if (
+            directive
+            and (
+                hash_index < 0
+                or offset + hash_index >= len(lexical_code_positions)
+                or not lexical_code_positions[offset + hash_index]
+            )
+        ):
+            directive = None
+        if directive:
+            for index in range(offset, line_end):
+                active_positions[index] = False
+            name = directive.group("name").lower()
+            body = directive.group("body").strip()
+            if name == "if":
+                parent_active = active
+                parent_ambiguous = ambiguous
+                selected = condition_value(body)
+                unknown = selected is None
+                active = bool(parent_active and selected is True and not parent_ambiguous)
+                ambiguous = bool(
+                    parent_ambiguous or (parent_active and unknown)
+                )
+                stack.append(
+                    {
+                        "parent_active": parent_active,
+                        "parent_ambiguous": parent_ambiguous,
+                        "branch_taken": selected is True,
+                        "unknown": unknown,
+                    }
+                )
+            elif name == "elif" and stack:
+                frame = stack[-1]
+                selected_value = condition_value(body)
+                if frame["unknown"] or selected_value is None:
+                    frame["unknown"] = True
+                    active = False
+                    ambiguous = bool(
+                        frame["parent_ambiguous"] or frame["parent_active"]
+                    )
+                else:
+                    selected = not frame["branch_taken"] and selected_value
+                    frame["branch_taken"] = frame["branch_taken"] or selected
+                    active = bool(
+                        frame["parent_active"]
+                        and selected
+                        and not frame["parent_ambiguous"]
+                    )
+                    ambiguous = bool(frame["parent_ambiguous"])
+            elif name == "else" and stack:
+                frame = stack[-1]
+                if frame["unknown"]:
+                    active = False
+                    ambiguous = bool(
+                        frame["parent_ambiguous"] or frame["parent_active"]
+                    )
+                else:
+                    selected = not frame["branch_taken"]
+                    frame["branch_taken"] = True
+                    active = bool(
+                        frame["parent_active"]
+                        and selected
+                        and not frame["parent_ambiguous"]
+                    )
+                    ambiguous = bool(frame["parent_ambiguous"])
+            elif name == "endif" and stack:
+                frame = stack.pop()
+                active = frame["parent_active"]
+                ambiguous = frame["parent_ambiguous"]
+            elif name in {"elif", "else", "endif"}:
+                preprocessor_valid = False
+        elif not active or ambiguous:
+            for index in range(offset, line_end):
+                active_positions[index] = False
+                if ambiguous and lexical_code_positions[index]:
+                    ambiguous_positions[index] = True
+        offset = line_end
+    if offset < len(text) and not active:
+        for index in range(offset, len(text)):
+            active_positions[index] = False
+    return active_positions, ambiguous_positions, preprocessor_valid and not stack
+
+
+def _mask_csharp_comments_with_code_positions(
+    source_text: str,
+) -> tuple[str, List[bool], List[bool], bool]:
+    """Preserve indexes and string payloads while marking positions that are executable C# code."""
+    text = str(source_text or "")
+    masked = list(text)
+    code_positions = [False] * len(text)
+    state = "code"
+    raw_delimiter = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if state == "code":
+            if char == "/" and next_char == "/":
+                masked[index] = masked[index + 1] = " "
+                state = "line_comment"
+                index += 2
+                continue
+            if char == "/" and next_char == "*":
+                masked[index] = masked[index + 1] = " "
+                state = "block_comment"
+                index += 2
+                continue
+            if char == '"':
+                quote_count = 1
+                while index + quote_count < len(text) and text[index + quote_count] == '"':
+                    quote_count += 1
+                if quote_count >= 3:
+                    state = "raw_string"
+                    raw_delimiter = quote_count
+                    index += quote_count
+                    continue
+                verbatim = index > 0 and text[index - 1] == "@"
+                state = "verbatim_string" if verbatim else "string"
+                index += 1
+                continue
+            if char == "'":
+                state = "char"
+                index += 1
+                continue
+            code_positions[index] = True
+            index += 1
+            continue
+        if state == "line_comment":
+            if char in "\r\n":
+                state = "code"
+                code_positions[index] = True
+            else:
+                masked[index] = " "
+            index += 1
+            continue
+        if state == "block_comment":
+            if char == "*" and next_char == "/":
+                masked[index] = masked[index + 1] = " "
+                state = "code"
+                index += 2
+            else:
+                if char not in "\r\n":
+                    masked[index] = " "
+                index += 1
+            continue
+        if state == "string":
+            if char == "\\":
+                index += 2
+            elif char == '"':
+                state = "code"
+                index += 1
+            else:
+                index += 1
+            continue
+        if state == "verbatim_string":
+            if char == '"' and next_char == '"':
+                index += 2
+            elif char == '"':
+                state = "code"
+                index += 1
+            else:
+                index += 1
+            continue
+        if state == "raw_string":
+            if char == '"':
+                quote_count = 1
+                while index + quote_count < len(text) and text[index + quote_count] == '"':
+                    quote_count += 1
+                if quote_count >= raw_delimiter:
+                    state = "code"
+                    index += raw_delimiter
+                    continue
+            index += 1
+            continue
+        if state == "char":
+            if char == "\\":
+                index += 2
+            elif char == "'":
+                state = "code"
+                index += 1
+            else:
+                index += 1
+    lexical_valid = state == "code"
+    active_positions, ambiguous_positions, preprocessor_valid = _csharp_preprocessor_active_positions(
+        text,
+        code_positions,
+    )
+    for position, is_active in enumerate(active_positions):
+        if is_active:
+            continue
+        code_positions[position] = False
+        if masked[position] not in "\r\n":
+            masked[position] = " "
+    return (
+        "".join(masked),
+        code_positions,
+        ambiguous_positions,
+        lexical_valid and preprocessor_valid,
+    )
+
+
+def _csharp_delimiters_balanced(source_text: str, code_positions: Sequence[bool]) -> bool:
+    stack: List[str] = []
+    pairs = {")": "(", "]": "[", "}": "{"}
+    for index, char in enumerate(source_text):
+        if index >= len(code_positions) or not code_positions[index]:
+            continue
+        if char in "([{":
+            stack.append(char)
+        elif char in pairs:
+            if not stack or stack.pop() != pairs[char]:
+                return False
+    return not stack
+
+
+def _csharp_code_tokens_with_positions(
+    source_text: str,
+    code_positions: Sequence[bool],
+) -> List[Dict[str, Any]]:
+    tokens: List[Dict[str, Any]] = []
+    index = 0
+    while index < len(source_text):
+        if index >= len(code_positions) or not code_positions[index]:
+            index += 1
+            continue
+        char = source_text[index]
+        if char.isspace():
+            index += 1
+            continue
+        identifier = re.match(r"[A-Za-z_][A-Za-z0-9_]*", source_text[index:])
+        if identifier:
+            value = identifier.group(0)
+            tokens.append(
+                {
+                    "kind": "identifier",
+                    "value": value,
+                    "start": index,
+                    "end": index + len(value),
+                }
+            )
+            index += len(value)
+            continue
+        tokens.append(
+            {
+                "kind": "symbol",
+                "value": char,
+                "start": index,
+                "end": index + 1,
+            }
+        )
+        index += 1
+    return tokens
+
+
+def _csharp_interpolated_string_payload_spans(
+    source_text: str,
+    code_positions: Sequence[bool],
+) -> List[tuple[int, int]]:
+    """Return executable expression spans for active interpolated strings."""
+    spans: List[tuple[int, int]] = []
+    text = str(source_text or "")
+    prefix_pattern = re.compile(r"(?:@\$+|\$+@?)\"+")
+    for match in prefix_pattern.finditer(text):
+        dollar_index = text.find("$", match.start(), match.end())
+        if (
+            dollar_index < 0
+            or dollar_index >= len(code_positions)
+            or not code_positions[dollar_index]
+        ):
+            continue
+        quote_start = text.find('"', dollar_index, match.end())
+        if quote_start < 0:
+            continue
+        quote_count = 1
+        while (
+            quote_start + quote_count < len(text)
+            and text[quote_start + quote_count] == '"'
+        ):
+            quote_count += 1
+        raw = quote_count >= 3
+        delimiter = quote_count if raw else 1
+        verbatim = "@" in text[match.start():quote_start]
+        payload_start = quote_start + delimiter
+        cursor = payload_start
+        brace_depth = 0
+        close_start = -1
+        expression_start = -1
+        expression_spans: List[tuple[int, int]] = []
+        dollar_count = text[match.start():quote_start].count("$")
+        while cursor < len(text):
+            if raw and brace_depth == 0 and text.startswith('"' * delimiter, cursor):
+                close_start = cursor
+                break
+            char = text[cursor]
+            next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+            if brace_depth > 0:
+                if char == "/" and next_char == "/":
+                    newline = text.find("\n", cursor + 2)
+                    cursor = len(text) if newline < 0 else newline + 1
+                    continue
+                if char == "/" and next_char == "*":
+                    comment_end = text.find("*/", cursor + 2)
+                    cursor = len(text) if comment_end < 0 else comment_end + 2
+                    continue
+                if char == "'":
+                    cursor += 1
+                    while cursor < len(text):
+                        if text[cursor] == "\\":
+                            cursor += 2
+                            continue
+                        if text[cursor] == "'":
+                            cursor += 1
+                            break
+                        cursor += 1
+                    continue
+                if char == "@" and next_char == '"':
+                    cursor += 2
+                    while cursor < len(text):
+                        if text[cursor] == '"':
+                            if cursor + 1 < len(text) and text[cursor + 1] == '"':
+                                cursor += 2
+                                continue
+                            cursor += 1
+                            break
+                        cursor += 1
+                    continue
+                if char == '"':
+                    nested_delimiter = 1
+                    while (
+                        cursor + nested_delimiter < len(text)
+                        and text[cursor + nested_delimiter] == '"'
+                    ):
+                        nested_delimiter += 1
+                    if nested_delimiter >= 3:
+                        nested_end = text.find('"' * nested_delimiter, cursor + nested_delimiter)
+                        cursor = len(text) if nested_end < 0 else nested_end + nested_delimiter
+                        continue
+                    cursor += 1
+                    while cursor < len(text):
+                        if text[cursor] == "\\":
+                            cursor += 2
+                            continue
+                        if text[cursor] == '"':
+                            cursor += 1
+                            break
+                        cursor += 1
+                    continue
+            if not raw and brace_depth == 0 and char == '"':
+                if verbatim and next_char == '"':
+                    cursor += 2
+                    continue
+                if not verbatim:
+                    backslashes = 0
+                    scan = cursor - 1
+                    while scan >= 0 and text[scan] == "\\":
+                        backslashes += 1
+                        scan -= 1
+                    if backslashes % 2:
+                        cursor += 1
+                        continue
+                close_start = cursor
+                break
+            if char == "{" and next_char == "{" and brace_depth == 0:
+                if raw and dollar_count > 1:
+                    expression_start = cursor + dollar_count
+                    brace_depth = 1
+                    cursor += dollar_count
+                    continue
+                cursor += 2
+                continue
+            if char == "}" and next_char == "}" and brace_depth == 0:
+                cursor += 2
+                continue
+            if char == "{":
+                if brace_depth == 0:
+                    expression_start = cursor + 1
+                brace_depth += 1
+            elif char == "}" and brace_depth > 0:
+                brace_depth -= 1
+                if brace_depth == 0 and expression_start >= 0:
+                    expression_spans.append((expression_start, cursor))
+                    expression_start = -1
+            cursor += 1
+        if close_start < 0:
+            close_start = len(text)
+        if expression_start >= 0:
+            expression_spans.append((expression_start, close_start))
+        spans.extend(expression_spans)
+    return spans
+
+
+def _csharp_invocation_code_positions(
+    source_text: str,
+    code_positions: Sequence[bool],
+) -> List[bool]:
+    """Expose interpolated payloads to call counting; ambiguity fails closed."""
+    invocation_positions = list(code_positions)
+    for start, end in _csharp_interpolated_string_payload_spans(
+        source_text,
+        code_positions,
+    ):
+        fragment = source_text[start:end]
+        _, fragment_positions, _, fragment_valid = (
+            _mask_csharp_comments_with_code_positions(fragment)
+        )
+        if not fragment_valid:
+            fragment_positions = [True] * len(fragment)
+        for offset, is_code in enumerate(fragment_positions):
+            index = start + offset
+            if is_code and 0 <= index < len(invocation_positions):
+                invocation_positions[index] = True
+    return invocation_positions
+
+
+def _csharp_dbclient_call_sites(
+    source_text: str,
+    code_positions: Sequence[bool],
+) -> List[Dict[str, Any]]:
+    invocation_positions = _csharp_invocation_code_positions(
+        source_text,
+        code_positions,
+    )
+    tokens = _csharp_code_tokens_with_positions(source_text, invocation_positions)
+    sites: List[Dict[str, Any]] = []
+
+    def receiver_start(end_index: int) -> int:
+        while end_index >= 0 and tokens[end_index]["value"] == "!":
+            end_index -= 1
+        if end_index < 0:
+            return -1
+        if tokens[end_index]["value"] == ")":
+            depth = 1
+            cursor = end_index - 1
+            while cursor >= 0:
+                value = tokens[cursor]["value"]
+                if value == ")":
+                    depth += 1
+                elif value == "(":
+                    depth -= 1
+                    if depth == 0:
+                        inner_start = receiver_start(end_index - 1)
+                        if inner_start != cursor + 1:
+                            return -1
+                        return cursor
+                cursor -= 1
+            return -1
+        if (
+            tokens[end_index]["kind"] == "identifier"
+            and tokens[end_index]["value"] == "dbClient"
+        ):
+            return end_index
+        return -1
+
+    for method_index, method in enumerate(tokens):
+        if method["kind"] != "identifier" or method_index < 2:
+            continue
+        verbatim_identifier = (
+            method_index >= 3 and tokens[method_index - 1]["value"] == "@"
+        )
+        dot_index = method_index - 2 if verbatim_identifier else method_index - 1
+        if tokens[dot_index]["value"] != ".":
+            continue
+        access_start = dot_index
+        if dot_index > 0 and tokens[dot_index - 1]["value"] == "?":
+            access_start = dot_index - 1
+        receiver_index = receiver_start(access_start - 1)
+        if receiver_index < 0:
+            continue
+        next_index = method_index + 1
+        if next_index < len(tokens) and tokens[next_index]["value"] == "<":
+            generic_depth = 0
+            while next_index < len(tokens):
+                value = tokens[next_index]["value"]
+                if value == "<":
+                    generic_depth += 1
+                elif value == ">":
+                    generic_depth -= 1
+                    if generic_depth == 0:
+                        next_index += 1
+                        break
+                next_index += 1
+            if generic_depth != 0:
+                continue
+        if next_index >= len(tokens) or tokens[next_index]["value"] != "(":
+            continue
+        sites.append(
+            {
+                "start": tokens[receiver_index]["start"],
+                "method": method["value"],
+                "open_index": tokens[next_index]["start"],
+            }
+        )
+    return sites
+
+
+def _find_csharp_matching_parenthesis(
+    source_text: str,
+    code_positions: Sequence[bool],
+    open_index: int,
+) -> int:
+    depth = 0
+    for index in range(open_index, len(source_text)):
+        if not code_positions[index]:
+            continue
+        if source_text[index] == "(":
+            depth += 1
+        elif source_text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+            if depth < 0:
+                return -1
+    return -1
+
+
+def _split_csharp_top_level_arguments(
+    source_text: str,
+    code_positions: Sequence[bool],
+    open_index: int,
+    close_index: int,
+) -> List[tuple[int, int]]:
+    result: List[tuple[int, int]] = []
+    start = open_index + 1
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    for index in range(start, close_index):
+        if not code_positions[index]:
+            continue
+        char = source_text[index]
+        if char == "(":
+            paren_depth += 1
+        elif char == ")":
+            paren_depth -= 1
+        elif char == "[":
+            bracket_depth += 1
+        elif char == "]":
+            bracket_depth -= 1
+        elif char == "{":
+            brace_depth += 1
+        elif char == "}":
+            brace_depth -= 1
+        elif (
+            char == ","
+            and paren_depth == 0
+            and bracket_depth == 0
+            and brace_depth == 0
+        ):
+            result.append((start, index))
+            start = index + 1
+        if paren_depth < 0 or bracket_depth < 0 or brace_depth < 0:
+            return []
+    if paren_depth or bracket_depth or brace_depth:
+        return []
+    result.append((start, close_index))
+    return result
+
+
+def _csharp_value_expression_tokens(
+    source_text: str,
+    code_positions: Sequence[bool],
+    start: int,
+    end: int,
+) -> List[tuple[str, str]]:
+    tokens: List[tuple[str, str]] = []
+    index = start
+    two_character_operators = {
+        "=>",
+        "??",
+        "?.",
+        "?[",
+        "==",
+        "!=",
+        "<=",
+        ">=",
+        "&&",
+        "||",
+        "++",
+        "--",
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "%=",
+        "&=",
+        "|=",
+        "^=",
+        "<<",
+        ">>",
+    }
+    while index < end:
+        char = source_text[index]
+        if char.isspace():
+            index += 1
+            continue
+        if index >= len(code_positions):
+            return []
+        if not code_positions[index]:
+            literal_end = index + 1
+            while literal_end < end and not code_positions[literal_end]:
+                literal_end += 1
+            literal = source_text[index:literal_end]
+            if literal.strip():
+                tokens.append(("literal", literal))
+            index = literal_end
+            continue
+        if char in "@$":
+            prefix_end = index
+            while (
+                prefix_end < end
+                and source_text[prefix_end] in "@$"
+                and code_positions[prefix_end]
+            ):
+                prefix_end += 1
+            if (
+                prefix_end < end
+                and not code_positions[prefix_end]
+                and source_text[prefix_end] in {'"', "'"}
+            ):
+                literal_end = prefix_end + 1
+                while literal_end < end and not code_positions[literal_end]:
+                    literal_end += 1
+                tokens.append(("literal", source_text[index:literal_end]))
+                index = literal_end
+                continue
+        identifier = re.match(r"[A-Za-z_][A-Za-z0-9_]*", source_text[index:end])
+        if identifier:
+            value = identifier.group(0)
+            tokens.append(("identifier", value))
+            index += len(value)
+            continue
+        number = re.match(
+            r"(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|(?:\d[\d_]*)(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?)(?:[uUlLfFdDmM]+)?",
+            source_text[index:end],
+        )
+        if number:
+            value = number.group(0)
+            tokens.append(("number", value))
+            index += len(value)
+            continue
+        operator = source_text[index : index + 2]
+        if operator in two_character_operators:
+            tokens.append(("symbol", operator))
+            index += 2
+            continue
+        tokens.append(("symbol", char))
+        index += 1
+    return tokens
+
+
+def _is_supported_csharp_parameter_value(
+    source_text: str,
+    code_positions: Sequence[bool],
+    start: int,
+    end: int,
+) -> bool:
+    """Accept only the target-style scalar value expressions used by direct DbParameter calls."""
+    tokens = _csharp_value_expression_tokens(source_text, code_positions, start, end)
+    if not tokens:
+        return False
+    banned_identifiers = {
+        "async",
+        "await",
+        "delegate",
+        "from",
+        "new",
+        "select",
+        "stackalloc",
+        "with",
+        "yield",
+    }
+    banned_symbols = {
+        "=>",
+        "{",
+        "}",
+        ";",
+        "=",
+        "+=",
+        "-=",
+        "*=",
+        "/=",
+        "%=",
+        "&=",
+        "|=",
+        "^=",
+        "++",
+        "--",
+        "&&",
+        "||",
+        "==",
+        "!=",
+        "<=",
+        ">=",
+        "<<",
+        ">>",
+        "?",
+        ":",
+    }
+    if any(
+        (kind == "identifier" and value.lower() in banned_identifiers)
+        or (kind == "symbol" and value in banned_symbols)
+        for kind, value in tokens
+    ):
+        return False
+
+    position = 0
+
+    def current() -> tuple[str, str] | None:
+        return tokens[position] if position < len(tokens) else None
+
+    def consume(value: str | None = None) -> tuple[str, str] | None:
+        nonlocal position
+        token = current()
+        if token is None or (value is not None and token[1] != value):
+            return None
+        position += 1
+        return token
+
+    def starts_value(token: tuple[str, str] | None) -> bool:
+        return bool(
+            token
+            and (
+                token[0] in {"identifier", "literal", "number"}
+                or token[1] in {"(", "+", "-", "!", "~"}
+            )
+        )
+
+    def cast_close_index(open_position: int) -> int:
+        index = open_position + 1
+        saw_identifier = False
+        while index < len(tokens):
+            kind, value = tokens[index]
+            if value == ")":
+                if not saw_identifier or index + 1 >= len(tokens):
+                    return -1
+                return index if starts_value(tokens[index + 1]) else -1
+            if kind == "identifier":
+                saw_identifier = True
+            elif value not in {".", "?", "[", "]"}:
+                return -1
+            index += 1
+        return -1
+
+    def parse_expression() -> bool:
+        if not parse_unary_and_postfix():
+            return False
+        while current() and current()[1] == "??":
+            consume("??")
+            if not parse_unary_and_postfix():
+                return False
+        return True
+
+    def parse_argument_list(close_symbol: str) -> bool:
+        if current() and current()[1] == close_symbol:
+            consume(close_symbol)
+            return True
+        while True:
+            if not parse_expression():
+                return False
+            token = current()
+            if token and token[1] == ",":
+                consume(",")
+                continue
+            if token and token[1] == close_symbol:
+                consume(close_symbol)
+                return True
+            return False
+
+    def parse_unary_and_postfix() -> bool:
+        token = current()
+        if token and token[1] in {"+", "-", "!", "~"}:
+            consume(token[1])
+            return parse_unary_and_postfix()
+        if token and token[1] == "(":
+            cast_close = cast_close_index(position)
+            if cast_close >= 0:
+                consume("(")
+                while position < cast_close:
+                    consume()
+                consume(")")
+                if not parse_unary_and_postfix():
+                    return False
+            else:
+                consume("(")
+                if not parse_expression() or not consume(")"):
+                    return False
+        elif token and token[0] in {"identifier", "literal", "number"}:
+            consume()
+        else:
+            return False
+
+        while current():
+            token = current()
+            if token[1] in {".", "?."}:
+                consume(token[1])
+                member = consume()
+                if not member or member[0] != "identifier":
+                    return False
+                continue
+            if token[1] in {"[", "?["}:
+                consume(token[1])
+                if not parse_argument_list("]"):
+                    return False
+                continue
+            if token[1] == "(":
+                consume("(")
+                if not parse_argument_list(")"):
+                    return False
+                continue
+            break
+        return True
+
+    return parse_expression() and position == len(tokens)
+
+
+def _is_plausible_csharp_return_type(return_type_text: str) -> bool:
+    text = str(return_type_text or "").strip()
+    if not text:
+        return False
+    tokens = [
+        token
+        for token in re.findall(
+            r"::|[A-Za-z_][A-Za-z0-9_]*|[<>,.?\[\]()]",
+            text,
+        )
+        if token
+    ]
+    if not tokens or "".join(tokens) != re.sub(r"\s+", "", text):
+        return False
+    word_tokens = [
+        token.lower()
+        for token in tokens
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token)
+    ]
+    if "void" in word_tokens:
+        return len(tokens) == 1 and tokens[0].lower() == "void"
+    reserved_non_types = {
+        "as",
+        "break",
+        "case",
+        "catch",
+        "checked",
+        "continue",
+        "default",
+        "delegate",
+        "do",
+        "else",
+        "finally",
+        "fixed",
+        "for",
+        "foreach",
+        "goto",
+        "if",
+        "in",
+        "is",
+        "lock",
+        "namespace",
+        "operator",
+        "out",
+        "params",
+        "ref",
+        "return",
+        "sizeof",
+        "stackalloc",
+        "switch",
+        "throw",
+        "try",
+        "typeof",
+        "unchecked",
+        "unsafe",
+        "using",
+        "var",
+        "while",
+        "yield",
+    }
+    if any(token.lower() in reserved_non_types for token in tokens if token[0].isalpha()):
+        return False
+
+    position = 0
+
+    def current() -> str:
+        return tokens[position] if position < len(tokens) else ""
+
+    def consume(value: str | None = None) -> str:
+        nonlocal position
+        token = current()
+        if not token or (value is not None and token != value):
+            return ""
+        position += 1
+        return token
+
+    def identifier() -> bool:
+        token = current()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token or ""):
+            return False
+        consume()
+        return True
+
+    def parse_named_type() -> bool:
+        if current() == "global":
+            consume("global")
+            if not consume("::"):
+                return False
+        if not identifier():
+            return False
+        if current() == "<":
+            if not parse_generic_arguments():
+                return False
+        while current() in {".", "::"}:
+            consume()
+            if not identifier():
+                return False
+            if current() == "<" and not parse_generic_arguments():
+                return False
+        return True
+
+    def parse_generic_arguments() -> bool:
+        if not consume("<") or not parse_type():
+            return False
+        while current() == ",":
+            consume(",")
+            if not parse_type():
+                return False
+        return bool(consume(">"))
+
+    def parse_tuple_type() -> bool:
+        if not consume("(") or not parse_type():
+            return False
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", current() or ""):
+            consume()
+        count = 1
+        while current() == ",":
+            consume(",")
+            if not parse_type():
+                return False
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", current() or ""):
+                consume()
+            count += 1
+        return count >= 2 and bool(consume(")"))
+
+    def parse_type() -> bool:
+        if current() == "(":
+            if not parse_tuple_type():
+                return False
+        elif not parse_named_type():
+            return False
+        if current() == "?":
+            consume("?")
+        while current() == "[":
+            consume("[")
+            while current() == ",":
+                consume(",")
+            if not consume("]"):
+                return False
+        return True
+
+    return parse_type() and position == len(tokens)
+
+
+def _csharp_call_context_is_direct(
+    source_text: str,
+    code_positions: Sequence[bool],
+    call_start: int,
+) -> bool:
+    active_text = "".join(
+        char if index < len(code_positions) and code_positions[index] else " "
+        for index, char in enumerate(source_text)
+    )
+    stack: List[Dict[str, str]] = []
+    segment_start = 0
+    control_names = {
+        "catch",
+        "checked",
+        "do",
+        "else",
+        "finally",
+        "fixed",
+        "for",
+        "foreach",
+        "if",
+        "lock",
+        "switch",
+        "try",
+        "unchecked",
+        "unsafe",
+        "using",
+        "while",
+    }
+
+    method_modifiers = {
+        "abstract",
+        "async",
+        "extern",
+        "internal",
+        "new",
+        "override",
+        "partial",
+        "private",
+        "protected",
+        "public",
+        "sealed",
+        "static",
+        "unsafe",
+        "virtual",
+    }
+
+    def classify_brace(segment: str) -> Dict[str, str]:
+        compact = segment.strip()
+        if re.search(r"=>\s*$", compact):
+            return {"kind": "lambda", "name": ""}
+        if re.search(r"\bdelegate(?:\s*\([^{};]*\))?\s*$", compact):
+            return {"kind": "delegate", "name": ""}
+        type_match = re.search(
+            r"\b(?:class|struct|record(?:\s+(?:class|struct))?)\s+"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b[^;{}]*$",
+            compact,
+        )
+        if type_match:
+            return {"kind": "type", "name": type_match.group("name")}
+        if re.search(r"\bnamespace\b[^;{}]*$", compact):
+            return {"kind": "namespace", "name": ""}
+        if re.search(r"\b(?:get|set|init|add|remove)\s*$", compact):
+            return {"kind": "accessor", "name": ""}
+        method_header = re.sub(r"\s+where\s+[^{};]+$", "", compact).rstrip()
+        parameter_open = -1
+        if method_header.endswith(")"):
+            depth = 0
+            for cursor in range(len(method_header) - 1, -1, -1):
+                char = method_header[cursor]
+                if char == ")":
+                    depth += 1
+                elif char == "(":
+                    depth -= 1
+                    if depth == 0:
+                        parameter_open = cursor
+                        break
+        before_parameters = (
+            method_header[:parameter_open].rstrip()
+            if parameter_open >= 0
+            else ""
+        )
+        if before_parameters.endswith(">"):
+            generic_depth = 0
+            for cursor in range(len(before_parameters) - 1, -1, -1):
+                char = before_parameters[cursor]
+                if char == ">":
+                    generic_depth += 1
+                elif char == "<":
+                    generic_depth -= 1
+                    if generic_depth == 0:
+                        before_parameters = before_parameters[:cursor].rstrip()
+                        break
+        method_name_match = re.search(
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)$",
+            before_parameters,
+        )
+        if method_name_match:
+            name = method_name_match.group("name")
+            if name.lower() in control_names:
+                return {"kind": "block", "name": name}
+            nearest_type_name = next(
+                (
+                    context["name"]
+                    for context in reversed(stack)
+                    if context["kind"] == "type"
+                ),
+                "",
+            )
+            prefix = before_parameters[: method_name_match.start("name")].strip()
+            prefix_without_attributes = prefix
+            while True:
+                leading_attribute = re.match(
+                    r"^\s*\[[^\]]*\]\s*",
+                    prefix_without_attributes,
+                )
+                if not leading_attribute:
+                    break
+                prefix_without_attributes = prefix_without_attributes[
+                    leading_attribute.end() :
+                ]
+            return_type_text = prefix_without_attributes.strip()
+            modifier_pattern = re.compile(
+                r"^(?:" + "|".join(sorted(method_modifiers)) + r")\b\s*",
+                flags=re.IGNORECASE,
+            )
+            while True:
+                stripped = modifier_pattern.sub("", return_type_text, count=1)
+                if stripped == return_type_text:
+                    break
+                return_type_text = stripped.lstrip()
+            nonordinary = bool(
+                re.search(r"\boperator\b", compact)
+                or re.search(rf"~\s*{re.escape(name)}\s*\(", compact)
+                or (nearest_type_name and name == nearest_type_name)
+                or not _is_plausible_csharp_return_type(return_type_text)
+            )
+            return {
+                "kind": "nonordinary_method" if nonordinary else "ordinary_method",
+                "name": name,
+            }
+        return {"kind": "block", "name": ""}
+
+    for index, char in enumerate(active_text[:call_start]):
+        if char == "{":
+            stack.append(classify_brace(active_text[segment_start:index]))
+            segment_start = index + 1
+        elif char == "}":
+            if not stack:
+                return False
+            stack.pop()
+            segment_start = index + 1
+        elif char == ";":
+            segment_start = index + 1
+
+    statement_prefix = active_text[segment_start:call_start]
+    if not re.fullmatch(r"\s*(?:return\s+)?", statement_prefix):
+        return False
+    if any(
+        context["kind"]
+        in {"lambda", "delegate", "accessor", "nonordinary_method"}
+        for context in stack
+    ):
+        return False
+    type_count = sum(context["kind"] == "type" for context in stack)
+    method_count = sum(context["kind"] == "ordinary_method" for context in stack)
+    if type_count < 1 or method_count != 1:
+        return False
+    return True
+
+
+def _direct_csharp_dbparameter_name(
+    source_text: str,
+    code_positions: Sequence[bool],
+    start: int,
+    end: int,
+) -> str:
+    argument = source_text[start:end]
+    match = re.fullmatch(
+        r"\s*new\s+DbParameter\s*\((?P<body>.*)\)\s*",
+        argument,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return ""
+    open_index = source_text.find("(", start, end)
+    if open_index < 0 or not code_positions[open_index]:
+        return ""
+    close_index = _find_csharp_matching_parenthesis(
+        source_text,
+        code_positions,
+        open_index,
+    )
+    if close_index < 0 or close_index >= end:
+        return ""
+    if source_text[close_index + 1 : end].strip():
+        return ""
+    constructor_arguments = _split_csharp_top_level_arguments(
+        source_text,
+        code_positions,
+        open_index,
+        close_index,
+    )
+    if len(constructor_arguments) != 2:
+        return ""
+    name_start, name_end = constructor_arguments[0]
+    name_match = re.fullmatch(
+        r'\s*"@(?P<parameter>[A-Za-z][A-Za-z0-9_]*)"\s*',
+        source_text[name_start:name_end],
+    )
+    value_start, value_end = constructor_arguments[1]
+    if (
+        not name_match
+        or not _is_supported_csharp_parameter_value(
+            source_text,
+            code_positions,
+            value_start,
+            value_end,
+        )
+    ):
+        return ""
+    return f"@{name_match.group('parameter').upper()}"
+
+
+def _extract_csharp_sp_calls(artifact_text: str) -> List[Dict[str, Any]]:
+    (
+        without_comments,
+        code_positions,
+        ambiguous_positions,
+        lexical_valid,
+    ) = _mask_csharp_comments_with_code_positions(artifact_text)
+    calls: List[Dict[str, Any]] = []
+    if not lexical_valid or not _csharp_delimiters_balanced(
+        without_comments,
+        code_positions,
+    ):
+        return []
+    if _csharp_dbclient_call_sites(str(artifact_text or ""), ambiguous_positions):
+        return []
+    active_sites = _csharp_dbclient_call_sites(without_comments, code_positions)
+    if len(active_sites) != 1:
+        return []
+    supported_methods = {"GetDataSetFromSP", "ExecSPTrn", "ExecSP"}
+    for site in active_sites:
+        if site["method"] not in supported_methods:
+            return []
+        if not _csharp_call_context_is_direct(
+            without_comments,
+            code_positions,
+            site["start"],
+        ):
+            return []
+        open_index = int(site["open_index"])
+        if open_index < 0 or not code_positions[open_index]:
+            continue
+        close_paren_index = _find_csharp_matching_parenthesis(
+            without_comments,
+            code_positions,
+            open_index,
+        )
+        close_index = close_paren_index + 1 if close_paren_index >= 0 else -1
+        if close_index < 0:
+            continue
+        terminator_index = close_index
+        while terminator_index < len(without_comments) and (
+            without_comments[terminator_index].isspace()
+            or not code_positions[terminator_index]
+        ):
+            terminator_index += 1
+        if terminator_index >= len(without_comments) or without_comments[terminator_index] != ";":
+            continue
+
+        arguments = _split_csharp_top_level_arguments(
+            without_comments,
+            code_positions,
+            open_index,
+            close_paren_index,
+        )
+        if not arguments:
+            continue
+        procedure_start, procedure_end = arguments[0]
+        procedure_match = re.fullmatch(
+            r'\s*"(?P<procedure>[^"\\\r\n]+)"\s*',
+            without_comments[procedure_start:procedure_end],
+        )
+        if not procedure_match:
+            continue
+        parameters: List[str] = []
+        direct_arguments_valid = True
+        for parameter_start, parameter_end in arguments[1:]:
+            parameter_name = _direct_csharp_dbparameter_name(
+                without_comments,
+                code_positions,
+                parameter_start,
+                parameter_end,
+            )
+            if not parameter_name:
+                direct_arguments_valid = False
+                break
+            parameters.append(parameter_name)
+        if not direct_arguments_valid:
+            continue
+        calls.append(
+            {
+                "target_procedure": _normalized_sp_identity(
+                    procedure_match.group("procedure")
+                ),
+                "parameters": parameters,
+            }
+        )
+    return calls
+
+
+def _caller_contract_is_present_in_artifact(
+    artifact_text: str,
+    contract: List[Dict[str, Any]],
+    *,
+    kind: str,
+    caller_id: str = "",
+    target_procedure: str = "",
+) -> bool:
+    if not contract:
+        return False
+    if kind == "csharp_call":
+        expected_target = _normalized_sp_identity(target_procedure)
+        expected_parameters = [item["name"] for item in contract]
+        return any(
+            call["target_procedure"] == expected_target
+            and call["parameters"] == expected_parameters
+            for call in _extract_csharp_sp_calls(artifact_text)
+        )
+    try:
+        payload = json.loads(artifact_text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if caller_id and str(payload.get("caller_id") or "").strip() != caller_id:
+        return False
+    if _normalized_sp_identity(payload.get("target_procedure")) != _normalized_sp_identity(
+        target_procedure
+    ):
+        return False
+    artifact_contract = _normalize_caller_parameter_contract(
+        payload.get("parameter_contract") or payload.get("parameters")
+    )
+    fields = ["name", "type_spec", "default_present", "default", "output", "readonly"]
+    return len(artifact_contract) == len(contract) and all(
+        all(artifact_contract[index].get(field) == contract[index].get(field) for field in fields)
+        for index in range(len(contract))
+    )
+
+
+def _csharp_contract_unproven_metadata(contract: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    unproven: List[Dict[str, Any]] = []
+    for parameter in contract:
+        fields = []
+        if parameter.get("type_specified"):
+            fields.append("type_spec")
+        if parameter.get("default_specified"):
+            fields.append("default")
+        if parameter.get("output_specified"):
+            fields.append("output")
+        if parameter.get("readonly_specified"):
+            fields.append("readonly")
+        if fields:
+            unproven.append({"parameter": parameter.get("name"), "fields": fields})
+    return unproven
+
+
+def _external_caller_artifact_caller_id(artifact_text: str) -> str:
+    try:
+        payload = json.loads(artifact_text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
+    return str(payload.get("caller_id") or "").strip() if isinstance(payload, dict) else ""
+
+
+def _external_caller_artifact_target_procedure(artifact_text: str) -> str:
+    return _normalized_sp_identity(
+        _external_caller_artifact_target_procedure_raw(artifact_text)
+    )
+
+
+def _external_caller_artifact_target_procedure_raw(artifact_text: str) -> str:
+    try:
+        payload = json.loads(artifact_text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("target_procedure") or "").strip()
+
+
+def _source_metadata_values(items: List[Dict[str, Any]]) -> tuple[set[str], set[str]]:
+    authors: set[str] = set()
+    dates: set[str] = set()
+    for item in items:
+        kind = str(item.get("kind") or "")
+        if kind not in {"existing_sp", "pasted_sql", "pb_srd_sql"}:
+            continue
+        definition, error = _source_definition_text(item)
+        if error or not definition:
+            continue
+        match = SP_METADATA_HEADER_PATTERN.search(definition)
+        if not match:
+            continue
+        author = str(match.group("author") or "").strip()
+        create_date = str(match.group("create_date") or "").strip()
+        if author:
+            authors.add(author)
+        if create_date:
+            dates.add(create_date)
+    return authors, dates
+
+
 def verify_pb_migration_sp_generation_contract(
     sql_text: str,
     *,
     source_evidence: Any = None,
     allow_inferred_draft: bool = False,
     profile_evidence: Any = None,
+    operation: str = "new_generation",
+    original_sp_text: str | None = None,
+    caller_parameter_contract: Any = None,
+    external_caller_contract: Any = None,
 ) -> HarnessResult:
     """Check that generated SELECT/SAVE SP work is evidence-gated before it is presented as migration output."""
     sql = str(sql_text or "")
     issues: List[Dict[str, Any]] = []
+    allowed_operations = {
+        "new_generation",
+        "pb_srd_generation",
+        "existing_sp_cleanup",
+        "approved_inferred_draft",
+    }
+    effective_operation = "approved_inferred_draft" if allow_inferred_draft else str(operation or "new_generation")
     profile_context, profile_issues = _consume_profile_evidence(profile_evidence, "sql")
     issues.extend(profile_issues)
     if not profile_issues:
@@ -6078,6 +8998,7 @@ def verify_pb_migration_sp_generation_contract(
             profile_context,
             domain="sql",
             procedure_name=_extract_sp_procedure_name(sql),
+            preserve_existing=effective_operation == "existing_sp_cleanup",
         )
         issues.extend(applied_issues)
     profile_consumption = dict(
@@ -6089,6 +9010,16 @@ def verify_pb_migration_sp_generation_contract(
     comments_stripped = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
     comments_stripped = re.sub(r"--.*?$", " ", comments_stripped, flags=re.MULTILINE)
     upper_comments_stripped = comments_stripped.upper()
+    candidate_target_procedure = _extract_sp_procedure_identity(sql)
+    if effective_operation not in allowed_operations:
+        issues.append(
+            {
+                "code": "unsupported_sp_generation_operation",
+                "severity": "error",
+                "message": "SP verification requires an explicit supported operation mode.",
+                "operation": effective_operation,
+            }
+        )
     normalized_source_evidence: List[Dict[str, Any]] = []
     unstructured_source_evidence = False
     if isinstance(source_evidence, dict):
@@ -6099,14 +9030,57 @@ def verify_pb_migration_sp_generation_contract(
         unstructured_source_evidence = True
     elif source_evidence:
         unstructured_source_evidence = True
-    allowed_evidence_kinds = {"pb_srd_sql", "existing_sp", "pasted_sql", "db_schema", "approved_inferred_draft"}
+    allowed_evidence_kinds = {
+        "pb_srd_sql",
+        "existing_sp",
+        "pasted_sql",
+        "db_schema",
+        "approved_inferred_draft",
+        "csharp_call",
+        "external_caller",
+        "branch_contract",
+        "composite_contract",
+    }
     accepted_source_evidence = []
+    accepted_body_source_evidence: List[Dict[str, Any]] = []
+    bound_source_text_by_locator: Dict[str, str] = {}
+    bound_source_authority_lineage: List[str] = []
+    bound_source_trace_by_hash: Dict[str, List[str]] = {}
+    branch_contract_authorities: List[Dict[str, Any]] = []
+    candidate_fingerprint = _sql_evidence_fingerprint(sql)
     for item in normalized_source_evidence:
         kind = str(item.get("kind") or "")
         if kind not in allowed_evidence_kinds:
+            if any(
+                key in item
+                for key in [
+                    "caller_parameters",
+                    "db_parameters",
+                    "csharp_db_parameters",
+                    "external_caller_parameters",
+                    "parameter_contract",
+                ]
+            ):
+                issues.append(
+                    {
+                        "code": "untrusted_caller_evidence_kind",
+                        "severity": "error",
+                        "message": "Only csharp_call or verified external_caller evidence may authorize SP parameters.",
+                        "kind": kind,
+                    }
+                )
+            continue
+        if kind == "approved_inferred_draft" and effective_operation != "approved_inferred_draft":
+            issues.append(
+                {
+                    "code": "inferred_evidence_operation_mismatch",
+                    "severity": "error",
+                    "message": "Approved inferred evidence is valid only under operation='approved_inferred_draft'.",
+                    "operation": effective_operation,
+                }
+            )
             continue
         path_or_summary = bool(str(item.get("path") or item.get("summary") or "").strip())
-        path_only = bool(str(item.get("path") or "").strip())
         object_name = bool(str(item.get("object") or "").strip())
         hash_or_definition = bool(
             str(
@@ -6118,16 +9092,427 @@ def verify_pb_migration_sp_generation_contract(
             ).strip()
         )
         verified = bool(item.get("verified"))
-        if kind == "existing_sp":
-            has_detail = verified and (object_name or path_only) and hash_or_definition
+        if kind in {"existing_sp", "pasted_sql", "pb_srd_sql"}:
+            source_text, source_error, source_locator = _bound_source_artifact_text(item)
+            has_detail = not source_error
+            if source_error:
+                issues.append(
+                    {
+                        "code": source_error,
+                        "severity": "error",
+                        "message": (
+                            "PB/SQL/SP source evidence must be verified and bound to a readable path or "
+                            "host-resolved artifact URI by a matching SHA-256 digest."
+                        ),
+                        "kind": kind,
+                        "locator": source_locator,
+                    }
+                )
+            if has_detail and kind == "existing_sp":
+                source_object = _extract_sp_procedure_name(source_text)
+                declared_object = _normalized_sp_object_name(item.get("object"))
+                has_detail = bool(object_name and source_object and declared_object == source_object)
+                if not has_detail:
+                    issues.append(
+                        {
+                            "code": "existing_sp_object_definition_mismatch",
+                            "severity": "error",
+                            "message": "Existing-SP evidence object name must match the bound procedure definition.",
+                            "declared_object": declared_object,
+                            "definition_object": source_object,
+                        }
+                    )
+            if has_detail and kind == "pasted_sql":
+                evidence_role = str(item.get("evidence_role") or "")
+                has_detail = evidence_role in {"existing_procedure", "pb_query", "body_fragment"}
+                if not has_detail:
+                    issues.append(
+                        {
+                            "code": "pasted_sql_evidence_role_missing_or_invalid",
+                            "severity": "error",
+                            "message": "Pasted SQL must declare existing_procedure, pb_query, or body_fragment role.",
+                        }
+                    )
+                elif evidence_role == "existing_procedure" and not _extract_sp_procedure_name(source_text):
+                    has_detail = False
+                    issues.append(
+                        {
+                            "code": "pasted_existing_procedure_definition_missing",
+                            "severity": "error",
+                            "message": "Pasted SQL marked existing_procedure must contain a procedure definition.",
+                        }
+                    )
+            if has_detail and kind in {"pb_srd_sql", "pasted_sql"} and not re.search(
+                r"\b(?:SELECT|FROM|WHERE|JOIN|INSERT|UPDATE|DELETE|EXEC(?:UTE)?|CREATE|ALTER)\b",
+                _strip_sql_literals_and_comments_for_pb_contract(source_text),
+                flags=re.IGNORECASE,
+            ):
+                has_detail = False
+                issues.append(
+                    {
+                        "code": "source_artifact_contains_no_sql_statement",
+                        "severity": "error",
+                        "message": "PB/pasted SQL evidence must contain an actual SQL statement or body fragment.",
+                        "kind": kind,
+                    }
+                )
+            if (
+                has_detail
+                and effective_operation != "existing_sp_cleanup"
+                and candidate_fingerprint
+                and _sql_evidence_fingerprint(source_text) == candidate_fingerprint
+            ):
+                has_detail = False
+                issues.append(
+                    {
+                        "code": "candidate_reused_as_source_evidence",
+                        "severity": "error",
+                        "message": (
+                            "The generated candidate cannot authenticate itself as PB/SQL/SP source evidence. "
+                            "Use an independently captured source artifact or existing_sp_cleanup."
+                        ),
+                        "kind": kind,
+                        "locator": source_locator,
+                    }
+                )
+            if has_detail and effective_operation != "existing_sp_cleanup":
+                correlated, correlation_reason = _source_correlates_to_candidate(
+                    item,
+                    source_text,
+                    sql,
+                )
+                if not correlated:
+                    has_detail = False
+                    issues.append(
+                        {
+                            "code": (
+                                "body_fragment_not_present_in_candidate"
+                                if kind == "pasted_sql" and str(item.get("evidence_role") or "") == "body_fragment"
+                                else "source_evidence_not_correlated_to_candidate"
+                            ),
+                            "severity": "error",
+                            "message": (
+                                "Source evidence must identify the candidate procedure and prove at least one "
+                                "meaningful SQL fragment preserved in both the bound source artifact and candidate."
+                            ),
+                            "kind": kind,
+                            "correlation_reason": correlation_reason,
+                            "locator": source_locator,
+                        }
+                    )
+                else:
+                    item["candidate_correlation"] = correlation_reason
+            if has_detail:
+                bound_source_text_by_locator[source_locator] = source_text
+                source_hash = str(item.get("sha256") or item.get("definition_hash") or "").strip().lower()
+                if source_hash and source_hash not in bound_source_authority_lineage:
+                    bound_source_authority_lineage.append(source_hash)
+                    bound_source_trace_by_hash[source_hash] = [
+                        trace_item["trace_key"]
+                        for trace_item in _sql_hierarchical_trace(source_text)
+                        if not trace_item["generated_wrapper"]
+                        and not trace_item.get("generated_envelope")
+                    ]
         elif kind == "approved_inferred_draft":
-            has_detail = bool(item.get("approved") and path_or_summary)
+            has_detail = bool(
+                item.get("approved")
+                and str(item.get("approval_artifact") or item.get("approval_id") or "").strip()
+                and item.get("approved_parameters")
+            )
+        elif kind == "csharp_call":
+            caller_values = item.get("parameter_contract")
+            if caller_values is None:
+                caller_values = item.get("db_parameters")
+            if caller_values is None:
+                caller_values = item.get("csharp_db_parameters")
+            caller_contract = _normalize_caller_parameter_contract(caller_values)
+            artifact_text, artifact_error = _bound_caller_artifact_text(item)
+            if not verified and not artifact_error:
+                artifact_error = "caller_artifact_unverified"
+            unproven_metadata = _csharp_contract_unproven_metadata(caller_contract)
+            declared_target_raw = str(item.get("target_procedure") or "").strip()
+            declared_target = _normalized_sp_identity(declared_target_raw)
+            declared_target_invalid = bool(declared_target_raw and not declared_target)
+            target_matches = bool(
+                declared_target
+                and candidate_target_procedure
+                and declared_target == candidate_target_procedure
+            )
+            has_detail = bool(
+                verified
+                and not artifact_error
+                and not unproven_metadata
+                and target_matches
+                and _caller_contract_is_present_in_artifact(
+                    artifact_text,
+                    caller_contract,
+                    kind="csharp_call",
+                    target_procedure=candidate_target_procedure,
+                )
+            )
+            if not has_detail:
+                if declared_target_invalid:
+                    issue_code = "csharp_caller_target_procedure_invalid"
+                elif not declared_target:
+                    issue_code = "csharp_caller_target_procedure_missing"
+                elif not target_matches or (
+                    not artifact_error
+                    and not _caller_contract_is_present_in_artifact(
+                        artifact_text,
+                        caller_contract,
+                        kind="csharp_call",
+                        target_procedure=candidate_target_procedure,
+                    )
+                ):
+                    issue_code = "csharp_caller_target_procedure_mismatch"
+                else:
+                    issue_code = (
+                        artifact_error
+                        or (
+                            "csharp_caller_parameter_metadata_not_proven_by_artifact"
+                            if unproven_metadata
+                            else "caller_contract_not_bound_to_artifact"
+                        )
+                    )
+                issues.append(
+                    {
+                        "code": issue_code,
+                        "severity": "error",
+                        "message": (
+                            "C# caller evidence must contain one bound dbClient call to the exact candidate procedure "
+                            "and the ordered DbParameter list. It cannot claim SQL type, default, OUTPUT, or READONLY "
+                            "metadata absent from the C# artifact."
+                        ),
+                        "candidate_target_procedure": candidate_target_procedure,
+                        "declared_target_procedure": declared_target,
+                        "unproven_metadata": unproven_metadata,
+                    }
+                )
+        elif kind == "external_caller":
+            external_parameter_contract = _normalize_caller_parameter_contract(
+                item.get("parameter_contract")
+            )
+            artifact_text, artifact_error = _bound_caller_artifact_text(item)
+            declared_caller_id = str(item.get("caller_id") or "").strip()
+            artifact_caller_id = _external_caller_artifact_caller_id(artifact_text)
+            declared_target_raw = str(item.get("target_procedure") or "").strip()
+            declared_target = _normalized_sp_identity(declared_target_raw)
+            declared_target_invalid = bool(declared_target_raw and not declared_target)
+            artifact_target_raw = _external_caller_artifact_target_procedure_raw(artifact_text)
+            artifact_target = _external_caller_artifact_target_procedure(artifact_text)
+            artifact_target_invalid = bool(artifact_target_raw and not artifact_target)
+            caller_id_matches = bool(
+                declared_caller_id
+                and artifact_caller_id
+                and declared_caller_id == artifact_caller_id
+            )
+            target_matches = bool(
+                candidate_target_procedure
+                and declared_target == candidate_target_procedure
+                and artifact_target == candidate_target_procedure
+            )
+            has_detail = bool(
+                verified
+                and caller_id_matches
+                and target_matches
+                and str(item.get("artifact_uri") or item.get("path") or "").strip()
+                and re.fullmatch(r"[0-9a-fA-F]{64}", str(item.get("sha256") or "").strip())
+                and external_parameter_contract
+                and not artifact_error
+                and _caller_contract_is_present_in_artifact(
+                    artifact_text,
+                    external_parameter_contract,
+                    kind="external_caller",
+                    caller_id=declared_caller_id,
+                    target_procedure=candidate_target_procedure,
+                )
+            )
+            if not has_detail and artifact_error:
+                issues.append(
+                    {
+                        "code": artifact_error,
+                        "severity": "error",
+                        "message": "External caller evidence requires a readable SHA-256-bound artifact.",
+                    }
+                )
+            elif not has_detail and (declared_target_invalid or artifact_target_invalid):
+                issues.append(
+                    {
+                        "code": "external_caller_target_procedure_invalid",
+                        "severity": "error",
+                        "message": (
+                            "External caller target_procedure must use a strict one-part or two-part SQL "
+                            "identifier with no empty or extra qualifiers."
+                        ),
+                        "declared_target_procedure": declared_target_raw,
+                        "artifact_target_procedure": artifact_target_raw,
+                    }
+                )
+            elif not has_detail and declared_caller_id != artifact_caller_id:
+                issues.append(
+                    {
+                        "code": "external_caller_id_mismatch",
+                        "severity": "error",
+                        "message": "External caller evidence caller_id must match the SHA-256-bound artifact caller_id.",
+                        "declared_caller_id": declared_caller_id,
+                        "artifact_caller_id": artifact_caller_id,
+                    }
+                )
+            elif not has_detail and (not declared_target or not artifact_target):
+                issues.append(
+                    {
+                        "code": "external_caller_target_procedure_missing",
+                        "severity": "error",
+                        "message": (
+                            "External caller evidence and its SHA-256-bound JSON artifact must both declare "
+                            "target_procedure."
+                        ),
+                        "declared_target_procedure": declared_target,
+                        "artifact_target_procedure": artifact_target,
+                    }
+                )
+            elif not has_detail and not target_matches:
+                issues.append(
+                    {
+                        "code": "external_caller_target_procedure_mismatch",
+                        "severity": "error",
+                        "message": "External caller target_procedure must match the exact candidate procedure.",
+                        "candidate_target_procedure": candidate_target_procedure,
+                        "declared_target_procedure": declared_target,
+                        "artifact_target_procedure": artifact_target,
+                    }
+                )
+        elif kind in {"branch_contract", "composite_contract"}:
+            (
+                branch_trace_keys,
+                branch_error,
+                contract_metadata,
+            ) = _bound_branch_contract_trace_keys(
+                item,
+                candidate_target_procedure,
+                sql,
+            )
+            has_detail = bool(branch_trace_keys and not branch_error)
+            if branch_error:
+                issues.append(
+                    {
+                        "code": branch_error,
+                        "severity": "error",
+                        "message": (
+                            "Generated branch conditions require a verified SHA-256-bound JSON authority whose "
+                            "target_procedure and complete trace topology match the candidate. Composite authorities "
+                            "must also bind an explicit source_lineage list."
+                        ),
+                    }
+                )
+            if has_detail:
+                branch_contract_authorities.append(
+                    {
+                        "authority_id": str(
+                            item.get("artifact_uri")
+                            or item.get("path")
+                            or item.get("sha256")
+                            or "branch_contract"
+                        ),
+                        "trace_key_counts": dict(branch_trace_keys),
+                        "authority_kind": kind,
+                        "source_lineage": list(
+                            contract_metadata.get("source_lineage") or []
+                        ),
+                        "trace_sha256": str(
+                            contract_metadata.get("trace_sha256") or ""
+                        ),
+                        "lineage_trace_keys": list(
+                            contract_metadata.get("lineage_trace_keys") or []
+                        ),
+                    }
+                )
         elif kind == "db_schema":
             has_detail = path_or_summary or hash_or_definition or (object_name and verified)
-        else:
-            has_detail = path_or_summary or hash_or_definition
         if has_detail:
             accepted_source_evidence.append(item)
+            if kind in {"existing_sp", "pasted_sql", "pb_srd_sql"}:
+                accepted_body_source_evidence.append(item)
+        elif kind in {"external_caller", "approved_inferred_draft"}:
+            issues.append(
+                {
+                    "code": f"incomplete_{kind}_evidence",
+                    "severity": "error",
+                    "message": f"{kind} evidence is missing its required role, artifact, hash, approval, or parameter contract.",
+                }
+            )
+
+    validated_contract_authorities: List[Dict[str, Any]] = []
+    for authority in branch_contract_authorities:
+        if authority.get("authority_kind") == "composite_contract":
+            lineage = [
+                str(value or "").strip().lower()
+                for value in authority.get("source_lineage") or []
+                if str(value or "").strip()
+            ]
+            if len(lineage) != len(set(lineage)):
+                issues.append(
+                    {
+                        "code": "composite_contract_source_lineage_duplicate",
+                        "severity": "error",
+                        "message": (
+                            "Composite source_lineage cannot contain duplicate source authority hashes."
+                        ),
+                        "source_lineage": lineage,
+                    }
+                )
+                continue
+            if lineage != bound_source_authority_lineage:
+                issues.append(
+                    {
+                        "code": "composite_contract_source_lineage_mismatch",
+                        "severity": "error",
+                        "message": (
+                            "Composite source_lineage must exactly equal every independently bound and "
+                            "candidate-correlated source authority SHA-256 in verification order. Subsets, "
+                            "unknown hashes, and reordering fail closed."
+                        ),
+                        "source_lineage": lineage,
+                        "expected_source_lineage": bound_source_authority_lineage,
+                    }
+                )
+                continue
+            expected_lineage_trace = [
+                trace_key
+                for source_hash in lineage
+                for trace_key in bound_source_trace_by_hash.get(source_hash, [])
+            ]
+            if list(authority.get("lineage_trace_keys") or []) != expected_lineage_trace:
+                issues.append(
+                    {
+                        "code": "composite_contract_source_trace_mismatch",
+                        "severity": "error",
+                        "message": (
+                            "Composite trace_sql must equal the exhaustive ordered non-envelope trace "
+                            "of every bound source authority in source_lineage order."
+                        ),
+                        "source_lineage": lineage,
+                        "expected_trace_event_count": len(expected_lineage_trace),
+                        "actual_trace_event_count": len(
+                            list(authority.get("lineage_trace_keys") or [])
+                        ),
+                    }
+                )
+                continue
+        validated_contract_authorities.append(authority)
+    branch_contract_authorities = validated_contract_authorities
+
+    migration_source_evidence = [
+        item
+        for item in accepted_source_evidence
+        if str(item.get("kind") or "")
+        not in {
+            "csharp_call",
+            "external_caller",
+            "branch_contract",
+            "composite_contract",
+        }
+    ]
 
     if unstructured_source_evidence:
         issues.append(
@@ -6147,13 +9532,79 @@ def verify_pb_migration_sp_generation_contract(
                 "severity": "error",
                 "message": (
                     "Target-style procedure output must include the standard metadata comment block "
-                    "immediately above CREATE/ALTER PROCEDURE: AUTHOR, CREATE DATE, and DESCRIPTION."
+                    "immediately above CREATE/ALTER PROCEDURE. DESCRIPTION is required; AUTHOR and "
+                    "CREATE DATE are included only when supplied by authoritative source evidence."
                 ),
             }
         )
     elif header_match:
+        header_author = str(header_match.group("author") or "").strip()
+        header_create_date = str(header_match.group("create_date") or "").strip()
         header_description = str(header_match.group("description") or "").strip()
         procedure_name = _extract_sp_procedure_name(sql)
+        if header_author and re.search(
+            r"<[^>]+>|TODO|SAMPLE|MAINTAINER|UNKNOWN|TBD",
+            header_author,
+            flags=re.IGNORECASE,
+        ):
+            issues.append(
+                {
+                    "code": "sp_metadata_author_placeholder",
+                    "severity": "error",
+                    "message": (
+                        "Do not invent or placeholder-fill AUTHOR. Preserve a source/caller-provided "
+                        "author or omit the AUTHOR line."
+                    ),
+                    "actual_author": header_author,
+                }
+            )
+        metadata_sources = list(accepted_source_evidence)
+        if effective_operation == "existing_sp_cleanup" and str(original_sp_text or "").strip():
+            metadata_sources.append(
+                {
+                    "kind": "existing_sp",
+                    "definition_text": str(original_sp_text),
+                }
+            )
+        authoritative_authors, authoritative_dates = _source_metadata_values(metadata_sources)
+        if header_author and not authoritative_authors:
+            issues.append(
+                {
+                    "code": "sp_metadata_author_not_source_backed",
+                    "severity": "error",
+                    "message": "Omit AUTHOR unless authoritative source evidence supplies the exact value.",
+                    "actual_author": header_author,
+                }
+            )
+        elif header_author and header_author not in authoritative_authors:
+            issues.append(
+                {
+                    "code": "sp_metadata_author_mismatch",
+                    "severity": "error",
+                    "message": "AUTHOR does not match authoritative source evidence.",
+                    "actual_author": header_author,
+                    "expected_authors": sorted(authoritative_authors),
+                }
+            )
+        if header_create_date and not authoritative_dates:
+            issues.append(
+                {
+                    "code": "sp_metadata_create_date_not_source_backed",
+                    "severity": "error",
+                    "message": "Omit CREATE DATE unless authoritative source evidence supplies the exact value.",
+                    "actual_create_date": header_create_date,
+                }
+            )
+        elif header_create_date and header_create_date not in authoritative_dates:
+            issues.append(
+                {
+                    "code": "sp_metadata_create_date_mismatch",
+                    "severity": "error",
+                    "message": "CREATE DATE does not match authoritative source evidence.",
+                    "actual_create_date": header_create_date,
+                    "expected_create_dates": sorted(authoritative_dates),
+                }
+            )
         expected_descriptions = [
             str(item.get(key) or "").strip()
             for item in normalized_source_evidence
@@ -6196,18 +9647,35 @@ def verify_pb_migration_sp_generation_contract(
                     "actual_description": header_description,
                 }
             )
-    if sql.strip() and not accepted_source_evidence:
+    body_traceability: List[Dict[str, Any]] = []
+    if (
+        sql.strip()
+        and effective_operation != "approved_inferred_draft"
+        and not accepted_body_source_evidence
+    ):
         issues.append(
             {
                 "code": "inferred_draft_not_complete" if allow_inferred_draft else "missing_pb_or_db_source_evidence_for_sp_generation",
                 "severity": "error",
                 "message": (
-                    "Do not present a full migration SELECT/SAVE procedure as completed unless PB/DataWindow SQL, "
-                    "verified existing SP, pasted SQL, DB schema, or explicit user-approved inferred draft evidence is recorded."
+                    "Do not present a full migration SELECT/SAVE procedure as completed unless independently "
+                    "hash-bound PB/DataWindow SQL, existing-SP, or pasted-SQL body evidence is recorded. "
+                    "Schema evidence alone does not authorize a procedure body."
                 ),
             }
         )
-    if "@WORKTYPE" not in upper_unprotected:
+    if effective_operation in {"new_generation", "pb_srd_generation"} and bound_source_text_by_locator:
+        source_authorities = [
+            {"authority_id": locator, "text": source_text}
+            for locator, source_text in bound_source_text_by_locator.items()
+        ]
+        body_traceability, body_traceability_issues = _candidate_body_traceability(
+            sql,
+            source_authorities,
+            branch_contract_authorities,
+        )
+        issues.extend(body_traceability_issues)
+    if effective_operation != "existing_sp_cleanup" and "@WORKTYPE" not in upper_unprotected:
         issues.append(
             {
                 "code": "missing_worktype_contract",
@@ -6215,7 +9683,7 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Migration SELECT/SAVE procedures must expose the @WORKTYPE branch contract.",
             }
         )
-    if re.search(r"@WORKTYPE\s+VARCHAR\s*\(\s*20\s*\)\s*=\s*''", upper_comments_stripped):
+    if effective_operation != "existing_sp_cleanup" and re.search(r"@WORKTYPE\s+VARCHAR\s*\(\s*20\s*\)\s*=\s*''", upper_comments_stripped):
         issues.append(
             {
                 "code": "worktype_empty_string_default_detected",
@@ -6223,7 +9691,7 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Target-style procedures do not default @WORKTYPE to an empty string; use NULL or the verified required parameter contract.",
             }
         )
-    if re.search(r"@[A-Z][A-Z0-9_]*\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'%'", upper_comments_stripped):
+    if effective_operation != "existing_sp_cleanup" and re.search(r"@[A-Z][A-Z0-9_]*\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'%'", upper_comments_stripped):
         issues.append(
             {
                 "code": "wildcard_filter_parameter_default_detected",
@@ -6231,7 +9699,7 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not default text filter parameters to '%' unless verified target procedure evidence uses that exact contract.",
             }
         )
-    if re.search(r"@[A-Z][A-Z0-9_]*\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'(?:T|1)'", upper_comments_stripped):
+    if effective_operation != "existing_sp_cleanup" and re.search(r"@[A-Z][A-Z0-9_]*\s+(?:N?VARCHAR|N?CHAR)\s*\([^)]*\)\s*=\s*'(?:T|1)'", upper_comments_stripped):
         issues.append(
             {
                 "code": "business_flag_parameter_default_detected",
@@ -6239,62 +9707,234 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not default business selector parameters to generated literals unless verified target procedure evidence uses them.",
             }
         )
-    signature_match = re.search(
-        r"(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)PROCEDURE[\s\S]*?\bAS\b",
-        upper_comments_stripped,
+    procedure_parameter_contract = _extract_sp_parameter_contract(sql)
+    procedure_parameters = [item["name"] for item in procedure_parameter_contract]
+    caller_contract = _normalize_caller_parameter_contract(caller_parameter_contract)
+    declared_external_contract = _normalize_caller_parameter_contract(
+        external_caller_contract
     )
-    procedure_parameters: List[str] = []
-    if signature_match:
-        signature_text = signature_match.group(0)
-        procedure_parameters = sorted(
-            set(
-                re.findall(
-                    r"@([A-Z][A-Z0-9_]*)\s+(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*))?(?:\s*\([^)]*\))?",
-                    signature_text,
+    external_contract: List[Dict[str, Any]] = []
+    for item in accepted_source_evidence:
+        kind = str(item.get("kind") or "")
+        if kind == "csharp_call":
+            values = item.get("parameter_contract")
+            if values is None:
+                for key in ["db_parameters", "csharp_db_parameters"]:
+                    if item.get(key) is not None:
+                        values = item.get(key)
+                        break
+            caller_contract.extend(_normalize_caller_parameter_contract(values))
+        elif kind == "external_caller":
+            contract = _normalize_caller_parameter_contract(item.get("parameter_contract"))
+            if any(not parameter.get("type_spec") for parameter in contract):
+                issues.append(
+                    {
+                        "code": "external_caller_parameter_type_missing",
+                        "severity": "error",
+                        "message": "Verified external caller contracts must include ordered SQL type specifications.",
+                    }
                 )
+            external_contract.extend(contract)
+
+    if declared_external_contract:
+        if not external_contract:
+            issues.append(
+                {
+                    "code": "external_caller_contract_without_provenance",
+                    "severity": "error",
+                    "message": "The external_caller_contract argument cannot authorize parameters without matching verified external_caller artifact evidence.",
+                }
             )
-        )
-        caller_parameter_names: set[str] = set()
-        for item in normalized_source_evidence:
-            for key in (
-                "caller_parameters",
-                "db_parameters",
-                "csharp_db_parameters",
-                "procedure_call_parameters",
-                "sp_call_parameters",
+        elif not _sp_signatures_equal(declared_external_contract, external_contract):
+            issues.append(
+                {
+                    "code": "external_caller_contract_evidence_mismatch",
+                    "severity": "error",
+                    "message": "The direct external caller contract does not match the artifact-backed external caller evidence.",
+                }
+            )
+
+    signature_authority = "none"
+    original_parameter_contract: List[Dict[str, Any]] = []
+    if effective_operation == "existing_sp_cleanup":
+        original_definition = ""
+        for item in accepted_body_source_evidence:
+            if str(item.get("kind") or "") == "existing_sp" or (
+                str(item.get("kind") or "") == "pasted_sql"
+                and str(item.get("evidence_role") or "") == "existing_procedure"
             ):
-                values = item.get(key)
-                if isinstance(values, str):
-                    values = re.findall(r"@[A-Za-z][A-Za-z0-9_]*", values)
-                if isinstance(values, (list, tuple, set)):
-                    for value in values:
-                        match = re.search(r"@?([A-Za-z][A-Za-z0-9_]*)", str(value or ""))
-                        if match:
-                            caller_parameter_names.add(match.group(1).upper())
-        if caller_parameter_names:
-            non_caller_params = [name for name in procedure_parameters if name not in caller_parameter_names]
-            if non_caller_params:
+                locator = str(
+                    item.get("artifact_uri")
+                    or item.get("definition_path")
+                    or item.get("path")
+                    or ""
+                ).strip()
+                original_definition = bound_source_text_by_locator.get(locator, "")
+                if original_definition:
+                    break
+        if not original_definition:
+            issues.append(
+                {
+                    "code": "existing_sp_definition_missing",
+                    "severity": "error",
+                    "message": (
+                        "Existing-SP cleanup cannot prove signature preservation without an authenticated "
+                        "existing_sp or pasted_sql(existing_procedure) artifact."
+                    ),
+                }
+            )
+        else:
+            if str(original_sp_text or "") and str(original_sp_text) != original_definition:
+                issues.append(
+                    {
+                        "code": "original_sp_text_evidence_mismatch",
+                        "severity": "error",
+                        "message": "The direct original_sp_text argument does not match the authenticated source artifact.",
+                    }
+                )
+            original_parameter_contract = _extract_sp_parameter_contract(original_definition)
+            signature_authority = "existing_sp_definition"
+            if not _sp_signatures_equal(procedure_parameter_contract, original_parameter_contract):
+                issues.append(
+                    {
+                        "code": "existing_sp_signature_changed",
+                        "severity": "error",
+                        "message": "Formatting/cleanup must preserve parameter name, order, type, size, default, OUTPUT, and READONLY exactly.",
+                        "original_signature": original_parameter_contract,
+                        "candidate_signature": procedure_parameter_contract,
+                    }
+                )
+            issues.extend(_existing_sp_cleanup_preservation_issues(original_definition, sql))
+    elif effective_operation in {"new_generation", "pb_srd_generation"}:
+        expected_contract = caller_contract + external_contract
+        expected_names = [item["name"] for item in expected_contract]
+        if not expected_contract and procedure_parameters:
+            issues.append(
+                {
+                    "code": "missing_caller_parameter_contract",
+                    "severity": "error",
+                    "message": (
+                        "New PB migration procedure generation requires an ordered C# caller contract or "
+                        "a verified external-caller artifact. PB/DataWindow SQL does not authorize parameters."
+                    ),
+                    "parameters": procedure_parameters,
+                }
+            )
+        elif expected_contract:
+            signature_authority = "csharp_or_verified_external_caller"
+            extra = [name for name in procedure_parameters if name not in expected_names]
+            missing = [name for name in expected_names if name not in procedure_parameters]
+            if extra:
                 issues.append(
                     {
                         "code": "non_caller_procedure_parameter_detected",
                         "severity": "error",
-                        "message": (
-                            "Generated SP parameters must match values actually sent by the C# caller. "
-                            "SP-internal calculation/helper values must be local DECLARE variables assigned with SET."
-                        ),
-                        "parameters": [f"@{name}" for name in non_caller_params],
-                        "caller_parameters": [f"@{name}" for name in sorted(caller_parameter_names)],
+                        "message": "SP helper/calculation values must be local DECLARE variables, not procedure parameters.",
+                        "parameters": extra,
+                        "caller_parameters": expected_names,
                     }
                 )
-        helper_date_params = sorted(
-            set(
-                re.findall(
-                    r"@(DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s+(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Z][A-Z0-9_]*))?(?:\s*\([^)]*\))?",
-                    signature_text,
+            if missing:
+                issues.append(
+                    {
+                        "code": "caller_parameter_missing_from_procedure",
+                        "severity": "error",
+                        "message": "Every approved caller parameter must appear in the generated procedure signature.",
+                        "parameters": missing,
+                    }
                 )
+            if not extra and not missing and procedure_parameters != expected_names:
+                issues.append(
+                    {
+                        "code": "caller_parameter_order_mismatch",
+                        "severity": "error",
+                        "message": "Generated procedure parameters must preserve caller order.",
+                        "expected": expected_names,
+                        "actual": procedure_parameters,
+                    }
+                )
+            for index, expected in enumerate(expected_contract):
+                if index >= len(procedure_parameter_contract):
+                    break
+                expected_type = str(expected.get("type_spec") or "")
+                if expected_type and expected_type != procedure_parameter_contract[index].get("type_spec"):
+                    issues.append(
+                        {
+                            "code": "caller_parameter_type_mismatch",
+                            "severity": "error",
+                            "message": "Generated procedure parameter type differs from the verified caller contract.",
+                            "parameter": expected["name"],
+                            "expected": expected_type,
+                            "actual": procedure_parameter_contract[index].get("type_spec"),
+                        }
+                    )
+                for field, issue_code, label in [
+                    ("output", "caller_parameter_output_mismatch", "OUTPUT"),
+                    ("readonly", "caller_parameter_readonly_mismatch", "READONLY"),
+                    ("default_present", "caller_parameter_default_presence_mismatch", "default presence"),
+                    ("default", "caller_parameter_default_mismatch", "default value"),
+                ]:
+                    specified_key = (
+                        "default_specified"
+                        if field in {"default_present", "default"}
+                        else f"{field}_specified"
+                    )
+                    if not expected.get(specified_key):
+                        continue
+                    if expected.get(field) == procedure_parameter_contract[index].get(field):
+                        continue
+                    issues.append(
+                        {
+                            "code": issue_code,
+                            "severity": "error",
+                            "message": f"Generated procedure parameter {label} differs from the verified caller contract.",
+                            "parameter": expected["name"],
+                            "expected": expected.get(field),
+                            "actual": procedure_parameter_contract[index].get(field),
+                        }
+                    )
+        if effective_operation == "pb_srd_generation" and not any(
+            str(item.get("kind") or "") == "pb_srd_sql" for item in migration_source_evidence
+        ):
+            issues.append(
+                {
+                    "code": "pb_srd_evidence_missing_for_operation",
+                    "severity": "error",
+                    "message": "pb_srd_generation requires explicit PB/DataWindow SQL evidence.",
+                }
             )
+    elif effective_operation == "approved_inferred_draft":
+        approval_items = [
+            item
+            for item in accepted_source_evidence
+            if str(item.get("kind") or "") == "approved_inferred_draft"
+        ]
+        approved_contract = _normalize_caller_parameter_contract(
+            approval_items[0].get("approved_parameters") if approval_items else None
         )
-        if helper_date_params:
+        if not approval_items or [item["name"] for item in approved_contract] != procedure_parameters:
+            issues.append(
+                {
+                    "code": "approved_inferred_parameter_contract_mismatch",
+                    "severity": "error",
+                    "message": "Approved inferred drafts require an artifact-backed ordered parameter list matching the draft.",
+                }
+            )
+        issues.append(
+            {
+                "code": "approved_inferred_draft_release_pending",
+                "severity": "pending",
+                "message": "An inferred draft remains non-release-ready until caller and DB evidence are verified.",
+            }
+        )
+
+    if procedure_parameter_contract:
+        helper_date_params = sorted(
+            item["name"]
+            for item in procedure_parameter_contract
+            if item["name"] in {"@DERIVED_YEAR", "@DERIVED_MONTH", "@BASE_YEAR", "@BOUNDARY_DATE"}
+        )
+        if helper_date_params and effective_operation != "existing_sp_cleanup":
             issues.append(
                 {
                     "code": "derived_date_helper_parameter_detected",
@@ -6304,10 +9944,10 @@ def verify_pb_migration_sp_generation_contract(
                         "as generated procedure parameters. Accept the raw target-style date input, then use local DECLARE and SET "
                         "inside the procedure when derived values are needed."
                     ),
-                    "parameters": [f"@{name}" for name in helper_date_params],
+                    "parameters": helper_date_params,
                 }
             )
-    if re.search(
+    if effective_operation != "existing_sp_cleanup" and re.search(
         r"IF\s*\(?\s*ISNULL\s*\(\s*@(INPUT_DATE|DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s*,\s*''\s*\)",
         upper_comments_stripped,
     ):
@@ -6321,7 +9961,7 @@ def verify_pb_migration_sp_generation_contract(
                 ),
             }
         )
-    if re.search(
+    if effective_operation != "existing_sp_cleanup" and re.search(
         r"SET\s+@(DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s*=\s*(?:LEFT\s*\(\s*@INPUT_DATE|SUBSTRING\s*\(\s*@INPUT_DATE|RIGHT\s*\(\s*'0'\s*\+|CONVERT\s*\(\s*VARCHAR\s*\(\s*[48]\s*\)\s*,\s*(?:YEAR|DATEADD|CONVERT))",
         upper_comments_stripped,
     ) and re.search(
@@ -6338,7 +9978,7 @@ def verify_pb_migration_sp_generation_contract(
                 ),
             }
         )
-    if re.search(
+    if effective_operation != "existing_sp_cleanup" and re.search(
         r"IF\s*\(?\s*@(INPUT_DATE|DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s*(?:<>|=|>|<|>=|<=)[\s\S]{0,240}\bSET\s+@(DERIVED_YEAR|DERIVED_MONTH|BASE_YEAR|BOUNDARY_DATE)\s*=",
         upper_comments_stripped,
     ):
@@ -6352,7 +9992,7 @@ def verify_pb_migration_sp_generation_contract(
                 ),
             }
         )
-    if re.search(r"SET\s+@WORKTYPE\s*=\s*ISNULL\s*\(", upper_comments_stripped):
+    if effective_operation != "existing_sp_cleanup" and re.search(r"SET\s+@WORKTYPE\s*=\s*ISNULL\s*\(", upper_comments_stripped):
         issues.append(
             {
                 "code": "worktype_isnull_normalization_detected",
@@ -6360,7 +10000,7 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not add SET @WORKTYPE = ISNULL(...) normalization in generated KH-style SP output.",
             }
         )
-    if re.search(r"SET\s+@[A-Z0-9_]+\s*=\s*\(\s*CASE\s+WHEN\s+ISNULL\s*\(", upper_comments_stripped):
+    if effective_operation != "existing_sp_cleanup" and re.search(r"SET\s+@[A-Z0-9_]+\s*=\s*\(\s*CASE\s+WHEN\s+ISNULL\s*\(", upper_comments_stripped):
         issues.append(
             {
                 "code": "case_isnull_parameter_normalization_detected",
@@ -6377,7 +10017,7 @@ def verify_pb_migration_sp_generation_contract(
         "trim_parameter_normalization_detected": r"(?:SET|SELECT)\s+@[A-Z0-9_]+\s*=\s*(?:LTRIM|RTRIM)\s*\(",
     }
     for code, pattern in parameter_normalization_patterns.items():
-        if re.search(pattern, upper_comments_stripped):
+        if effective_operation != "existing_sp_cleanup" and re.search(pattern, upper_comments_stripped):
             issues.append(
                 {
                     "code": code,
@@ -6385,7 +10025,7 @@ def verify_pb_migration_sp_generation_contract(
                     "message": "Do not add generated parameter normalization blocks unless verified target SP evidence already uses that exact pattern.",
                 }
             )
-    if re.search(r"(^|[;\s])WITH\s+(?:\[[^\]]+\]|[A-Z0-9_]+)\s+AS\s*\(", upper_unprotected):
+    if effective_operation != "existing_sp_cleanup" and re.search(r"(^|[;\s])WITH\s+(?:\[[^\]]+\]|[A-Z0-9_]+)\s+AS\s*\(", upper_unprotected):
         issues.append(
             {
                 "code": "cte_in_generated_sp",
@@ -6393,7 +10033,7 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not introduce CTEs in migration SP generation by default.",
             }
         )
-    if re.search(r"SELECT\s+TOP\s*\(?\s*0\s*\)?[\s\S]{0,800}(?:CAST|CONVERT|TRY_CONVERT)\s*\(", upper_unprotected):
+    if effective_operation != "existing_sp_cleanup" and re.search(r"SELECT\s+TOP\s*\(?\s*0\s*\)?[\s\S]{0,800}(?:CAST|CONVERT|TRY_CONVERT)\s*\(", upper_unprotected):
         issues.append(
             {
                 "code": "schema_only_select_top_0_fallback_in_generated_sp",
@@ -6401,7 +10041,7 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not add source-unbacked SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...) schema-only fallback blocks to migration SP output.",
             }
         )
-    if re.search(r"#[A-Z0-9_]+", upper_unprotected):
+    if effective_operation != "existing_sp_cleanup" and re.search(r"#[A-Z0-9_]+", upper_unprotected):
         issues.append(
             {
                 "code": "temp_table_in_generated_sp",
@@ -6409,7 +10049,7 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not introduce # temporary tables in migration SP generation by default.",
             }
         )
-    if "MERGE " in upper_unprotected:
+    if effective_operation != "existing_sp_cleanup" and "MERGE " in upper_unprotected:
         issues.append(
             {
                 "code": "merge_in_generated_sp",
@@ -6417,7 +10057,7 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not introduce MERGE in migration SP generation by default.",
             }
         )
-    if "NOT EXISTS" in upper_unprotected:
+    if effective_operation != "existing_sp_cleanup" and "NOT EXISTS" in upper_unprotected:
         issues.append(
             {
                 "code": "not_exists_in_generated_sp",
@@ -6425,7 +10065,7 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not introduce NOT EXISTS in migration SP generation by default.",
             }
         )
-    if _pb_contract_contains_if_exists_where_subquery(upper_unprotected):
+    if effective_operation != "existing_sp_cleanup" and _pb_contract_contains_if_exists_where_subquery(upper_unprotected):
         issues.append(
             {
                 "code": "if_exists_where_subquery_in_generated_sp",
@@ -6437,18 +10077,33 @@ def verify_pb_migration_sp_generation_contract(
             }
         )
 
-    passed = not any(issue["severity"] == "error" for issue in issues)
+    has_errors = any(issue["severity"] == "error" for issue in issues)
+    has_pending = any(issue["severity"] == "pending" for issue in issues)
+    passed = not has_errors and not has_pending
+    status = "blocked" if has_errors else "pending" if has_pending else "passed"
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
-        "status": "passed" if passed else "blocked",
+        "status": status,
+        "operation": effective_operation,
         "source_evidence": accepted_source_evidence,
         "source_evidence_count": len(accepted_source_evidence),
         "allow_inferred_draft": bool(allow_inferred_draft),
         "profile_consumption": profile_consumption,
+        "signature_authority": signature_authority,
+        "candidate_parameter_contract": procedure_parameter_contract,
+        "original_parameter_contract": original_parameter_contract,
+        "caller_parameter_contract": caller_contract,
+        "external_caller_contract": external_contract,
+        "declared_external_caller_contract": declared_external_contract,
+        "body_traceability": body_traceability,
+        "release_readiness": {
+            "status": "ready" if passed else "pending" if has_pending and not has_errors else "blocked"
+        },
         "issues": issues,
         "sp_generation_contract": (
-            "Full migration SP output must be backed by structured PB/DataWindow SQL, existing SP, pasted SQL, DB evidence, "
-            "or an explicit approved inferred-draft marker; object-only existing_sp evidence is not enough. SQL style verification remains separate."
+            "Release-ready migration SP output requires independently captured, readable, SHA-256-matched "
+            "PB/DataWindow SQL, existing-SP, or pasted-SQL body evidence plus caller authority. Schema evidence "
+            "does not authorize a body, and approved inferred drafts remain pending. SQL style verification remains separate."
         ),
         "token_optimizer_status": "passthrough",
         "token_optimizer_status_reason": "SQL/stored procedure text is contract-sensitive and was not compressed.",
@@ -6457,7 +10112,7 @@ def verify_pb_migration_sp_generation_contract(
         success=passed,
         stdout=json.dumps({"status": metadata["status"], "issue_count": len(issues)}, ensure_ascii=False, sort_keys=True),
         stderr="" if passed else "SP generation contract verification blocked by missing evidence or style issues.",
-        exit_code=0 if passed else 1,
+        exit_code=0 if passed else 2 if status == "pending" else 1,
         metadata=metadata,
     )
 
@@ -6516,6 +10171,107 @@ def _pb_contract_find_matching_parenthesis(text: str, open_index: int) -> int:
                 return index
     return -1
 
+def _execute_pb_sql_final_response_binding(
+    original_sql_text: str,
+    formatted_sql_text: str,
+    draft_final_response: str,
+    *,
+    sql_provider_path: str | Path,
+    selected_active_sql_provider_path: str | Path | None = None,
+    sql_provider_selection: Mapping[str, Any] | None = None,
+    cte_temp_table_reason: str = "",
+    alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+    sql_formatting_verifier_kwargs: Mapping[str, Any] | None = None,
+) -> tuple[bool, Dict[str, Any]]:
+    from src.skills.sql_formatting_provider import (
+        SqlFinalResponseBindingError,
+        SqlFormattingProviderPathError,
+        guard_and_bind_verified_sql_final_response,
+    )
+
+    if not str(draft_final_response or ""):
+        return False, {
+            "status": "blocked",
+            "code": "sql_final_response_missing",
+            "message": "SQL-emitting PB validation requires the exact draft final response for binding.",
+        }
+    if not str(sql_provider_path or ""):
+        return False, {
+            "status": "blocked",
+            "code": "sql_provider_path_missing",
+            "message": "SQL-emitting PB validation requires the authoritative SQL provider path.",
+        }
+    if not str(selected_active_sql_provider_path or ""):
+        return False, {
+            "status": "blocked",
+            "code": "selected_active_sql_provider_path_missing",
+            "message": "SQL-emitting PB validation requires the exact active provider path selected by the front door.",
+        }
+    if not isinstance(sql_provider_selection, Mapping):
+        return False, {
+            "status": "blocked",
+            "code": "sql_provider_selection_missing",
+            "message": "SQL-emitting PB validation requires correlated front-door provider-selection evidence.",
+        }
+    verifier_kwargs = dict(sql_formatting_verifier_kwargs or {})
+    operation = verifier_kwargs.pop("operation", "formatting")
+    style_contract_path = verifier_kwargs.pop("style_contract_path", None)
+    if operation != "formatting" or verifier_kwargs:
+        return False, {
+            "status": "blocked",
+            "code": "unsupported_sql_binding_verifier_options",
+            "message": "The PB final-response binder accepts only operation='formatting' and style_contract_path.",
+            "unsupported_options": sorted(verifier_kwargs),
+        }
+    try:
+        release = guard_and_bind_verified_sql_final_response(
+            original_sql_text,
+            formatted_sql_text,
+            draft_final_response,
+            provider_path=sql_provider_path,
+            selected_active_provider_path=selected_active_sql_provider_path,
+            provider_selection=sql_provider_selection,
+            style_contract_path=style_contract_path,
+            cte_temp_table_reason=cte_temp_table_reason,
+            alias_role_plan=alias_role_plan,
+        )
+    except (SqlFinalResponseBindingError, SqlFormattingProviderPathError, OSError, ValueError) as exc:
+        return False, {
+            "status": "blocked",
+            "code": str(getattr(exc, "code", "sql_final_response_binding_failed")),
+            "message": str(exc),
+        }
+    return True, release.to_receipt_dict()
+
+
+def _pb_sql_release_evidence_views(
+    release_success: bool,
+    release_receipt: Mapping[str, Any],
+) -> tuple[bool, Dict[str, Any], Dict[str, Any]]:
+    full_release = dict(release_receipt)
+    if not release_success:
+        blocked = dict(full_release)
+        return False, blocked, full_release
+    binding = full_release.get("binding")
+    if (
+        type(full_release.get("status")) is not str
+        or full_release.get("status") != "passed"
+        or not isinstance(binding, Mapping)
+        or type(binding.get("status")) is not str
+        or binding.get("status") != "bound"
+    ):
+        blocked = {
+            "status": "blocked",
+            "code": "sql_final_response_release_contract_invalid",
+            "message": (
+                "Successful PB SQL release evidence requires release.status=passed "
+                "and release.binding.status=bound."
+            ),
+        }
+        return False, blocked, full_release
+    return True, dict(binding), full_release
+
+
 def verify_pb_migration_sp_with_sql_formatting(
     original_sql_text: str,
     formatted_sql_text: str,
@@ -6524,27 +10280,62 @@ def verify_pb_migration_sp_with_sql_formatting(
     allow_inferred_draft: bool = False,
     cte_temp_table_reason: str = "",
     profile_evidence: Any = None,
+    alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+    sql_formatting_verifier_kwargs: Mapping[str, Any] | None = None,
+    sp_operation: str = "new_generation",
+    original_sp_text: str | None = None,
+    caller_parameter_contract: Any = None,
+    external_caller_contract: Any = None,
+    draft_final_response: str = "",
+    sql_provider_path: str | Path = "",
+    selected_active_sql_provider_path: str | Path | None = None,
+    sql_provider_selection: Mapping[str, Any] | None = None,
 ) -> HarnessResult:
-    """Verify migration SP evidence and host-local SQL formatting style as one composed gate."""
-    from src.skills.sql_formatting_style import verify_sql_formatting_style
+    """Verify the SP contract and bind the exact SQL-bearing final response as one gate."""
 
     contract_result = verify_pb_migration_sp_generation_contract(
         formatted_sql_text,
         source_evidence=source_evidence,
         allow_inferred_draft=allow_inferred_draft,
         profile_evidence=profile_evidence,
+        operation=sp_operation,
+        original_sp_text=original_sp_text,
+        caller_parameter_contract=caller_parameter_contract,
+        external_caller_contract=external_caller_contract,
     )
-    style_result = verify_sql_formatting_style(
-        original_sql_text,
-        formatted_sql_text,
-        cte_temp_table_reason=cte_temp_table_reason,
-    )
-    success = bool(contract_result.success and style_result.success)
+    binding_success = False
+    binding_receipt: Dict[str, Any] = {
+        "status": "blocked",
+        "code": "sp_generation_contract_failed",
+        "message": "Final SQL binding did not run because the PB SP contract failed.",
+    }
+    release_receipt: Dict[str, Any] = dict(binding_receipt)
+    if contract_result.success:
+        binding_success, release_receipt = _execute_pb_sql_final_response_binding(
+            original_sql_text,
+            formatted_sql_text,
+            draft_final_response,
+            sql_provider_path=sql_provider_path,
+            selected_active_sql_provider_path=selected_active_sql_provider_path,
+            sql_provider_selection=sql_provider_selection,
+            cte_temp_table_reason=cte_temp_table_reason,
+            alias_role_plan=alias_role_plan,
+            sql_formatting_verifier_kwargs=sql_formatting_verifier_kwargs,
+        )
+        binding_success, binding_receipt, release_receipt = (
+            _pb_sql_release_evidence_views(binding_success, release_receipt)
+        )
+    success = bool(contract_result.success and binding_success)
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
         "status": "passed" if success else "blocked",
         "sp_generation_contract": contract_result.metadata,
-        "sql_formatting_style": style_result.metadata,
+        "sql_final_response_binding": binding_receipt,
+        "sql_final_response_release": release_receipt,
+        "sql_formatting_style": {
+            "status": "passed" if binding_success else "blocked",
+            "evidence_source": "sql_final_response_binding",
+        },
         "token_optimizer_status": "passthrough",
         "token_optimizer_status_reason": "SQL/stored procedure text is contract-sensitive and was not compressed.",
     }
@@ -6554,7 +10345,8 @@ def verify_pb_migration_sp_with_sql_formatting(
             {
                 "status": metadata["status"],
                 "sp_contract_status": contract_result.metadata.get("status"),
-                "sql_formatting_status": style_result.metadata.get("mechanical_checks", {}).get("status"),
+                "sql_formatting_status": metadata["sql_formatting_style"]["status"],
+                "sql_final_response_binding_status": binding_receipt.get("status"),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -6590,13 +10382,22 @@ def orchestrate_pb_migration_validation(
     source_evidence: Any = None,
     allow_inferred_draft: bool = False,
     cte_temp_table_reason: str = "",
+    alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+    sql_formatting_verifier_kwargs: Mapping[str, Any] | None = None,
+    sp_operation: str = "new_generation",
+    caller_parameter_contract: Any = None,
+    external_caller_contract: Any = None,
+    draft_final_response: str = "",
+    sql_provider_path: str | Path = "",
+    selected_active_sql_provider_path: str | Path | None = None,
+    sql_provider_selection: Mapping[str, Any] | None = None,
 ) -> HarnessResult:
     """Run the fail-closed offline profile, C#, SP, and formatting validation contract."""
     required_order = [
         "load-profile",
         "validate-csharp",
         "validate-sp",
-        "formatting-evidence",
+        "final-sql-binding",
     ]
     stages: List[Dict[str, Any]] = []
     evidence: Dict[str, Any] = {}
@@ -6702,11 +10503,20 @@ def orchestrate_pb_migration_validation(
     if not csharp_result.success:
         return finish(False)
 
+    normalized_sp_evidence: List[Dict[str, Any]] = []
+    if isinstance(source_evidence, dict):
+        normalized_sp_evidence.append(dict(source_evidence))
+    elif isinstance(source_evidence, (list, tuple)):
+        normalized_sp_evidence.extend(dict(item) for item in source_evidence if isinstance(item, dict))
     sp_result = verify_pb_migration_sp_generation_contract(
         formatted_sql_text,
-        source_evidence=source_evidence,
+        source_evidence=normalized_sp_evidence,
         allow_inferred_draft=allow_inferred_draft,
         profile_evidence=loaded_profile,
+        operation=sp_operation,
+        original_sp_text=original_sql_text if sp_operation == "existing_sp_cleanup" else None,
+        caller_parameter_contract=caller_parameter_contract,
+        external_caller_contract=external_caller_contract,
     )
     stages.append(
         {
@@ -6718,21 +10528,34 @@ def orchestrate_pb_migration_validation(
     if not sp_result.success:
         return finish(False)
 
-    from src.skills.sql_formatting_style import verify_sql_formatting_style
-
-    formatting_result = verify_sql_formatting_style(
+    binding_success, release_receipt = _execute_pb_sql_final_response_binding(
         original_sql_text,
         formatted_sql_text,
+        draft_final_response,
+        sql_provider_path=sql_provider_path,
+        selected_active_sql_provider_path=selected_active_sql_provider_path,
+        sql_provider_selection=sql_provider_selection,
         cte_temp_table_reason=cte_temp_table_reason,
+        alias_role_plan=alias_role_plan,
+        sql_formatting_verifier_kwargs=sql_formatting_verifier_kwargs,
+    )
+    binding_success, binding_receipt, release_receipt = _pb_sql_release_evidence_views(
+        binding_success,
+        release_receipt,
     )
     stages.append(
         {
-            "name": "formatting-evidence",
-            "status": "passed" if formatting_result.success else "blocked",
+            "name": "final-sql-binding",
+            "status": "passed" if binding_success else "blocked",
         }
     )
-    evidence["formatting"] = formatting_result.metadata
-    return finish(bool(formatting_result.success))
+    evidence["sql_final_response_binding"] = binding_receipt
+    evidence["sql_final_response_release"] = release_receipt
+    evidence["formatting"] = {
+        "status": "passed" if binding_success else "blocked",
+        "evidence_source": "sql_final_response_binding",
+    }
+    return finish(binding_success)
 
 
 def build_datawindow_grid_layout(
