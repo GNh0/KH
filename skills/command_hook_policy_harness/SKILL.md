@@ -43,9 +43,12 @@ The default should be conservative for destructive actions and non-blocking for 
 1. Load a supplied project/user policy source with `load_command_policy`, or use packaged defaults when no policy is supplied.
 2. Call `src.skills.command_policy.load_command_policy` and verify the returned integrity digest before trusting it.
 3. Call `src.skills.command_policy.classify_command` to classify the command as read, write, network, destructive, credential-bearing, or unknown.
-4. Call `src.skills.command_policy.evaluate_command_hook_policy` to apply rewrite rules, guard verdicts, integrity status, and audit records in one decision.
-5. Rewrite only when the host-supplied rule is intended to be semantically equivalent and the decision records `rewrite.applied_rules`; this harness records and audits the rewrite, but the host owns semantic-equivalence approval for custom rules.
-6. On parse errors, unknown protocol input, or hook failure, passthrough with an audit note instead of blocking unrelated execution.
+4. For every Git command, pass the exact `cwd` to `evaluate_command_hook_policy`; it must run the filesystem-only Git workspace gate before the host starts `git.exe`.
+5. Deny Git commands when no valid `.git` directory or worktree pointer exists. Mutating actions such as commit, push, worktree, merge, or reset also require explicit authorization.
+6. Call `src.skills.command_policy.evaluate_command_hook_policy` to apply rewrite rules, guard verdicts, integrity status, and audit records in one decision.
+7. KH-owned structured command checks call `authorize_git_argv` immediately before `subprocess.run`; this is the enforceable local path. External hosts must enforce the same decision at their process-creation boundary because skill text alone cannot intercept a host shell.
+8. Rewrite only when the host-supplied rule is intended to be semantically equivalent and the decision records `rewrite.applied_rules`; this harness records and audits the rewrite, but the host owns semantic-equivalence approval for custom rules.
+9. On parse errors, unknown protocol input, or hook failure, passthrough with an audit note instead of blocking unrelated execution. Git workspace ambiguity is an exception and fails closed.
 
 ## Audit fields
 
@@ -81,6 +84,7 @@ Pressure scenario: if a command contains a token or deletes outside the workspac
 - Do not rewrite a command unless the replacement is semantically equivalent and auditable.
 - Do not block unrelated execution because a hook parser failed; passthrough with an audit note.
 - Do not allow destructive commands through default policy without explicit approval.
+- Do not spawn Git for repository discovery; a non-Git target must return a deny verdict without executing Git.
 - Do not hide credential-like content in audit logs; redact while preserving the reason.
 
 ## UAF implementation targets
@@ -91,5 +95,8 @@ Pressure scenario: if a command contains a token or deletes outside the workspac
 - `src.skills.command_policy.load_command_policy`
 - `src.skills.command_policy.build_command_audit_record`
 - `src.skills.command_policy.redact_command`
+- `src.orchestration.git_workspace_gate.authorize_git_action`
+- `src.orchestration.git_workspace_gate.authorize_git_argv`
+- `src.tasks.checks.CommandCheckRunner`
 - `src.platforms.dispatcher_factory`
 - `tests.test_command_policy_runtime`

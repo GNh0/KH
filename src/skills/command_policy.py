@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from src.skills.base import agent_skill
+from src.orchestration.git_workspace_gate import authorize_git_action
 
 
 DESTRUCTIVE_PATTERNS = (
@@ -152,10 +153,28 @@ def evaluate_command_hook_policy(
     policy: Any = None,
     approved: bool = False,
     actor: str = "host-agent",
+    cwd: str | None = None,
 ) -> Dict[str, Any]:
     loaded_policy = load_command_policy(policy)
     rewrite = _rewrite_decision(command, loaded_policy)
     decision = evaluate_guard_policy(rewrite["rewritten_command"], approved=approved, actor=actor)
+    git_workspace_gate = _git_workspace_decision(
+        rewrite["rewritten_command"],
+        cwd=cwd,
+        mutation_authorized=approved,
+    )
+    if git_workspace_gate and not git_workspace_gate["allowed"]:
+        decision["verdict"] = git_workspace_gate["verdict"]
+        decision["requires_confirmation"] = decision["verdict"] == "ask"
+        decision["override"] = False
+        decision["classification"]["reasons"] = list(
+            dict.fromkeys(
+                [
+                    *decision["classification"]["reasons"],
+                    git_workspace_gate["reason"],
+                ]
+            )
+        )
     audit = build_command_audit_record(
         command=command,
         final_command=rewrite["rewritten_command"],
@@ -175,8 +194,258 @@ def evaluate_command_hook_policy(
         },
         "integrity": dict(loaded_policy["integrity"]),
         "rewrite": rewrite,
+        "git_workspace_gate": git_workspace_gate or {},
         "audit": audit,
     }
+
+
+def _git_workspace_decision(
+    command: str,
+    *,
+    cwd: str | None,
+    mutation_authorized: bool,
+) -> Dict[str, Any] | None:
+    invocations = _extract_git_invocations(command, cwd=cwd)
+    if not invocations:
+        return None
+    actions = [invocation["action"] for invocation in invocations]
+    if any(not invocation.get("project") for invocation in invocations):
+        return {
+            "action": actions[0] if len(actions) == 1 else "multiple",
+            "actions": actions,
+            "action_kind": "unknown",
+            "allowed": False,
+            "verdict": "deny",
+            "requires_confirmation": False,
+            "reason": "Git command requires a filesystem-only workspace probe before execution",
+            "probe": {
+                "status": "missing_workspace_path",
+                "is_git_backed": False,
+                "git_process_allowed": False,
+            },
+        }
+    decisions = [
+        {
+            **authorize_git_action(
+                invocation["project"],
+                invocation["action"],
+                mutation_authorized=mutation_authorized,
+            ),
+            "effective_project": invocation["project"],
+            "target_source": invocation["target_source"],
+        }
+        for invocation in invocations
+    ]
+    blocked = next(
+        (decision for decision in decisions if decision["verdict"] == "deny"),
+        None,
+    )
+    if blocked is None:
+        blocked = next(
+            (decision for decision in decisions if decision["verdict"] == "ask"),
+            None,
+        )
+    if blocked is None and len(decisions) == 1:
+        return decisions[0]
+
+    first = blocked or decisions[0]
+    return {
+        "action": actions[0] if len(actions) == 1 else "multiple",
+        "actions": actions,
+        "action_kind": first["action_kind"] if len(actions) == 1 else "composite",
+        "allowed": blocked is None,
+        "verdict": "allow" if blocked is None else blocked["verdict"],
+        "requires_confirmation": bool(
+            blocked and blocked.get("requires_confirmation", False)
+        ),
+        "effective_project": first.get("effective_project", ""),
+        "target_source": first.get("target_source", ""),
+        "reason": (
+            "all Git command segments passed the workspace gate"
+            if blocked is None
+            else blocked["reason"]
+        ),
+        "probe": first["probe"],
+        "decisions": decisions,
+    }
+
+
+def _extract_git_invocations(
+    command: str,
+    *,
+    cwd: str | None,
+) -> List[Dict[str, str]]:
+    """Extract direct Git actions and effective targets without running Git."""
+    invocations: List[Dict[str, str]] = []
+    current_dir = _resolved_shell_path(cwd, base=None) if cwd else None
+    for segment in _split_shell_segments(command or ""):
+        candidate = segment.strip()
+        if not candidate:
+            continue
+        changed_dir = _shell_directory_change(candidate, current_dir)
+        if changed_dir is not None:
+            current_dir = changed_dir
+            continue
+        unwrapped = _unwrap_shell_launcher(candidate)
+        if unwrapped != candidate.strip():
+            invocations.extend(
+                _extract_git_invocations(
+                    unwrapped,
+                    cwd=str(current_dir) if current_dir else None,
+                )
+            )
+            continue
+        candidate = unwrapped
+        candidate = re.sub(r"^\s*&\s*", "", candidate)
+        candidate = _strip_balanced_wrapper(candidate)
+        executable = re.match(
+            r'''(?ix)^\s*
+            (?:
+                git(?:\.exe)?
+              | ["']git(?:\.exe)?["']
+              | ["'][^"']*[\\/]git(?:\.exe)?["']
+              | [^\s"']*[\\/]git(?:\.exe)?
+            )
+            \s+
+            (.*)$
+            ''',
+            candidate,
+        )
+        if not executable:
+            continue
+        arguments = executable.group(1)
+        effective_dir = current_dir
+        target_source = "cwd"
+        for target_match in re.finditer(
+            r'''(?ix)(?:^|\s)-C(?:\s+|=)(?:"([^"]*)"|'([^']*)'|(\S+))''',
+            arguments,
+        ):
+            raw_target = next(
+                (value for value in target_match.groups() if value is not None),
+                "",
+            )
+            effective_dir = _resolved_shell_path(raw_target, base=effective_dir)
+            target_source = "git_-C"
+
+        if re.search(r"(?i)(?:^|\s)--(?:git-dir|work-tree)(?:=|\s)", arguments):
+            invocations.append(
+                {
+                    "action": "unparsed",
+                    "project": str(effective_dir) if effective_dir else "",
+                    "target_source": "unsupported_explicit_git_path",
+                }
+            )
+            continue
+        match = re.match(
+            r'''(?ix)^\s*
+            (?:
+                (?:-C|-c|--git-dir|--work-tree|--namespace)
+                (?:=|\s+)(?:"[^"]*"|'[^']*'|\S+)\s*
+              | --(?:bare|no-pager|paginate|literal-pathspecs|no-literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-replace-objects)\s*
+            )*
+            ([a-z][a-z0-9-]*)\b
+            ''',
+            arguments,
+        )
+        if match:
+            action = match.group(1).lower()
+        else:
+            action = "unparsed"
+        invocations.append(
+            {
+                "action": action,
+                "project": str(effective_dir) if effective_dir else "",
+                "target_source": target_source,
+            }
+        )
+    return invocations
+
+
+def _split_shell_segments(command: str) -> List[str]:
+    segments: List[str] = []
+    current: List[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = ""
+            elif char == "`" and index + 1 < len(command):
+                index += 1
+                current.append(command[index])
+            index += 1
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            current.append(char)
+            index += 1
+            continue
+        if char in ";|&":
+            segments.append("".join(current))
+            current = []
+            while index + 1 < len(command) and command[index + 1] == char:
+                index += 1
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    segments.append("".join(current))
+    return segments
+
+
+def _unwrap_shell_launcher(candidate: str) -> str:
+    stripped = candidate.strip()
+    if re.match(r"(?i)^cmd(?:\.exe)?\b", stripped):
+        match = re.search(r"(?i)\s/(?:c|k)\s+", stripped)
+        if match:
+            stripped = stripped[match.end():].strip()
+    elif re.match(r"(?i)^(?:powershell|pwsh)(?:\.exe)?\b", stripped):
+        match = re.search(r"(?i)\s-(?:command|c)\s+", stripped)
+        if match:
+            stripped = stripped[match.end():].strip()
+    stripped = re.sub(r"(?i)^call\s+", "", stripped)
+    return _strip_balanced_wrapper(stripped)
+
+
+def _strip_balanced_wrapper(candidate: str) -> str:
+    stripped = candidate.strip()
+    changed = True
+    while changed and len(stripped) >= 2:
+        changed = False
+        if stripped[0] == stripped[-1] and stripped[0] in {'"', "'"}:
+            stripped = stripped[1:-1].strip()
+            changed = True
+        elif stripped[0] == "(" and stripped[-1] == ")":
+            stripped = stripped[1:-1].strip()
+            changed = True
+    return stripped
+
+
+def _shell_directory_change(candidate: str, current_dir: Path | None) -> Path | None:
+    match = re.match(
+        r'''(?ix)^\s*(?:cd|chdir|set-location|sl)\s+(?:/d\s+)?(?:"([^"]*)"|'([^']*)'|(\S+))\s*$''',
+        candidate,
+    )
+    if not match:
+        return None
+    raw_target = next((value for value in match.groups() if value is not None), "")
+    return _resolved_shell_path(raw_target, base=current_dir)
+
+
+def _resolved_shell_path(path: str | None, *, base: Path | None) -> Path | None:
+    if not path:
+        return None
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        if base is None:
+            return None
+        candidate = base / candidate
+    try:
+        return candidate.resolve(strict=False)
+    except OSError:
+        return candidate.absolute()
 
 
 @agent_skill(

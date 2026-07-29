@@ -29,7 +29,7 @@ This is a UAF-native context harness for context-save and context-restore patter
 
 ## Workflow
 
-1. Capture current git branch, dirty files, active workflow id, role graph, and task status in goal/workflow metadata before saving the handoff.
+1. Probe Git metadata through `git_workspace_gate` without starting Git. Capture branch/head/dirty files only when `git_process_allowed=true`; otherwise record `git_state.status=not_applicable_non_git` without a Git command.
 2. Record decisions, assumptions, blockers, and next actions in structured metadata.
 3. Store context artifacts inside the UAF runtime state directory, not in external user skill folders and not in the target project root by default.
 4. Write a resume handoff snapshot to runtime `.uaf/state/resume_handoff.json` and a human-readable note to `.uaf/state/resume_handoff.md`.
@@ -42,6 +42,7 @@ This is a UAF-native context harness for context-save and context-restore patter
 
 - `context_id`: stable id for the saved context.
 - `git_state`: branch, head sha, and dirty file summary.
+- For non-Git targets, `git_state` must contain the gate status and not-applicable reason instead of fabricated branch data.
 - `decisions`: explicit decisions and assumptions.
 - `remaining_work`: next tasks and verification commands.
 - `resume_handoff`: JSON and Markdown paths for a future host session.
@@ -65,6 +66,7 @@ Pressure scenario: if a handoff says tests passed but the current git state diff
 
 - Do not store resumable runtime state in the target project root unless project-local state was explicitly requested.
 - Do not trust stale context when the git branch, head, or dirty files no longer match.
+- Do not run Git while saving or restoring a non-Git project context.
 - Do not omit blocked reasons, remaining work, or verification commands from handoff state.
 - Do not allow context compaction to erase decisions or next actions that are not yet present in `.kh` state or scoped memory.
 - Do not persist secrets, credentials, or private tool outputs as memory/context records.
@@ -78,3 +80,4 @@ Pressure scenario: if a handoff says tests passed but the current git state diff
 - `src.contracts.WorkflowDispatchResult`
 - `src.orchestration.handoff`
 - `src.orchestration.agent_loop`
+- `src.orchestration.git_workspace_gate.inspect_git_workspace`

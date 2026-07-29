@@ -49,4 +49,4 @@ The user asks for a multi-file SaaS feature in a Git repository. The current che
   - `skills/parallel_orchestration_harness/SKILL.md`
   - `skills/development_lifecycle_harness/SKILL.md`
 - actual_runtime_path: `src.orchestration.development_progress.WORKSPACE_STRATEGIES`
-- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, git status/root checks, and the workflow tests that use the selected workspace strategy.
+- verification evidence: run `scripts/git_workspace_gate.py --project <target>` first; run Git status/root checks only when it returns `git_process_allowed=true`, then run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and the workflow tests.

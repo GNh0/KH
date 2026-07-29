@@ -24,7 +24,8 @@ Use `--prompt-file` for Korean, Japanese, Chinese, or any other non-ASCII reques
 6. Record selected, considered, skipped, and blocked skills with evidence; then start source reads, edits, role DAG execution, or deliverable generation only when `execution_gate.can_execute=true` or the gate has explicit handoff evidence.
 7. Before delegating non-trivial work to a subagent, the controller should run front-door intake and pass a bounded task packet. A subagent should also run front-door first for its own non-trivial task before memory lookup or workspace inspection. After the subagent returns, audit whether the selected skills were actually used, skipped with rationale, or missing.
 8. Use `README.md` for install and host integration instructions.
-9. Validate the skill pack before relying on it:
+9. Before any Git executable, inspect the exact target ancestry for a `.git` directory or valid worktree `.git` pointer without starting Git. If absent or invalid, skip all Git and GitHub branch-finishing commands for that task and do not retry them merely to reconfirm the result.
+10. Validate the skill pack before relying on it:
 
 ```bash
 python -m src.skills.uaf_skill_catalog --check

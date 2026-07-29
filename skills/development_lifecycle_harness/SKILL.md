@@ -31,6 +31,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 ## Workspace Strategy Policy
 
 - Default to an isolated workspace before implementation in a Git-backed project.
+- Determine Git-backed status with `src.orchestration.git_workspace_gate` before any Git process. No valid `.git` marker means no `git status`, worktree, commit, push, or PR commands for that task.
 - Prefer a host-provided worktree when Codex, Antigravity-style, Claude Code, or another host exposes one; otherwise use project-local `.worktrees/<task-or-branch>` or an isolated branch.
 - Treat TDD implementation, multi-file edits, large changes, parallel implementers, and user-work protection as strong triggers for `project-local-worktree` or `host-worktree`.
 - In-place edits are allowed only for documentation-only changes, a single-file small patch, or explicit user instruction.
@@ -66,7 +67,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 ## Workflow
 
 1. Clarify the intended outcome and constraints before changing behavior.
-2. Choose and record `workspace_strategy` before editing; for implementation in a Git-backed project, prefer isolated workspace unless an in-place exception applies.
+2. Run the filesystem-only Git workspace gate, then choose and record `workspace_strategy`; for non-Git work use current checkout and mark Git integration not applicable.
 3. Create or refresh `GoalState` before implementation by using `goal-state-harness` for objective, success criteria, required evidence, and blocked-state handling.
 4. For large work, create or update `large_work_orchestration_bundle.skill_statuses` before editing.
 5. Decide `token_optimizer_status` and `token_optimizer_status_reason` for large or long-running work and route long logs or subagent transcripts through `token-optimizer` when needed.
@@ -79,7 +80,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 12. Run fresh verification before claiming completion or committing.
 13. Update the goal ledger with evidence, missing evidence, next action, and visible KH Markdown artifacts.
 14. Validate `skill_transition_handoff` for large work so required follow-up skills cannot be silently omitted.
-15. Finish with an explicit integration action: keep changes local, commit, push, or open a PR.
+15. Finish with an explicit integration action: non-Git local result, keep Git changes local, commit, push, or open a PR. Git actions require a passed workspace gate.
 16. If the review exposed a reusable pattern, bug class, or repeatable workflow, capture it through `compound-engineering-harness` first, then route to `workflow-skill-distiller`, `context-state-harness`, or a scenario regression only when the Compound handoff requires it.
 
 ## Gate checks
@@ -89,6 +90,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 - No implementation in the current checkout unless the task matches an in-place exception or the user explicitly requested it.
 - No concurrent file-editing workers in one mutable checkout without a non-overlap proof.
 - No branch finishing until the working tree diff matches the requested scope.
+- No Git executable invocation until a filesystem-only probe proves the target is Git-backed.
 
 ## External Benchmark Recipe
 
@@ -133,5 +135,6 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - `src.tasks.workflows`
 - `src.skills.uaf_skill_catalog`
 - `src.orchestration.development_progress`
+- `src.orchestration.git_workspace_gate`
 - `src.orchestration.progress_panel.render_progress_panel`
 - `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts`

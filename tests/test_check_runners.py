@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.tasks.checks import (
     CommandCheckInput,
@@ -85,6 +86,69 @@ class CommandCheckRunnerTests(unittest.TestCase):
                     project_dir=tmp,
                     preset_names=["unknown-check"],
                 )
+
+    def test_git_command_is_blocked_before_subprocess_in_non_git_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            check = CommandCheckInput(
+                project_dir=str(project_dir),
+                command=["git", "status"],
+                evidence_key="git status passed",
+            )
+
+            with patch("src.tasks.checks.subprocess.run") as run:
+                result = CommandCheckRunner().run(check)
+
+        run.assert_not_called()
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.metadata["exit_code"], 126)
+        self.assertEqual(result.metadata["error_type"], "GitWorkspaceGateDenied")
+
+    def test_git_dash_c_uses_structured_effective_target_before_subprocess(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_dir = root / "repo"
+            project_dir.mkdir()
+            git_dir = project_dir / ".git"
+            git_dir.mkdir()
+            (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="ascii")
+            (git_dir / "objects").mkdir()
+            (git_dir / "refs").mkdir()
+            plain = root / "plain"
+            plain.mkdir()
+            check = CommandCheckInput(
+                project_dir=str(project_dir),
+                command=["git", "-C", str(plain), "status"],
+                evidence_key="git status passed",
+            )
+
+            with patch("src.tasks.checks.subprocess.run") as run:
+                result = CommandCheckRunner().run(check)
+
+        run.assert_not_called()
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(
+            result.metadata["git_workspace_gate"]["effective_project"],
+            str(plain.resolve()),
+        )
+
+    def test_wrapped_git_is_blocked_before_subprocess(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = Path(tmp) / "demo"
+            project_dir.mkdir()
+            check = CommandCheckInput(
+                project_dir=str(project_dir),
+                command=["powershell", "-NoProfile", "-Command", "git status"],
+                evidence_key="wrapped git passed",
+            )
+
+            with patch("src.tasks.checks.subprocess.run") as run:
+                result = CommandCheckRunner().run(check)
+
+        run.assert_not_called()
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.metadata["error_type"], "GitWorkspaceGateDenied")
 
 
 if __name__ == "__main__":

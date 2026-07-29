@@ -8,7 +8,8 @@ This harness should be considered before edits in repositories, especially when 
 
 ## Inputs to collect
 
-- Whether the target directory is a Git repository and the current branch/upstream.
+- Filesystem-only Git workspace probe evidence. Do not call Git to obtain this first fact.
+- Current branch/upstream only after `git_process_allowed=true`.
 - Current dirty state, untracked files, and user-owned unrelated changes.
 - Host worktree capability and project-local `.worktrees/` policy.
 - Task size, expected files, generated artifacts, subagent plan, and concurrency needs.
@@ -23,13 +24,15 @@ This harness should be considered before edits in repositories, especially when 
 
 ## Execution pattern
 
-1. Check repository state before editing.
-2. Decide whether isolation is required. Strong triggers include multi-file implementation, TDD, parallel work, large refactors, generated code, migration work, and user dirty state.
-3. Prefer a host-provided worktree when available; otherwise use `.worktrees/<task>` or an isolated branch.
-4. Keep current checkout only for docs-only edits, single-file small patches, read-only work, or explicit in-place instruction.
-5. Record `workspace_strategy`, path or branch, base SHA, dirty-state handling, and cleanup policy.
-6. For subagents, ensure each write-capable worker has an isolated workspace or a documented non-overlap proof.
-7. Carry the strategy into progress state, branch finishing, and final report.
+1. Run `python scripts/git_workspace_gate.py --project <target>` without starting Git.
+2. If no valid `.git` marker exists, skip every Git command and record a non-Git current-checkout strategy.
+3. If the gate passes, check repository state before editing.
+4. Decide whether isolation is required. Strong triggers include multi-file implementation, TDD, parallel work, large refactors, generated code, migration work, and user dirty state.
+5. Prefer a host-provided worktree when available; otherwise use `.worktrees/<task>` or an isolated branch.
+6. Keep current checkout for non-Git work, docs-only edits, single-file small patches, read-only work, or explicit in-place instruction.
+7. Record `workspace_strategy`, path or branch, base SHA, dirty-state handling, and cleanup policy.
+8. For subagents, ensure each write-capable worker has an isolated workspace or a documented non-overlap proof.
+9. Carry the strategy into progress state, branch finishing, and final report.
 
 ## Evidence to produce
 
@@ -42,6 +45,7 @@ This harness should be considered before edits in repositories, especially when 
 ## Failure handling
 
 - If worktree creation fails, fall back to an isolated branch or block with the Git error.
+- If the filesystem-only probe reports `not_git_backed`, do not attempt worktree creation and do not run any Git command.
 - If Git metadata is permission-blocked, do not edit in-place until the risk is understood.
 - If existing dirty changes are unrelated, keep them out of staging and report them.
 - If the user explicitly requests current checkout editing, record that override.

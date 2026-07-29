@@ -9,6 +9,7 @@ from src.orchestration.evidence_producers import (
     EvidenceProducerResult,
     command_result_evidence,
 )
+from src.orchestration.git_workspace_gate import authorize_git_argv
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,34 @@ class CommandCheckRunner:
             project_root = _resolve_project_dir(check.project_dir)
             if not check.command:
                 raise ValueError("command must contain at least one argument")
+
+            git_gate = authorize_git_argv(
+                project_root,
+                check.command,
+                mutation_authorized=bool(
+                    check.metadata.get("git_mutation_authorized", False)
+                ),
+            )
+            if git_gate and not git_gate["allowed"]:
+                elapsed = time.perf_counter() - start
+                return EvidenceProducerResult(
+                    source="command",
+                    status="failed",
+                    evidence=[],
+                    metadata={
+                        "command": " ".join(check.command),
+                        "exit_code": 126,
+                        "stdout": "",
+                        "stderr": git_gate["reason"],
+                        "runner": self.name,
+                        "project_dir": str(project_root),
+                        "timeout_seconds": check.timeout_seconds,
+                        "elapsed_seconds": elapsed,
+                        "error_type": "GitWorkspaceGateDenied",
+                        "git_workspace_gate": git_gate,
+                        **dict(check.metadata),
+                    },
+                )
 
             completed = subprocess.run(
                 check.command,

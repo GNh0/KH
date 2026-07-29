@@ -8,8 +8,9 @@ This harness applies at the end of a feature branch, worktree task, review-fix l
 
 ## Inputs to collect
 
-- Branch name, upstream, base SHA, current HEAD, worktree path, and workspace strategy.
-- `git status --short`, changed file list, staged file list, and untracked file list.
+- Filesystem-only `git_workspace_gate` evidence for the exact target.
+- Branch name, upstream, base SHA, current HEAD, worktree path, and workspace strategy only when the gate passes.
+- `git status --short`, changed file list, staged file list, and untracked file list only when `git_process_allowed=true`.
 - User-owned unrelated changes and files that must not be touched.
 - Verification-before-completion evidence and review/QA gate state.
 - Commit message intent, push target, PR target, merge policy, and cleanup policy.
@@ -23,14 +24,16 @@ This harness applies at the end of a feature branch, worktree task, review-fix l
 
 ## Execution pattern
 
-1. Inspect branch/worktree and establish whether it is safe to finish.
-2. Check diff scope against the requested task. If unrelated changes are present, keep them out of the finish operation or block for user direction.
-3. Require fresh verification evidence or a documented blocked/risk state.
-4. Choose exactly one integration state for this turn: local only, committed, pushed, PR-ready, merged, blocked, or cleanup-only.
-5. Stage only intended files, commit with a precise message, and record the SHA.
-6. Push or prepare PR only if requested by user policy or project workflow.
-7. Record cleanup decisions for worktrees, temporary branches, generated logs, and stale subagents.
-8. Update GoalState/progress and final report fields.
+1. Probe `.git` metadata without starting Git.
+2. For a non-Git target, skip all Git/GitHub integration actions and record `not_applicable_non_git`.
+3. For a verified Git target, inspect branch/worktree and establish whether it is safe to finish.
+4. Check diff scope against the requested task. If unrelated changes are present, keep them out of the finish operation or block for user direction.
+5. Require fresh verification evidence or a documented blocked/risk state.
+6. Choose exactly one integration state for this turn.
+7. Stage only intended files, commit with a precise message, and record the SHA.
+8. Push or prepare PR only if requested by user policy or project workflow.
+9. Record cleanup decisions for worktrees, temporary branches, generated logs, and stale subagents.
+10. Update GoalState/progress and final report fields.
 
 ## Evidence to produce
 
@@ -43,6 +46,7 @@ This harness applies at the end of a feature branch, worktree task, review-fix l
 ## Failure handling
 
 - If Git metadata cannot be written, check safe.directory and permissions before assuming repo corruption.
+- If no valid `.git` marker exists, do not run Git to confirm the absence and do not retry; mark Git integration not applicable.
 - If push fails because of network/auth, report local commit SHA and blocked push reason.
 - If verification failed, do not claim ready; report local-only or blocked state.
 - If unrelated user changes are present, keep them unstaged and mention them as excluded.

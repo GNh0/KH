@@ -58,6 +58,7 @@ A bounded confirmation or status message may reuse current evidence only while t
 5. If `execution_gate.can_execute=false`, stop before global memory lookup, source reads, file writes, scaffolding, deliverable generation, browser QA, verification, or subagent dispatch. First apply, skip with rationale, or block `immediate_next_skills`.
 6. If the gate is `blocked_until_large_work_preflight`, do only the allowed setup evidence: GoalState, orchestration bundle, workspace/domain boundary, token decision, host/subagent strategy, parallel strategy, role-audit decision, command-output plan, deliverable/render quality plan, guard/rollback policy, and verification plan.
 7. After intake, route specialist providers by capability. KH intake must not hide host-local skills such as `sql-formatting` when they match the request.
+8. Before any Git executable, inspect the exact target ancestry through `src.orchestration.git_workspace_gate`. If no valid Git metadata exists, skip Git and GitHub branch-finishing actions for the task and do not retry Git merely to reconfirm absence.
 
 ## Required outputs
 
@@ -85,6 +86,7 @@ A bounded confirmation or status message may reuse current evidence only while t
 - Do not skip `immediate_next_skills` and jump directly to source exploration, implementation, verification, or final claims.
 - Do not treat a support-file read as immediate skill application, even when the support file contains runtime marker names.
 - Do not treat exit code 3 from `--strict-execution-gate` as a front-door crash. It means KH intake succeeded and the next action is limited to the reported gate/setup evidence.
+- Do not launch `git.exe` to discover whether the target is a repository. Use the filesystem-only Git workspace gate first and reuse that decision for the task.
 
 ## UAF implementation targets
 

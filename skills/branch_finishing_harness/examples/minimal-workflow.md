@@ -50,4 +50,4 @@ A KH feature worktree has finished implementation and review. The user asked to 
   - `src.orchestration.progress_compound_bridge.write_progress_compound_artifacts`
   - `src.orchestration.session_postmortem.analyze_codex_session_jsonl`
 - actual_runtime_path: `src.orchestration.development_progress.DevelopmentRunProgress`
-- verification evidence: run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, git status checks, and relevant branch-finishing tests before reporting a branch decision.
+- verification evidence: run the filesystem-only Git workspace gate first; run Git status checks only when allowed, then run `scripts/smoke_check.py`, `scripts/demo.py --output-dir <tmp>`, and relevant branch-finishing tests.
