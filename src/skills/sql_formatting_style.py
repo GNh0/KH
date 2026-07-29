@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import os
@@ -53,7 +54,9 @@ _ALIAS_BASIS_EVIDENCE_CONTRACT = {
     "reviewer_approved": True,
     "role_coverage": "exact_declared_role_names",
     "legacy_compact_source_format": "review://<review-id>/<declared-role-names>-roles",
+    "semantic_authentication": "caller_declared_not_authenticated",
 }
+_SUPPORT_ALIAS_SYMBOLS = "BCDEFGHIJKLMNOPQRSUVWXYZ"
 _INSERT_SELECT_LAYOUT_CONTRACT = {
     "wide_mapping_min_items": 8,
     "horizontal_expression_max_length": 72,
@@ -259,6 +262,8 @@ def verify_sql_formatting_style(
     formatted_scopes = _build_sql_scopes(formatted_tokens) if output_valid else []
     alias_changes = _find_alias_changes(original_scopes, formatted_scopes)
     alias_metadata, alias_issues, alias_plan_valid = _validate_alias_role_plan(
+        original_sha256,
+        original_tokens,
         original_scopes,
         formatted_scopes,
         alias_changes,
@@ -549,6 +554,481 @@ def verify_sql_formatting_style(
         exit_code=0 if release_ready else 1,
         metadata=metadata,
     )
+
+
+def apply_sql_alias_role_plan(
+    sql: str,
+    alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+) -> str:
+    """Apply an explicit role plan without asking the host to rename references by hand.
+
+    Business-role grouping remains a reviewer/host decision. This function only
+    performs the mechanical, scope-aware declaration and reference rewrite after
+    that decision has been recorded in the plan.
+    """
+    if not isinstance(sql, str):
+        raise TypeError("sql must be a string")
+    tokens, integrity_issues = _analyze_sql_integrity(sql, check_kind="alias_rewrite")
+    if _has_errors(integrity_issues):
+        raise ValueError("SQL integrity must pass before aliases can be applied")
+    scopes = _build_sql_scopes(tokens)
+    binding_conflicts = _alias_plan_binding_conflicts(
+        _sha256_text(sql),
+        tokens,
+        scopes,
+        alias_role_plan,
+    )
+    if binding_conflicts:
+        raise ValueError(
+            "alias-role plan source binding is invalid: "
+            + "; ".join(message for _, message in binding_conflicts)
+        )
+    raw_scopes: Any = (
+        alias_role_plan.get("scopes")
+        if isinstance(alias_role_plan, Mapping)
+        else alias_role_plan
+    )
+    if not isinstance(raw_scopes, Sequence) or isinstance(raw_scopes, (str, bytes)):
+        raise ValueError("alias_role_plan.scopes must be a sequence")
+
+    planned_scopes: Dict[str, Mapping[str, Any]] = {}
+    for raw_scope in raw_scopes:
+        if not isinstance(raw_scope, Mapping):
+            raise ValueError("each alias-role scope must be an object")
+        scope_id = str(raw_scope.get("scope_id", "")).strip()
+        if not scope_id or scope_id in planned_scopes:
+            raise ValueError(f"invalid or duplicate alias-role scope {scope_id!r}")
+        planned_scopes[scope_id] = raw_scope
+
+    required_scope_ids = {
+        scope.scope_id
+        for scope in scopes
+        if len(scope.declarations) > 1
+        and not (
+            _is_derived_internal_scope(scope, scopes)
+            and all(
+                declaration.alias_start is not None
+                and _DERIVED_INTERNAL_ALIAS_PATTERN.fullmatch(
+                    declaration.effective_alias
+                )
+                for declaration in scope.declarations
+            )
+        )
+    }
+    missing_scope_ids = required_scope_ids - set(planned_scopes)
+    if missing_scope_ids:
+        raise ValueError(
+            "alias-role plan must cover every non-exempt multi-source scope: "
+            f"missing={sorted(missing_scope_ids)!r}"
+        )
+
+    edits: Dict[Tuple[int, int], str] = {}
+    for scope in scopes:
+        raw_scope = planned_scopes.get(scope.scope_id)
+        if raw_scope is None:
+            continue
+        roles = raw_scope.get("roles", [])
+        if not isinstance(roles, Sequence) or isinstance(roles, (str, bytes)):
+            raise ValueError(f"scope {scope.scope_id!r} roles must be a sequence")
+
+        unmatched = list(scope.declarations)
+        planned: List[Tuple[_SourceDeclaration, str]] = []
+        role_first_orders: List[int] = []
+        next_role_index = 0
+        for role_index, role in enumerate(roles):
+            if not isinstance(role, Mapping):
+                raise ValueError(f"scope {scope.scope_id!r} role must be an object")
+            members = role.get("members", [])
+            if not isinstance(members, Sequence) or isinstance(members, (str, bytes)) or not members:
+                raise ValueError(f"scope {scope.scope_id!r} role has no members")
+            matched_role: List[Tuple[_SourceDeclaration, str]] = []
+            for member in members:
+                if not isinstance(member, Mapping):
+                    raise ValueError(f"scope {scope.scope_id!r} role member must be an object")
+                source = _normalize_source(str(member.get("source", "")))
+                original_alias = str(member.get("original_alias", "")).strip().upper()
+                desired_alias = str(member.get("alias", "")).strip().upper()
+                declaration = next(
+                    (
+                        item
+                        for item in unmatched
+                        if item.source == source and item.effective_alias == original_alias
+                    ),
+                    None,
+                )
+                if declaration is None or not desired_alias:
+                    raise ValueError(
+                        f"scope {scope.scope_id!r} member {source}:{original_alias} does not bind uniquely"
+                    )
+                unmatched.remove(declaration)
+                matched_role.append((declaration, desired_alias))
+
+            orders = [item.order for item, _ in matched_role]
+            if orders != sorted(orders):
+                raise ValueError(
+                    f"scope {scope.scope_id!r} role members must follow SQL declaration order"
+                )
+            role_first_orders.append(min(orders))
+            aliases = [alias for _, alias in matched_role]
+            kind = str(role.get("kind", "support")).strip().lower()
+            if kind == "main":
+                expected_aliases = ["A"]
+                if role_index != 0 or orders != [1] or aliases != expected_aliases:
+                    raise ValueError(
+                        f"scope {scope.scope_id!r} main role must be first source A"
+                    )
+            else:
+                family = _support_family_alias(next_role_index)
+                expected_aliases = (
+                    [family]
+                    if len(aliases) == 1
+                    else [f"{family}{index}" for index in range(1, len(aliases) + 1)]
+                )
+                if aliases != expected_aliases:
+                    raise ValueError(
+                        f"scope {scope.scope_id!r} role aliases {aliases!r} must be {expected_aliases!r}"
+                    )
+                next_role_index += 1
+            planned.extend(matched_role)
+
+        if role_first_orders != sorted(role_first_orders):
+            raise ValueError(
+                f"scope {scope.scope_id!r} role families must follow first SQL appearance"
+            )
+        if unmatched:
+            raise ValueError(
+                f"scope {scope.scope_id!r} plan does not cover every source declaration"
+            )
+
+        for declaration, desired_alias in planned:
+            original_alias = declaration.effective_alias
+            if declaration.alias_end is None:
+                source_token = tokens[declaration.source_end]
+                edits[(source_token.end, source_token.end)] = f" {desired_alias}"
+            else:
+                alias_token = tokens[declaration.alias_end]
+                edits[(alias_token.start, alias_token.end)] = desired_alias
+            if original_alias == desired_alias:
+                continue
+            for index in range(scope.start, min(scope.end, len(tokens))):
+                token = tokens[index]
+                if _identifier_value(token) != original_alias:
+                    continue
+                if any(
+                    item.source_start <= index <= item.source_name_end
+                    for item in scope.declarations
+                ):
+                    continue
+                if _is_bound_alias_reference(tokens, index, scope, original_alias, scopes):
+                    edits[(token.start, token.end)] = desired_alias
+
+    if set(planned_scopes) - {scope.scope_id for scope in scopes}:
+        raise ValueError("alias-role plan contains a scope that is not present in SQL")
+    return _apply_text_edits(sql, edits)
+
+
+def describe_sql_alias_role_plan_bindings(sql: str) -> Dict[str, Any]:
+    """Return deterministic source and per-scope bindings for role-plan creation."""
+    if not isinstance(sql, str):
+        raise TypeError("sql must be a string")
+    tokens, integrity_issues = _analyze_sql_integrity(
+        sql,
+        check_kind="alias_plan_binding",
+    )
+    if _has_errors(integrity_issues):
+        raise ValueError("SQL integrity must pass before scope bindings can be described")
+    scopes = _build_sql_scopes(tokens)
+    return {
+        "source_sql_sha256": _sha256_text(sql),
+        "scopes": [
+            {
+                "scope_id": scope.scope_id,
+                "scope_declaration_fingerprint": _scope_declaration_fingerprint(
+                    scope,
+                    tokens,
+                ),
+            }
+            for scope in scopes
+        ],
+    }
+
+
+def bind_sql_alias_role_plan(
+    sql: str,
+    alias_role_plan: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Bind an authored role plan to the exact SQL and declaration structure."""
+    if not isinstance(alias_role_plan, Mapping):
+        raise TypeError("alias_role_plan must be an object")
+    binding = describe_sql_alias_role_plan_bindings(sql)
+    fingerprints = {
+        item["scope_id"]: item["scope_declaration_fingerprint"]
+        for item in binding["scopes"]
+    }
+    result = copy.deepcopy(dict(alias_role_plan))
+    raw_scopes = result.get("scopes")
+    if not isinstance(raw_scopes, Sequence) or isinstance(raw_scopes, (str, bytes)):
+        raise ValueError("alias_role_plan.scopes must be a sequence")
+    for raw_scope in raw_scopes:
+        if not isinstance(raw_scope, dict):
+            raise ValueError("each alias-role scope must be an object")
+        scope_id = str(raw_scope.get("scope_id", "")).strip()
+        if scope_id not in fingerprints:
+            raise ValueError(
+                f"alias-role plan contains scope {scope_id!r} that is not present in SQL"
+            )
+        raw_scope["scope_declaration_fingerprint"] = fingerprints[scope_id]
+    result["source_sql_sha256"] = binding["source_sql_sha256"]
+    return result
+
+
+def _scope_declaration_fingerprint(
+    scope: _SqlScope,
+    tokens: Sequence[_SqlToken],
+) -> str:
+    payload = {
+        "schema": "uaf.sql-alias-scope-binding.v1",
+        "statement_kind": (
+            tokens[scope.start].normalized
+            if 0 <= scope.start < len(tokens)
+            else ""
+        ),
+        "depth": scope.depth,
+        "declarations": [
+            {
+                "order": declaration.order,
+                "source": declaration.source,
+                "base_source": declaration.base_source,
+                "effective_alias": declaration.effective_alias,
+                "explicit_alias": declaration.alias_start is not None,
+            }
+            for declaration in scope.declarations
+        ],
+    }
+    return _sha256_text(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+
+
+def _alias_plan_binding_supplied(
+    alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None,
+) -> bool:
+    if not isinstance(alias_role_plan, Mapping):
+        return False
+    if "source_sql_sha256" in alias_role_plan:
+        return True
+    raw_scopes = alias_role_plan.get("scopes")
+    return bool(
+        isinstance(raw_scopes, Sequence)
+        and not isinstance(raw_scopes, (str, bytes))
+        and any(
+            isinstance(raw_scope, Mapping)
+            and "scope_declaration_fingerprint" in raw_scope
+            for raw_scope in raw_scopes
+        )
+    )
+
+
+def _alias_plan_binding_conflicts(
+    source_sql_sha256: str,
+    tokens: Sequence[_SqlToken],
+    scopes: Sequence[_SqlScope],
+    alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]],
+) -> List[Tuple[str, str]]:
+    if not isinstance(alias_role_plan, Mapping):
+        return [
+            (
+                "alias_plan_binding_object_required",
+                "alias-role plan must be an object with source_sql_sha256 and bound scopes",
+            )
+        ]
+
+    conflicts: List[Tuple[str, str]] = []
+    bound_source_sha256 = str(alias_role_plan.get("source_sql_sha256", "")).strip().lower()
+    if not bound_source_sha256:
+        conflicts.append(
+            (
+                "alias_plan_source_sql_sha256_missing",
+                "alias-role plan source_sql_sha256 is required",
+            )
+        )
+    elif re.fullmatch(r"[0-9a-f]{64}", bound_source_sha256) is None:
+        conflicts.append(
+            (
+                "alias_plan_source_sql_sha256_invalid",
+                "alias-role plan source_sql_sha256 must be a 64-character hexadecimal digest",
+            )
+        )
+    elif bound_source_sha256 != source_sql_sha256.lower():
+        conflicts.append(
+            (
+                "alias_plan_source_sql_sha256_mismatch",
+                "alias-role plan source_sql_sha256 does not match the exact source SQL",
+            )
+        )
+
+    raw_scopes = alias_role_plan.get("scopes")
+    if not isinstance(raw_scopes, Sequence) or isinstance(raw_scopes, (str, bytes)):
+        conflicts.append(
+            (
+                "alias_plan_scopes_invalid",
+                "alias_role_plan.scopes must be a sequence",
+            )
+        )
+        return conflicts
+
+    scopes_by_id = {scope.scope_id: scope for scope in scopes}
+    seen_scope_ids: set[str] = set()
+    for raw_scope in raw_scopes:
+        if not isinstance(raw_scope, Mapping):
+            conflicts.append(
+                (
+                    "alias_plan_scope_binding_object_required",
+                    "each bound alias-role scope must be an object",
+                )
+            )
+            continue
+        scope_id = str(raw_scope.get("scope_id", "")).strip()
+        if not scope_id or scope_id in seen_scope_ids:
+            conflicts.append(
+                (
+                    "alias_plan_scope_binding_invalid",
+                    f"alias-role plan has invalid or duplicate scope_id {scope_id!r}",
+                )
+            )
+            continue
+        seen_scope_ids.add(scope_id)
+        scope = scopes_by_id.get(scope_id)
+        if scope is None:
+            conflicts.append(
+                (
+                    "alias_plan_scope_binding_not_found",
+                    f"alias-role plan scope {scope_id!r} is not present in the source SQL",
+                )
+            )
+            continue
+        bound_fingerprint = str(
+            raw_scope.get("scope_declaration_fingerprint", "")
+        ).strip().lower()
+        if not bound_fingerprint:
+            conflicts.append(
+                (
+                    "alias_plan_scope_fingerprint_missing",
+                    f"alias-role plan scope {scope_id!r} requires scope_declaration_fingerprint",
+                )
+            )
+            continue
+        if re.fullmatch(r"[0-9a-f]{64}", bound_fingerprint) is None:
+            conflicts.append(
+                (
+                    "alias_plan_scope_fingerprint_invalid",
+                    f"alias-role plan scope {scope_id!r} fingerprint must be a 64-character hexadecimal digest",
+                )
+            )
+            continue
+        expected_fingerprint = _scope_declaration_fingerprint(scope, tokens)
+        if bound_fingerprint != expected_fingerprint:
+            conflicts.append(
+                (
+                    "alias_plan_scope_fingerprint_mismatch",
+                    f"alias-role plan scope {scope_id!r} declaration fingerprint does not match the source SQL",
+                )
+            )
+    return conflicts
+
+
+def normalize_sql_join_layout(sql: str) -> str:
+    """Normalize line-leading JOIN, ON, and same-join AND indentation only."""
+    if not isinstance(sql, str):
+        raise TypeError("sql must be a string")
+    tokens, integrity_issues = _analyze_sql_integrity(sql, check_kind="join_layout")
+    if _has_errors(integrity_issues):
+        raise ValueError("SQL integrity must pass before JOIN layout can be normalized")
+
+    directives: Dict[int, int] = {}
+    for scope in _build_sql_scopes(tokens):
+        if len(scope.declarations) < 2:
+            continue
+        from_index = _source_marker_before(
+            tokens,
+            scope.declarations[0].source_start,
+            scope.start,
+            scope.depth,
+            {"FROM"},
+        )
+        if from_index is None:
+            continue
+        _, from_column, _ = _token_line_position(sql, tokens[from_index])
+        expected_clause_column = from_column + int(
+            _JOIN_LAYOUT_CONTRACT["join_indent_from_from"]
+        )
+        for declaration in scope.declarations[1:]:
+            join_index = _source_marker_before(
+                tokens,
+                declaration.source_start,
+                scope.start,
+                scope.depth,
+                {"JOIN"},
+            )
+            if join_index is None:
+                continue
+            clause_start = _join_clause_start(sql, tokens, join_index)
+            clause_line, clause_column, clause_line_leading = _token_line_position(
+                sql,
+                tokens[clause_start],
+            )
+            join_line, join_column, _ = _token_line_position(sql, tokens[join_index])
+            if clause_line != join_line:
+                raise ValueError("JOIN type/hint prefixes must be on the JOIN line")
+            if clause_line_leading:
+                directives[clause_line] = expected_clause_column
+            expected_predicate_column = (
+                expected_clause_column + (join_column - clause_column) + 2
+            )
+            for predicate_index in _same_join_predicate_indexes(
+                sql,
+                tokens,
+                join_index,
+                scope.end,
+                scope.depth,
+            ):
+                line, _, line_leading = _token_line_position(sql, tokens[predicate_index])
+                if line_leading:
+                    directives[line] = expected_predicate_column
+
+    if not directives:
+        return sql
+    lines = sql.splitlines(keepends=True)
+    for line_number, indent in directives.items():
+        index = line_number - 1
+        lines[index] = re.sub(r"^[ \t]*", " " * indent, lines[index], count=1)
+    return "".join(lines)
+
+
+def _apply_text_edits(sql: str, edits: Mapping[Tuple[int, int], str]) -> str:
+    result = sql
+    for (start, end), replacement in sorted(
+        edits.items(),
+        key=lambda item: (item[0][0], item[0][1]),
+        reverse=True,
+    ):
+        result = result[:start] + replacement + result[end:]
+    return result
+
+
+def _support_family_alias(index: int) -> str:
+    if type(index) is not int or index < 0:
+        raise ValueError("support family index must be a non-negative integer")
+    if index >= len(_SUPPORT_ALIAS_SYMBOLS):
+        raise ValueError(
+            "support role families exceed the canonical B-S/U-Z alias range"
+        )
+    return _SUPPORT_ALIAS_SYMBOLS[index]
 
 
 def extract_powerbuilder_sql_fragments(
@@ -1302,6 +1782,8 @@ def _find_alias_changes(
 
 
 def _validate_alias_role_plan(
+    original_sha256: str,
+    original_tokens: Sequence[_SqlToken],
     original_scopes: Sequence[_SqlScope],
     formatted_scopes: Sequence[_SqlScope],
     changes: Sequence[_AliasChange],
@@ -1399,11 +1881,47 @@ def _validate_alias_role_plan(
     required_scope_ids = {
         item.scope_id for item in changes
     } | multi_source_scope_ids
-    pre_plan_issues = [*missing_alias_issues, *canonical_main_issues, *main_alias_issues]
+    binding_conflicts: List[Tuple[str, str]] = []
+    binding_status = "not_provided" if plan is None else "legacy_unbound"
+    if _alias_plan_binding_supplied(plan):
+        binding_conflicts = _alias_plan_binding_conflicts(
+            original_sha256,
+            original_tokens,
+            original_scopes,
+            plan,
+        )
+        binding_status = "conflict" if binding_conflicts else "verified"
+    binding_issues = [
+        SqlFormattingIssue(
+            code=code,
+            severity="error",
+            message="Alias-role plan source binding validation failed.",
+            evidence=[message],
+            check_kind="alias_role_plan_binding",
+        )
+        for code, message in binding_conflicts
+    ]
+    binding_metadata = {
+        "status": binding_status,
+        "required_by_applier": True,
+        "source_sql_sha256": (
+            str(plan.get("source_sql_sha256", ""))
+            if isinstance(plan, Mapping)
+            else ""
+        ),
+        "conflicts": [message for _, message in binding_conflicts],
+    }
+    pre_plan_issues = [
+        *missing_alias_issues,
+        *canonical_main_issues,
+        *main_alias_issues,
+        *binding_issues,
+    ]
     pre_plan_conflicts = [
         *missing_alias_conflicts,
         *canonical_main_conflicts,
         *numbered_main_conflicts,
+        *(message for _, message in binding_conflicts),
     ]
     if not required_scope_ids:
         return (
@@ -1417,6 +1935,7 @@ def _validate_alias_role_plan(
                 "plan_provided": plan is not None,
                 "verified_scopes": [],
                 "conflicts": pre_plan_conflicts,
+                "source_binding": binding_metadata,
                 "basis_evidence_contract": dict(_ALIAS_BASIS_EVIDENCE_CONTRACT),
             },
             pre_plan_issues,
@@ -1444,6 +1963,7 @@ def _validate_alias_role_plan(
                 "plan_provided": False,
                 "verified_scopes": [],
                 "conflicts": [*pre_plan_conflicts, *issue.evidence],
+                "source_binding": binding_metadata,
                 "basis_evidence_contract": dict(_ALIAS_BASIS_EVIDENCE_CONTRACT),
             },
             [*pre_plan_issues, issue],
@@ -1466,7 +1986,15 @@ def _validate_alias_role_plan(
     formatted_by_id = {item.scope_id: item for item in formatted_scopes}
     plan_scope_ids: set[str] = set()
     verified_scopes: List[str] = []
-    all_expected = _expected_alias_members(original_scopes, formatted_scopes, required_scope_ids)
+    all_expected_ordered = _expected_alias_member_order(
+        original_scopes,
+        formatted_scopes,
+        required_scope_ids,
+    )
+    all_expected = {
+        scope_id: set(values)
+        for scope_id, values in all_expected_ordered.items()
+    }
 
     for raw_scope in raw_scopes:
         if not isinstance(raw_scope, Mapping):
@@ -1522,7 +2050,12 @@ def _validate_alias_role_plan(
             )
             issue_codes.add("alias_main_role_required")
         members: List[Tuple[str, str, str]] = []
-        next_role_letter = ord("B")
+        expected_position = {
+            member: index
+            for index, member in enumerate(all_expected_ordered.get(scope_id, []), start=1)
+        }
+        role_first_positions: List[int] = []
+        next_role_index = 0
         for role_index, role in enumerate(roles):
             if not isinstance(role, Mapping):
                 conflicts.append(f"scope {scope_id!r} role {role_index + 1} is not an object")
@@ -1549,6 +2082,20 @@ def _validate_alias_role_plan(
                 issue_codes.add("alias_plan_incomplete")
             members.extend(normalized_members)
 
+            positions = [
+                expected_position[item]
+                for item in normalized_members
+                if item in expected_position
+            ]
+            if positions:
+                role_first_positions.append(min(positions))
+            if len(positions) == len(normalized_members) and positions != sorted(positions):
+                conflicts.append(
+                    f"scope {scope_id!r} role {role_index + 1} members must follow SQL declaration order: "
+                    f"positions={positions!r}"
+                )
+                issue_codes.add("alias_role_member_order_invalid")
+
             kind = str(role.get("kind", "support")).strip().lower()
             aliases = [item[2] for item in normalized_members]
             if kind == "main":
@@ -1563,12 +2110,26 @@ def _validate_alias_role_plan(
                     conflicts.append(f"scope {scope_id!r} main role aliases {aliases} must be {expected}")
                     issue_codes.add("alias_main_role_invalid")
             else:
-                family = chr(next_role_letter)
+                if next_role_index >= len(_SUPPORT_ALIAS_SYMBOLS):
+                    conflicts.append(
+                        f"scope {scope_id!r} exceeds the canonical B-S/U-Z support-family range"
+                    )
+                    issue_codes.add("alias_role_family_capacity_exceeded")
+                    next_role_index += 1
+                    continue
+                family = _support_family_alias(next_role_index)
                 expected = [family] if len(aliases) == 1 else [f"{family}{i}" for i in range(1, len(aliases) + 1)]
                 if aliases != expected:
                     conflicts.append(f"scope {scope_id!r} role aliases {aliases} must be sequential {expected}")
                     issue_codes.add("alias_role_letters_not_sequential")
-                next_role_letter += 1
+                next_role_index += 1
+
+        if role_first_positions != sorted(role_first_positions):
+            conflicts.append(
+                f"scope {scope_id!r} role families must be ordered by first SQL appearance: "
+                f"positions={role_first_positions!r}"
+            )
+            issue_codes.add("alias_role_family_order_invalid")
 
         expected_members = all_expected.get(scope_id, set())
         actual_members = set(members)
@@ -1615,10 +2176,16 @@ def _validate_alias_role_plan(
     return (
         {
             "status": status,
-            "reason": "complete_per_scope_plan_matched" if not issues else "plan_conflicts_with_sql",
+            "reason": (
+                "complete_per_scope_plan_structurally_matched"
+                if not issues
+                else "plan_conflicts_with_sql"
+            ),
+            "semantic_authentication": "caller_declared_not_authenticated",
             "plan_provided": True,
             "verified_scopes": verified_scopes,
             "conflicts": conflicts,
+            "source_binding": binding_metadata,
             "basis_evidence_contract": dict(_ALIAS_BASIS_EVIDENCE_CONTRACT),
         },
         issues,
@@ -1648,16 +2215,16 @@ def _is_derived_internal_scope(
     )
 
 
-def _expected_alias_members(
+def _expected_alias_member_order(
     original_scopes: Sequence[_SqlScope],
     formatted_scopes: Sequence[_SqlScope],
     required_scope_ids: set[str],
-) -> Dict[str, set[Tuple[str, str, str]]]:
-    result: Dict[str, set[Tuple[str, str, str]]] = {}
+) -> Dict[str, List[Tuple[str, str, str]]]:
+    result: Dict[str, List[Tuple[str, str, str]]] = {}
     for original_scope, formatted_scope in zip(original_scopes, formatted_scopes):
         if formatted_scope.scope_id not in required_scope_ids:
             continue
-        values = set()
+        values: List[Tuple[str, str, str]] = []
         unmatched_original = list(original_scope.declarations)
         for formatted_decl in formatted_scope.declarations:
             original_decl = next(
@@ -1670,7 +2237,7 @@ def _expected_alias_members(
             )
             if original_decl is not None:
                 unmatched_original.remove(original_decl)
-            values.add(
+            values.append(
                 (
                     formatted_decl.source,
                     (
@@ -2723,6 +3290,44 @@ def _check_join_layout(
                 scope.end,
                 scope.depth,
             )
+            clause_words = {
+                formatted_tokens[index].normalized
+                for index in range(clause_start, join_index + 1)
+                if formatted_tokens[index].kind not in {"line_comment", "block_comment"}
+            }
+            if not predicate_indexes and "CROSS" not in clause_words:
+                issues.append(
+                    SqlFormattingIssue(
+                        code="join_predicate_missing",
+                        severity="error",
+                        message="Every non-CROSS JOIN requires an ON predicate.",
+                        evidence=[f"{scope.scope_id}:line {line}:JOIN has no ON predicate"],
+                        check_kind="style",
+                    )
+                )
+            on_index = next(
+                (
+                    index
+                    for index in predicate_indexes
+                    if formatted_tokens[index].normalized == "ON"
+                ),
+                None,
+            )
+            if on_index is not None and not _join_on_has_expression(
+                formatted_tokens,
+                on_index,
+                scope.end,
+                scope.depth,
+            ):
+                issues.append(
+                    SqlFormattingIssue(
+                        code="join_predicate_expression_missing",
+                        severity="error",
+                        message="JOIN ON must be followed by a predicate expression.",
+                        evidence=[f"{scope.scope_id}:line {line}:ON has no expression"],
+                        check_kind="style",
+                    )
+                )
             predicate_conflicts = []
             for predicate_index in predicate_indexes:
                 predicate = formatted_tokens[predicate_index]
@@ -2958,6 +3563,53 @@ def _same_join_predicate_indexes(
         if line_leading:
             predicate_indexes.append(index)
     return predicate_indexes
+
+
+def _join_on_has_expression(
+    tokens: Sequence[_SqlToken],
+    on_index: int,
+    scope_end: int,
+    depth: int,
+) -> bool:
+    boundaries = {
+        "FROM",
+        "JOIN",
+        "WHERE",
+        "GROUP",
+        "HAVING",
+        "ORDER",
+        "UNION",
+        "EXCEPT",
+        "INTERSECT",
+    }
+    invalid_leading_tokens = {
+        ";",
+        ",",
+        ")",
+        "=",
+        "<",
+        ">",
+        "<=",
+        ">=",
+        "<>",
+        "!=",
+    }
+    for index in range(on_index + 1, min(scope_end, len(tokens))):
+        token = tokens[index]
+        if token.kind in {"line_comment", "block_comment"}:
+            continue
+        if token.depth < depth:
+            return False
+        if token.depth == depth and (
+            token.normalized in boundaries or token.text == ";"
+        ):
+            return False
+        if token.text == "(":
+            continue
+        if token.text in invalid_leading_tokens or token.normalized in {"AND", "OR"}:
+            return False
+        return True
+    return False
 
 
 def _token_line_position(sql: str, token: _SqlToken) -> Tuple[int, int, bool]:

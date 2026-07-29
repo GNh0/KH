@@ -18,6 +18,7 @@ description: Use when SQL or T-SQL must be formatted by the host without changin
 - Use `examples/minimal-workflow.md` for the source-to-candidate-to-verifier contract.
 - Run `python scripts/smoke_check.py` to validate packaging and implementation targets.
 - Run `python scripts/demo.py --output-dir <tmp>` for a deterministic provider handoff demo.
+- Run `python scripts/prepare_candidate.py ...` to apply a source-bound alias plan and JOIN whitespace mechanically before verification.
 
 ## Provider boundary
 
@@ -34,9 +35,15 @@ Provider authority is path-bound to correlated front-door provider selection evi
 1. Preserve the exact source SQL, encoding, literals, comments, and caller constraints.
 2. Read `skills/sql_formatting_style_harness/references/style-contract.md`; do not copy or fork its rules into this provider.
 3. Record provider provenance and `execution_actor=host-llm`. Preserve the exact correlated front-door provider-selection JSON. Guard the exact selected host-local path or the module-derived packaged fallback. Reject missing/uncorrelated selection, caller-local `CODEX_HOME` or skills-root overrides, self-declared clones, unrelated cache entries, disabled copies, backups, staging files, and stale discovered versions even when their content is compatible.
-4. Have the host LLM write one complete formatted candidate file without semantic changes. Apply the canonical relative `JOIN` layout, including joins whose source is a derived table, and apply the canonical query-list width policy; do not preserve visibly noncanonical source indentation as authority. Formatting must not drift into optimization, temp-table conversion, predicate changes, or partial stored-procedure/`WORKTYPE` output.
-5. Complete alias plans for every multi-source formatted scope, plus every single-source formatted scope whose alias changes. Bind every required scope and declaration to declared, reviewer-approved semantic/business-role evidence before verification.
-6. Run `src.skills.sql_formatting_style.verify_sql_formatting_style` against the exact source and candidate file. Any lint, semantic-preservation, alias-plan, verifier, or release-readiness failure remains blocked.
+4. Have the host LLM write one complete formatted candidate file without semantic changes. Formatting must not drift into optimization, temp-table conversion, predicate changes, or partial stored-procedure/`WORKTYPE` output.
+5. Complete alias plans for every multi-source formatted scope, plus every single-source formatted scope whose alias changes. The structural first source is `A`. Walk source declarations in SQL order: the first new support role family is `B`, the next is `C`, then `D`; when one family has multiple members, number every member from `1` (`B1`, `B2`, ...). Bind every required scope and declaration to declared, reviewer-approved semantic/business-role evidence. After the host has completed all non-alias formatting, call `bind_sql_alias_role_plan(host_candidate_sql, plan)` once against the exact pre-alias candidate that will be passed to `prepare_candidate.py`; it records that candidate's SHA-256 and the ordered declaration fingerprint for every planned scope. Apply that bound plan with `apply_sql_alias_role_plan(...)`. If the pre-alias candidate changes, discard and regenerate the plan rather than rebinding a stale plan.
+6. Put each complete JOIN clause and its `ON`/continuation `AND` terms on their required lines, then run `normalize_sql_join_layout(...)` to set their leading whitespace. The helper does not split inline clauses or rebuild derived-table inner layout. Run `src.skills.sql_formatting_style.verify_sql_formatting_style` against the exact source and normalized candidate file. Presentation-only failures must be repaired from structured issue evidence and reverified in a bounded loop before asking the user. Semantic ambiguity remains blocked for clarification. Any unresolved lint, semantic-preservation, alias-plan, verifier, or release-readiness failure remains blocked.
+
+For file-based work, prepare the candidate with the packaged command:
+
+```powershell
+python scripts/prepare_candidate.py --candidate <host-candidate.sql> --output <prepared-candidate.sql> --alias-role-plan <alias-role-plan.json>
+```
 7. Every user correction invalidates the previous verification. This includes an immediate short contextual correction such as `No, that's wrong.`, `That is not what I asked.`, `Try again.`, or the equivalent Korean phrases when it directly follows an active SQL formatting result. Do not apply those phrases broadly to unrelated turns. Update the same candidate file, rerun the verifier, and use only the new successful `formatted_sha256`; never patch or retype final SQL after verification.
 8. Invoke the front door as one exact standalone Python command. Comments, `echo`/`Write-Output`, pipelines, separators, redirection, missing shell status, and every nonzero exit are not execution. Text shell evidence is successful only when the complete line is exactly `Exit code: 0`; structured evidence requires an actual integer zero.
 9. Invoke `python -m src.skills.sql_formatting_provider` with the original, candidate, response, exact selected provider path, signed provider-selection JSON file, session id, and a fresh invocation nonce. `--skills-root` is not supported. The CLI reruns `verify_sql_formatting_style` and emits a durable local runtime receipt binding the invocation scope, canonical content hashes, raw file SHA-256 values for all four artifacts, provider-selection hash, module hash, exact verifier result, and successful exit status. Receipt state resolves through `src.orchestration.runtime_paths.runtime_root`, including `UAF_RUNTIME_ROOT` and writable fallback policy. The host shell output must independently report exit code 0.
@@ -86,4 +93,7 @@ Public receipt validation is intentionally non-consuming so independent reviewer
 - `src.skills.sql_formatting_provider.guard_authoritative_sql_formatting_provider_path`
 - `src.skills.sql_formatting_provider.bind_verified_sql_final_response`
 - `src.skills.sql_formatting_provider.guard_and_bind_verified_sql_final_response`
+- `src.skills.sql_formatting_style.apply_sql_alias_role_plan`
+- `src.skills.sql_formatting_style.bind_sql_alias_role_plan`
+- `src.skills.sql_formatting_style.normalize_sql_join_layout`
 - `src.skills.sql_formatting_style.verify_sql_formatting_style`

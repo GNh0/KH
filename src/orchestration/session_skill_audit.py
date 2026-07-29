@@ -4504,6 +4504,8 @@ def _is_sql_follow_up_request(text: str) -> bool:
     lowered = str(text or "").lower()
     if looks_like_sql_output_request(lowered):
         return True
+    if _is_sql_layout_correction(lowered):
+        return True
     return any(
         marker in lowered
         for marker in [
@@ -4518,9 +4520,6 @@ def _is_sql_follow_up_request(text: str) -> bool:
             "format",
             "recheck",
             "correction",
-            "정리",
-            "수정",
-            "다시",
             "쿼리",
             "별칭",
         ]
@@ -4548,6 +4547,8 @@ def _is_short_contextual_sql_correction(text: str) -> bool:
     value = str(text or "").strip().casefold()
     if not value or len(value) > 80 or "\n" in value or "\r" in value:
         return False
+    if _is_sql_layout_correction(value):
+        return True
     value = re.sub(r"['’]", "", value)
     value = re.sub(r"[^0-9a-z가-힣]+", " ", value).strip()
     return value in {
@@ -4558,6 +4559,40 @@ def _is_short_contextual_sql_correction(text: str) -> bool:
         "제가 요청한 내용이 아닙니다",
         "다시 해주세요",
     }
+
+
+def _is_sql_layout_correction(text: str) -> bool:
+    value = str(text or "").strip().casefold()
+    if not value:
+        return False
+    has_sql_target = bool(
+        re.search(r"\b(?:join|where|alias)\b", value)
+        or (re.search(r"\bon\b", value) and re.search(r"\band\b", value))
+        or any(marker in value for marker in ["별칭", "조인", "온절", "조건절", "조건"])
+    )
+    has_correction_intent = any(
+        marker in value
+        for marker in [
+            "position",
+            "align",
+            "indent",
+            "wrong",
+            "incorrect",
+            "fix",
+            "again",
+            "위치",
+            "정렬",
+            "들여쓰기",
+            "틀",
+            "잘못",
+            "못",
+            "고쳐",
+            "수정",
+            "다시",
+            "잡",
+        ]
+    )
+    return has_sql_target and has_correction_intent
 
 
 def _looks_like_sql_answer(lowered: str) -> bool:

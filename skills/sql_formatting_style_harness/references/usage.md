@@ -16,7 +16,7 @@ Capture:
 - `operation`: `formatting` or `refactor`;
 - selected style-contract path and SHA-256;
 - explicit user constraints;
-- a complete alias plan only when aliases change;
+- a complete alias plan for every non-exempt multi-source formatted scope and every alias-changed single-source scope;
 - `scalar_function_refactor` only for a separately requested conversion.
 
 Pass a `Path` or UTF-8 `bytes` when encoding evidence matters. The verifier decodes strictly and records the raw SHA-256. A Python `str` has no source-encoding provenance and is reported as `encoding_unverified`.
@@ -28,6 +28,9 @@ Execution level: `python-module`.
 Implementation targets:
 
 - `src.skills.sql_formatting_style.verify_sql_formatting_style`
+- `src.skills.sql_formatting_style.apply_sql_alias_role_plan`
+- `src.skills.sql_formatting_style.bind_sql_alias_role_plan`
+- `src.skills.sql_formatting_style.normalize_sql_join_layout`
 - `src.skills.sql_formatting_style.resolve_style_contract_source`
 
 ### Contract Selection
@@ -196,7 +199,7 @@ For eight or more target/value mappings, the verifier measures each source expre
 
 ### JOIN and Query-List Layout
 
-Preserve existing `JOIN` indentation. No absolute indentation or `JOIN`-to-`ON` delta is a universal verifier rule, and generated deep indentation is not source authority. When authoring SQL without a source layout, one query indentation level below `FROM` is a fallback; align `ON` and continuation `AND` terms within that join block.
+Do not preserve noncanonical source indentation. For every ordinary or derived-table join, place the complete join clause exactly eight columns to the right of the current query scope's `FROM` column. Keep the join type/hint prefix and `JOIN` token on one line. Align `ON` and each actual line-leading same-join continuation `AND` to the `I` column of that `JOIN` token. Nested queries compute the same rule from their own `FROM`. After the host has placed those clauses on separate lines, run `normalize_sql_join_layout(...)` to apply their leading whitespace mechanically. The helper intentionally does not split inline joins, join prefixes, or derived-table inner clauses; the verifier keeps those cases blocked until the host revises their line structure.
 
 For query-level `GROUP BY` and `ORDER BY`, the verifier splits only at commas whose token depth matches the clause. It keeps function/subquery commas, comments, `ASC`/`DESC`, and `COLLATE` within the item. Simple lists whose compact rendering fits the 100-column preferred width must remain inline; inline lists wider than 100 are rejected and must wrap compactly without exceeding the 120-column hard ceiling. Complex items remain atomic. Nested query clauses are evaluated in their own scope, while window and ordered-aggregate `ORDER BY` are excluded by their deeper token depth.
 

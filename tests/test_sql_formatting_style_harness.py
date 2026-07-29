@@ -11,8 +11,12 @@ from unittest.mock import patch
 from src.orchestration.kh_front_door import build_kh_front_door
 from src.skills.sql_formatting_style import (
     _extract_insert_select_statements,
+    _support_family_alias,
+    apply_sql_alias_role_plan,
+    bind_sql_alias_role_plan,
     build_powerbuilder_sql_validation_plan,
     extract_powerbuilder_sql_fragments,
+    normalize_sql_join_layout,
     resolve_style_contract_source,
     validate_powerbuilder_output_dir,
     verify_sql_formatting_style,
@@ -4172,6 +4176,10 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         self.assertIn("alias_missing_in_multi_source_scope", _issue_codes(unaliased_result))
         self.assertIn("alias_role_plan_required", _issue_codes(missing_plan))
         self.assertTrue(approved.success, approved.to_dict())
+        self.assertEqual(
+            approved.metadata["alias_role_plan_validation"]["semantic_authentication"],
+            "caller_declared_not_authenticated",
+        )
 
     def test_explicit_sole_source_requires_a_but_unaliased_source_remains_not_needed(self):
         noncanonical = "SELECT B.ID\nFROM ONLY_TABLE B;\n"
@@ -4700,6 +4708,389 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         self.assertEqual(result.metadata["formatting_preservation"]["status"], "verified")
         self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
         self.assertIn("join_indentation_not_relative", _issue_codes(result))
+
+    def test_join_layout_normalizer_repairs_relative_join_on_and_indentation(self):
+        original = (
+            "IF @ENABLED = 'Y'\n"
+            "BEGIN\n"
+            "    SELECT A.ID\n"
+            "         , B.VALUE\n"
+            "    FROM HEADER_TABLE A\n"
+            "  LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "       ON A.ID = B.ID\n"
+            "             AND B.ACTIVE_YN = 'Y';\n"
+            "END;\n"
+        )
+        expected = (
+            "IF @ENABLED = 'Y'\n"
+            "BEGIN\n"
+            "    SELECT A.ID\n"
+            "         , B.VALUE\n"
+            "    FROM HEADER_TABLE A\n"
+            "            LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                         ON A.ID = B.ID\n"
+            "                         AND B.ACTIVE_YN = 'Y';\n"
+            "END;\n"
+        )
+
+        normalized = normalize_sql_join_layout(original)
+        result = verify_sql_formatting_style(
+            original,
+            normalized,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertEqual(normalized, expected)
+        self.assertEqual(normalize_sql_join_layout(normalized), normalized)
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_alias_plan_applier_renames_declarations_and_bound_references(self):
+        original = (
+            "SELECT H.ID\n"
+            "     , P.VALUE AS PRIMARY_VALUE\n"
+            "     , S.VALUE AS SECONDARY_VALUE\n"
+            "FROM HEADER_TABLE H\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY P\n"
+            "                     ON H.ID = P.ID\n"
+            "        LEFT OUTER JOIN DETAIL_SECONDARY S\n"
+            "                     ON H.ID = S.ID;\n"
+        )
+        expected = (
+            "SELECT A.ID\n"
+            "     , B1.VALUE AS PRIMARY_VALUE\n"
+            "     , B2.VALUE AS SECONDARY_VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B1\n"
+            "                     ON A.ID = B1.ID\n"
+            "        LEFT OUTER JOIN DETAIL_SECONDARY B2\n"
+            "                     ON A.ID = B2.ID;\n"
+        )
+        plan = self._role_plan(numbered_support=True)
+        plan["scopes"][0]["roles"][0]["members"][0]["original_alias"] = "H"
+        plan["scopes"][0]["roles"][1]["members"][0]["original_alias"] = "P"
+        plan["scopes"][0]["roles"][1]["members"][1]["original_alias"] = "S"
+
+        with self.assertRaisesRegex(ValueError, "source_sql_sha256 is required"):
+            apply_sql_alias_role_plan(original, plan)
+
+        bound_plan = bind_sql_alias_role_plan(original, plan)
+        rewritten = apply_sql_alias_role_plan(original, bound_plan)
+        result = verify_sql_formatting_style(
+            original,
+            rewritten,
+            alias_role_plan=bound_plan,
+        )
+
+        self.assertEqual(rewritten, expected)
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(
+            result.metadata["alias_role_plan_validation"]["source_binding"]["status"],
+            "verified",
+        )
+
+    def test_alias_plan_applier_rejects_inserted_preceding_select_as_stale(self):
+        original = (
+            "SELECT H.ID, D.VALUE\n"
+            "FROM HEADER_TABLE H\n"
+            "        INNER JOIN DETAIL_TABLE D\n"
+            "                ON H.ID = D.ID;\n"
+        )
+        plan = self._role_plan()
+        plan["scopes"][0]["roles"][0]["members"][0]["original_alias"] = "H"
+        plan["scopes"][0]["roles"][1]["members"][0]["original_alias"] = "D"
+        bound_plan = bind_sql_alias_role_plan(original, plan)
+        changed = (
+            "SELECT X.ID, Y.VALUE\n"
+            "FROM PRECEDING_HEADER X\n"
+            "        INNER JOIN PRECEDING_DETAIL Y\n"
+            "                ON X.ID = Y.ID;\n"
+            + original
+        )
+
+        with self.assertRaisesRegex(ValueError, "source_sql_sha256 does not match"):
+            apply_sql_alias_role_plan(changed, bound_plan)
+
+        result = verify_sql_formatting_style(
+            changed,
+            changed,
+            alias_role_plan=bound_plan,
+        )
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("alias_plan_source_sql_sha256_mismatch", _issue_codes(result))
+
+    def test_alias_plan_applier_rejects_reordered_select_scopes_as_stale(self):
+        first = (
+            "SELECT H.ID, D.VALUE\n"
+            "FROM FIRST_HEADER H\n"
+            "        INNER JOIN FIRST_DETAIL D\n"
+            "                ON H.ID = D.ID;\n"
+        )
+        second = (
+            "SELECT P.ID, Q.VALUE\n"
+            "FROM SECOND_HEADER P\n"
+            "        INNER JOIN SECOND_DETAIL Q\n"
+            "                ON P.ID = Q.ID;\n"
+        )
+        original = first + second
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "roles": [
+                        {
+                            "name": "first_header",
+                            "kind": "main",
+                            "members": [
+                                {"source": "FIRST_HEADER", "original_alias": "H", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "first_detail",
+                            "kind": "support",
+                            "members": [
+                                {"source": "FIRST_DETAIL", "original_alias": "D", "alias": "B"}
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "scope_id": "scope_2",
+                    "roles": [
+                        {
+                            "name": "second_header",
+                            "kind": "main",
+                            "members": [
+                                {"source": "SECOND_HEADER", "original_alias": "P", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "second_detail",
+                            "kind": "support",
+                            "members": [
+                                {"source": "SECOND_DETAIL", "original_alias": "Q", "alias": "B"}
+                            ],
+                        },
+                    ],
+                },
+            ]
+        }
+        bound_plan = bind_sql_alias_role_plan(original, plan)
+
+        with self.assertRaisesRegex(ValueError, "source_sql_sha256 does not match"):
+            apply_sql_alias_role_plan(second + first, bound_plan)
+
+    def test_alias_plan_applier_rejects_tampered_scope_declaration_fingerprint(self):
+        original = (
+            "SELECT H.ID, D.VALUE\n"
+            "FROM HEADER_TABLE H\n"
+            "        INNER JOIN DETAIL_TABLE D\n"
+            "                ON H.ID = D.ID;\n"
+        )
+        plan = self._role_plan()
+        plan["scopes"][0]["roles"][0]["members"][0]["original_alias"] = "H"
+        plan["scopes"][0]["roles"][1]["members"][0]["original_alias"] = "D"
+        bound_plan = bind_sql_alias_role_plan(original, plan)
+        bound_plan["scopes"][0]["scope_declaration_fingerprint"] = "0" * 64
+
+        with self.assertRaisesRegex(ValueError, "declaration fingerprint does not match"):
+            apply_sql_alias_role_plan(original, bound_plan)
+
+    def test_alias_role_families_must_follow_first_sql_appearance(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , C.VALUE AS DETAIL_VALUE\n"
+            "     , B.NAME AS STATUS_NAME\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY C\n"
+            "                     ON A.ID = C.ID\n"
+            "        LEFT OUTER JOIN STATUS_TABLE B\n"
+            "                     ON A.STATUS_CD = B.STATUS_CD;\n"
+        )
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-GENERIC/header-status-detail-roles",
+                        "header",
+                        "status",
+                        "detail",
+                    ),
+                    "roles": [
+                        {
+                            "name": "header",
+                            "kind": "main",
+                            "members": [
+                                {"source": "HEADER_TABLE", "original_alias": "A", "alias": "A"}
+                            ],
+                        },
+                        {
+                            "name": "status",
+                            "kind": "support",
+                            "members": [
+                                {"source": "STATUS_TABLE", "original_alias": "B", "alias": "B"}
+                            ],
+                        },
+                        {
+                            "name": "detail",
+                            "kind": "support",
+                            "members": [
+                                {"source": "DETAIL_PRIMARY", "original_alias": "C", "alias": "C"}
+                            ],
+                        },
+                    ],
+                }
+            ]
+        }
+
+        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("alias_role_family_order_invalid", _issue_codes(result))
+        with self.assertRaisesRegex(ValueError, "first SQL appearance"):
+            apply_sql_alias_role_plan(sql, bind_sql_alias_role_plan(sql, plan))
+
+    def test_non_cross_join_without_on_is_blocked(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        INNER JOIN DETAIL_PRIMARY B;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("join_predicate_missing", _issue_codes(result))
+
+    def test_empty_join_on_expression_is_blocked(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        INNER JOIN DETAIL_PRIMARY B\n"
+            "                ON;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("join_predicate_expression_missing", _issue_codes(result))
+
+    def test_cross_join_without_on_remains_valid(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        CROSS JOIN DETAIL_PRIMARY B;\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("join_predicate_missing", _issue_codes(result))
+
+    def test_join_layout_normalizer_does_not_claim_to_split_inline_clauses(self):
+        sql = (
+            "SELECT A.ID, B.VALUE\n"
+            "FROM HEADER_TABLE A INNER JOIN DETAIL_PRIMARY B ON A.ID = B.ID;\n"
+        )
+
+        normalized = normalize_sql_join_layout(sql)
+        result = verify_sql_formatting_style(
+            sql,
+            normalized,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertEqual(normalized, sql)
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("join_indentation_not_relative", _issue_codes(result))
+
+    def test_alias_applier_rejects_partial_multi_scope_plan(self):
+        sql = (
+            "SELECT A.ID, B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        INNER JOIN DETAIL_PRIMARY B\n"
+            "                ON A.ID = B.ID;\n"
+            "SELECT A.ID, B.VALUE\n"
+            "FROM SECOND_HEADER A\n"
+            "        INNER JOIN SECOND_DETAIL B\n"
+            "                ON A.ID = B.ID;\n"
+        )
+
+        partial_plan = bind_sql_alias_role_plan(sql, self._role_plan())
+        with self.assertRaisesRegex(ValueError, "cover every non-exempt multi-source scope"):
+            apply_sql_alias_role_plan(sql, partial_plan)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            candidate_path = root / "candidate.sql"
+            plan_path = root / "plan.json"
+            output_path = root / "prepared.sql"
+            candidate_path.write_text(sql, encoding="utf-8")
+            plan_path.write_text(json.dumps(partial_plan), encoding="utf-8")
+            script = (
+                Path(__file__).resolve().parents[1]
+                / "skills"
+                / "sql_formatting"
+                / "scripts"
+                / "prepare_candidate.py"
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--candidate",
+                    str(candidate_path),
+                    "--output",
+                    str(output_path),
+                    "--alias-role-plan",
+                    str(plan_path),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+            )
+            output_exists = output_path.exists()
+
+        self.assertEqual(completed.returncode, 1, completed.stdout)
+        self.assertEqual(json.loads(completed.stdout)["status"], "blocked")
+        self.assertFalse(output_exists)
+
+    def test_support_alias_sequence_skips_reserved_t_and_stays_identifier_safe(self):
+        self.assertEqual(_support_family_alias(0), "B")
+        self.assertEqual(_support_family_alias(17), "S")
+        self.assertEqual(_support_family_alias(18), "U")
+        self.assertEqual(_support_family_alias(23), "Z")
+        with self.assertRaisesRegex(ValueError, "exceed"):
+            _support_family_alias(24)
+
+    def test_join_and_alias_documents_match_the_executable_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        usage = (
+            root / "skills" / "sql_formatting_style_harness" / "references" / "usage.md"
+        ).read_text(encoding="utf-8")
+        contract = (
+            root / "skills" / "sql_formatting_style_harness" / "references" / "style-contract.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("Preserve existing `JOIN` indentation", usage)
+        self.assertIn("exactly eight columns", usage)
+        self.assertIn("first appearance in SQL", contract)
 
 
 if __name__ == "__main__":

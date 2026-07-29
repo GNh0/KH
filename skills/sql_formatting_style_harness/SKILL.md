@@ -51,8 +51,10 @@ Use this harness after selecting the host-local `sql-formatting` contract or the
 - Every changed scope requires exactly one first `main` role containing exactly one source; all-support and multi-source main plans block.
 - The structural first `FROM` source, or parsed DML target source, is the one main source and uses `A`. This structural choice does not infer semantic support-family grouping from later source order. Generated `A1`, `A2`, and later main aliases are invalid.
 - Each subsequent distinct business-role family advances sequentially through `B`, `C`, `D`, and so on.
+- Role-family letters are assigned by the first SQL appearance of each family, and members inside a family follow declaration order. A plan that lists a later family before an earlier declaration blocks even when its alias letters are otherwise sequential.
 - A singleton non-main family starts at `B` and uses its letter without a suffix. Multiple siblings in one non-main family use suffixes from the first member, for example `B1`, `B2`; numbered aliases are valid only when the approved role plan declares those members as siblings. The next distinct family is `C`.
 - Family grouping comes from structured `reviewer_approved_business_role` evidence, not table identity, repetition, or source order alone. Each evidence object must name a controlled reviewer artifact URI using `review`, `spec`, `ticket`, or `design`, set `reviewer_approved=true`, and exactly cover the declared role names. The compatibility form is limited to `review://<review-id>/<declared-role-names>-roles`.
+- The local verifier validates that declared reviewer evidence is structured and fully bound; it cannot authenticate that an external reviewer actually approved the semantic grouping. Metadata therefore reports `semantic_authentication=caller_declared_not_authenticated`. When the family decision is ambiguous, obtain an independent review or user confirmation instead of presenting structural validation as semantic proof.
 - Every changed scope must be present. Every declaration and changed reference must be covered. Cross-scope members, skipped role letters, missing aliases, and vague/empty basis references block.
 - Scope-aware binding applies to nested/correlated queries and to `UPDATE ... FROM`, joined `DELETE`, and `MERGE`; an outer rename never owns a reference shadowed by an inner declaration.
 
@@ -116,6 +118,9 @@ Query-level `GROUP BY` and `ORDER BY` lists use a 100-column preferred width and
 ## UAF implementation targets
 
 - `src.skills.sql_formatting_style.verify_sql_formatting_style`
+- `src.skills.sql_formatting_style.apply_sql_alias_role_plan`
+- `src.skills.sql_formatting_style.bind_sql_alias_role_plan`
+- `src.skills.sql_formatting_style.normalize_sql_join_layout`
 - `src.skills.sql_formatting_style.resolve_style_contract_source`
 - `src.contracts.HarnessResult`
 - `skills/sql_formatting_style_harness/SKILL.md`

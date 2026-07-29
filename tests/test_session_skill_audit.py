@@ -3646,6 +3646,9 @@ class SessionSkillAuditTests(unittest.TestCase):
             "아니요, 틀렸습니다.",
             "제가 요청한 내용이 아닙니다.",
             "다시 해주세요.",
+            "ON, AND 위치도 제대로 못 잡았어.",
+            "별칭 잡는 것도 잘못됐어.",
+            "조건 위치가 안 맞아.",
         ]
         original_sql = "SELECT * FROM BA011T WHERE MAINCD = 'DZ010'"
         formatted_sql = "SELECT A.SUBCD\nFROM BA011T A;"
@@ -3683,6 +3686,10 @@ class SessionSkillAuditTests(unittest.TestCase):
             "Thanks for the help.",
             "Try again tomorrow after the deployment window.",
             "이제 배포 일정만 확인해 주세요.",
+            "UI 수정해줘.",
+            "문서 다시 정리해줘.",
+            "배포 다시 해줘.",
+            "Turn it on again.",
         ]:
             with self.subTest(message=message):
                 events = self.sql_audit_events(original_sql, formatted_sql)
