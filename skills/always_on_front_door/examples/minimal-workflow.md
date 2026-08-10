@@ -12,6 +12,8 @@ The user did not name KH, UAF, skills, or harnesses.
 
 The same bootstrap applies to short requests such as `1+1?`, `Translate hello`, or `Format this SQL: SELECT ...`.
 
+It also applies before a clarification such as `Which folder should I use?`; asking a question is still a response to a new user task.
+
 ## Expected steps
 
 1. Recognize this as work-bearing because it edits project files and needs verification.
@@ -47,6 +49,7 @@ A bounded confirmation may reuse the current receipt only while this same task r
 - The host decides a request is trivial and answers, translates, rewrites, looks up, calculates, or reads the SQL provider before running front-door.
 - The manifest is treated as proof that the host auto-selected KH; compliance was not audited from runtime evidence.
 - The assistant reads `SKILL.md` but never runs front-door intake.
+- The assistant waits for `/KH`, a KH/UAF mention, or a plugin manifest prompt before invoking this skill.
 - The assistant claims all selected skills were used.
 - The assistant suppresses a failed verification command in the final report.
 

@@ -38,7 +38,7 @@ description: Use when planning, generating, or reviewing offline PowerBuilder-to
    - `mixed-input`: described behavior plus supplied source or visual evidence;
    - `contract-only`: only the requested behavior and packaged style contract are available.
 3. Build a migration plan with `build_pb_to_csharp_migration_plan` when the runtime module is available. Otherwise produce the same fields procedurally.
-4. Keep `confirmed`, `inferred`, `blocked`, and `proposal-only` facts separate. Never turn an inferred improvement into an approved edit.
+4. Keep `confirmed`, `inferred`, `blocked`, and `proposal-only` facts separate. Never turn an inferred improvement into an approved edit. Real PB/SRU/SRD/DataWindow evidence and the actual target project govern behavior, captions, control roles, bindings, events, and database mapping. Do not invent UX, business fields, or helpers.
 5. Load the packaged style contract. Select one C# style family, one control provider, one event/method family, and one SP family. Do not mix alternatives without evidence.
 6. Map behavior before code:
    - PB event or described action to C# event/method;
@@ -48,8 +48,8 @@ description: Use when planning, generating, or reviewing offline PowerBuilder-to
 7. Generate C# and Designer output using the contract's naming grammar, event shapes, provider order, property rules, grid conventions, and forbidden-pattern list.
 8. Select an explicit SP operation before generation: `new_generation`, `pb_srd_generation`, `existing_sp_cleanup`, or `approved_inferred_draft`. Never apply new-generation prohibitions to a preservation-only cleanup, and never release an inferred draft as complete.
 9. Generate SELECT/SAVE procedure output only when the selected operation has authoritative body/signature evidence. Pasted SQL must declare its role as `existing_procedure`, `pb_query`, or `body_fragment`; a prose summary or object name is not SQL authority. For new generation, every executable candidate statement must match a complete statement from independently bound source evidence. A contained fragment cannot authorize extra DML, JOINs, predicates, assignments, declarations, or error/control statements.
-10. Verify generated C# with `verify_migration_generated_csharp_style` and generated SQL with `verify_pb_migration_sp_generation_contract` when those runtime functions are available. Run the SQL formatter/verifier separately.
-11. Finish with the migration checklist, evidence ledger, blocked assumptions, and manual test plan.
+10. After every generated C# or Designer change, execute `verify_migration_generated_csharp_style` or `orchestrate_pb_migration_validation` against the exact target paths and SHA-256 digests with complete `expected_control_contracts`. Every selected-form member constructed in the sole class-member `InitializeComponent` requires one entry, including custom target wrappers and components. Omitting the argument is a blocked contract gap. Pass an explicit empty list only when `no_control_contract_evidence` records an evidence-backed reason and registry-bound references. Every supplied `evidence_refs` or `property_evidence` ID must resolve through `evidence_registry`, even when no default guard consumes it. For an existing Designer, also bind a separately captured pre-edit baseline path and digest; the current target file cannot serve as its own baseline. Reading this skill or running only a smoke check is not execution evidence. Verify generated SQL separately with `verify_pb_migration_sp_generation_contract` and the SQL formatter/verifier.
+11. Finish with the migration checklist, evidence ledger, blocked assumptions, manual test plan, and an analysis-to-implementation handoff complete enough for another agent to proceed without rediscovery.
 
 ## Offline Style Rules
 
@@ -60,7 +60,8 @@ description: Use when planning, generating, or reviewing offline PowerBuilder-to
 - Use command handlers for search, save, clear, and delete only when the selected family supports them.
 - Keep select and save calls in one established path. Do not invent a parallel query or save helper.
 - Keep list retrieval, focused-row detail retrieval, validation, binding, and save serialization explicit.
-- Pass raw editor values to the caller boundary. Do not hide wildcard shaping, date derivation, or silent defaults in C#.
+- Reuse established target-project clear, query, and save helpers before generic assignments or new helpers.
+- Pass raw editor values through existing wrappers, including date text APIs such as `YYYYMMDD`, when target evidence uses them. Let the procedure own date/default/wildcard derivation when target style evidence says so; do not add client-side derivation, DTOs, or value helpers.
 
 ### Control Provider Order
 
@@ -71,7 +72,7 @@ Resolve each logical control from declared dependency evidence in this order:
 3. DevExpress family when DevExpress is explicitly declared.
 4. WinForms family when neither library is declared.
 
-Do not inspect a local project to choose a provider during normal generation. Do not add, upgrade, or retarget UI packages.
+When the target project is supplied as migration evidence, its available wrappers and APIs take precedence. Otherwise do not inspect unrelated local projects to choose a provider. Do not add, upgrade, or retarget UI packages.
 
 ### Designer and Controls
 
@@ -79,12 +80,14 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - Keep code-behind limited to runtime behavior, event-handler implementations, validation, procedure calls, data binding, and evidence-backed dynamic state changes.
 - A static assignment in code-behind is blocked unless supplied source or an explicit behavior contract proves the setting changes at runtime and targeted verification covers it.
 - Emit explicit members, initialization, parent containment, and collection registration.
-- Preserve supplied `BindingField`, `TabIndex`, bounds, docking, captions, editor properties, and grid/view links.
+- Preserve wrapper defaults and existing `Size`, `Location`, `Margin`, `MaximumSize`, `Visible`, `BindingField`, `TabIndex`, docking, captions, editor properties, and grid/view links unless an exact contract value plus registry-bound source or user evidence authorizes a change. Preserve horizontal and vertical label alignment defaults. Verify existing values against a separately captured pre-edit Designer baseline.
+- Map lookup, search, and detail roles to the evidence-backed wrapper or repository type and exact `BindingField`; never replace a role-specific control with a text editor.
 - Within each independent container, located input controls follow row-major top-to-bottom/left-to-right order, and their `TabIndex` values must be present, unique, and contiguous increasing; labels and non-input controls are excluded. Validate different containers independently; each container may restart its sequence.
 - Treat generated View XML as the authoritative `Layout -> Load` baseline. An explicit grid contract requires both valid Layout-Load-ready XML and matching post-load-equivalent C# Designer state. Local dictionaries and file hashes never prove a live Designer load; record `actual_live_layout_load_observed=false` unless a genuinely external DevExpress host supplies stronger evidence.
 - Preserve target grid names (`grdList`/`gvwList`, `grdDetail`/`gvwDetail`, or explicit table/purpose suffixes); never copy XML `gridView1` into C# naming.
 - Use explicit grid columns registered through `Columns.AddRange`.
-- Use repository editors for numeric, lookup, button, and boolean grid columns; register repositories before assigning `ColumnEdit`.
+- Use repository editors for numeric, lookup, button, and boolean grid columns; register repositories before assigning `ColumnEdit`. Numeric result fields use `RepositoryItemSpinEdit` based on SQL/result shape, never GridColumn `DisplayFormat` as a substitute.
+- `EnableAppearanceEvenRow` may be enabled, but do not invent an `Appearance.EvenRow.BackColor` value.
 - Keep `FieldName` and result-column names identical.
 - For an evidence-backed composite business identifier, keep every raw base/sequence key in the SELECT result for identity and logic, and bind the visible grid column to a separate display result field. Hide raw key columns by default unless PB/UI evidence requires them visible.
 - Do not infer components from a table name alone. Once PB/DataWindow/result/schema evidence establishes an ordered base key plus sequence keys, preserve a supplied display alias or derive the packaged `<BASE>S` default.
@@ -97,7 +100,7 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - Parse parameter defaults with SQL string awareness. Text such as `N'A OUTPUT READONLY B'` is a default literal, not a direction option.
 - `existing_sp_cleanup` is formatting-only: preserve procedure identity, every comment payload and its relative executable-token position, every statement/operator/literal/terminator, and the complete ordered signature including defaults, `OUTPUT`, and `READONLY`. Only whitespace and keyword/identifier case may differ. The normal SSMS Object preamble remains supported when its content and relative order are unchanged. A semantic change requires a separate explicit operation.
 - Values used only inside the procedure are local variables declared and assigned in the procedure.
-- Pass raw date/search inputs; derive helper dates and wildcard predicates inside the procedure.
+- Pass raw date/search inputs through established target wrappers; derive helper dates, defaults, and wildcard predicates inside the procedure when target evidence assigns that ownership there.
 - Preserve supplied result-column names, branch values, literals, comments, calculations, and row-state behavior.
 - Build composite display SQL only from authoritative PB/DataWindow/result/business-key evidence. The packaged `BASE + '-' + FORMAT(SEQUENCE, '##0')` family appends additional sequences in key order. Do not add `CASE`, `ISNULL`, `CONCAT`, casts, or different null handling unless the source contract explicitly requires it.
 - A release-ready SELECT/SAVE body requires independently captured PB/DataWindow SQL, current procedure text, or pasted SQL bound to a readable path and matching SHA-256. Every executable statement and relevant structural event is fingerprinted after comment/case/whitespace normalization and consumes one unified ordinal within its hierarchical path. Structural events include IF/ELSE arms, WHILE bodies, nested generic BEGIN/END scopes, BEGIN TRY/END TRY, BEGIN CATCH/END CATCH, and transaction-control statements. Scope movement, omission, insertion, or reordering changes the canonical trace. Only the first root-level `SET NOCOUNT ON` in a real procedure envelope, before every non-wrapper event, is a generated wrapper at ordinal `0`; transaction, TRY/CATCH, loop, branch, or nested scope context prevents wrapper classification. One single independently bound source artifact or one complete SHA-bound branch/composite artifact must cover the candidate's entire non-wrapper stream and topology. Separate source and branch artifacts are supporting evidence only and cannot pool disjoint trace keys. A composite authority must carry exact `target_procedure`, `trace_sql`, `trace_sha256`, and ordered `source_lineage`. `trace_sha256` is SHA-256 over UTF-8 canonical JSON `{"schema_version":"kh.pb.nonwrapper-trace.v2","trace_keys":[...]}` using sorted keys and compact separators; `trace_keys` are every candidate non-wrapper executable or structural trace key in traversal order. The evidence and JSON fields must match, the canonical `trace_sql` hash must equal the candidate hash, and lineage must exactly equal all correlated source authority SHA-256 values in evidence order with no unknown, missing, duplicate, or reordered entry. A flat pool cannot authorize scope movement, TRY/CATCH omission, loop-body extraction, arm swaps, nested-arm swaps, branch/statement swaps, reordering, or cross-artifact `then`/`else` splicing. A smaller source fragment cannot authorize a new scope, branch, transaction, DML, JOIN, predicate, declaration, assignment, or error/control statement. Unrelated SQL is not evidence. Candidate output cannot authenticate itself after case, comments, whitespace, or terminator-only disguise.
@@ -121,7 +124,7 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - SP operation, source-role ledger, exact original-signature comparison when cleaning an existing procedure, and caller-authority evidence.
 - Forbidden-pattern scan result.
 - C#, Designer, SQL, build, and manual verification status, with unsupported claims left blocked.
-- Cross-agent handoff that is complete without hidden chat context.
+- Cross-agent handoff containing PB behavior, event flow, control-role map, field/`BindingField` map, SP/caller contract, proven-versus-inferred labels, unresolved gaps, and manual tests; it must be complete without hidden chat context or rediscovery.
 
 ## Forbidden Patterns
 
@@ -131,7 +134,9 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - Runtime grid-column factories when explicit Designer columns are required.
 - Static control creation, layout, naming, `TabIndex`, binding fields, fixed grid/repository wiring, `Appearance`, `Options`, or design properties in code-behind without runtime-state evidence.
 - Numeric `DisplayFormat` without the selected repository editor behavior.
+- Text-control substitution for evidence-backed lookup, search, or detail roles.
 - Inline C# wildcard shaping, hidden date defaults, or derived date parameters.
+- Generic clear/query/save assignments when an established target-project helper exists.
 - Procedure parameters absent from the caller matrix.
 - Source-unbacked schema-only result sets or completed procedure claims.
 - Source-unbacked `AUTHOR`/`CREATE DATE`, metadata placeholders, untyped external caller evidence, or release-ready inferred drafts.
@@ -147,6 +152,7 @@ Do not inspect a local project to choose a provider during normal generation. Do
 - Emitting a complete procedure from only a control list or caller signature.
 - Duplicating Designer-owned static UI setup in constructors, load handlers, or query methods.
 - Reporting static formatting or syntax checks as database semantic proof.
+- Treating a skill read or smoke check as generated-file verifier execution.
 - Omitting the caller-parameter matrix or allowing procedure-local values into the signature.
 - Claiming the harness ran when only its references were read.
 

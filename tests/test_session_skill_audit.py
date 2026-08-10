@@ -11116,6 +11116,102 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
+    def test_same_task_screenshot_and_correction_followups_reuse_front_door_but_new_objective_does_not(self):
+        receipt = self.producer_micro_receipt()
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "메일 전송 오류를 확인해줘.",
+                    },
+                },
+                self.front_door_call("front-door-mail-followup"),
+                self.front_door_output(receipt, "front-door-mail-followup"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "SMTP 앱 비밀번호 설정 화면을 확인하겠습니다.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "# Files mentioned by the user:\n"
+                            "- C:\\Temp\\mail-error.png\n\n"
+                            "앱 비밀번호는 방금 새로 발급한 거고 메일 주소도 맞아."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "view_image",
+                        "arguments": "C:\\Temp\\mail-error.png",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "메일 오류 확인 완료."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "아니 저건 웹훅인데.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n webhook src",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "웹훅 경로를 확인했습니다."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "그건 이제 됐고 다음은 SA100100 Designer를 검토해줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n SA100100.Designer.cs Programs",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        missing = [
+            issue
+            for issue in audit.issues
+            if issue["skill"] == "always-on-front-door"
+            and issue["status"] == "missing_front_door"
+        ]
+
+        self.assertEqual(len(missing), 1)
+        self.assertIn("SA100100 Designer", missing[0]["trigger"])
+
     def test_unphased_assistant_answer_is_work_but_progress_commentary_is_not(self):
         cases = {
             "answer": ("The implementation is complete and the focused tests pass.", True),
@@ -11829,6 +11925,257 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         self.assertEqual(issue["severity"], "P0")
         self.assertIn("retired_flag", issue["invalidated_claims"])
+
+    def test_synthetic_context_never_creates_user_correction_or_residual_obligations(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "<recommended_plugins>\n"
+                            "Here is a list of plugins that are available but not installed.\n"
+                            "</recommended_plugins>"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "<skills_instructions>\n## Skills\n### Available skills\n"
+                            "Do not use `catalog_placeholder`.\n</skills_instructions>"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "developer",
+                        "content": "<app-context>Injected developer context must not emit `fake_field`.</app-context>",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        forbidden_statuses = {
+            "invalidated_user_correction_repeated",
+            "forbidden_residuals_at_completion",
+            "missing_fresh_residual_scan_at_completion",
+        }
+
+        self.assertFalse(any(issue["status"] in forbidden_statuses for issue in audit.issues))
+
+    def test_korean_webhook_correction_and_assistant_admission_invalidate_prior_completion(self):
+        receipt = self.producer_micro_receipt()
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "메일 발송 설정 오류를 봐줘.",
+                    },
+                },
+                self.front_door_call("front-door-webhook-correction"),
+                self.front_door_output(receipt, "front-door-webhook-correction"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "이 화면은 SMTP 앱 비밀번호를 등록하는 설정입니다.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "설정 안내 완료."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "저건 웹훅인데.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "맞습니다. 제가 경로를 잘못 안내했습니다. 웹훅은 SMTP 설정과 다릅니다.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "정정했습니다."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "premature_completion_corrected_after_task_complete"
+        )
+
+        self.assertEqual(issue["severity"], "P0")
+        self.assertIn("저건 웹훅인데", issue["correction"])
+        self.assertIn("잘못 안내", issue["admission"])
+        self.assertFalse(
+            any(
+                candidate["status"] == "missing_front_door"
+                and "웹훅" in candidate.get("trigger", "")
+                for candidate in audit.issues
+            )
+        )
+
+    def test_korean_sql_correction_grammar_invalidates_prior_completion(self):
+        corrections = [
+            "아니 OUTER APPLY는 쓰지 마.",
+            "OUTER APPLY 말고 LEFT JOIN으로 써.",
+            "필요한 건 OUTER APPLY가 아니라 LEFT JOIN이야.",
+            "근데 누가 SQL문을 OUTER APPLY로 이따구로 씀??",
+            "조회문을 누가 그따구로 쓰냐니깐.",
+        ]
+        for offset, correction in enumerate(corrections):
+            with self.subTest(correction=correction):
+                call_id = f"front-door-sql-correction-{offset}"
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "이 조회 SQL을 기존 스타일로 정리해줘.",
+                            },
+                        },
+                        self.front_door_call(call_id),
+                        self.front_door_output(self.producer_micro_receipt(), call_id),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": "OUTER APPLY를 유지한 조회문으로 완료했습니다.",
+                            },
+                        },
+                        {
+                            "type": "event_msg",
+                            "payload": {"type": "task_complete", "last_agent_message": "SQL 완료."},
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": correction,
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": "맞습니다. 제가 OUTER APPLY를 계속 유지한 게 잘못입니다.",
+                            },
+                        },
+                        {
+                            "type": "event_msg",
+                            "payload": {"type": "task_complete", "last_agent_message": "SQL을 정정했습니다."},
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertTrue(
+                    any(
+                        issue["status"] == "premature_completion_corrected_after_task_complete"
+                        and issue["severity"] == "P0"
+                        for issue in audit.issues
+                    )
+                )
+                self.assertFalse(
+                    any(
+                        issue["status"] == "missing_front_door"
+                        and issue.get("trigger") == correction
+                        for issue in audit.issues
+                    )
+                )
+
+    def test_correction_in_a_true_new_objective_does_not_invalidate_older_completion(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "메일 설정 확인을 마쳤습니다.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "메일 작업 완료."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "그건 이제 됐고 다음은 조회 SQL을 고쳐줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "OUTER APPLY를 유지하겠습니다.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "아니 OUTER APPLY 말고 LEFT JOIN으로 써.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "맞습니다. 제가 OUTER APPLY를 유지한 게 잘못입니다.",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["status"] == "premature_completion_corrected_after_task_complete"
+                for issue in audit.issues
+            )
+        )
 
     def test_negated_reference_to_invalidated_assumption_is_not_repetition(self):
         path = self.write_session(
@@ -12910,6 +13257,1919 @@ class SessionSkillAuditTests(unittest.TestCase):
                 for issue in audit.issues
             )
         )
+
+    def test_pb_migration_smoke_only_after_write_is_missing_execution_proof(self):
+        pb_receipt = build_kh_front_door(
+            "Migrate a GWERP PBL DataWindow screen to C# WinForms Designer.",
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Continue the routed screen work.",
+                    },
+                },
+                self.front_door_call("pb-front-door"),
+                self.front_door_output(pb_receipt, "pb-front-door"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "write-pb-designer",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: Programs/DE100100.Designer.cs\n"
+                            "+this.Name = \"DE100100\";\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "write-pb-designer",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "pb-smoke-only",
+                        "arguments": (
+                            "python skills/pb_to_csharp_migration_harness/scripts/smoke_check.py"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "pb-smoke-only",
+                        "output": "Exit code: 0\nsmoke passed",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        row = next(
+            row for row in audit.skills if row["name"] == "pb-to-csharp-migration-harness"
+        )
+
+        self.assertTrue(row["required"])
+        self.assertEqual(row["status"], "considered")
+        self.assertEqual(row["acceptance"]["status"], "missing_outputs")
+        self.assertIn(
+            "pb-to-csharp-migration-harness",
+            audit.usage_summary["selected_not_executed_skills"],
+        )
+        self.assertIn(
+            "pb-to-csharp-migration-harness",
+            audit.coverage["required_unaccepted_skill_names"],
+        )
+        self.assertIn(
+            "pb-to-csharp-migration-harness",
+            {
+                item["name"]
+                for item in audit.usage_summary["required_missing_or_unaccepted"]
+            },
+        )
+        self.assertTrue(
+            any(
+                issue["skill"] == "pb-to-csharp-migration-harness"
+                and issue["status"] == "missing_post_write_migration_verification"
+                and issue["severity"] == "P1"
+                for issue in audit.issues
+            )
+        )
+
+    def test_pb_migration_verifier_before_write_is_missing_execution_proof(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Migrate the GWERP PBL DataWindow to a C# WinForms Designer "
+                            "screen using DevExpress and KoneLib."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "verify-before-write",
+                        "arguments": (
+                            "python -c \"from src.skills.pb_to_csharp_migration import "
+                            "verify_migration_generated_csharp_style; "
+                            "verify_migration_generated_csharp_style('Programs/DE100100.cs')\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-before-write",
+                        "output": "Exit code: 0\nverification passed",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "write-after-verifier",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: Programs/DE100100.cs\n"
+                            "+LoadDataWindow();\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "write-after-verifier",
+                        "output": "Done!",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "pb-to-csharp-migration-harness"
+                and issue["status"] == "missing_post_write_migration_verification"
+                and issue["severity"] == "P1"
+                for issue in audit.issues
+            )
+        )
+
+    def test_pb_migration_verifier_after_write_satisfies_execution_proof(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Migrate this PowerBuilder DataWindow to a C# WinForms Designer "
+                            "screen with DevExpress."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "write-before-verifier",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: Programs/DE100100.Designer.cs\n"
+                            "+this.gridView1.OptionsView.ShowGroupPanel = false;\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "write-before-verifier",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "verify-after-write",
+                        "arguments": (
+                            "python -c \"from src.skills.pb_to_csharp_migration import "
+                            "orchestrate_pb_migration_validation; "
+                            "orchestrate_pb_migration_validation('Programs/DE100100.Designer.cs')\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-after-write",
+                        "output": "Exit code: 0\nvalidation passed",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        row = next(
+            row for row in audit.skills if row["name"] == "pb-to-csharp-migration-harness"
+        )
+
+        self.assertTrue(row["required"])
+        self.assertEqual(row["status"], "applied")
+        self.assertEqual(row["acceptance"]["status"], "passed")
+        self.assertNotIn(
+            "pb-to-csharp-migration-harness",
+            audit.usage_summary["selected_not_executed_skills"],
+        )
+        self.assertNotIn(
+            "pb-to-csharp-migration-harness",
+            audit.coverage["required_unaccepted_skill_names"],
+        )
+        self.assertFalse(
+            any(
+                issue["skill"] == "pb-to-csharp-migration-harness"
+                and issue["status"] == "missing_post_write_migration_verification"
+                for issue in audit.issues
+            )
+        )
+
+    def test_unrelated_csharp_write_does_not_require_pb_migration_verifier(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Update the C# logging message in Worker.cs.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "write-unrelated-csharp",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: src/Worker.cs\n"
+                            "-Log(\"old\");\n+Log(\"new\");\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "write-unrelated-csharp",
+                        "output": "Done!",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        row = next(
+            row for row in audit.skills if row["name"] == "pb-to-csharp-migration-harness"
+        )
+
+        self.assertFalse(row["required"])
+        self.assertFalse(
+            any(issue["skill"] == "pb-to-csharp-migration-harness" for issue in audit.issues)
+        )
+
+    def test_pb_generic_database_migration_with_csharp_does_not_trigger(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Migrate the generic database layer to C# services.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "write-db-migration",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: src/DatabaseMigration.cs\n"
+                            "+RunMigration();\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "write-db-migration",
+                        "output": "Done!",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        row = next(
+            row for row in audit.skills if row["name"] == "pb-to-csharp-migration-harness"
+        )
+
+        self.assertFalse(row["required"])
+        self.assertFalse(audit.usage_summary["pb_migration_evidence"]["contextual"])
+
+    def test_pb_echo_and_prose_verifier_spoofs_are_rejected(self):
+        spoof_calls = [
+            {
+                "type": "function_call",
+                "name": "shell_command",
+                "call_id": "spoof",
+                "arguments": (
+                    "echo verify_migration_generated_csharp_style "
+                    "Programs/DE100100.cs"
+                ),
+            },
+            {
+                "type": "function_call",
+                "name": "text",
+                "call_id": "spoof",
+                "arguments": (
+                    "Verifier orchestrate_pb_migration_validation passed for "
+                    "Programs/DE100100.cs"
+                ),
+            },
+        ]
+        for spoof_call in spoof_calls:
+            with self.subTest(name=spoof_call["name"]):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Migrate the PowerBuilder DataWindow to C#.",
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "apply_patch",
+                                "call_id": "write-before-spoof",
+                                "arguments": (
+                                    "*** Begin Patch\n*** Update File: Programs/DE100100.cs\n"
+                                    "+LoadData();\n*** End Patch"
+                                ),
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call_output",
+                                "call_id": "write-before-spoof",
+                                "output": "Done!",
+                            },
+                        },
+                        {"type": "response_item", "payload": spoof_call},
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call_output",
+                                "call_id": "spoof",
+                                "output": "Exit code: 0",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertFalse(
+                    audit.usage_summary["pb_migration_evidence"]["verifier_executed"]
+                )
+                self.assertIn(
+                    "pb-to-csharp-migration-harness",
+                    audit.coverage["required_unaccepted_skill_names"],
+                )
+
+    def test_pb_nested_apply_patch_is_detected_as_relevant_write(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Migrate the GWERP SRD screen to C# WinForms.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "functions.exec",
+                        "call_id": "nested-write",
+                        "arguments": (
+                            "const result = await tools.apply_patch(\"*** Begin Patch\\n"
+                            "*** Update File: Programs/DE100101.cs\\n+LoadData();\\n"
+                            "*** End Patch\");\\ntext(result);"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "nested-write",
+                        "output": "Script completed",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["required"])
+        self.assertEqual(evidence["written_targets"], ["programs/de100101.cs"])
+        self.assertFalse(evidence["verifier_executed"])
+
+    def test_global_memory_shortcut_requires_fresh_underspecified_direction_intent(self):
+        cases = {
+            "fresh_dashboard_direction": (
+                "신규 재고 입출고 관리 대시보드의 방향과 범위, 선택지를 먼저 잡아줘.",
+                True,
+            ),
+            "existing_code_diagnosis": (
+                "PopSendMail 메일 발송 오류 원인을 기존 코드에서 확인해줘.",
+                False,
+            ),
+            "specific_designer_edit": (
+                "SA100100.Designer.cs에서 기존 컨트롤의 TabIndex 순서만 수정해줘.",
+                False,
+            ),
+            "sql_formatting": (
+                "이 SELECT와 JOIN 별칭을 기존 SQL 스타일대로 정리해줘.",
+                False,
+            ),
+        }
+        for label, (request, expected_shortcut) in cases.items():
+            with self.subTest(label=label):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": request,
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": (
+                                    "Get-Content -Path "
+                                    "'C:\\Users\\KONEIT\\.codex\\memories\\MEMORY.md'"
+                                ),
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+                shortcut = any(
+                    issue["status"] == "global_memory_shortcut_without_brainstorm_gate"
+                    for issue in audit.issues
+                )
+
+                self.assertEqual(shortcut, expected_shortcut)
+
+    def test_correction_invalidating_completion_updates_completion_guard(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "메일 발송 설정 오류를 봐줘.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "이 화면은 SMTP 앱 비밀번호 설정입니다.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "완료."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "저건 웹훅인데.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "맞습니다. 제가 잘못 안내했습니다.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "정정 완료."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        guard = audit.postmortem["completion_guard"]
+
+        self.assertEqual(guard["status"], "failed")
+        self.assertIn("completion_invalidated_by_same_task_correction", guard["reasons"])
+        self.assertIn("corrected_completion_evidence_missing", guard["reasons"])
+        self.assertEqual(guard["pending_correction_count"], 1)
+
+    def test_corrected_implementation_and_fresh_verification_clear_completion_guard(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "The implementation keeps `retired_flag`.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Use `canonical_flag`, not `retired_flag`.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": "I was wrong. I will replace the retired flag.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "corrected-write",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: sample.py\n"
+                            "-retired_flag = True\n+canonical_flag = True\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "corrected-write",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "corrected-test",
+                        "arguments": "python -m unittest tests.test_sample",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "corrected-test",
+                        "output": "Exit code: 0\nOK",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "objective": "Apply the corrected flag contract",
+                            "status": "complete",
+                        },
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Corrected and verified."},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        issue = next(
+            issue
+            for issue in audit.issues
+            if issue["status"] == "premature_completion_corrected_after_task_complete"
+        )
+
+        self.assertTrue(issue["corrected_completion_evidence"])
+        self.assertEqual(audit.postmortem["completion_guard"]["status"], "passed")
+
+    def test_threshold_token_gate_is_required_even_for_sql_specialist_scope(self):
+        token_count = {
+            "type": "response_item",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {"total_tokens": 250_000},
+                    "last_token_usage": {"input_tokens": 120_000},
+                    "model_context_window": 200_000,
+                },
+            },
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Format this SQL: SELECT A.ID FROM T A ORDER BY A.ID",
+                    },
+                },
+                token_count,
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        row = next(skill for skill in audit.skills if skill["name"] == "token-optimizer")
+        summary = audit.usage_summary["token_optimizer"]
+
+        self.assertTrue(audit.postmortem["token_gate"]["required"])
+        self.assertTrue(row["required"])
+        self.assertEqual(row["token_optimizer_status"], "blocked")
+        self.assertEqual(row["acceptance"]["status"], "missing_application")
+        self.assertIn("token-optimizer", audit.coverage["required_missing_skill_names"])
+        self.assertIn("token-optimizer", audit.coverage["required_unaccepted_skill_names"])
+        self.assertTrue(summary["required"])
+        self.assertEqual(summary["acceptance_status"], "missing_application")
+
+    def test_threshold_token_gate_accepts_runtime_used_and_passthrough_evidence(self):
+        token_count = {
+            "type": "response_item",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {"total_tokens": 250_000},
+                    "last_token_usage": {"input_tokens": 120_000},
+                    "model_context_window": 200_000,
+                },
+            },
+        }
+        for status in ["used", "passthrough"]:
+            with self.subTest(status=status):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Format this SQL: SELECT A.ID FROM T A ORDER BY A.ID",
+                            },
+                        },
+                        token_count,
+                        *self.runtime_optimizer_events(status, f"sql-{status}"),
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+                row = next(
+                    skill for skill in audit.skills if skill["name"] == "token-optimizer"
+                )
+
+                self.assertTrue(row["required"])
+                self.assertEqual(row["token_optimizer_status"], status)
+                self.assertEqual(row["acceptance"]["status"], "passed")
+                self.assertNotIn(
+                    "token-optimizer", audit.coverage["required_unaccepted_skill_names"]
+                )
+
+    def test_pb_legitimate_nested_shell_verifier_with_output_targets_passes(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Migrate the PowerBuilder SRW screen to C# WinForms.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "write-before-nested-verifier",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: Programs/DE100102.cs\n"
+                            "+LoadData();\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "write-before-nested-verifier",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "functions.exec",
+                        "call_id": "nested-verifier",
+                        "arguments": (
+                            "const result = await tools.shell_command({command: "
+                            "\"python -c \\\"from src.skills.pb_to_csharp_migration import "
+                            "orchestrate_pb_migration_validation; "
+                            "orchestrate_pb_migration_validation()\\\"\"}); "
+                            "text(result);"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "nested-verifier",
+                        "output": json.dumps(
+                            {
+                                "status": "passed",
+                                "verified_target_paths": ["Programs/DE100102.cs"],
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        row = next(
+            row for row in audit.skills if row["name"] == "pb-to-csharp-migration-harness"
+        )
+
+        self.assertEqual(row["status"], "applied")
+        self.assertEqual(row["acceptance"]["status"], "passed")
+
+    def test_pb_verifier_for_unrelated_target_is_rejected(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Migrate the PBL DataWindow screen to C# WinForms.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "write-target-a",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: Programs/TargetA.cs\n"
+                            "+LoadData();\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "write-target-a",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "verify-target-b",
+                        "arguments": (
+                            "python -c \"from src.skills.pb_to_csharp_migration import "
+                            "verify_migration_generated_csharp_style; "
+                            "verify_migration_generated_csharp_style('Programs/TargetB.cs')\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "verify-target-b",
+                        "output": "Exit code: 0",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(audit.usage_summary["pb_migration_evidence"]["verifier_executed"])
+        self.assertIn(
+            "pb-to-csharp-migration-harness",
+            audit.coverage["required_unaccepted_skill_names"],
+        )
+
+    def test_pb_failed_verifier_output_is_rejected(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Migrate the PBD DataWindow screen to C# WinForms.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "write-before-failed-verifier",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: Programs/DE100103.cs\n"
+                            "+LoadData();\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "write-before-failed-verifier",
+                        "output": "Done!",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "failed-verifier",
+                        "arguments": (
+                            "python -c \"from src.skills.pb_to_csharp_migration import "
+                            "orchestrate_pb_migration_validation; "
+                            "orchestrate_pb_migration_validation('Programs/DE100103.cs')\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "failed-verifier",
+                        "output": "Exit code: 1\nvalidation failed",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(audit.usage_summary["pb_migration_evidence"]["verifier_executed"])
+        self.assertIn(
+            "pb-to-csharp-migration-harness",
+            {
+                item["name"]
+                for item in audit.usage_summary["required_missing_or_unaccepted"]
+            },
+        )
+
+    @staticmethod
+    def pb_write_events(target, *, user_text=None, call_id="pb-write"):
+        return [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": user_text
+                    or "Migrate the PowerBuilder DataWindow screen to C# WinForms.",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "apply_patch",
+                    "call_id": call_id,
+                    "arguments": (
+                        f"*** Begin Patch\n*** Update File: {target}\n"
+                        "+LoadData();\n*** End Patch"
+                    ),
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": "Done!",
+                },
+            },
+        ]
+
+    def test_pb_verifier_masked_command_and_failure_text_are_rejected(self):
+        valid_source = (
+            "from src.skills.pb_to_csharp_migration import "
+            "orchestrate_pb_migration_validation; "
+            "orchestrate_pb_migration_validation('Programs/Masked.cs')"
+        )
+        cases = [
+            (
+                f'python -c "{valid_source}"; Write-Output masked',
+                "Exit code: 0",
+                False,
+            ),
+            (
+                f'python -c "{valid_source}"',
+                "Exit code: 0\nvalidation failed: blocked by style error",
+                True,
+            ),
+        ]
+        for command, output, attempted in cases:
+            with self.subTest(command=command, output=output):
+                path = self.write_session(
+                    [
+                        *self.pb_write_events("Programs/Masked.cs"),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "call_id": "masked-verifier",
+                                "arguments": command,
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call_output",
+                                "call_id": "masked-verifier",
+                                "output": output,
+                            },
+                        },
+                    ]
+                )
+
+                evidence = analyze_session_skills(path).usage_summary[
+                    "pb_migration_evidence"
+                ]
+
+                self.assertEqual(evidence["verifier_attempted"], attempted)
+                self.assertFalse(evidence["verifier_executed"])
+
+    def test_pb_verifier_same_basename_in_different_directories_is_rejected(self):
+        path = self.write_session(
+            [
+                *self.pb_write_events("Programs/A/Shared.cs"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "wrong-shared-target",
+                        "arguments": (
+                            "python -c \"from src.skills.pb_to_csharp_migration import "
+                            "verify_migration_generated_csharp_style; "
+                            "verify_migration_generated_csharp_style('Programs/B/Shared.cs')\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "wrong-shared-target",
+                        "output": "Exit code: 0",
+                    },
+                },
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["verifier_attempted"])
+        self.assertFalse(evidence["verifier_executed"])
+
+    def test_pb_blocked_front_door_route_is_correlated_but_failed_spoof_is_not(self):
+        receipt = build_kh_front_door(
+            "Migrate a PowerBuilder DataWindow screen to C# WinForms.",
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+        blocked_path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Continue the current routed edit.",
+                    },
+                },
+                self.front_door_call("blocked-pb-front-door"),
+                self.front_door_output(receipt, "blocked-pb-front-door", exit_code=3),
+                *self.pb_write_events(
+                    "Programs/BlockedRoute.cs",
+                    user_text="Continue the current routed edit.",
+                    call_id="blocked-route-write",
+                )[1:],
+            ]
+        )
+
+        blocked_evidence = analyze_session_skills(blocked_path).usage_summary[
+            "pb_migration_evidence"
+        ]
+        self.assertTrue(blocked_evidence["routed"])
+        self.assertTrue(blocked_evidence["required"])
+
+        spoof_path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Update the C# logging text in Worker.cs.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "failed-arbitrary-tool",
+                        "arguments": "python -c \"raise SystemExit(1)\"",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "failed-arbitrary-tool",
+                        "output": f"Exit code: 1\n{json.dumps(receipt)}",
+                    },
+                },
+                *self.pb_write_events(
+                    "src/Worker.cs",
+                    user_text="Update the C# logging text in Worker.cs.",
+                    call_id="unrelated-after-spoof",
+                )[1:],
+            ]
+        )
+
+        spoof_evidence = analyze_session_skills(spoof_path).usage_summary[
+            "pb_migration_evidence"
+        ]
+        self.assertFalse(spoof_evidence["routed"])
+        self.assertFalse(spoof_evidence["required"])
+
+    def test_pb_verbose_blocked_route_preserves_continuations_and_nested_writes(self):
+        receipt = build_kh_front_door(
+            "Migrate a PowerBuilder DataWindow screen to C# WinForms Designer.",
+            project=Path(__file__).resolve().parents[1],
+        ).to_summary_dict()
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Migrate the PowerBuilder DataWindow screen to C# WinForms "
+                            "with DevExpress."
+                        ),
+                    },
+                },
+                self.front_door_call("verbose-blocked-pb", "verbose-summary"),
+                self.front_door_output(receipt, "verbose-blocked-pb", exit_code=3),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Keep the existing event names in the correction.",
+                    },
+                },
+                *self.pb_write_events(
+                    "Programs/Migrated/DE200100.cs",
+                    user_text="Keep the existing event names in the correction.",
+                    call_id="verbose-nested-code-write",
+                )[1:],
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Also align the nested Designer layout.",
+                    },
+                },
+                *self.pb_write_events(
+                    "Programs/Migrated/Views/DE200100.Designer.cs",
+                    user_text="Also align the nested Designer layout.",
+                    call_id="verbose-nested-designer-write",
+                )[1:],
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["routed"])
+        self.assertTrue(evidence["contextual"])
+        self.assertTrue(evidence["required"])
+        self.assertEqual(
+            evidence["written_targets"],
+            [
+                "programs/migrated/de200100.cs",
+                "programs/migrated/views/de200100.designer.cs",
+            ],
+        )
+
+    def test_pb_static_const_front_door_command_is_correlated(self):
+        receipt = build_kh_front_door(
+            "Migrate a PowerBuilder DataWindow screen to C# WinForms.",
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+        command = (
+            "python C:\\kh-uaf\\skills\\always_on_front_door\\scripts\\front_door.py "
+            "--prompt-file C:\\Temp\\kh-front-door-prompt.txt --micro-summary "
+            "--strict-execution-gate"
+        )
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Continue the already routed screen correction.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "functions.exec",
+                        "call_id": "const-front-door-command",
+                        "input": (
+                            f"const command = {json.dumps(command)}; "
+                            "const result = await tools.shell_command({command: command}); "
+                            "text(result);"
+                        ),
+                    },
+                },
+                self.front_door_exec_output(
+                    receipt,
+                    "const-front-door-command",
+                    exit_code=3,
+                ),
+                *self.pb_write_events(
+                    "Programs/ConstRoute.cs",
+                    user_text="Continue the already routed screen correction.",
+                    call_id="const-route-write",
+                )[1:],
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["routed"])
+        self.assertFalse(evidence["contextual"])
+        self.assertTrue(evidence["required"])
+        self.assertEqual(evidence["written_targets"], ["programs/constroute.cs"])
+
+    def test_pb_nested_add_content_is_detected_as_relevant_write(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Migrate the PBL screen to C# WinForms.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "functions.exec",
+                        "call_id": "nested-add-content",
+                        "arguments": (
+                            "const result = await tools.shell_command({command: "
+                            "\"Add-Content -Path 'Programs/NestedWrite.cs' "
+                            "-Value 'LoadData();'\"}); text(result);"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "nested-add-content",
+                        "output": "Script completed",
+                    },
+                },
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["required"])
+        self.assertEqual(evidence["written_targets"], ["programs/nestedwrite.cs"])
+
+    def test_pb_old_turn_does_not_contaminate_unrelated_current_csharp_edit(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Migrate the PowerBuilder DataWindow to C# WinForms.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "task_complete", "last_agent_message": "Done."},
+                },
+                *self.pb_write_events(
+                    "src/Worker.cs",
+                    user_text="Change the current C# logging message only.",
+                    call_id="current-csharp-write",
+                ),
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertFalse(evidence["contextual"])
+        self.assertFalse(evidence["required"])
+
+    def test_pb_failed_correlated_verifier_is_recorded_as_attempted(self):
+        path = self.write_session(
+            [
+                *self.pb_write_events("Programs/FailedAttempt.cs"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "failed-attempt",
+                        "arguments": (
+                            "python -c \"from src.skills.pb_to_csharp_migration import "
+                            "orchestrate_pb_migration_validation; "
+                            "orchestrate_pb_migration_validation('Programs/FailedAttempt.cs')\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "failed-attempt",
+                        "output": "Exit code: 1\nvalidation failed",
+                    },
+                },
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["verifier_attempted"])
+        self.assertFalse(evidence["verifier_executed"])
+
+    def test_pb_fake_python_module_verifier_is_rejected(self):
+        path = self.write_session(
+            [
+                *self.pb_write_events("Programs/FakeModule.cs"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "fake-module",
+                        "arguments": (
+                            "python -m tools.orchestrate_pb_migration_validation "
+                            "Programs/FakeModule.cs"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "fake-module",
+                        "output": "Exit code: 0",
+                    },
+                },
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertFalse(evidence["verifier_attempted"])
+        self.assertFalse(evidence["verifier_executed"])
+
+    def test_pb_legitimate_python_c_verifier_with_target_metadata_passes(self):
+        path = self.write_session(
+            [
+                *self.pb_write_events("Programs/MetadataBound.cs"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "metadata-bound-verifier",
+                        "arguments": (
+                            "python -c \"from src.skills.pb_to_csharp_migration import "
+                            "orchestrate_pb_migration_validation; "
+                            "orchestrate_pb_migration_validation()\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "metadata-bound-verifier",
+                        "output": json.dumps(
+                            {
+                                "status": "passed",
+                                "verified_target_paths": [
+                                    "Programs/MetadataBound.cs"
+                                ],
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        evidence = audit.usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["verifier_attempted"])
+        self.assertTrue(evidence["verifier_executed"])
+        row = next(
+            row for row in audit.skills if row["name"] == "pb-to-csharp-migration-harness"
+        )
+        self.assertEqual(row["acceptance"]["status"], "passed")
+
+    def test_pb_verifier_dead_or_rebound_ast_calls_are_rejected(self):
+        commands = [
+            (
+                "dead-expression",
+                "from src.skills.pb_to_csharp_migration import "
+                "verify_migration_generated_csharp_style as verify; "
+                "False and verify('Programs/AstGuard.cs')",
+            ),
+            (
+                "rebound-import",
+                "from src.skills.pb_to_csharp_migration import "
+                "verify_migration_generated_csharp_style as verify; "
+                "verify = lambda *args: None; verify('Programs/AstGuard.cs')",
+            ),
+        ]
+        for label, source in commands:
+            with self.subTest(label=label):
+                path = self.write_session(
+                    [
+                        *self.pb_write_events("Programs/AstGuard.cs"),
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "call_id": f"ast-{label}",
+                                "arguments": f'python -c "{source}"',
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call_output",
+                                "call_id": f"ast-{label}",
+                                "output": "Exit code: 0",
+                            },
+                        },
+                    ]
+                )
+
+                evidence = analyze_session_skills(path).usage_summary[
+                    "pb_migration_evidence"
+                ]
+
+                self.assertFalse(evidence["verifier_attempted"])
+                self.assertFalse(evidence["verifier_executed"])
+
+    def test_pb_explicit_failure_output_overrides_self_asserted_success(self):
+        path = self.write_session(
+            [
+                *self.pb_write_events("Programs/Contradictory.cs"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "contradictory-verifier",
+                        "arguments": (
+                            "python -c \"from src.skills.pb_to_csharp_migration import "
+                            "verify_migration_generated_csharp_style; "
+                            "verify_migration_generated_csharp_style("
+                            "'Programs/Contradictory.cs')\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "contradictory-verifier",
+                        "output": json.dumps(
+                            {
+                                "status": "passed",
+                                "verified_target_paths": [
+                                    "Programs/Contradictory.cs"
+                                ],
+                                "message": "validation failed: blocked by style error",
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["verifier_attempted"])
+        self.assertFalse(evidence["verifier_executed"])
+
+    def test_pb_relative_target_rejects_verification_from_another_checkout(self):
+        path = self.write_session(
+            [
+                *self.pb_write_events("Programs/CheckoutBound.cs"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "wrong-checkout-verifier",
+                        "arguments": (
+                            "python -c \"from src.skills.pb_to_csharp_migration import "
+                            "orchestrate_pb_migration_validation; "
+                            "orchestrate_pb_migration_validation()\""
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "wrong-checkout-verifier",
+                        "output": json.dumps(
+                            {
+                                "status": "passed",
+                                "verified_target_paths": [
+                                    "D:/other-checkout/Programs/CheckoutBound.cs"
+                                ],
+                            }
+                        ),
+                    },
+                },
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["verifier_attempted"])
+        self.assertFalse(evidence["verifier_executed"])
+
+    def test_pb_exec_decoy_front_door_command_literal_is_rejected(self):
+        receipt = build_kh_front_door(
+            "Migrate a PowerBuilder DataWindow screen to C# WinForms.",
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Continue the current C# correction.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "functions.exec",
+                        "call_id": "decoy-front-door",
+                        "input": (
+                            "const decoy = {command: \"python C:/kh-uaf/skills/"
+                            "always_on_front_door/scripts/front_door.py --micro-summary\"}; "
+                            "const result = await tools.shell_command({command: "
+                            "\"Write-Output spoof\"}); text(result);"
+                        ),
+                    },
+                },
+                self.front_door_exec_output(
+                    receipt,
+                    "decoy-front-door",
+                    exit_code=3,
+                ),
+                *self.pb_write_events(
+                    "Programs/DecoyRoute.cs",
+                    user_text="Continue the current C# correction.",
+                    call_id="decoy-route-write",
+                )[1:],
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertFalse(evidence["routed"])
+        self.assertFalse(evidence["required"])
+
+    def test_pb_verbose_blocked_packet_requires_recorded_block_contract(self):
+        base = build_kh_front_door(
+            "Migrate a PowerBuilder DataWindow screen to C# WinForms Designer.",
+            project=Path(__file__).resolve().parents[1],
+        ).to_summary_dict()
+        recorded = dict(base)
+        recorded["execution_gate"] = {
+            "can_execute": True,
+            "status": "execution_allowed_after_selected_skill_setup",
+        }
+        recorded["execution_authorization"] = {
+            "must_stop_before_execution": True,
+            "status": "blocked_by_pending_immediate_skill_gate",
+        }
+        recorded["required_next_action_codes"] = [
+            "stop_before_task_work",
+            "apply_immediate_next_skills",
+        ]
+        malformed = dict(recorded)
+        malformed["execution_gate"] = {"can_execute": False}
+        malformed["execution_authorization"] = {
+            "must_stop_before_execution": True,
+        }
+        malformed.pop("required_next_action_codes", None)
+
+        for label, packet, expected in [
+            ("malformed", malformed, False),
+            ("recorded-019faba1", recorded, True),
+        ]:
+            with self.subTest(label=label):
+                call_id = f"verbose-{label}"
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Continue the routed screen correction.",
+                            },
+                        },
+                        self.front_door_call(call_id, "verbose-summary"),
+                        self.front_door_output(packet, call_id, exit_code=3),
+                        *self.pb_write_events(
+                            "Programs/VerboseContract.cs",
+                            user_text="Continue the routed screen correction.",
+                            call_id=f"write-{label}",
+                        )[1:],
+                    ]
+                )
+
+                evidence = analyze_session_skills(path).usage_summary[
+                    "pb_migration_evidence"
+                ]
+
+                self.assertEqual(evidence["routed"], expected)
+                self.assertEqual(evidence["required"], expected)
+
+    def test_pb_readme_csharp_mention_is_not_a_write_target(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Document the PowerBuilder to C# WinForms migration target."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "call_id": "readme-only-write",
+                        "arguments": (
+                            "*** Begin Patch\n*** Update File: README.md\n"
+                            "+Generated target: Programs/Documented.cs\n*** End Patch"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": "readme-only-write",
+                        "output": "Done!",
+                    },
+                },
+            ]
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertFalse(evidence["required"])
+        self.assertEqual(evidence["written_targets"], [])
+
+    def test_pb_actual_019faba1_wrapper_and_patch_shapes_are_preserved(self):
+        project = "C:\\Users\\KONEIT\\Desktop\\Source\\TY\\C_KONE110_1"
+        source = (
+            project
+            + "\\Programs\\40.생산(PR)\\Konesystem.PR01\\PR900100.cs"
+        )
+        designer = (
+            project
+            + "\\Programs\\40.생산(PR)\\Konesystem.PR01\\PR900100.Designer.cs"
+        )
+        packet = {
+            "classification": {
+                "complexity": "heavy",
+                "confidence": 0.88,
+                "domain": "software",
+                "recommended_execution": "role_dag",
+            },
+            "execution_authorization": {
+                "allowed_next_actions_only": [
+                    "read_selected_skill_docs",
+                    "create_or_update_goal_state",
+                    "record_large_work_orchestration_bundle",
+                    "read_immediate_skill_docs_only",
+                    "record_immediate_skill_applied_skipped_or_blocked_evidence",
+                ],
+                "can_execute_now": False,
+                "can_start_task_work": False,
+                "gate_can_execute": False,
+                "must_stop_before_execution": True,
+                "pending_immediate_next_skills": [
+                    "goal-state-harness",
+                    "pb-to-csharp-migration-harness",
+                    "workflow-usability-harness",
+                    "host-agent-orchestration",
+                ],
+                "status": "blocked_by_execution_gate",
+                "strict_exit_code_when_blocked": 3,
+            },
+            "execution_gate": {
+                "allowed_setup_actions": [
+                    "read_selected_skill_docs",
+                    "create_or_update_goal_state",
+                    "record_large_work_orchestration_bundle",
+                ],
+                "blocked_actions": [
+                    "broad_source_exploration",
+                    "implementation",
+                    "file_writes",
+                ],
+                "can_execute": False,
+                "required_before_execution": [
+                    "goal-state-harness",
+                    "large_work_orchestration_bundle",
+                    "skill_statuses",
+                ],
+                "status": "blocked_until_large_work_preflight",
+            },
+            "front_door_status": "ok",
+            "host": "codex",
+            "immediate_next_skills": [
+                "goal-state-harness",
+                "pb-to-csharp-migration-harness",
+                "workflow-usability-harness",
+                "host-agent-orchestration",
+            ],
+            "plugin_route": {"route": "single"},
+            "project": project,
+            "required_next_actions": [
+                (
+                    "BLOCKING FRONT-DOOR RESULT: "
+                    "`execution_authorization.must_stop_before_execution=true`. "
+                    "Only the gate's allowed setup actions may run next; source "
+                    "exploration, implementation, file writes, DB writes, verification, "
+                    "subagent dispatch, and completion claims are invalid until required "
+                    "evidence exists."
+                ),
+                (
+                    "NEXT SKILL EXECUTION: apply `goal-state-harness`, "
+                    "`pb-to-csharp-migration-harness`, `workflow-usability-harness`, "
+                    "`host-agent-orchestration` now. Everything else in "
+                    "`selected_not_executed_skills` is deferred."
+                ),
+                (
+                    "HARD PRE-FLIGHT STOP: heavy or role_dag work cannot move into "
+                    "broad source exploration or file writes until "
+                    "large_work_orchestration_bundle evidence is recorded."
+                ),
+            ],
+            "runtime_applied_skills": [
+                "always-on-front-door",
+                "automatic-intake-harness",
+                "request-complexity-router",
+                "token-optimizer",
+            ],
+            "selected_not_executed_skills": [
+                "pb-to-csharp-migration-harness",
+                "workflow-usability-harness",
+            ],
+            "skill_status_summary": {
+                "pb-to-csharp-migration-harness": "pending_immediate_execution"
+            },
+            "token_optimizer_decision": {
+                "token_optimizer_status": "passthrough"
+            },
+        }
+        front_door_command = (
+            "python \"C:\\Users\\KONEIT\\.codex\\plugins\\cache\\"
+            "kh-uaf-marketplace\\kh-uaf\\2.9.136\\skills\\always_on_front_door\\"
+            "scripts\\front_door.py\" --prompt \"Migrate PowerBuilder prod_405 and "
+            "prod_005.pbl into PR900100 in the exact C_KONE110_1 project, preserving "
+            "TY KoneLib WinForms and DevExpress conventions, database contracts, UI "
+            "behavior, and verification.\" --project \""
+            + project
+            + "\" --host codex --verbose-summary --strict-execution-gate"
+        )
+
+        def patch_events(target, call_id):
+            patch = (
+                f"*** Begin Patch\n*** Delete File: {target}\n"
+                f"*** Add File: {target}\n+namespace Konesystem.PR01 {{ }}\n"
+                "*** End Patch"
+            )
+            return [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "exec",
+                        "call_id": call_id,
+                        "input": (
+                            f"const patch = {json.dumps(patch, ensure_ascii=False)};\n"
+                            "text(await tools.apply_patch(patch));\n"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": call_id,
+                        "output": [
+                            {
+                                "type": "input_text",
+                                "text": "Script completed\nWall time 3.1 seconds\nOutput:\n",
+                            },
+                            {"type": "input_text", "text": "{}"},
+                        ],
+                    },
+                },
+            ]
+
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "다음 큰작업인데 prod_405 / prod_005.pbl를 PR900100에 "
+                            "만들어야함. 넌 PR900100에만 집중."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call",
+                        "name": "exec",
+                        "call_id": "actual-front-door",
+                        "input": (
+                            "const r=await tools.shell_command({\n"
+                            f"  command: {json.dumps(front_door_command)},\n"
+                            "  workdir: \"C:\\\\Users\\\\KONEIT\\\\Desktop\\\\Source\\\\TY\",\n"
+                            "  timeout_ms: 120000\n"
+                            "});\ntext(r);\n"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "custom_tool_call_output",
+                        "call_id": "actual-front-door",
+                        "output": [
+                            {
+                                "type": "input_text",
+                                "text": "Script failed\nWall time 1.3 seconds\nOutput:\n",
+                            },
+                            {
+                                "type": "input_text",
+                                "text": (
+                                    "Script error:\nExit code: 1\nWall time: 1.2 seconds\n"
+                                    "Output:\n"
+                                    + json.dumps(packet, ensure_ascii=False, indent=2)
+                                ),
+                            },
+                        ],
+                    },
+                },
+                *patch_events(source, "actual-source-write"),
+                *patch_events(designer, "actual-designer-write"),
+            ]
+        )
+        session_lines = path.read_text(encoding="utf-8").splitlines()
+        metadata = json.loads(session_lines[0])
+        metadata["payload"]["cwd"] = "C:\\Users\\KONEIT\\Desktop\\Source\\TY"
+        path.write_text(
+            "\n".join(
+                [json.dumps(metadata, ensure_ascii=False), *session_lines[1:]]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        evidence = analyze_session_skills(path).usage_summary["pb_migration_evidence"]
+
+        self.assertTrue(evidence["required"])
+        self.assertTrue(evidence["routed"])
+        self.assertEqual(
+            evidence["written_targets"],
+            [
+                "c:/users/koneit/desktop/source/ty/c_kone110_1/programs/"
+                "40.생산(pr)/konesystem.pr01/pr900100.cs",
+                "c:/users/koneit/desktop/source/ty/c_kone110_1/programs/"
+                "40.생산(pr)/konesystem.pr01/pr900100.designer.cs",
+            ],
+        )
+        self.assertFalse(evidence["verifier_executed"])
 
 
 if __name__ == "__main__":

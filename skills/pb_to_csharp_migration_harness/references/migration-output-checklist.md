@@ -15,12 +15,13 @@ Use this checklist before handoff or completion.
 ## Analysis And Mapping
 
 - Confirmed, inferred, blocked, and proposal-only facts are separate.
+- PB/SRU/SRD/DataWindow and target-project evidence governs behavior, captions, control roles, binding, events, and DB mapping; no UX, business field, control, or helper is invented.
 - Event/action to C# method mapping is complete.
 - Field to editor/`BindingField`/grid/result mapping is complete.
 - Caller value to SP parameter mapping is complete and ordered.
 - Derived values are listed as SP locals, not caller parameters.
 - SAVE row states, payload shape, write order, transaction, error, and logging behavior are documented.
-- A separate developer can implement without hidden chat context.
+- The handoff includes PB behavior, event flow, control-role map, field/`BindingField` map, SP/caller contract, proven-versus-inferred labels, unresolved gaps, and manual tests so a separate developer can implement without rediscovery.
 
 ## C# And Designer
 
@@ -28,6 +29,8 @@ Use this checklist before handoff or completion.
 - Missing identifiers use only packaged naming grammars.
 - One query path and one save path are used.
 - Provider fallback follows target wrapper, KoneLib, DevExpress, then WinForms from declared evidence.
+- Existing wrapper defaults, `Size`, `Location`, `Margin`, `MaximumSize`, `Visible`, and horizontal/vertical label alignment match a separately captured pre-edit Designer baseline unless an exact contract value plus registry-bound source/user evidence authorizes change.
+- Lookup, search, and detail roles use the evidence-backed wrapper/repository and exact `BindingField`; no text-control substitution remains.
 - No dependency was added, upgraded, or retargeted.
 - Designer members, initialization, containment, collections, bounds/layout, and `TabIndex` are explicit.
 - Within each independent container, located input controls follow row-major top-to-bottom/left-to-right order and have present, unique, contiguous increasing `TabIndex` values; labels and non-input controls are excluded. Different containers are validated independently and may restart their sequence.
@@ -46,7 +49,8 @@ Use this checklist before handoff or completion.
 - Evidence-backed composite business keys retain every raw key result field, emit the dedicated display alias, preserve component order, bind the visible grid `FieldName` to the display field, and hide raw identity columns unless source/UI evidence requires visibility.
 - A supplied display alias/caption is preserved; otherwise the established ordered business-key components use the packaged `<BASE>S` default. The display expression uses direct `+ '-' + FORMAT(..., '##0')` composition without unrequested `CASE`, `ISNULL`, `CONCAT`, casts, or null/type rewrites.
 - Repository editors are registered before `ColumnEdit` assignment.
-- Numeric fields use numeric editor behavior, not formatting alone.
+- Numeric fields follow SQL/result shape and use `RepositoryItemSpinEdit`, not GridColumn `DisplayFormat` alone.
+- `EnableAppearanceEvenRow` may be enabled, but no source-unbacked even-row color is assigned.
 
 ## Stored Procedures
 
@@ -62,7 +66,8 @@ Use this checklist before handoff or completion.
 - Parameter defaults are parsed with SQL string awareness; `OUTPUT`/`READONLY` inside literals are not options.
 - Normal SSMS `USE`/`GO`, Object comment, ANSI settings, and `GO` preamble are accepted before the metadata header.
 - Internal calculations and derived dates are local variables.
-- Raw search/date values cross the caller boundary.
+- Raw search/date values cross the caller boundary through established wrappers such as evidenced `YYYYMMDD` APIs; SP-owned defaults, date derivation, and wildcards remain in the SP.
+- Existing target-project clear/query/save helpers are used before generic assignments such as `DataSource = null`; no unnecessary DTO/helper abstraction is added.
 - Supplied predicates, literals, comments, calculations, result order, and write behavior are preserved.
 - Formatting verification and semantic-equivalence claims are separate.
 - Offline generation does not claim database parity.
@@ -82,7 +87,12 @@ Use this checklist before handoff or completion.
 ## Verification
 
 - Migration analysis verifier status is recorded when available.
-- C# style verifier status is recorded when C# is generated.
+- After every generated C# or Designer change, `verify_migration_generated_csharp_style` or `orchestrate_pb_migration_validation` is executed against exact target paths/digests with complete `expected_control_contracts`, and its status is recorded.
+- `expected_control_contracts` accounts for every selected-form member constructed in the sole class-member `InitializeComponent`, including custom wrappers/components. It is never silently omitted. An explicit empty list is accepted only with `no_control_contract_evidence.reason` and non-empty registry-bound `no_control_contract_evidence.evidence_refs`.
+- Every supplied contract-level or property-level evidence ID resolves through the structured `evidence_registry`; unused, malformed, duplicate, free-form, and undeclared-property references are blocked.
+- Existing Designer preservation binds a separately captured pre-edit `baseline_designer_path` and SHA-256. Source and Designer target paths are distinct, and the current Designer target is not reused as its own baseline.
+- Any protected KoneLib-default override has matching exact `properties` plus source/user provenance in `property_evidence` or `evidence_refs`; a repeated property value alone is not override authority.
+- Skill/reference reads and smoke checks are not counted as generated-file verifier execution.
 - Per-file Designer ownership scan and any dynamic-state exception evidence are recorded.
 - SP generation verifier status is recorded when SQL is generated.
 - SQL formatter/verifier status is recorded separately.

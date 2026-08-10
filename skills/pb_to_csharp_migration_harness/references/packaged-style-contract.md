@@ -18,6 +18,10 @@ Record these selections before generation:
 
 Use one value per decision and keep it stable across a generated screen. User-supplied target code may override a packaged default, but a local discovery run may not.
 
+## Source Authority
+
+Real PB/SRU/SRD/DataWindow artifacts and the supplied target project govern behavior, captions, control roles, binding, events, and database mapping. The packaged profile supplies style only. Do not invent UX, business fields, controls, or helpers when source evidence is absent; record the gap.
+
 ## Style Families
 
 ### Browse
@@ -155,9 +159,9 @@ Provider selection depends only on user-supplied dependency evidence:
 3. `devexpress`: DevExpress editors, grids, views, tabs, and layout controls when DevExpress is declared.
 4. `winforms`: standard WinForms controls when no richer provider is declared.
 
-For KoneLib, map logical controls to the corresponding `u_*` wrapper family and keep its binding/reset APIs. For DevExpress, use the existing referenced API generation, not the newest online API. For WinForms, replace `BindingField` with an explicit binding map when the control has no such property.
+For KoneLib, map logical controls to the corresponding `u_*` wrapper family and keep its binding/reset APIs. Lookup, search, and detail roles use the evidence-backed wrapper or repository and exact `BindingField`; a text editor is not a substitute. For DevExpress, use the existing referenced API generation, not the newest online API. For WinForms, replace `BindingField` with an explicit binding map when the control has no such property.
 
-Never add packages or inspect a project during normal generation. When dependency evidence is missing, select WinForms and record the lower-fidelity fallback.
+When the supplied target project is migration evidence, inspect only that project for available wrappers and APIs. Never add packages or inspect unrelated projects during normal generation. When dependency evidence is missing, select WinForms and record the lower-fidelity fallback.
 
 ## Designer Contract
 
@@ -186,6 +190,16 @@ For every supplied or generated editor, record:
 Within each independent container, located input controls follow row-major top-to-bottom/left-to-right visual order, and their `TabIndex` values must be present, unique, and contiguous increasing. Labels, grid columns, repositories, and other non-input controls do not participate in this check. Different containers are validated independently and may restart their sequence.
 
 Do not invent project-specific flags. Preserve them only when they are present in supplied source.
+
+### Executable Control Contracts
+
+Pass `expected_control_contracts` to `verify_migration_generated_csharp_style` for every generated-control verification. Each entry requires `instance_name` and `expected_type`; the type may be fully qualified or short. The inventory is fail-closed: every selected-form Designer member constructed in the sole ordinary class-member `InitializeComponent` requires exactly one entry, including custom target wrappers and components. Local functions and lookalike methods do not count as `InitializeComponent`. Optional `BindingField` and `properties` entries are exact Designer assignments, and every observed binding must be declared. Omitting the argument is a blocked contract gap. Pass an explicit empty list only when `no_control_contract_evidence` contains a non-empty evidence-backed `reason` and registry-bound `evidence_refs` proving that the generated files intentionally contain no mapped controls.
+
+Bind verification with the target code-behind path and SHA-256 arguments and, when a separate Designer input is supplied, its target path and SHA-256 arguments. The verifier reads each path, matches the digest, decodes UTF-8, and requires exact text equality. Code-behind and Designer role paths must be distinct. Every supplied `evidence_refs` and `property_evidence` value must be a unique evidence ID resolved through the structured `evidence_registry`, even when no protected default consumes it; `property_evidence` may name only a property declared in the same contract entry.
+
+KoneLib defaults are executable guards. A KoneLib `u_*` input must not explicitly set `Properties.AutoHeight = true`; `u_Label` keeps horizontal `Far` and vertical `Center` alignment; and generated views must not assign a custom `Appearance.EvenRow.BackColor`. An override requires both the matching exact value in `expected_control_contracts.properties` and explicit source/user provenance in that entry's `property_evidence` or `evidence_refs`. A repeated property value without provenance is rejected.
+
+Preserve wrapper defaults and existing `Size`, `Location`, `Margin`, `MaximumSize`, `Visible`, and horizontal/vertical label alignment unless an exact contract value and registry-bound source or user evidence authorize a change. For an existing target, bind the baseline path and SHA-256 arguments to a separately captured pre-edit Designer artifact. The current target Designer path cannot serve as its own baseline. `EnableAppearanceEvenRow` may be enabled without inventing an even-row color.
 
 ## Designer Ownership Boundary
 
@@ -278,6 +292,7 @@ It moves control creation, naming, tab order, and fixed grid registration out of
 - Do not whitelist tables, prefixes, domains, or field names. Source evidence supplies one key-value field, one or more sequence fields, and their exact order.
 - Apply every authoritative Layout Load default, not only the commonly visible `OptionsView` subset.
 - Numeric fields use a spin/numeric repository editor assigned through `ColumnEdit`.
+- Numeric classification follows authoritative SQL/result shape. Use `RepositoryItemSpinEdit`; GridColumn `DisplayFormat` is not a replacement.
 - Lookup fields use a lookup repository whose value/display members come from supplied evidence.
 - Button fields use a button repository and one explicit button event.
 - Boolean fields use a check repository when the selected provider supports it.
@@ -303,7 +318,8 @@ Rules:
 - Every procedure parameter maps to a caller value or an explicitly documented non-screen caller.
 - Keep parameter order synchronized between C# and SQL.
 - Internal counters, normalized values, derived dates, and calculation values are local `DECLARE` variables.
-- C# passes raw search/date values. SQL owns wildcard and date derivation.
+- C# passes raw search/date values through established target wrappers, including date text APIs such as `YYYYMMDD` when evidenced. SQL owns wildcard, default, and date derivation when target style evidence assigns that ownership there.
+- Reuse target-project clear, query, and save helpers before generic assignments such as setting a grid `DataSource` to `null`; do not introduce DTO/helper abstractions for simple caller values.
 - Do not add literal defaults, normalization blocks, or helper parameters without supplied evidence.
 - SELECT result fields exactly match C# bindings and `FieldName` values.
 - Composite display expressions preserve authoritative component order. The packaged direct style is `BASE + '-' + FORMAT(SEQUENCE, '##0')`, with `+ '-' + FORMAT(...)` repeated for each additional numeric sequence. Do not introduce `CASE`, `ISNULL`, `CONCAT`, casts, or other null/type rewrites without source evidence. `FORMAT` produces character output; the builder therefore requires character base-key and numeric sequence-key type evidence and never replaces the raw typed result fields.
@@ -374,6 +390,10 @@ The metadata parser accepts the normal SSMS `USE`/`GO`, Object block comment, `S
 - Dependency upgrades, invented custom-control flags, or API calls from a different library generation.
 
 ## Evidence Requirements
+
+After every generated C# or Designer change, execute `verify_migration_generated_csharp_style` or `orchestrate_pb_migration_validation` with complete `expected_control_contracts`, exact target paths/digests, a structured registry for every evidence reference, and a separately captured baseline path/digest when an existing Designer is being preserved. Reading this skill, reading a smoke test, or running only package smoke checks is not generated-file validation.
+
+The analysis-to-implementation handoff must record PB behavior, event flow, control-role map, field/`BindingField` map, SP/caller contract, proven-versus-inferred labels, unresolved gaps, and manual tests so a different agent can implement without rediscovery.
 
 A generated artifact is release-ready only when its evidence record includes:
 

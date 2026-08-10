@@ -9,6 +9,11 @@ SKILL_NAME = "pb-to-csharp-migration-harness"
 CONTRACT_ID = "pb-csharp-offline-generalized"
 
 
+def _write_utf8_artifact(path: Path, text: str) -> str:
+    path.write_text(text, encoding="utf-8", newline="")
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _complete_csharp_caller_artifact(method_body: str) -> str:
     return f"""public sealed class CallerEvidence
 {{
@@ -253,13 +258,88 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     grid_xml = generate_devexpress_grid_xml(grid_columns)
     csharp_path = output_dir / "CatalogBrowseForm.cs"
     designer_path = output_dir / "CatalogBrowseForm.Designer.cs"
+    baseline_designer_path = output_dir / "CatalogBrowseForm.baseline.Designer.cs"
+    unrelated_csharp_path = output_dir / "UnmappedWidget.cs"
+    misplaced_csharp_path = output_dir / "CatalogBrowseForm.misplaced.cs"
     sql_path = output_dir / "SP_CATALOG_SELECT.sql"
     grid_xml_path = output_dir / "CatalogBrowseGrid.xml"
     evidence_path = output_dir / "offline_generation_evidence.json"
-    grid_xml_path.write_text(grid_xml, encoding="utf-8")
+    unrelated_csharp = "public class UnmappedWidget {}"
+    misplaced_csharp = csharp.replace(
+        "InitializeComponent();",
+        'InitializeComponent(); this.txtFilterText.Name = "txtFilterText";',
+    )
+    csharp_sha256 = _write_utf8_artifact(csharp_path, csharp)
+    designer_sha256 = _write_utf8_artifact(designer_path, designer)
+    baseline_designer_sha256 = _write_utf8_artifact(baseline_designer_path, designer)
+    unrelated_csharp_sha256 = _write_utf8_artifact(
+        unrelated_csharp_path,
+        unrelated_csharp,
+    )
+    misplaced_csharp_sha256 = _write_utf8_artifact(
+        misplaced_csharp_path,
+        misplaced_csharp,
+    )
+    _write_utf8_artifact(grid_xml_path, grid_xml)
+    evidence_registry = {
+        "demo:generated-source": {
+            "evidence_id": "demo:generated-source",
+            "kind": "source",
+            "locator": "artifact://demo/CatalogBrowseForm.cs",
+            "sha256": csharp_sha256,
+        },
+        "demo:generated-designer": {
+            "evidence_id": "demo:generated-designer",
+            "kind": "source",
+            "locator": "artifact://demo/CatalogBrowseForm.Designer.cs",
+            "sha256": designer_sha256,
+        },
+        "demo:baseline-designer": {
+            "evidence_id": "demo:baseline-designer",
+            "kind": "source",
+            "locator": "artifact://demo/CatalogBrowseForm.baseline.Designer.cs",
+            "sha256": baseline_designer_sha256,
+        },
+        "demo:no-generated-controls": {
+            "evidence_id": "demo:no-generated-controls",
+            "kind": "user",
+            "locator": "user://demo/no-generated-controls",
+        },
+    }
+    control_contracts = [
+        {
+            "instance_name": "grdList",
+            "expected_type": "DevExpress.XtraGrid.GridControl",
+            "evidence_refs": ["demo:generated-designer"],
+        },
+        {
+            "instance_name": "gvwList",
+            "expected_type": "DevExpress.XtraGrid.Views.Grid.GridView",
+            "evidence_refs": ["demo:generated-designer"],
+        },
+        {
+            "instance_name": "colList_ENTITY_ID",
+            "expected_type": "DevExpress.XtraGrid.Columns.GridColumn",
+            "bindings": {"FieldName": "ENTITY_ID"},
+            "evidence_refs": ["demo:generated-designer"],
+        },
+        {
+            "instance_name": "colList_QUANTITY",
+            "expected_type": "DevExpress.XtraGrid.Columns.GridColumn",
+            "bindings": {"FieldName": "QUANTITY"},
+            "evidence_refs": ["demo:generated-designer"],
+        },
+        {
+            "instance_name": "rpsSpinAmt",
+            "expected_type": (
+                "DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit"
+            ),
+            "evidence_refs": ["demo:generated-designer"],
+        },
+    ]
     mapped = _validate_csharp_structure(contract, csharp)
     empty = _validate_csharp_structure(contract, "")
-    unrelated = _validate_csharp_structure(contract, "public class UnmappedWidget {}")
+    unrelated = _validate_csharp_structure(contract, unrelated_csharp)
     ownership = _validate_designer_ownership(contract, csharp)
     if not mapped["success"] or empty["success"] or unrelated["success"] or not ownership["success"]:
         raise RuntimeError("packaged C# structural rules do not distinguish mapped output")
@@ -278,25 +358,48 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
         form_class="CatalogBrowseForm",
         source_role="code-behind",
         result_fields=[item["field_name"] for item in grid_columns],
+        expected_control_contracts=control_contracts,
+        evidence_registry=evidence_registry,
+        target_source_path=str(csharp_path),
+        target_source_sha256=csharp_sha256,
+        target_designer_path=str(designer_path),
+        target_designer_sha256=designer_sha256,
+        baseline_designer_path=str(baseline_designer_path),
+        baseline_designer_sha256=baseline_designer_sha256,
         expected_grid_role="list",
         expected_grid_suffix="List",
         expected_grid_columns=grid_columns,
         layout_load_artifact_path=str(grid_xml_path),
     )
     runtime_unrelated = verify_migration_generated_csharp_style(
-        "public class UnmappedWidget {}",
+        unrelated_csharp,
         profile_evidence=profile,
         form_class="CatalogBrowseForm",
         source_role="code-behind",
+        expected_control_contracts=[],
+        no_control_contract_evidence={
+            "reason": "The unrelated negative fixture intentionally has no generated controls.",
+            "evidence_refs": ["demo:no-generated-controls"],
+        },
+        evidence_registry=evidence_registry,
+        target_source_path=str(unrelated_csharp_path),
+        target_source_sha256=unrelated_csharp_sha256,
     )
     runtime_misplaced = verify_migration_generated_csharp_style(
-        csharp.replace(
-            "InitializeComponent();",
-            'InitializeComponent(); this.txtFilterText.Name = "txtFilterText";',
-        ),
+        misplaced_csharp,
+        designer_source_text=designer,
         profile_evidence=profile,
         form_class="CatalogBrowseForm",
         source_role="code-behind",
+        result_fields=[item["field_name"] for item in grid_columns],
+        expected_control_contracts=control_contracts,
+        evidence_registry=evidence_registry,
+        target_source_path=str(misplaced_csharp_path),
+        target_source_sha256=misplaced_csharp_sha256,
+        target_designer_path=str(designer_path),
+        target_designer_sha256=designer_sha256,
+        baseline_designer_path=str(baseline_designer_path),
+        baseline_designer_sha256=baseline_designer_sha256,
     )
     caller_body = (
         'return dbClient.GetDataSetFromSP("SP_CATALOG_SELECT"\n'
@@ -1299,9 +1402,7 @@ END;
             )
         )
 
-    csharp_path.write_text(csharp, encoding="utf-8")
-    designer_path.write_text(designer, encoding="utf-8")
-    sql_path.write_text(sql, encoding="utf-8")
+    _write_utf8_artifact(sql_path, sql)
 
     evidence = {
         "schema_version": "1.0",
@@ -1340,6 +1441,16 @@ END;
             ],
             "misplaced_issue_codes": [
                 item["code"] for item in runtime_misplaced.metadata.get("issues", [])
+            ],
+            "target_artifact_binding": runtime_mapped.metadata[
+                "target_artifact_binding"
+            ],
+            "control_contracts": runtime_mapped.metadata["control_contracts"],
+            "control_evidence_registry": runtime_mapped.metadata[
+                "control_evidence_registry"
+            ],
+            "baseline_designer_preservation": runtime_mapped.metadata[
+                "baseline_designer_preservation"
             ],
             "sp_generation_contract": "passed" if sp_contract.success else "blocked",
             "branch_contract": {
@@ -1457,6 +1568,16 @@ END;
             created_by_case="success",
         ),
         demo_scenarios._artifact_record_from_file(
+            baseline_designer_path,
+            "synthetic-csharp-designer-baseline",
+            output_dir,
+            [
+                "UTF-8 readable",
+                "separately captured pre-verification Designer baseline",
+            ],
+            created_by_case="success",
+        ),
+        demo_scenarios._artifact_record_from_file(
             sql_path,
             "synthetic-select-procedure",
             output_dir,
@@ -1502,6 +1623,8 @@ END;
             "empty source and unrelated class text were rejected",
             "Designer ownership scan kept static UI out of code-behind",
             "misplaced static UI fixture was correctly rejected",
+            "exact distinct C# source Designer and baseline artifacts were SHA-256 bound",
+            "complete control inventory and structured evidence registry passed",
             "demo SQL passed the PB SP contract and actual final-response binder",
             "generated View XML and matching DevExpress Designer source passed static contract verification",
             "actual live DevExpress Layout Load was not observed",

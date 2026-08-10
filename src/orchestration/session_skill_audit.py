@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from datetime import datetime
 import hashlib
 import json
@@ -362,6 +363,13 @@ ACCEPTANCE_OUTPUT_MARKERS = {
         "verifier": ["verify_sql_formatting_style", "mechanical_checks", "style_contract_source"],
         "sql_passthrough": ["token_optimizer_status", "passthrough", "contract-sensitive"],
     },
+    "pb-to-csharp-migration-harness": {
+        "post_write_verifier": [
+            "verify_migration_generated_csharp_style",
+            "orchestrate_pb_migration_validation",
+        ],
+        "verified_targets": ["verified_target_paths", "verified_targets", "target_paths"],
+    },
     "snapshot-state-harness": {
         "snapshot": ["snapshot", "rollback", "checkpoint", "snapshotmanager"],
     },
@@ -463,6 +471,8 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     postmortem = analyze_codex_session_jsonl(path)
     postmortem_data = postmortem.to_dict()
     front_door_token_receipts = _apply_front_door_token_optimizer_evidence(path, postmortem_data)
+    supersession_issues = _user_instruction_supersession_issues(path)
+    _apply_correction_completion_guard(postmortem_data, supersession_issues)
     scoped_goal_evidence = _scoped_current_goal_evidence(path)
     goal_terminal_evidence = _terminal_goal_state_evidence(
         path,
@@ -491,6 +501,12 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
         active_texts,
         sql_scope_texts=sql_scope_texts,
     )
+    pb_migration_audit = _pb_migration_execution_audit(path)
+    if pb_migration_audit["required"]:
+        required.setdefault(
+            "pb-to-csharp-migration-harness",
+            "PB migration scope or routing requires post-write C#/Designer validation evidence",
+        )
     if _has_auditable_user_request(path):
         required.setdefault(
             "always-on-front-door",
@@ -517,6 +533,13 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             elif status == "applied":
                 status = "considered" if sql_formatting_audit["provider_selected"] else "mentioned"
                 observations["runtime_hits"] = 0
+        if name == "pb-to-csharp-migration-harness" and pb_migration_audit["relevant_writes"]:
+            if pb_migration_audit["verifier_executed"]:
+                status = "applied"
+                observations["runtime_hits"] = max(1, int(observations["runtime_hits"]))
+            else:
+                status = "considered"
+                observations["runtime_hits"] = 0
         if (
             name == "goal-state-harness"
             and goal_terminal_evidence.get("valid")
@@ -534,6 +557,12 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
         if name == "sql-formatting-style-harness":
             acceptance = _sql_style_harness_acceptance(
                 sql_formatting_audit,
+                required=is_required,
+                default=acceptance,
+            )
+        if name == "pb-to-csharp-migration-harness":
+            acceptance = _pb_migration_harness_acceptance(
+                pb_migration_audit,
                 required=is_required,
                 default=acceptance,
             )
@@ -586,8 +615,9 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             )
 
     issues.extend(_session_integrity_issues(path))
+    issues.extend(_pb_migration_execution_issues(pb_migration_audit))
     issues.extend(_aggregate_skill_runtime_evidence_issues(path))
-    issues.extend(_user_instruction_supersession_issues(path))
+    issues.extend(supersession_issues)
     issues.extend(_authoritative_reference_order_issues(path))
     issues.extend(_forbidden_residual_completion_issues(path))
     issues.extend(_kh_front_door_issues(path))
@@ -622,6 +652,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
         for key, value in sql_formatting_audit.items()
         if key != "issues"
     }
+    usage_summary["pb_migration_evidence"] = dict(pb_migration_audit)
     return SessionSkillAudit(
         session_id=postmortem.session_id,
         path=str(path),
@@ -637,7 +668,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             "token_optimizer_evidence": postmortem_data.get("token_optimizer_evidence", {}) or {},
             "review_status": postmortem.review_status,
             "subagent_summary": postmortem.subagent_summary,
-            "completion_guard": postmortem.completion_guard,
+            "completion_guard": postmortem_data.get("completion_guard", {}) or {},
             "verification_claim_guard": postmortem.verification_claim_guard,
             "scope_completion_delta": postmortem.scope_completion_delta,
             "user_stop_guard": postmortem.user_stop_guard,
@@ -676,14 +707,18 @@ def _postmortem_guard_issues(postmortem: Dict[str, Any]) -> List[Dict[str, Any]]
             }
         )
     completion_guard = postmortem.get("completion_guard", {}) or {}
-    if completion_guard.get("status") == "blocked":
+    if completion_guard.get("status") in {"blocked", "failed", "pending"}:
         issues.append(
             {
                 "skill": "goal-state-harness",
-                "status": "blocked",
+                "status": str(completion_guard.get("status")),
                 "severity": "P1",
-                "reason": "task_complete was emitted while the user goal was still active",
-                "action": "Keep the goal active, report partial progress, and carry next_task/missing evidence forward.",
+                "reason": "; ".join(str(reason) for reason in completion_guard.get("reasons", []) or [])
+                or "completion remains invalid until corrected completion evidence exists",
+                "action": (
+                    "Keep completion pending, apply the user's correction, and record corrected implementation "
+                    "plus fresh verification evidence before claiming completion again."
+                ),
             }
         )
     verification_guard = postmortem.get("verification_claim_guard", {}) or {}
@@ -1122,7 +1157,9 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     kh_active_directive_seen = False
     kh_active_directive_sample = ""
     task_unfinished = False
+    task_route_checked = False
     active_goal = False
+    latest_assistant_text = ""
 
     for event_index, event in enumerate(events):
         payload = event.get("payload", {})
@@ -1141,13 +1178,21 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                 elif status in {"complete", "blocked"}:
                     active_goal = False
 
+        if (
+            payload_type == "agent_message"
+            or (payload_type == "message" and str(payload.get("role", "")).lower() == "assistant")
+        ):
+            latest_assistant_text = text
+
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
             if _is_synthetic_context_message(text):
                 continue
-            if front_door_seen and task_unfinished and (
-                _is_bounded_same_task_continuation(text)
-                or (active_goal and bool(_extract_correction_claims(text)["invalidated"]))
+            if task_route_checked and _is_same_task_followup(
+                text,
+                latest_assistant_text,
+                allow_acknowledgement=task_unfinished,
             ):
+                task_unfinished = True
                 continue
             active_directive = _is_kh_active_directive(text)
             if active_directive:
@@ -1156,6 +1201,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
             direct_code_question = _looks_like_direct_code_question(lowered)
             waiting_for_front_door = True
             front_door_seen = False
+            task_route_checked = False
             task_unfinished = True
             trigger_sample = _short(text)
             if _is_kh_front_door_request(lowered):
@@ -1174,13 +1220,13 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
 
         if not waiting_for_front_door:
             if payload_type == "task_complete":
-                front_door_seen = False
                 task_unfinished = False
                 active_goal = False
             continue
 
         if event_index in correlated_receipts:
             front_door_seen = True
+            task_route_checked = True
             continue
 
         if _is_non_kh_work_start(payload, lowered) and not front_door_seen:
@@ -1208,9 +1254,9 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                 }
             )
             waiting_for_front_door = False
+            task_route_checked = True
         if payload_type == "task_complete":
             waiting_for_front_door = False
-            front_door_seen = False
             task_unfinished = False
             active_goal = False
     return issues
@@ -2467,29 +2513,44 @@ def _session_has_new_project_discovery_request(path: Path) -> bool:
         if str(payload.get("role", "")).lower() != "user":
             continue
         text = _payload_text(payload)
-        lowered = text.lower()
-        if _early_domain_discovery_text(lowered):
-            return True
-        if _extract_windows_paths(text) and any(
-            marker in lowered
-            for marker in [
-                "pdf",
-                "docx",
-                "xlsx",
-                "html",
-                "css",
-                "javascript",
-                "index.html",
-                "styles.css",
-                "app.js",
-                "website",
-                "webpage",
-                "homepage",
-                "dashboard",
-            ]
-        ):
+        if _requires_fresh_brainstorming_direction(text):
             return True
     return False
+
+
+def _requires_fresh_brainstorming_direction(text: str) -> bool:
+    """Return true only for fresh, underspecified direction-discovery work."""
+
+    lowered = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    if not lowered or _is_synthetic_context_message(text):
+        return False
+
+    existing_artifact_signals = [
+        r"\b[a-z][a-z0-9_]*\.(?:designer\.)?(?:cs|sql|py|js|ts|tsx|jsx|html|css|srd|srw|sru)\b",
+        r"\b(?:select|insert|update|delete|merge|join|where|group\s+by|order\s+by)\b",
+        r"\b(?:stored\s+procedure|procedure|function|class|method|designer|tabindex)\b",
+        r"\b(?:error|exception|bug|failure|diagnos|debug|trace|inspect|format|refactor|fix|modify|rename)\w*\b",
+        r"(?:오류|에러|버그|원인|진단|디버깅|추적|확인해|점검해|수정해|고쳐|추가해|정리해|포맷|별칭|쿼리|프로시저|디자이너|탭인덱스)",
+    ]
+    if any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in existing_artifact_signals):
+        return False
+
+    domain_signals = [
+        r"\b(?:product|project|app|application|website|web\s*site|webpage|homepage|dashboard|"
+        r"workflow|process|policy|research|analysis|specification|drawing|operating\s+model)\b",
+        r"(?:제품|프로젝트|앱|애플리케이션|사이트|웹사이트|웹페이지|홈페이지|대시보드|"
+        r"업무\s*흐름|워크플로|프로세스|정책|리서치|연구|기획|설계도|도면|운영\s*모델)",
+    ]
+    discovery_signals = [
+        r"\b(?:brainstorm|new|fresh|from\s+scratch|idea|direction|scope|options?|alternatives?|"
+        r"requirements?|plan(?:ning)?|want\s+to\s+(?:build|create|make|design)|"
+        r"help\s+me\s+(?:build|create|make|design))\b",
+        r"(?:신규|새로|처음부터|아이디어|방향|범위|선택지|대안|요구사항|요건|계획|"
+        r"기획|브레인스토밍|만들고\s*싶|만들어\s*보고\s*싶|구상|어떻게\s*구성)",
+    ]
+    has_domain = any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in domain_signals)
+    has_discovery = any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in discovery_signals)
+    return bool(has_domain and has_discovery)
 
 
 def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
@@ -2625,6 +2686,663 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
 
 def _host_local_sql_formatting_issues(path: Path) -> List[Dict[str, Any]]:
     return list(_host_local_sql_formatting_audit(path)["issues"])
+
+
+def _pb_migration_execution_audit(
+    path: Path,
+) -> Dict[str, Any]:
+    events = _session_payload_events(path)
+    session_cwd = str(_session_metadata(path).get("cwd", "") or "").strip()
+    receipts = _correlated_tool_receipts(events, include_failed=True)
+    front_door_receipts = []
+    for receipt in receipts:
+        call_text = _payload_text(receipt.call)
+        if not _is_front_door_runtime_command(receipt.call, call_text.lower()):
+            continue
+        data = _front_door_json(_payload_text(receipt.output))
+        if not data or not _structured_pb_migration_selection(data):
+            continue
+        if not (
+            _runtime_tool_output_succeeded(receipt.output)
+            or _is_strict_blocked_front_door_packet(data)
+        ):
+            continue
+        front_door_receipts.append(receipt)
+
+    routed = False
+    contextual = False
+    write_receipts = []
+    for receipt in receipts:
+        if not _runtime_tool_output_succeeded(receipt.output):
+            continue
+        if not _is_implementation_call(receipt.call):
+            continue
+        targets = _extract_pb_csharp_write_targets(receipt.call)
+        if not targets:
+            continue
+        task_boundary, task_text = _latest_user_task_scope(events, receipt.call_index)
+        write_contextual = _is_pb_migration_task_scope(task_text)
+        write_routed = any(
+            task_boundary < front_door.output_index < receipt.call_index
+            for front_door in front_door_receipts
+        )
+        if not (write_contextual or write_routed):
+            continue
+        contextual = contextual or write_contextual
+        routed = routed or write_routed
+        write_receipts.append((receipt, targets))
+    last_write_index = max((receipt.output_index for receipt, _ in write_receipts), default=-1)
+    written_targets = {
+        target
+        for _, targets in write_receipts
+        for target in targets
+    }
+    targets_extractable = bool(write_receipts) and all(targets for _, targets in write_receipts)
+    verifier_receipts = []
+    verifier_attempts = []
+    for receipt in receipts:
+        if last_write_index < 0 or receipt.call_index <= last_write_index:
+            continue
+        invocation = _pb_migration_verifier_invocation(receipt.call)
+        if not invocation["valid"]:
+            continue
+        verifier_attempts.append(receipt)
+        verifier_targets = set(invocation["targets"])
+        verifier_targets.update(_pb_verified_targets_from_output(receipt.data))
+        if not targets_extractable or not _pb_targets_cover(
+            written_targets,
+            verifier_targets,
+            session_cwd=session_cwd,
+        ):
+            continue
+        if not _pb_verifier_output_succeeded(
+            receipt.output,
+            written_targets=written_targets,
+            session_cwd=session_cwd,
+        ):
+            continue
+        verifier_receipts.append(receipt)
+    return {
+        "required": bool(write_receipts),
+        "routed": routed,
+        "contextual": contextual,
+        "relevant_writes": [
+            {
+                "call_id": _payload_call_id(receipt.call),
+                "output_index": receipt.output_index,
+                "targets": sorted(targets),
+                "sample": _short(_payload_text(receipt.call)),
+            }
+            for receipt, targets in write_receipts
+        ],
+        "last_write_index": last_write_index,
+        "written_targets": sorted(written_targets),
+        "targets_extractable": targets_extractable,
+        "verifier_attempted": bool(verifier_attempts),
+        "verifier_executed": bool(verifier_receipts),
+        "verifier_call_ids": [_payload_call_id(receipt.call) for receipt in verifier_receipts],
+    }
+
+
+def _latest_user_task_scope(
+    events: Sequence[Dict[str, Any]],
+    before_index: int,
+) -> tuple[int, str]:
+    task_boundary = -1
+    task_text: List[str] = []
+    for index, event in enumerate(events[:before_index]):
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        if str(payload.get("type", "")) == "task_complete":
+            task_boundary = index
+            task_text = []
+            continue
+        if (
+            str(payload.get("type", "")) == "message"
+            and str(payload.get("role", "")).strip().lower() == "user"
+        ):
+            text = _strip_passive_prefix(_payload_text(payload))
+            if text and not _is_synthetic_context_message(text):
+                if not task_text:
+                    task_boundary = index
+                task_text.append(text)
+    return task_boundary, "\n".join(task_text)
+
+
+def _is_pb_migration_task_scope(text: str) -> bool:
+    value = str(text or "")
+    return bool(
+        re.search(
+            r"(?i)(?:\bpowerbuilder\b|\bpbl\b|\bpbd\b|\bsru\b|\bsrd\b|\bsrw\b|"
+            r"\bdata\s*window\b|\bdatawindow\b|\bgwerp\b)",
+            value,
+        )
+        and re.search(
+            r"(?i)(?:c#|\.designer\.cs\b|(?<![a-z0-9_])\.cs\b|\bdesigner\b|"
+            r"\bwinforms?\b|\bdevexpress\b|\bkonelib\b)",
+            value,
+        )
+    )
+
+
+def _structured_pb_migration_selection(data: Mapping[str, Any]) -> bool:
+    skill = "pb-to-csharp-migration-harness"
+    for key in [
+        "runtime_applied_skills",
+        "selected_not_executed_skills",
+        "immediate_next_skills",
+        "recommended_skills",
+    ]:
+        value = data.get(key, [])
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            if skill in {str(item) for item in value}:
+                return True
+    for key in ["skill_status_summary", "skill_statuses"]:
+        statuses = data.get(key, {})
+        if not isinstance(statuses, Mapping) or skill not in statuses:
+            continue
+        status = statuses.get(skill)
+        if isinstance(status, Mapping):
+            status = status.get("status", "")
+        if str(status).strip().lower() not in {"", "absent", "not_required"}:
+            return True
+    return (
+        str(data.get("skill", "")).strip() == skill
+        and str(data.get("status", "")).strip().lower()
+        not in {"", "absent", "not_required"}
+    )
+
+
+_PB_MIGRATION_VERIFIERS = {
+    "verify_migration_generated_csharp_style",
+    "orchestrate_pb_migration_validation",
+}
+
+
+def _pb_migration_verifier_invocation(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
+        return {"valid": False, "targets": []}
+    name = str(payload.get("name", "") or "").strip().lower().replace("-", "_")
+    tail = re.split(r"[.:]", name)[-1]
+    arguments = _payload_arguments_text(payload)
+    if tail in _PB_MIGRATION_VERIFIERS:
+        return {"valid": True, "targets": sorted(_extract_csharp_paths(arguments))}
+    if any(marker in name for marker in ["read", "search", "find", "grep", "view", "open", "list", "text", "print"]):
+        return {"valid": False, "targets": []}
+
+    record = SessionTextRecord(
+        text=_payload_text(payload),
+        payload_type=str(payload.get("type", "")),
+        name=str(payload.get("name", "")),
+        arguments=arguments,
+    )
+    command = _exact_shell_command_text(record)
+    if not command:
+        return {"valid": False, "targets": []}
+    return _python_command_pb_verifier_invocation(command)
+
+
+def _python_command_invokes_pb_verifier(command: str) -> bool:
+    return bool(_python_command_pb_verifier_invocation(command)["valid"])
+
+
+def _python_command_pb_verifier_invocation(command: str) -> Dict[str, Any]:
+    if not command or _contains_unquoted_shell_control(command):
+        return {"valid": False, "targets": []}
+    try:
+        tokens = [_strip_shell_token_quotes(item) for item in shlex.split(command, posix=False)]
+    except ValueError:
+        return {"valid": False, "targets": []}
+    if not tokens or Path(tokens[0].replace("\\", "/")).name.lower() not in {
+        "python",
+        "python.exe",
+        "python3",
+        "python3.exe",
+        "py",
+        "py.exe",
+    }:
+        return {"valid": False, "targets": []}
+    if len(tokens) >= 3 and tokens[1] == "-c":
+        return _python_source_pb_verifier_invocation(tokens[2])
+    return {"valid": False, "targets": []}
+
+
+def _python_source_invokes_pb_verifier(source: str) -> bool:
+    return bool(_python_source_pb_verifier_invocation(source)["valid"])
+
+
+def _python_source_pb_verifier_invocation(source: str) -> Dict[str, Any]:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {"valid": False, "targets": []}
+    module_name = "src.skills.pb_to_csharp_migration"
+    imported_names: Set[str] = set()
+    imported_modules: Set[str] = set()
+    for statement in tree.body:
+        if isinstance(statement, ast.ImportFrom):
+            if statement.module == module_name and statement.level == 0:
+                for alias in statement.names:
+                    if alias.name in _PB_MIGRATION_VERIFIERS:
+                        imported_names.add(alias.asname or alias.name)
+            continue
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                if alias.name == module_name and alias.asname:
+                    imported_modules.add(alias.asname)
+            continue
+
+        call = _top_level_python_call(statement)
+        if call is not None and _is_imported_pb_verifier_call(
+            call,
+            imported_names=imported_names,
+            imported_modules=imported_modules,
+        ):
+            return {
+                "valid": True,
+                "targets": sorted(_csharp_paths_from_python_call(call)),
+            }
+
+        rebound = _python_statement_bound_names(statement)
+        imported_names.difference_update(rebound)
+        imported_modules.difference_update(rebound)
+    return {"valid": False, "targets": []}
+
+
+def _top_level_python_call(statement: ast.stmt) -> ast.Call | None:
+    value: ast.AST | None = None
+    if isinstance(statement, ast.Expr):
+        value = statement.value
+    elif isinstance(statement, (ast.Assign, ast.AnnAssign)):
+        value = statement.value
+    return value if isinstance(value, ast.Call) else None
+
+
+def _is_imported_pb_verifier_call(
+    call: ast.Call,
+    *,
+    imported_names: Set[str],
+    imported_modules: Set[str],
+) -> bool:
+    if isinstance(call.func, ast.Name):
+        return call.func.id in imported_names
+    if not (
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr in _PB_MIGRATION_VERIFIERS
+    ):
+        return False
+    root = call.func.value
+    while isinstance(root, ast.Attribute):
+        root = root.value
+    return isinstance(root, ast.Name) and root.id in imported_modules
+
+
+def _python_statement_bound_names(statement: ast.stmt) -> Set[str]:
+    return {
+        node.id
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+    } | {
+        node.name
+        for node in ast.walk(statement)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    }
+
+
+def _csharp_paths_from_python_call(call: ast.Call) -> Set[str]:
+    values: List[ast.AST] = list(call.args)
+    values.extend(keyword.value for keyword in call.keywords)
+    return {
+        normalized
+        for value in values
+        for node in ast.walk(value)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        if (normalized := _normalize_pb_target_path(node.value))
+    }
+
+
+def _extract_pb_csharp_write_targets(payload: Dict[str, Any]) -> Set[str]:
+    arguments = _payload_arguments_text(payload)
+    targets = _extract_patch_csharp_paths(arguments)
+    name = str(payload.get("name", "") or "").strip().lower().replace("-", "_")
+
+    if any(marker in name for marker in ["write_file", "edit_file"]):
+        targets.update(_extract_structured_write_csharp_paths(payload))
+
+    record = SessionTextRecord(
+        text=_payload_text(payload),
+        payload_type=str(payload.get("type", "")),
+        name=str(payload.get("name", "")),
+        arguments=arguments,
+    )
+    command = _exact_shell_command_text(record)
+    if command:
+        targets.update(_extract_shell_write_csharp_paths(command))
+    return targets
+
+
+def _extract_patch_csharp_paths(text: str) -> Set[str]:
+    candidates: List[str] = []
+    candidates.extend(
+        match.group("path")
+        for match in re.finditer(
+            r"(?im)^\s*\*{3}\s+(?:add|update|delete)\s+file:\s*(?P<path>[^\r\n]+\.cs)\s*$",
+            str(text or ""),
+        )
+    )
+    candidates.extend(
+        match.group("path")
+        for match in re.finditer(
+            r"(?i)\*{3}\s+(?:add|update|delete)\s+file:\s*(?P<path>.*?\.cs)(?=\\n|\r?$)",
+            str(text or ""),
+            re.MULTILINE,
+        )
+    )
+    return {
+        normalized
+        for candidate in candidates
+        if (normalized := _normalize_pb_target_path(candidate))
+    }
+
+
+def _extract_structured_write_csharp_paths(payload: Mapping[str, Any]) -> Set[str]:
+    raw = payload.get("arguments") or payload.get("input") or {}
+    if isinstance(raw, str):
+        try:
+            raw = load_json_without_duplicate_keys(raw)
+        except (json.JSONDecodeError, DuplicateJsonKeyError):
+            return set()
+    if not isinstance(raw, Mapping):
+        return set()
+    path_keys = {"path", "file_path", "target_path", "destination"}
+    return {
+        normalized
+        for key, value in raw.items()
+        if str(key).strip().lower() in path_keys
+        if isinstance(value, str)
+        if (normalized := _normalize_pb_target_path(value))
+    }
+
+
+def _extract_shell_write_csharp_paths(command: str) -> Set[str]:
+    candidates: List[str] = []
+    write_command = re.compile(
+        r"(?is)(?<![a-z0-9_-])(?:set-content|add-content|clear-content|out-file|"
+        r"new-item|copy-item|move-item|rename-item|remove-item)\b"
+        r"(?P<body>[^|\r\n]*)"
+    )
+    target_flag = re.compile(
+        r"(?i)-(?:literalpath|path|filepath|destination)\s+"
+        r"(?P<path>\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s;|]+)"
+    )
+    for match in write_command.finditer(str(command or "")):
+        flag = target_flag.search(match.group("body"))
+        if flag:
+            candidates.append(flag.group("path"))
+    candidates.extend(
+        match.group("path")
+        for match in re.finditer(
+            r"(?m)(?<!>)>{1,2}\s*(?P<path>\"[^\"\r\n]+\"|'[^'\r\n]+'|[^\s;|]+\.cs)",
+            str(command or ""),
+        )
+    )
+    return {
+        normalized
+        for candidate in candidates
+        if (normalized := _normalize_pb_target_path(candidate))
+    }
+
+
+def _extract_csharp_paths(text: str) -> Set[str]:
+    candidates: List[str] = []
+    candidates.extend(
+        match.group("path")
+        for match in re.finditer(
+            r"(?im)^\s*\*{3}\s+(?:add|update|delete)\s+file:\s*(?P<path>[^\r\n]+\.cs)\s*$",
+            str(text or ""),
+        )
+    )
+    candidates.extend(
+        match.group("path")
+        for match in re.finditer(
+            r"(?i)\*{3}\s+(?:add|update|delete)\s+file:\s*(?P<path>.*?\.cs)(?=\\n|\r?$)",
+            str(text or ""),
+            re.MULTILINE,
+        )
+    )
+    candidates.extend(
+        match.group("path")
+        for match in re.finditer(
+            r"(?i)[\"'](?P<path>[^\"'\r\n]+\.cs)[\"']",
+            str(text or ""),
+        )
+        if "\\n" not in match.group("path")
+    )
+    candidates.extend(
+        match.group("path")
+        for match in re.finditer(
+            r"(?i)(?<![A-Za-z0-9_])(?P<path>(?:[A-Za-z]:)?(?:[^\s\"'`;|]+[\\/])+[^\s\"'`;|]+\.cs)(?![A-Za-z0-9_])",
+            str(text or ""),
+        )
+    )
+    return {
+        normalized
+        for candidate in candidates
+        if (normalized := _normalize_pb_target_path(candidate))
+    }
+
+
+def _normalize_pb_target_path(value: str) -> str:
+    normalized = str(value or "").strip().strip("\"'`<>()[]{}.,:;").replace("\\", "/")
+    normalized = re.sub(r"/+", "/", normalized).lower()
+    return normalized if normalized.endswith(".cs") else ""
+
+
+def _pb_verified_targets_from_output(data: Mapping[str, Any]) -> Set[str]:
+    targets: Set[str] = set()
+
+    def visit(value: Any) -> None:
+        if not isinstance(value, Mapping):
+            return
+        for key, item in value.items():
+            if str(key).lower() in {"verified_target_paths", "verified_targets", "target_paths"}:
+                values = item if isinstance(item, Sequence) and not isinstance(item, (str, bytes)) else [item]
+                for candidate in values:
+                    normalized = _normalize_pb_target_path(str(candidate))
+                    if normalized:
+                        targets.add(normalized)
+            elif isinstance(item, Mapping):
+                visit(item)
+            elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
+                for child in item:
+                    visit(child)
+
+    visit(data)
+    return targets
+
+
+def _pb_targets_cover(
+    written_targets: Set[str],
+    verifier_targets: Set[str],
+    *,
+    session_cwd: str = "",
+) -> bool:
+    if not written_targets or not verifier_targets:
+        return False
+    return all(
+        any(
+            _pb_target_paths_match(
+                target,
+                verifier_target,
+                session_cwd=session_cwd,
+            )
+            for verifier_target in verifier_targets
+        )
+        for target in written_targets
+    )
+
+
+def _pb_target_paths_match(
+    left: str,
+    right: str,
+    *,
+    session_cwd: str = "",
+) -> bool:
+    left_path = _canonical_pb_target_path(left, session_cwd=session_cwd)
+    right_path = _canonical_pb_target_path(right, session_cwd=session_cwd)
+    if not left_path or not right_path:
+        return False
+    return left_path == right_path
+
+
+def _canonical_pb_target_path(value: str, *, session_cwd: str) -> str:
+    normalized = _normalize_pb_target_path(value)
+    if not normalized:
+        return ""
+    if _is_absolute_pb_target_path(normalized):
+        return _collapse_pb_path_components(normalized)
+    base = str(session_cwd or "").strip().strip("\"'`").replace("\\", "/").lower()
+    base = re.sub(r"/+", "/", base)
+    if not _is_absolute_pb_target_path(base):
+        return _collapse_pb_path_components(normalized)
+    return _collapse_pb_path_components(f"{base.rstrip('/')}/{normalized}")
+
+
+def _collapse_pb_path_components(value: str) -> str:
+    prefix = ""
+    remainder = str(value or "")
+    if re.match(r"^[a-z]:/", remainder):
+        prefix, remainder = remainder[:2], remainder[3:]
+    elif remainder.startswith("/"):
+        prefix, remainder = "/", remainder[1:]
+    components: List[str] = []
+    for component in remainder.split("/"):
+        if component in {"", "."}:
+            continue
+        if component == "..":
+            if not components:
+                return ""
+            components.pop()
+            continue
+        components.append(component)
+    collapsed = "/".join(components)
+    if prefix == "/":
+        return f"/{collapsed}"
+    if prefix:
+        return f"{prefix}/{collapsed}"
+    return collapsed
+
+
+def _is_absolute_pb_target_path(value: str) -> bool:
+    return bool(value.startswith("/") or re.match(r"^[a-z]:/", value))
+
+
+def _pb_verifier_output_succeeded(
+    payload: Dict[str, Any],
+    *,
+    written_targets: Set[str],
+    session_cwd: str = "",
+) -> bool:
+    if not _runtime_tool_output_succeeded(payload):
+        return False
+    text = _payload_text(payload)
+    data = _json_object_from_text(text)
+    controls: List[Mapping[str, Any]] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, Mapping):
+            controls.append(value)
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            for child in value:
+                collect(child)
+
+    collect(payload)
+    if data:
+        collect(data)
+    if any(_pb_verifier_mapping_failed(control) for control in controls):
+        return False
+    if re.search(r"(?i)\bvalidation\s+failed\b|\berror\b|\bblocked\b", text):
+        return False
+    if any(control.get("success") is True for control in controls):
+        return True
+    if any(str(control.get("status", "")).strip().lower() in {"ok", "passed", "success", "succeeded"} for control in controls):
+        return True
+    for control in controls:
+        for key in ["exit_code", "return_code", "returncode"]:
+            if key in control and type(control[key]) is int and control[key] == 0:
+                return True
+    return bool(re.search(r"(?im)^\s*exit\s+code\s*:\s*0\s*$", text))
+
+
+def _pb_verifier_mapping_failed(control: Mapping[str, Any]) -> bool:
+    status = str(control.get("status", "") or "").strip().lower()
+    if status in {"blocked", "error", "failed", "failure"}:
+        return True
+    return _runtime_mapping_failed(dict(control))
+
+
+def _pb_direct_verified_targets(control: Mapping[str, Any]) -> Set[str]:
+    targets: Set[str] = set()
+    for key, item in control.items():
+        if str(key).lower() not in {
+            "verified_target_paths",
+            "verified_targets",
+            "target_paths",
+        }:
+            continue
+        values = item if isinstance(item, Sequence) and not isinstance(item, (str, bytes)) else [item]
+        for candidate in values:
+            normalized = _normalize_pb_target_path(str(candidate))
+            if normalized:
+                targets.add(normalized)
+    return targets
+
+
+def _pb_migration_harness_acceptance(
+    audit: Mapping[str, Any],
+    *,
+    required: bool,
+    default: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not required or not audit.get("required"):
+        return default
+    required_outputs = list(ACCEPTANCE_OUTPUT_MARKERS["pb-to-csharp-migration-harness"].keys())
+    if audit.get("verifier_executed"):
+        return {
+            "status": "passed",
+            "required_outputs": required_outputs,
+            "satisfied_outputs": required_outputs,
+            "missing_outputs": [],
+        }
+    return {
+        "status": "missing_outputs",
+        "required_outputs": required_outputs,
+        "satisfied_outputs": [],
+        "missing_outputs": required_outputs,
+    }
+
+
+def _pb_migration_execution_issues(audit: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    if not audit.get("required") or audit.get("verifier_executed"):
+        return []
+    writes = list(audit.get("relevant_writes", []) or [])
+    return [
+        {
+            "skill": "pb-to-csharp-migration-harness",
+            "status": "missing_post_write_migration_verification",
+            "severity": "P1",
+            "reason": (
+                "PB migration C#/Designer writes were completed without a successful actual "
+                "verify_migration_generated_csharp_style or orchestrate_pb_migration_validation "
+                "tool call after the last relevant write."
+            ),
+            "action": "Run the PB generated-C# verifier after the last relevant .cs write.",
+            "samples": [str(item.get("sample", "")) for item in writes[-2:]],
+        }
+    ]
 
 
 def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
@@ -3262,17 +3980,47 @@ def _exact_shell_command_text(record: SessionTextRecord) -> str:
         r"text\s*\(\s*(?P=result)\s*\)\s*;\s*",
         source,
     )
+    command_binding = None
+    if statement is None:
+        statement = re.fullmatch(
+            r"\s*const\s+(?P<command_var>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+            r"(?P<command_literal>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*')\s*;\s*"
+            r"const\s+(?P<result>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+            r"await\s+tools\.shell_command\s*\(\s*(?P<arguments>\{[\s\S]*\})\s*\)\s*;\s*"
+            r"text\s*\(\s*(?P=result)\s*\)\s*;\s*",
+            source,
+        )
+        if statement is not None:
+            try:
+                command_binding = ast.literal_eval(statement.group("command_literal"))
+            except (SyntaxError, ValueError):
+                return ""
+            if not isinstance(command_binding, str):
+                return ""
     if (
         statement is None
         or source.count("tools.shell_command") != 1
-        or source.count("tools.") != 1
+        or len(re.findall(r"\bawait\s+tools\.", source)) != 1
         or len(re.findall(r"\bawait\b", source)) != 1
     ):
         return ""
+    arguments_text = statement.group("arguments")
+    if command_binding is not None:
+        command_var = re.escape(statement.group("command_var"))
+        arguments_text, replacements = re.subn(
+            rf"(?P<prefix>[{{,]\s*)(?P<key>command|\"command\"|'command')\s*:\s*{command_var}(?P<suffix>\s*[,}}])",
+            lambda match: (
+                f'{match.group("prefix")}\"command\":{json.dumps(command_binding)}'
+                f'{match.group("suffix")}'
+            ),
+            arguments_text,
+        )
+        if replacements != 1:
+            return ""
     arguments_text = re.sub(
         r"(?P<prefix>[{,]\s*)(?P<key>[A-Za-z_$][A-Za-z0-9_$]*)\s*:",
         lambda match: f'{match.group("prefix")}\"{match.group("key")}\":',
-        statement.group("arguments"),
+        arguments_text,
     )
     try:
         parsed_arguments = load_json_without_duplicate_keys(arguments_text)
@@ -5016,10 +5764,33 @@ def _first_visible_brainstorm_response(path: Path) -> str:
 
 def _is_synthetic_context_message(text: str) -> bool:
     stripped = (text or "").lstrip().lower()
+    wrapper_prefixes = (
+        "<app-context>",
+        "<apps_instructions>",
+        "<developer_context>",
+        "<environment_context>",
+        "<goal_context>",
+        "<permissions instructions>",
+        "<permissions_instructions>",
+        "<plugins_instructions>",
+        "<recommended_plugins>",
+        "<skills_instructions>",
+        "<system_context>",
+    )
     return (
-        stripped.startswith("<environment_context>")
-        or stripped.startswith("<goal_context>")
-        or stripped.startswith("<recommended_plugins>")
+        stripped.startswith(wrapper_prefixes)
+        or stripped.startswith("# codex desktop context")
+        or (
+            stripped.startswith("## memory")
+            and (
+                "memory_summary" in stripped
+                or "you have access to a memory folder" in stripped
+            )
+        )
+        or (
+            stripped.startswith(("## skills", "### available skills"))
+            and ("### skill roots" in stripped or "skills_instructions" in stripped)
+        )
         or _is_untrusted_assessment_transcript(stripped)
     )
 
@@ -5258,6 +6029,15 @@ def _extract_correction_claims(text: str) -> Dict[str, List[str]]:
                 add(replacements, match.group(1))
                 add(invalidated, match.group(2))
 
+    korean_paired_patterns = [
+        re.compile(rf"({_CLAIM_TOKEN})\s*(?:은|는|이|가)?\s*말고\s*({_CLAIM_TOKEN})", re.IGNORECASE),
+        re.compile(rf"({_CLAIM_TOKEN})\s*(?:은|는|이|가)?\s*아니(?:라|고)\s*({_CLAIM_TOKEN})", re.IGNORECASE),
+    ]
+    for pattern in korean_paired_patterns:
+        for match in pattern.finditer(text):
+            add(invalidated, match.group(1))
+            add(replacements, match.group(2))
+
     negative_patterns = [
         re.compile(
             rf"\b(?:must|should)\s+not\s+(?:contain|include|emit|use|keep|require|have)\s+({_CLAIM_TOKEN})",
@@ -5268,7 +6048,6 @@ def _extract_correction_claims(text: str) -> Dict[str, List[str]]:
             re.IGNORECASE,
         ),
         re.compile(rf"\b(?:remove|drop|exclude|forbid)\s+({_CLAIM_TOKEN})", re.IGNORECASE),
-        re.compile(rf"\bnot\s+({_CLAIM_TOKEN})", re.IGNORECASE),
         re.compile(
             rf"({_CLAIM_TOKEN})\s+(?:is|was)\s+(?:invalid|wrong|incorrect|forbidden|obsolete)",
             re.IGNORECASE,
@@ -5281,8 +6060,122 @@ def _extract_correction_claims(text: str) -> Dict[str, List[str]]:
     return {"invalidated": invalidated, "replacements": replacements}
 
 
+_SQL_CORRECTION_SHAPES = (
+    r"\b(?:outer|cross)\s+apply\b",
+    r"\b(?:left|right|inner|full|cross)\s+(?:outer\s+)?join\b",
+    r"\b(?:correlated|scalar)\s+subquery\b",
+    r"\btop\s*\(\s*1\s*\)",
+    r"\bcte\b",
+)
+
+
+def _sql_shape_claims(text: str) -> List[str]:
+    lowered = str(text or "").lower()
+    claims: List[str] = []
+    for pattern in _SQL_CORRECTION_SHAPES:
+        for match in re.finditer(pattern, lowered, flags=re.IGNORECASE):
+            claim = re.sub(r"\s+", " ", match.group(0)).strip()
+            if claim and claim not in claims:
+                claims.append(claim)
+    return claims
+
+
+def _correction_signal(text: str, previous_assistant_text: str = "") -> Dict[str, Any]:
+    if _is_synthetic_context_message(text):
+        return {
+            "is_correction": False,
+            "related_to_previous": False,
+            "invalidated": [],
+            "replacements": [],
+        }
+
+    raw = str(text or "").strip()
+    normalized = re.sub(r"\s+", " ", raw.lower())
+    previous = str(previous_assistant_text or "")
+    claims = _extract_correction_claims(raw)
+    starts_with_rejection = bool(re.match(r"^(?:아니(?:요)?|그게\s+아니라)\b", normalized))
+    has_korean_contrast = bool(re.search(r"(?:말고|아니라|아니고)", normalized))
+    has_demonstrative_correction = bool(
+        re.match(r"^(?:아니\s+)?(?:저건|그건|이건)\b", normalized)
+        and re.search(r"(?:인데|이야|입니다|거야|건데)", normalized)
+    )
+    has_direct_rejection = any(
+        marker in normalized
+        for marker in [
+            "그따구",
+            "저따구",
+            "이따구",
+            "그런 식으로",
+            "누가 그렇게",
+            "누가 그걸",
+            "쓰지 마",
+            "쓰면 안",
+            "유지하지 마",
+        ]
+    )
+    english_correction = bool(
+        re.search(
+            r"\b(?:no[, ]|that(?:'s| is) not|i said\b|not what i (?:asked|said)|instead of)\b",
+            normalized,
+        )
+    )
+    relational_grammar = (
+        starts_with_rejection
+        or has_korean_contrast
+        or has_demonstrative_correction
+        or has_direct_rejection
+        or english_correction
+    )
+    is_correction = bool(claims["invalidated"] or (previous and relational_grammar))
+
+    invalidated = list(claims["invalidated"])
+    previous_shapes = _sql_shape_claims(previous)
+    current_shapes = _sql_shape_claims(raw)
+    if is_correction and previous_shapes:
+        rejected_shapes = [shape for shape in previous_shapes if shape in current_shapes]
+        if not rejected_shapes and (starts_with_rejection or has_direct_rejection or has_demonstrative_correction):
+            rejected_shapes = previous_shapes
+        for shape in rejected_shapes:
+            if shape not in invalidated:
+                invalidated.append(shape)
+
+    related_to_previous = bool(
+        previous
+        and (
+            relational_grammar
+            or any(_claim_in_text(claim, previous) for claim in invalidated)
+            or any(_claim_in_text(claim, previous) for claim in claims["replacements"])
+        )
+    )
+    return {
+        "is_correction": is_correction,
+        "related_to_previous": related_to_previous,
+        "invalidated": invalidated,
+        "replacements": list(claims["replacements"]),
+    }
+
+
+def _is_assistant_error_admission(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    if re.search(
+        r"(?:제가|제\s*(?:답|설명|안내|판단|이해|경로)|이전\s*(?:답|설명)).{0,80}"
+        r"(?:잘못|틀렸|오해|엉뚱)",
+        normalized,
+    ):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:i was wrong|i(?:'m| am) wrong|my (?:previous )?(?:answer|guidance) was wrong|"
+            r"i misread|i misunderstood|my mistake|i incorrectly)\b",
+            normalized,
+        )
+    )
+
+
 def _correlated_tool_receipts(
     events: Sequence[Dict[str, Any]],
+    *,
+    include_failed: bool = False,
 ) -> List[CorrelatedToolReceipt]:
     pending: Dict[str, tuple[int, Dict[str, Any]]] = {}
     receipts: List[CorrelatedToolReceipt] = []
@@ -5299,7 +6192,9 @@ def _correlated_tool_receipts(
         if payload_type not in {"function_call_output", "custom_tool_call_output"} or not call_id:
             continue
         call_record = pending.pop(call_id, None)
-        if call_record is None or not _runtime_tool_output_succeeded(payload):
+        if call_record is None:
+            continue
+        if not include_failed and not _runtime_tool_output_succeeded(payload):
             continue
         call_index, call = call_record
         receipts.append(
@@ -5321,19 +6216,62 @@ def _is_implementation_call(payload: Dict[str, Any]) -> bool:
     lowered = _payload_text(payload).lower()
     if any(marker in name for marker in ["apply_patch", "write_file", "edit_file"]):
         return True
+    if re.search(r"\btools\.(?:apply_patch|write_file|edit_file)\s*\(", lowered):
+        return True
+    record = SessionTextRecord(
+        text=_payload_text(payload),
+        payload_type=str(payload.get("type", "")),
+        name=str(payload.get("name", "")),
+        arguments=_payload_arguments_text(payload),
+    )
+    command = _exact_shell_command_text(record)
+    if command and _shell_command_has_write_effect(command):
+        return True
     if name != "shell_command" and "shell_command" not in name:
         return False
-    return any(
-        marker in lowered
-        for marker in [
-            "apply_patch",
-            "set-content",
-            "out-file",
-            "new-item",
-            "copy-item",
-            "move-item",
-        ]
-    )
+    return _shell_command_has_write_effect(lowered)
+
+
+_SHELL_WRITE_MARKERS = {
+    "apply_patch",
+    "set-content",
+    "add-content",
+    "clear-content",
+    "out-file",
+    "new-item",
+    "copy-item",
+    "move-item",
+    "rename-item",
+    "remove-item",
+}
+
+
+def _shell_command_has_write_effect(command: str) -> bool:
+    lowered = str(command or "").lower()
+    if any(re.search(rf"(?<![a-z0-9_-]){re.escape(marker)}(?![a-z0-9_-])", lowered) for marker in _SHELL_WRITE_MARKERS):
+        return True
+    return _contains_unquoted_output_redirection(command)
+
+
+def _contains_unquoted_output_redirection(command: str) -> bool:
+    quote = ""
+    escaped = False
+    for character in str(command or ""):
+        if escaped:
+            escaped = False
+            continue
+        if quote == '"' and character == "\\":
+            escaped = True
+            continue
+        if character in {"'", '"'}:
+            if not quote:
+                quote = character
+            elif quote == character:
+                quote = ""
+            continue
+        if not quote and character == ">":
+            return True
+    return False
 
 
 def _is_verification_call(payload: Dict[str, Any]) -> bool:
@@ -5391,6 +6329,13 @@ def _reasserted_invalidated_claims(text: str, claims: Sequence[str]) -> List[str
                 "invalid",
                 "rejected",
                 "exclude",
+                "잘못",
+                "틀렸",
+                "제거",
+                "빼",
+                "쓰지",
+                "사용하지",
+                "유지하지",
             ]
         )
         affirmative = any(
@@ -5407,6 +6352,10 @@ def _reasserted_invalidated_claims(text: str, claims: Sequence[str]) -> List[str
                 "retained",
                 "added",
                 "= true",
+                "유지",
+                "사용",
+                "그대로",
+                "포함",
             ]
         )
         if affirmative and not negative:
@@ -5501,11 +6450,14 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
     corrections: List[Dict[str, Any]] = []
     active_goal = False
     completion_indexes: List[int] = []
+    latest_assistant_text = ""
+    latest_completion_index: int | None = None
     for index, event in enumerate(events):
         payload = event.get("payload", {})
         if not isinstance(payload, dict):
             continue
         payload_type = str(payload.get("type", ""))
+        role = str(payload.get("role", "")).lower()
         if payload_type == "thread_goal_updated":
             goal = payload.get("goal", {}) or {}
             status = str(goal.get("status", "") or "").strip().lower() if isinstance(goal, dict) else ""
@@ -5513,20 +6465,38 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
                 active_goal = True
             elif status in {"complete", "blocked"}:
                 active_goal = False
-        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
-            claims = _extract_correction_claims(_payload_text(payload))
-            if claims["invalidated"]:
+        if payload_type == "agent_message" or (payload_type == "message" and role == "assistant"):
+            latest_assistant_text = _payload_text(payload)
+        if payload_type == "message" and role == "user":
+            user_text = _payload_text(payload)
+            if _is_synthetic_context_message(user_text):
+                continue
+            correction = _correction_signal(user_text, latest_assistant_text)
+            if correction["is_correction"]:
                 corrections.append(
                     {
                         "index": index,
                         "active_goal": active_goal,
-                        "invalidated": claims["invalidated"],
-                        "replacements": claims["replacements"],
-                        "sample": _short(_payload_text(payload)),
+                        "invalidated": correction["invalidated"],
+                        "replacements": correction["replacements"],
+                        "related_to_previous": correction["related_to_previous"],
+                        "prior_completion_index": (
+                            latest_completion_index
+                            if correction["related_to_previous"]
+                            else None
+                        ),
+                        "sample": _short(user_text),
                     }
                 )
+            if latest_completion_index is not None and not _is_same_task_followup(
+                user_text,
+                latest_assistant_text,
+                allow_acknowledgement=False,
+            ):
+                latest_completion_index = None
         if payload_type == "task_complete":
             completion_indexes.append(index)
+            latest_completion_index = index
 
     issues: List[Dict[str, Any]] = []
     for correction in corrections:
@@ -5538,6 +6508,7 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
         )
         repeated: List[str] = []
         repeated_sample = ""
+        admission_sample = ""
         for event in events[correction_index + 1 : completion_index + 1]:
             payload = event.get("payload", {})
             if not isinstance(payload, dict):
@@ -5549,10 +6520,50 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
                 or payload_type in {"agent_message", "task_complete"}
             ):
                 continue
-            repeated = _reasserted_invalidated_claims(_payload_text(payload), invalidated)
+            candidate_text = _payload_text(payload)
+            if not admission_sample and _is_assistant_error_admission(candidate_text):
+                admission_sample = _short(candidate_text)
+            repeated = _reasserted_invalidated_claims(candidate_text, invalidated)
             if repeated:
-                repeated_sample = _short(_payload_text(payload))
+                repeated_sample = _short(candidate_text)
                 break
+        if (
+            correction.get("prior_completion_index") is not None
+            and correction.get("related_to_previous")
+            and admission_sample
+        ):
+            implementation = _correction_implementation_receipt(
+                receipts,
+                correction_index,
+                completion_index,
+                invalidated,
+                list(correction["replacements"]),
+            )
+            verification = (
+                _fresh_verification_receipt(receipts, implementation.output_index, completion_index)
+                if implementation
+                else None
+            )
+            issues.append(
+                {
+                    "skill": "verification-before-completion-harness",
+                    "status": "premature_completion_corrected_after_task_complete",
+                    "severity": "P0",
+                    "reason": (
+                        "A same-task user correction and the assistant's explicit error admission "
+                        "invalidated an earlier task_complete claim."
+                    ),
+                    "action": (
+                        "Do not claim completion until the correction is implemented and fresh evidence "
+                        "verifies the corrected result."
+                    ),
+                    "prior_completion_index": correction["prior_completion_index"],
+                    "correction": correction["sample"],
+                    "admission": admission_sample,
+                    "corrected_completion_claimed": completion_index < len(events),
+                    "corrected_completion_evidence": bool(implementation and verification),
+                }
+            )
         if repeated:
             issues.append(
                 {
@@ -5601,6 +6612,43 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
                 }
             )
     return issues
+
+
+def _apply_correction_completion_guard(
+    postmortem: Dict[str, Any],
+    issues: Sequence[Dict[str, Any]],
+) -> None:
+    invalidations = [
+        issue
+        for issue in issues
+        if issue.get("status") == "premature_completion_corrected_after_task_complete"
+    ]
+    unresolved = [
+        issue for issue in invalidations if not issue.get("corrected_completion_evidence")
+    ]
+    if not unresolved:
+        return
+
+    guard = dict(postmortem.get("completion_guard", {}) or {})
+    corrected_completion_claimed = any(
+        bool(issue.get("corrected_completion_claimed")) for issue in unresolved
+    )
+    reasons = [str(reason) for reason in guard.get("reasons", []) or []]
+    for reason in [
+        "completion_invalidated_by_same_task_correction",
+        "corrected_completion_evidence_missing",
+    ]:
+        if reason not in reasons:
+            reasons.append(reason)
+    guard.update(
+        {
+            "status": "failed" if corrected_completion_claimed else "pending",
+            "reasons": reasons,
+            "pending_correction_count": len(unresolved),
+            "corrected_completion_evidence": False,
+        }
+    )
+    postmortem["completion_guard"] = guard
 
 
 def _aggregate_skill_runtime_evidence_issues(path: Path) -> List[Dict[str, Any]]:
@@ -5801,7 +6849,10 @@ def _forbidden_residual_completion_issues(path: Path) -> List[Dict[str, Any]]:
             continue
         payload_type = str(payload.get("type", ""))
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
-            claims = _extract_correction_claims(_payload_text(payload))
+            user_text = _payload_text(payload)
+            if _is_synthetic_context_message(user_text):
+                continue
+            claims = _extract_correction_claims(user_text)
             for claim in claims["invalidated"]:
                 forbidden[claim] = index
         if payload_type != "task_complete" or not forbidden:
@@ -7112,6 +8163,8 @@ def _front_door_output_succeeded(
 
 
 def _is_strict_blocked_front_door_packet(data: Dict[str, Any]) -> bool:
+    if _is_valid_verbose_blocked_front_door_packet(data):
+        return str(data.get("front_door_status", "")).strip().lower() == "ok"
     if not (
         _is_valid_compact_front_door_packet(data)
         or _is_valid_normalized_micro_front_door_packet(data)
@@ -7121,11 +8174,38 @@ def _is_strict_blocked_front_door_packet(data: Dict[str, Any]) -> bool:
         return False
 
     route = data.get("plugin_route", {}) or {}
+    return bool(
+        route.get("route") in {"single", "hybrid", "clarify"}
+        and _has_blocked_front_door_contract(data)
+    )
+
+
+def _is_valid_verbose_blocked_front_door_packet(data: Dict[str, Any]) -> bool:
+    classification = data.get("classification", {})
+    route = data.get("plugin_route", {})
+    gate = data.get("execution_gate", {})
+    authorization = data.get("execution_authorization", {})
+    return bool(
+        isinstance(data.get("token_optimizer_decision"), dict)
+        and isinstance(classification, dict)
+        and str(classification.get("complexity", "")).strip()
+        and str(classification.get("recommended_execution", "")).strip()
+        and isinstance(route, dict)
+        and route.get("route") in {"direct", "single", "hybrid", "clarify"}
+        and isinstance(gate, dict)
+        and isinstance(authorization, dict)
+        and _has_blocked_front_door_contract(data)
+    )
+
+
+def _has_blocked_front_door_contract(data: Mapping[str, Any]) -> bool:
     gate = data.get("execution_gate", {}) or {}
     authorization = data.get("execution_authorization", {}) or {}
     action_codes = data.get("required_next_action_codes")
-    gate_status = str(gate.get("status", "")).strip()
-    authorization_status = str(authorization.get("status", "")).strip().lower()
+    if not isinstance(gate, Mapping) or not isinstance(authorization, Mapping):
+        return False
+    gate_status = str(gate.get("status", "") or "").strip().lower()
+    authorization_status = str(authorization.get("status", "") or "").strip().lower()
     current_gate_contract = bool(
         gate.get("can_execute") is False and gate_status.startswith("blocked_")
     )
@@ -7134,10 +8214,13 @@ def _is_strict_blocked_front_door_packet(data: Dict[str, Any]) -> bool:
         and gate_status == "execution_allowed_after_selected_skill_setup"
     )
     return bool(
-        route.get("route") in {"single", "hybrid", "clarify"}
-        and (current_gate_contract or legacy_gate_contract)
+        (current_gate_contract or legacy_gate_contract)
         and authorization.get("must_stop_before_execution") is True
-        and ("blocked" in authorization_status or "pending" in authorization_status)
+        and authorization_status
+        in {
+            "blocked_by_execution_gate",
+            "blocked_by_pending_immediate_skill_gate",
+        }
         and isinstance(action_codes, list)
         and action_codes
         and all(isinstance(code, str) and code.strip() for code in action_codes)
@@ -7710,6 +8793,60 @@ _SAME_TASK_ACKNOWLEDGEMENTS = {
 }
 
 
+def _is_explicit_new_objective_transition(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    return any(
+        marker in normalized
+        for marker in [
+            "그건 이제 됐고",
+            "이건 이제 됐고",
+            "그거 말고 다음",
+            "다음 작업",
+            "다음은 ",
+            "새 작업",
+            "new task",
+            "next task",
+            "now inspect the other",
+            "now work on the other",
+            "switch to the other",
+        ]
+    )
+
+
+def _is_same_task_followup(
+    text: str,
+    previous_assistant_text: str,
+    *,
+    allow_acknowledgement: bool,
+) -> bool:
+    raw = str(text or "").strip()
+    normalized = re.sub(r"\s+", " ", raw.lower())
+    if not normalized or _is_explicit_new_objective_transition(normalized):
+        return False
+    if _correction_signal(raw, previous_assistant_text)["is_correction"]:
+        return True
+    if normalized.startswith("# files mentioned by the user:") or "<image name=" in normalized:
+        return True
+    if re.search(r"(?:^|[\\/])[^\r\n]+\.(?:png|jpe?g|gif|webp|bmp)(?:\s|$)", raw, re.IGNORECASE):
+        return True
+    if any(
+        marker in normalized
+        for marker in [
+            "스크린샷",
+            "첨부한 화면",
+            "오류 화면",
+            "방금 새로 발급",
+            "새로 발급한 거고",
+            "메일 주소도 맞",
+            "일단 메일주소는 맞",
+            "evidence attached",
+            "attached screenshot",
+        ]
+    ):
+        return True
+    return allow_acknowledgement and _is_bounded_same_task_continuation(raw)
+
+
 def _is_bounded_same_task_continuation(text: str) -> bool:
     normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
     normalized = normalized.strip(".!?~。！？,，;；:：")
@@ -8059,6 +9196,19 @@ def _runtime_command_candidates(payload: Dict[str, Any]) -> List[str]:
         if isinstance(command, str) and command.strip():
             candidates.append(command)
 
+    if tool_tail == "exec":
+        exact_command = _exact_shell_command_text(
+            SessionTextRecord(
+                text=raw,
+                payload_type=str(payload.get("type", "")),
+                name=str(payload.get("name", "")),
+                arguments=raw,
+            )
+        )
+        if exact_command:
+            return [exact_command]
+        return []
+
     command_literal = re.compile(
         r'(?:[\"\']command[\"\']|\bcommand)\s*:\s*'
         r'(?P<literal>\"(?:\\.|[^\"\\])*\"|\'(?:\\.|[^\'\\])*\')'
@@ -8068,10 +9218,6 @@ def _runtime_command_candidates(payload: Dict[str, Any]) -> List[str]:
         if command:
             candidates.append(command)
 
-    if tool_tail == "exec" and not candidates and re.match(
-        r"\s*(?:python|python3|py)(?:\.exe)?\b", raw, re.IGNORECASE
-    ):
-        candidates.append(raw)
     return _dedupe_text(candidates)
 
 
@@ -9014,7 +10160,54 @@ def _normalize_full_summary_front_door_packet(data: Dict[str, Any]) -> Dict[str,
     )
     if token_decision:
         normalized["token_optimizer"] = token_decision
+    if "required_next_action_codes" not in normalized:
+        action_codes = _normalized_full_summary_action_codes(data)
+        if action_codes:
+            normalized["required_next_action_codes"] = action_codes
     return normalized
+
+
+def _normalized_full_summary_action_codes(data: Mapping[str, Any]) -> List[str]:
+    actions = data.get("required_next_actions")
+    immediate = data.get("immediate_next_skills")
+    gate = data.get("execution_gate", {}) or {}
+    authorization = data.get("execution_authorization", {}) or {}
+    if not (
+        isinstance(actions, list)
+        and actions
+        and all(isinstance(action, str) and action.strip() for action in actions)
+        and isinstance(immediate, list)
+        and immediate
+        and all(isinstance(skill, str) and skill.strip() for skill in immediate)
+        and isinstance(gate, Mapping)
+        and isinstance(authorization, Mapping)
+    ):
+        return []
+
+    stop_prefix = (
+        "BLOCKING FRONT-DOOR RESULT: "
+        "`execution_authorization.must_stop_before_execution=true`."
+    )
+    has_stop = any(action.startswith(stop_prefix) for action in actions)
+    has_immediate = any(
+        action.startswith("NEXT SKILL EXECUTION: apply `")
+        and all(f"`{skill}`" in action for skill in immediate)
+        for action in actions
+    )
+    if not (has_stop and has_immediate):
+        return []
+
+    codes = ["stop_before_task_work", "apply_immediate_next_skills"]
+    gate_requirements = gate.get("required_before_execution")
+    if (
+        str(gate.get("status", "") or "").strip().lower()
+        == "blocked_until_large_work_preflight"
+        and isinstance(gate_requirements, list)
+        and "large_work_orchestration_bundle" in gate_requirements
+        and any(action.startswith("HARD PRE-FLIGHT STOP:") for action in actions)
+    ):
+        codes.append("large_work_preflight")
+    return codes
 
 
 def _normalize_full_summary_token_optimizer_decision(value: Any) -> Dict[str, Any]:
@@ -9323,7 +10516,7 @@ def _postmortem_acceptance_status(skill_name: str, postmortem: Dict[str, Any]) -
     if skill_name == "goal-state-harness":
         completion_guard = postmortem.get("completion_guard", {}) or {}
         user_stop_guard = postmortem.get("user_stop_guard", {}) or {}
-        if completion_guard.get("status") == "blocked" or user_stop_guard.get("status") == "blocked":
+        if completion_guard.get("status") in {"blocked", "failed", "pending"} or user_stop_guard.get("status") == "blocked":
             return "blocked"
         if completion_guard.get("status") == "passed":
             latest_status = str(completion_guard.get("latest_goal_status", "") or "")
@@ -9644,6 +10837,14 @@ def _required_skills(
     subagents = postmortem.get("subagent_summary", {}) or {}
     verification_commands = postmortem.get("verification_commands", []) or []
     sql_specialist_scope = _is_sql_specialist_answer_scope(postmortem, sql_lowered, sql_scope_texts)
+
+    if token_gate.get("required"):
+        token_reason = "token gate requires a runtime token-optimizer decision"
+        if "subagent_transcripts_require_token_decision" in {
+            str(reason) for reason in token_gate.get("reasons", []) or []
+        }:
+            token_reason = "subagent packets/transcripts require a token decision"
+        _add(required, "token-optimizer", token_reason)
 
     if sql_specialist_scope:
         _add(

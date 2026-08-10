@@ -329,9 +329,9 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
 
         self.assertIn("sql-formatting", catalog_names)
         self.assertIn("sql-formatting", root_skill_names)
-        self.assertEqual(root_manifest["version"], "2.9.138")
-        self.assertEqual(codex_manifest["version"], "2.9.138")
-        self.assertEqual(agent_manifest["version"], "2.9.138")
+        self.assertEqual(root_manifest["version"], "2.9.139")
+        self.assertEqual(codex_manifest["version"], "2.9.139")
+        self.assertEqual(agent_manifest["version"], "2.9.139")
         for manifest in [root_manifest, codex_manifest]:
             with self.subTest(manifest=manifest["description"]):
                 layout = manifest["artifact_layout"]
@@ -387,62 +387,37 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
 
         self.assertGreaterEqual(_version_tuple(root_manifest["version"]), (2, 9, 10))
 
-    def test_default_prompt_is_a_compact_bootstrap_contract(self):
+    def test_default_prompt_contains_compact_user_examples_only(self):
         manifest = _manifest(Path(".codex-plugin") / "plugin.json")
         segments = manifest["interface"]["defaultPrompt"]
 
         self.assertIsInstance(segments, list)
         self.assertTrue(all(isinstance(segment, str) and segment.strip() for segment in segments))
-        self.assertLessEqual(len(segments), 10)
+        self.assertGreaterEqual(len(segments), 2)
+        self.assertLessEqual(len(segments), 4)
 
         prompt = "\n".join(segments)
         character_count = len(prompt)
         estimated_tokens = (character_count + 3) // 4
 
-        self.assertLess(character_count, 1800)
-        self.assertLess(estimated_tokens, 450)
+        self.assertLess(character_count, 500)
+        self.assertLess(estimated_tokens, 125)
         self.assertEqual(len(segments), len(set(segments)))
 
-        required_markers = [
-            "kh-uaf:always-on-front-door",
-            "first and alone",
-            "execution_gate",
-            "execution_authorization",
-            "immediate_next_skills",
-            "best available specialist provider",
-            "GoalState",
-            "current project, chat/task, and subagent lineage",
-            "explicit authorization",
-            "token_optimizer_status",
-            "selected_not_executed_skills",
-            "runtime_applied_skills",
-            "verification-before-completion-harness",
-            "user's current language",
-            "selected skill docs",
-            "cannot guarantee host auto-selection",
-            "Audit compliance",
-            "normal machine bootstrap",
-            "current unfinished task evidence",
-            "task completion",
-            "new task",
-        ]
+        required_markers = ["Review this repository", "plan a new workflow", "Format this SQL"]
         for marker in required_markers:
             with self.subTest(required_marker=marker):
                 self.assertIn(marker, prompt)
 
-        detailed_procedure_markers = [
-            "BrainstormSession",
-            "Visible brainstorming output gate",
-            "large_work_orchestration_bundle",
-            "pb-to-csharp-migration-harness",
-            "sql-formatting-style-harness",
-            "windows-dev-server-runner",
-            "workflow_usability_auto",
-            ".kh/development/<run-id>/state/progress.json",
-            "For user-facing deliverables",
+        behavior_enforcement_markers = [
+            "first and alone",
+            "execution_gate",
+            "immediate_next_skills",
+            "runtime_applied_skills",
+            "verification-before-completion-harness",
         ]
-        for marker in detailed_procedure_markers:
-            with self.subTest(detailed_procedure_marker=marker):
+        for marker in behavior_enforcement_markers:
+            with self.subTest(behavior_enforcement_marker=marker):
                 self.assertNotIn(marker, prompt)
 
     def test_front_door_docs_bound_host_selection_and_same_task_reuse(self):

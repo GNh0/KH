@@ -456,6 +456,14 @@ def _generalized_contract_profile_entry(
     naming_grammar = payload.get("naming_grammar")
     event_shapes = payload.get("event_method_shapes")
     designer_properties = payload.get("designer_properties")
+    expected_control_contract = payload.get("expected_control_contract")
+    generated_csharp_verification = payload.get("generated_csharp_verification")
+    raw_konelib_defaults = payload.get("konelib_defaults")
+    konelib_defaults = (
+        dict(raw_konelib_defaults)
+        if isinstance(raw_konelib_defaults, Mapping)
+        else ({} if raw_konelib_defaults is None else None)
+    )
     grid_repository_conventions = payload.get("grid_repository_conventions")
     stored_procedure_rules = payload.get("stored_procedure_rules")
     packaged_rule_groups = payload.get("rules")
@@ -473,6 +481,15 @@ def _generalized_contract_profile_entry(
         or not isinstance(event_shapes, Mapping)
         or not isinstance(designer_properties, list)
         or not designer_properties
+        or (
+            expected_control_contract is not None
+            and not isinstance(expected_control_contract, Mapping)
+        )
+        or (
+            generated_csharp_verification is not None
+            and not isinstance(generated_csharp_verification, Mapping)
+        )
+        or konelib_defaults is None
         or not isinstance(grid_repository_conventions, Mapping)
         or not isinstance(stored_procedure_rules, Mapping)
         or not isinstance(packaged_csharp_rules, Mapping)
@@ -506,6 +523,28 @@ def _generalized_contract_profile_entry(
         return None
 
     artifact_hash = "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
+    generated_required_inputs = (
+        generated_csharp_verification.get("required_inputs", [])
+        if isinstance(generated_csharp_verification, Mapping)
+        else []
+    )
+    expected_control_contract_required = bool(
+        isinstance(expected_control_contract, Mapping)
+        and "expected_control_contracts" in generated_required_inputs
+    )
+    normalized_required_inputs = {
+        str(item).strip().lower() for item in generated_required_inputs if str(item).strip()
+    }
+    control_contract_feature_enabled = bool(
+        isinstance(expected_control_contract, Mapping)
+        and expected_control_contract_required
+    )
+    target_artifact_binding_required = bool(
+        control_contract_feature_enabled
+        and normalized_required_inputs.intersection(
+            {"actual target files", "actual target artifacts"}
+        )
+    )
     return {
         "profile_id": contract_id,
         "version": contract_version,
@@ -533,6 +572,27 @@ def _generalized_contract_profile_entry(
                 },
                 "designer_contract": {
                     "properties": [str(item) for item in designer_properties if str(item)],
+                    "expected_control_contract": (
+                        dict(expected_control_contract)
+                        if isinstance(expected_control_contract, Mapping)
+                        else {}
+                    ),
+                    "expected_control_contract_required": expected_control_contract_required,
+                    "control_contract_feature_enabled": control_contract_feature_enabled,
+                    "control_contract_completeness_required": bool(
+                        control_contract_feature_enabled
+                        and expected_control_contract.get("complete_inventory_required") is True
+                    ),
+                    "structured_evidence_registry_required": bool(
+                        control_contract_feature_enabled
+                        and expected_control_contract.get("evidence_registry_required") is True
+                    ),
+                    "initialize_component_scope_required": bool(
+                        control_contract_feature_enabled
+                        and expected_control_contract.get("initialize_component_scope_required") is True
+                    ),
+                    "target_artifact_binding_required": target_artifact_binding_required,
+                    "konelib_defaults": konelib_defaults,
                     "grid_repository_conventions": dict(grid_repository_conventions),
                     "static_ui_requires_designer": True,
                     "runtime_dynamic_evidence_required": True,
@@ -4562,6 +4622,7 @@ def _validate_designer_owned_ui_contract(
     designer_source: str,
     runtime_dynamic_ui_evidence: Any,
     require_designer_companion: bool,
+    allow_empty_designer: bool = False,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     contract = rules.get("designer_contract")
     contract = dict(contract) if isinstance(contract, Mapping) else {}
@@ -4613,7 +4674,7 @@ def _validate_designer_owned_ui_contract(
                 "designer_classes": sorted(designer_classes),
             }
         )
-    if designer_source.strip() and not designer_findings:
+    if designer_source.strip() and not designer_findings and not allow_empty_designer:
         issues.append(
             {
                 "code": "designer_companion_static_setup_missing",
@@ -4682,32 +4743,1857 @@ def _grid_contract_suffix(
     return (view_match.group("suffix") if view_match else "List"), issues
 
 
+def _csharp_class_scopes(structural_source: str) -> List[Dict[str, Any]]:
+    scopes: List[Dict[str, Any]] = []
+    class_pattern = re.compile(
+        r"\b(?:(?:public|internal|protected|private|abstract|sealed|static|partial)\s+)*"
+        r"class\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
+    )
+    for match in class_pattern.finditer(structural_source):
+        body_start = structural_source.find("{", match.end())
+        if body_start < 0:
+            continue
+        depth = 0
+        body_end = -1
+        for position in range(body_start, len(structural_source)):
+            token = structural_source[position]
+            if token == "{":
+                depth += 1
+            elif token == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = position + 1
+                    break
+        if body_end < 0:
+            continue
+        scopes.append(
+            {
+                "name": match.group("name"),
+                "start": match.start(),
+                "body_start": body_start,
+                "end": body_end,
+            }
+        )
+    return scopes
+
+
+def _csharp_owning_class_scope(
+    class_scopes: Iterable[Mapping[str, Any]],
+    position: int,
+) -> Dict[str, Any] | None:
+    containing = [
+        dict(scope)
+        for scope in class_scopes
+        if int(scope.get("body_start", -1)) < position < int(scope.get("end", -1))
+    ]
+    if not containing:
+        return None
+    return min(containing, key=lambda item: int(item["end"]) - int(item["start"]))
+
+
+def _csharp_scope_key(scope: Mapping[str, Any] | None) -> tuple[int, int]:
+    if not scope:
+        return (-1, -1)
+    return (int(scope.get("start", -1)), int(scope.get("end", -1)))
+
+
+def _csharp_scope_keys(scope: Mapping[str, Any] | None) -> set[tuple[int, int]]:
+    if not scope:
+        return set()
+    partial_scopes = scope.get("partial_scopes")
+    if isinstance(partial_scopes, list):
+        return {
+            _csharp_scope_key(item)
+            for item in partial_scopes
+            if isinstance(item, Mapping)
+        }
+    return {_csharp_scope_key(scope)}
+
+
+def _csharp_scope_is_selected(
+    owner: Mapping[str, Any] | None,
+    selected: Mapping[str, Any] | None,
+) -> bool:
+    return _csharp_scope_key(owner) in _csharp_scope_keys(selected)
+
+
+def _csharp_position_in_scopes(
+    position: int,
+    scopes: Iterable[Mapping[str, Any]],
+) -> bool:
+    return any(
+        int(scope.get("body_start", -1)) < position < int(scope.get("end", -1))
+        for scope in scopes
+    )
+
+
+def _csharp_initialize_component_scopes(
+    structural_source: str,
+    *,
+    class_scope: Mapping[str, Any] | None,
+    class_scopes: Iterable[Mapping[str, Any]],
+) -> List[Dict[str, Any]]:
+    scopes: List[Dict[str, Any]] = []
+    pattern = re.compile(
+        r"\b(?:(?:public|protected|internal|private|static|virtual|override)\s+)*"
+        r"void\s+InitializeComponent\s*\(\s*\)"
+    )
+    all_class_scopes = list(class_scopes)
+    for match in pattern.finditer(structural_source):
+        owner = _csharp_owning_class_scope(all_class_scopes, match.start())
+        if not _csharp_scope_is_selected(owner, class_scope):
+            continue
+        owner_body_start = int(owner.get("body_start", -1)) if owner else -1
+        if owner_body_start < 0:
+            continue
+        member_prefix = structural_source[owner_body_start + 1 : match.start()]
+        if member_prefix.count("{") != member_prefix.count("}"):
+            continue
+        body_start = structural_source.find("{", match.end())
+        if body_start < 0 or not owner or body_start >= int(owner.get("end", -1)):
+            continue
+        if structural_source[match.end() : body_start].strip():
+            continue
+        depth = 0
+        body_end = -1
+        for position in range(body_start, int(owner["end"])):
+            token = structural_source[position]
+            if token == "{":
+                depth += 1
+            elif token == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = position + 1
+                    break
+        if body_end > 0:
+            scopes.append(
+                {
+                    "name": "InitializeComponent",
+                    "start": match.start(),
+                    "body_start": body_start,
+                    "end": body_end,
+                    "class_scope": dict(owner),
+                }
+            )
+    return scopes
+
+
+def _resolve_csharp_designer_form_scope(
+    structural_source: str,
+    *,
+    requested_form_class: str,
+    required: bool,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any] | None, List[Dict[str, Any]], Dict[str, Any]]:
+    scopes = _csharp_class_scopes(structural_source)
+    requested = str(requested_form_class or "").strip()
+    candidates = (
+        [scope for scope in scopes if str(scope["name"]).lower() == requested.lower()]
+        if requested
+        else list(scopes)
+    )
+    candidate_names = {str(scope["name"]).lower() for scope in candidates}
+    selected = None
+    if candidates and len(candidate_names) == 1:
+        selected = dict(candidates[0])
+        selected["partial_scopes"] = [dict(scope) for scope in candidates]
+    issues: List[Dict[str, Any]] = []
+    if required and not candidates:
+        issues.append(
+            {
+                "code": "control_contract_form_scope_missing",
+                "severity": "error",
+                "expected_form_class": requested,
+                "message": "Expected control evidence requires one matching Designer form class.",
+            }
+        )
+    elif required and selected is None:
+        issues.append(
+            {
+                "code": "control_contract_form_scope_ambiguous",
+                "severity": "error",
+                "expected_form_class": requested,
+                "matching_class_count": len(candidates),
+                "message": "Expected control evidence is ambiguous across multiple Designer class bodies.",
+            }
+        )
+    metadata = {
+        "status": "selected" if selected else ("blocked" if required else "not_selected"),
+        "requested_form_class": requested,
+        "selected_form_class": str(selected.get("name") or "") if selected else "",
+        "declared_form_classes": [str(scope["name"]) for scope in scopes],
+        "matching_class_count": len(candidates),
+        "partial_declaration_count": len(candidates) if selected else 0,
+    }
+    return issues, selected, scopes, metadata
+
+
 def _csharp_designer_assignments(
     source: str,
     structural_source: str = "",
-) -> Dict[tuple[str, str], str]:
-    assignments: Dict[tuple[str, str], str] = {}
+    *,
+    class_scope: Mapping[str, Any] | None = None,
+    class_scopes: Iterable[Mapping[str, Any]] | None = None,
+    method_scopes: Iterable[Mapping[str, Any]] | None = None,
+) -> Dict[tuple[str, str], List[Dict[str, Any]]]:
+    assignments: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+    structural = structural_source or source
+    scopes = list(class_scopes or [])
+    selected_method_scopes = list(method_scopes or [])
+    scope_filter_requested = class_scopes is not None
+    method_filter_requested = method_scopes is not None
     for match in re.finditer(
-        r"(?m)^\s*this\.(?P<member>[A-Za-z_][A-Za-z0-9_]*)\."
-        r"(?P<property>[A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(?P<value>.*?)\s*;\s*$",
-        source,
+        r"^[ \t]*this\.(?P<member>[A-Za-z_][A-Za-z0-9_]*)\."
+        r"(?P<property>[A-Za-z_][A-Za-z0-9_.]*)[ \t]*=",
+        structural,
+        flags=re.MULTILINE,
     ):
-        if structural_source:
-            lhs = f"this.{match.group('member')}.{match.group('property')}"
-            if lhs not in structural_source[match.start() : match.end()]:
+        if scope_filter_requested:
+            owner = _csharp_owning_class_scope(scopes, match.start())
+            if not _csharp_scope_is_selected(owner, class_scope):
                 continue
-        assignments[(match.group("member"), match.group("property"))] = match.group("value").strip()
+        if method_filter_requested and not _csharp_position_in_scopes(
+            match.start(), selected_method_scopes
+        ):
+            continue
+        value_start = match.end()
+        value_end = structural.find(";", value_start)
+        if value_end < 0:
+            continue
+        owner_scope = _csharp_owning_class_scope(scopes, match.start())
+        assignments.setdefault((match.group("member"), match.group("property")), []).append(
+            {
+                "value": source[value_start:value_end].strip(),
+                "position": match.start(),
+                "conditional": _csharp_assignment_is_conditional(
+                    structural,
+                    match.start(),
+                    owner_scope,
+                ),
+            }
+        )
     return assignments
+
+
+def _csharp_assignment_is_conditional(
+    structural_source: str,
+    position: int,
+    class_scope: Mapping[str, Any] | None,
+) -> bool:
+    start = int(class_scope.get("body_start", -1)) + 1 if class_scope else 0
+    immediate_prefix = structural_source[
+        max(start, position - 512) : position
+    ].rstrip()
+    if re.search(
+        r"\b(?:if|else|switch|for|foreach|while|do|catch)\b"
+        r"(?:\s*\([^{};]*\))?\s*$",
+        immediate_prefix,
+        flags=re.DOTALL,
+    ):
+        return True
+    open_braces: List[int] = []
+    for cursor in range(max(start, 0), min(position, len(structural_source))):
+        token = structural_source[cursor]
+        if token == "{":
+            open_braces.append(cursor)
+        elif token == "}" and open_braces:
+            open_braces.pop()
+    for brace_position in open_braces:
+        prefix = structural_source[max(start, brace_position - 512) : brace_position].rstrip()
+        if re.search(
+            r"\b(?:if|else|switch|for|foreach|while|do|catch)\b"
+            r"(?:\s*\([^{};]*\))?\s*$",
+            prefix,
+            flags=re.DOTALL,
+        ):
+            return True
+    return False
+
+
+def _csharp_assignment_values(
+    assignments: Mapping[tuple[str, str], Sequence[Mapping[str, Any]]],
+    key: tuple[str, str],
+) -> List[str]:
+    return [str(item.get("value") or "") for item in assignments.get(key, [])]
+
+
+def _csharp_last_assignment_value(
+    assignments: Mapping[tuple[str, str], Sequence[Mapping[str, Any]]],
+    key: tuple[str, str],
+    default: Any = None,
+) -> Any:
+    values = _csharp_assignment_values(assignments, key)
+    return values[-1] if values else default
 
 
 def _csharp_direct_string_value(value: str) -> str | None:
     raw = str(value or "").strip()
     if raw in {"string.Empty", "System.String.Empty", '""'}:
         return ""
+    verbatim_match = re.fullmatch(r'@"((?:""|[^"])*)"', raw, flags=re.DOTALL)
+    if verbatim_match:
+        return verbatim_match.group(1).replace('""', '"')
     match = re.fullmatch(r'"((?:\\.|[^"\\])*)"', raw)
     if not match:
         return None
-    return match.group(1).replace(r'\"', '"')
+    content = match.group(1)
+    content = re.sub(
+        r"\\u([0-9A-Fa-f]{4})",
+        lambda item: chr(int(item.group(1), 16)),
+        content,
+    )
+    content = re.sub(
+        r"\\U([0-9A-Fa-f]{8})",
+        lambda item: chr(int(item.group(1), 16)),
+        content,
+    )
+    escapes = {
+        r"\0": "\0",
+        r"\a": "\a",
+        r"\b": "\b",
+        r"\f": "\f",
+        r"\n": "\n",
+        r"\r": "\r",
+        r"\t": "\t",
+        r"\v": "\v",
+        r'\"': '"',
+        r"\'": "'",
+        r"\\": "\\",
+    }
+    return re.sub(
+        r"\\[0abfnrtv\"'\\]",
+        lambda item: escapes.get(item.group(0), item.group(0)),
+        content,
+    )
+
+
+def _normalize_csharp_type_name(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or "").replace("global::", ""))
+
+
+def _csharp_type_matches(actual: str, expected: str) -> bool:
+    normalized_actual = _normalize_csharp_type_name(actual)
+    normalized_expected = _normalize_csharp_type_name(expected)
+    if not normalized_actual or not normalized_expected:
+        return False
+    if "." in normalized_actual and "." in normalized_expected:
+        return normalized_actual == normalized_expected
+    return normalized_actual.rsplit(".", 1)[-1] == normalized_expected.rsplit(".", 1)[-1]
+
+
+def _csharp_exact_property_matches(actual: str, expected: Any) -> bool:
+    raw_actual = str(actual or "").strip()
+    scalar_actual = re.sub(r"\s+", "", raw_actual)
+    while scalar_actual.startswith("(") and scalar_actual.endswith(")"):
+        scalar_actual = scalar_actual[1:-1]
+    parsed_actual = _parse_csharp_designer_value(scalar_actual)
+    if expected is None:
+        return raw_actual == "null"
+    if type(expected) in {bool, int, float}:
+        return parsed_actual == expected
+    return re.sub(r"\s+", "", raw_actual) == re.sub(r"\s+", "", str(expected).strip())
+
+
+def _designer_control_types(
+    source: str,
+    *,
+    class_scope: Mapping[str, Any] | None = None,
+    class_scopes: Iterable[Mapping[str, Any]] | None = None,
+    initializer_scopes: Iterable[Mapping[str, Any]] | None = None,
+) -> tuple[Dict[str, str], Dict[str, str]]:
+    declarations: Dict[str, str] = {}
+    initializers: Dict[str, str] = {}
+    scopes = list(class_scopes or [])
+    selected_initializer_scopes = list(initializer_scopes or [])
+    scope_filter_requested = class_scopes is not None
+    initializer_filter_requested = initializer_scopes is not None
+    declaration_pattern = re.compile(
+        r"(?m)^\s*(?:public|protected|internal|private)\s+"
+        r"(?:(?:static|readonly)\s+)*(?P<type>(?:global::)?[A-Za-z_][A-Za-z0-9_.<>]*)\s+"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;"
+    )
+    initializer_pattern = re.compile(
+        r"(?m)^\s*this\.(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+"
+        r"(?P<type>(?:global::)?[A-Za-z_][A-Za-z0-9_.<>]*)\s*\("
+    )
+    for match in declaration_pattern.finditer(source):
+        if scope_filter_requested and not _csharp_scope_is_selected(
+            _csharp_owning_class_scope(scopes, match.start()), class_scope
+        ):
+            continue
+        declarations[match.group("name")] = match.group("type")
+    for match in initializer_pattern.finditer(source):
+        if scope_filter_requested and not _csharp_scope_is_selected(
+            _csharp_owning_class_scope(scopes, match.start()), class_scope
+        ):
+            continue
+        if initializer_filter_requested and not _csharp_position_in_scopes(
+            match.start(), selected_initializer_scopes
+        ):
+            continue
+        initializers[match.group("name")] = match.group("type")
+    return declarations, initializers
+
+
+def _normalized_evidence_references(value: Any) -> List[str]:
+    if isinstance(value, str):
+        candidates = [value]
+    elif isinstance(value, Mapping):
+        candidates = value.get("evidence_refs", value.get("references", []))
+        if isinstance(candidates, str):
+            candidates = [candidates]
+    elif isinstance(value, Iterable):
+        candidates = list(value)
+    else:
+        candidates = []
+    return [str(item).strip() for item in candidates if str(item).strip()]
+
+
+def _strict_evidence_references(value: Any) -> tuple[List[str], bool]:
+    if isinstance(value, str):
+        candidates = [value]
+    elif isinstance(value, Iterable) and not isinstance(value, (str, bytes, Mapping)):
+        candidates = list(value)
+    else:
+        return [], False
+    references = [item.strip() for item in candidates if isinstance(item, str) and item.strip()]
+    valid = bool(references) and len(references) == len(candidates)
+    valid = valid and len(references) == len(set(references))
+    valid = valid and all(
+        re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*", reference)
+        for reference in references
+    )
+    return references, bool(valid)
+
+
+def _normalized_sha256(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw.startswith("sha256:"):
+        raw = raw.split(":", 1)[1]
+    return raw if re.fullmatch(r"[0-9a-f]{64}", raw) else ""
+
+
+def _validate_text_artifact_binding(
+    supplied_text: str,
+    *,
+    path_value: str | Path,
+    expected_sha256: str,
+    role: str,
+    required: bool,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any], str]:
+    path_text = str(path_value or "").strip()
+    expected_digest = _normalized_sha256(expected_sha256)
+    issues: List[Dict[str, Any]] = []
+    metadata = {
+        "role": role,
+        "status": "not_requested",
+        "path": "",
+        "expected_sha256": f"sha256:{expected_digest}" if expected_digest else "",
+        "actual_sha256": "",
+        "readback_matches_supplied_text": False,
+    }
+    if not path_text and not expected_digest:
+        if required:
+            issues.append(
+                {
+                    "code": f"target_{role}_artifact_required",
+                    "severity": "error",
+                    "message": f"Current profile verification requires the exact target {role} path and SHA-256.",
+                }
+            )
+            metadata["status"] = "blocked"
+        return issues, metadata, ""
+    if not path_text or not expected_digest:
+        issues.append(
+            {
+                "code": f"target_{role}_artifact_binding_incomplete",
+                "severity": "error",
+                "message": f"Target {role} artifact binding requires both path and SHA-256.",
+            }
+        )
+        metadata["status"] = "blocked"
+        return issues, metadata, ""
+    path = Path(path_text)
+    try:
+        raw_bytes = path.read_bytes()
+    except OSError as exc:
+        issues.append(
+            {
+                "code": f"target_{role}_artifact_unreadable",
+                "severity": "error",
+                "message": f"Target {role} artifact path must be readable.",
+                "detail": str(exc),
+            }
+        )
+        metadata["status"] = "blocked"
+        return issues, metadata, ""
+    actual_digest = hashlib.sha256(raw_bytes).hexdigest()
+    metadata["path"] = str(path.resolve())
+    metadata["actual_sha256"] = f"sha256:{actual_digest}"
+    if actual_digest != expected_digest:
+        issues.append(
+            {
+                "code": f"target_{role}_artifact_digest_mismatch",
+                "severity": "error",
+                "message": f"Target {role} artifact SHA-256 does not match the expected digest.",
+            }
+        )
+    try:
+        readback = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        issues.append(
+            {
+                "code": f"target_{role}_artifact_decode_failed",
+                "severity": "error",
+                "message": f"Target {role} artifact must be UTF-8 or UTF-8 with BOM.",
+                "detail": str(exc),
+            }
+        )
+        readback = ""
+    metadata["readback_matches_supplied_text"] = readback == str(supplied_text or "")
+    if not metadata["readback_matches_supplied_text"]:
+        issues.append(
+            {
+                "code": f"target_{role}_artifact_text_mismatch",
+                "severity": "error",
+                "message": f"Supplied {role} text is not the exact decoded content of the bound target file.",
+            }
+        )
+    metadata["status"] = "passed" if not issues else "blocked"
+    return issues, metadata, readback
+
+
+def _validate_target_artifact_path_separation(
+    source_binding: Mapping[str, Any],
+    designer_binding: Mapping[str, Any],
+    baseline_binding: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    source_path = str(source_binding.get("path") or "")
+    designer_path = str(designer_binding.get("path") or "")
+    baseline_path = str(baseline_binding.get("path") or "")
+    if source_path and designer_path and source_path.lower() == designer_path.lower():
+        issues.append(
+            {
+                "code": "target_artifact_role_path_collision",
+                "severity": "error",
+                "roles": ["source", "designer"],
+                "path": source_path,
+                "message": "Code-behind and Designer evidence must bind to distinct target files.",
+            }
+        )
+    if designer_path and baseline_path and designer_path.lower() == baseline_path.lower():
+        issues.append(
+            {
+                "code": "baseline_designer_target_path_collision",
+                "severity": "error",
+                "roles": ["designer", "baseline_designer"],
+                "path": designer_path,
+                "message": "A preservation baseline must be a separately captured pre-edit artifact, not the current target Designer file.",
+            }
+        )
+    return issues
+
+
+def _normalize_evidence_registry(
+    value: Any,
+    *,
+    required: bool,
+) -> tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any]]:
+    if isinstance(value, Mapping):
+        raw_entries = []
+        for key, raw_entry in value.items():
+            entry = dict(raw_entry) if isinstance(raw_entry, Mapping) else {}
+            entry.setdefault("evidence_id", str(key))
+            raw_entries.append(entry)
+    elif isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+        raw_entries = list(value)
+    else:
+        raw_entries = []
+    registry: Dict[str, Dict[str, Any]] = {}
+    issues: List[Dict[str, Any]] = []
+    if required and value is None:
+        issues.append(
+            {
+                "code": "control_evidence_registry_required",
+                "severity": "error",
+                "message": "Current control verification requires a structured evidence_registry ledger.",
+            }
+        )
+    for index, raw_entry in enumerate(raw_entries):
+        if not isinstance(raw_entry, Mapping):
+            issues.append(
+                {
+                    "code": "control_evidence_registry_entry_invalid",
+                    "severity": "error",
+                    "entry_index": index,
+                    "evidence_id": "",
+                    "message": "Each evidence registry entry must be a structured mapping.",
+                }
+            )
+            continue
+        entry = dict(raw_entry)
+        evidence_id = str(entry.get("evidence_id") or entry.get("id") or "").strip()
+        kind = str(entry.get("kind") or "").strip().lower()
+        locator = str(entry.get("locator") or "").strip()
+        digest = _normalized_sha256(entry.get("sha256") or entry.get("digest"))
+        stable_locator = bool(
+            re.fullmatch(r"(?:artifact|file|review|user|memory)://[^\s]+", locator)
+        )
+        if (
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*", evidence_id)
+            or kind not in {"source", "user"}
+            or not (stable_locator or digest)
+            or evidence_id in registry
+        ):
+            issues.append(
+                {
+                    "code": "control_evidence_registry_entry_invalid",
+                    "severity": "error",
+                    "entry_index": index,
+                    "evidence_id": evidence_id,
+                    "message": (
+                        "Each evidence registry entry requires a unique stable evidence_id, "
+                        "source/user kind, and a stable locator URI or SHA-256 digest."
+                    ),
+                }
+            )
+            continue
+        registry[evidence_id] = {
+            "evidence_id": evidence_id,
+            "kind": kind,
+            "locator": locator,
+            "sha256": f"sha256:{digest}" if digest else "",
+        }
+    return registry, issues, {
+        "status": "passed" if not issues else "blocked",
+        "required": required,
+        "entries": [dict(item) for item in registry.values()],
+    }
+
+
+def _resolve_control_evidence_references(
+    value: Any,
+    evidence_registry: Mapping[str, Mapping[str, Any]],
+    *,
+    issue_code: str,
+    context: Mapping[str, Any] | None = None,
+) -> tuple[List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    references = _normalized_evidence_references(value)
+    resolved: List[Dict[str, Any]] = []
+    issues: List[Dict[str, Any]] = []
+    for reference in references:
+        entry = evidence_registry.get(reference)
+        if not isinstance(entry, Mapping):
+            issues.append(
+                {
+                    "code": issue_code,
+                    "severity": "error",
+                    "evidence_ref": reference,
+                    **dict(context or {}),
+                    "message": "Evidence references must resolve to a structured source/user registry entry.",
+                }
+            )
+            continue
+        resolved.append(dict(entry))
+    return references, resolved, issues
+
+
+def _validate_control_contract_evidence_fields(
+    contract: Mapping[str, Any],
+    properties: Mapping[str, Any],
+    evidence_registry: Mapping[str, Mapping[str, Any]],
+    *,
+    control: str,
+    structured_required: bool,
+) -> List[Dict[str, Any]]:
+    if not structured_required:
+        return []
+    issues: List[Dict[str, Any]] = []
+
+    def validate_references(value: Any, *, property_path: str = "") -> None:
+        references, valid = _strict_evidence_references(value)
+        context = {"control": control}
+        if property_path:
+            context["property"] = property_path
+        if not valid:
+            issues.append(
+                {
+                    "code": "control_contract_evidence_references_invalid",
+                    "severity": "error",
+                    **context,
+                    "message": "Evidence references must be a non-empty unique string ID or list of string IDs.",
+                }
+            )
+            return
+        _, _, reference_issues = _resolve_control_evidence_references(
+            references,
+            evidence_registry,
+            issue_code="control_contract_evidence_reference_unresolved",
+            context=context,
+        )
+        issues.extend(reference_issues)
+
+    if "evidence_refs" in contract:
+        validate_references(contract.get("evidence_refs"))
+
+    property_evidence = contract.get("property_evidence")
+    if "property_evidence" not in contract:
+        return issues
+    if not isinstance(property_evidence, Mapping):
+        issues.append(
+            {
+                "code": "control_contract_property_evidence_invalid",
+                "severity": "error",
+                "control": control,
+                "message": "property_evidence must map declared property paths to evidence IDs.",
+            }
+        )
+        return issues
+    for raw_property_path, value in property_evidence.items():
+        property_path = str(raw_property_path or "").strip()
+        if (
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", property_path)
+            or property_path not in properties
+        ):
+            issues.append(
+                {
+                    "code": "control_contract_property_evidence_invalid",
+                    "severity": "error",
+                    "control": control,
+                    "property": property_path,
+                    "message": "property_evidence may reference only a property declared in the same control contract.",
+                }
+            )
+            continue
+        validate_references(value, property_path=property_path)
+    return issues
+
+
+def _control_property_provenance(
+    contract: Mapping[str, Any],
+    property_path: str,
+    evidence_registry: Mapping[str, Mapping[str, Any]],
+    *,
+    structured_required: bool,
+) -> Dict[str, Any]:
+    property_evidence = contract.get("property_evidence")
+    if isinstance(property_evidence, Mapping) and property_path in property_evidence:
+        references = _normalized_evidence_references(property_evidence[property_path])
+        source = "property_evidence"
+    else:
+        references = _normalized_evidence_references(contract.get("evidence_refs"))
+        source = "evidence_refs"
+    resolved: List[Dict[str, Any]] = []
+    if structured_required:
+        _, resolved, _ = _resolve_control_evidence_references(
+            references,
+            evidence_registry,
+            issue_code="control_contract_evidence_reference_unresolved",
+        )
+    return {
+        "source": source,
+        "references": references,
+        "resolved": resolved,
+        "valid": bool(resolved) if structured_required else bool(references),
+    }
+
+
+def _normalize_no_control_contract_evidence(
+    value: Any,
+    evidence_registry: Mapping[str, Mapping[str, Any]],
+    *,
+    structured_required: bool,
+) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    evidence = dict(value) if isinstance(value, Mapping) else {}
+    reason = str(
+        evidence.get("reason")
+        or (evidence.get("rationale") if not structured_required else "")
+        or ""
+    ).strip()
+    references, resolved, issues = _resolve_control_evidence_references(
+        evidence,
+        evidence_registry,
+        issue_code="no_control_evidence_reference_unresolved",
+    )
+    if value is not None and not reason:
+        issues.append(
+            {
+                "code": "no_control_evidence_reason_required",
+                "severity": "error",
+                "message": "no_control_contract_evidence requires a non-empty reason.",
+            }
+        )
+    if value is not None and not references:
+        issues.append(
+            {
+                "code": "no_control_evidence_references_required",
+                "severity": "error",
+                "message": "no_control_contract_evidence requires one or more evidence_refs.",
+            }
+        )
+    normalized = {
+        "provided": value is not None,
+        "reason": reason,
+        "references": references,
+        "resolved_evidence": resolved,
+        "provenance_valid": bool(reason and references)
+        and (bool(resolved) and len(resolved) == len(references) if structured_required else True),
+    }
+    return normalized, issues
+
+
+def _is_designer_control_type(type_name: str) -> bool:
+    normalized = _normalize_csharp_type_name(type_name)
+    short_name = normalized.rsplit(".", 1)[-1].lower()
+    if not short_name:
+        return False
+    if short_name.startswith("u_"):
+        return True
+    if normalized.startswith(("DevExpress.", "System.Windows.Forms.")):
+        return True
+    return bool(
+        re.search(
+            r"(?:Button|CheckBox|ComboBox|Component|Container|Control|DateEdit|Edit|"
+            r"GridColumn|GridControl|GridView|GroupBox|Label|LayoutControl|Memo|Panel|"
+            r"RepositoryItem[A-Za-z0-9_]*|SpinEdit|TabControl|TabPage|TextBox|View)$",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _designer_has_mapped_konelib_control_evidence(
+    designer_code: str,
+    *,
+    target_form_class: str,
+) -> bool:
+    _, selected_scope, class_scopes, _ = _resolve_csharp_designer_form_scope(
+        designer_code,
+        requested_form_class=target_form_class,
+        required=False,
+    )
+    scopes_to_check: List[Mapping[str, Any] | None] = (
+        [selected_scope] if selected_scope is not None else list(class_scopes)
+    )
+    for scope in scopes_to_check:
+        declarations, initializers = _designer_control_types(
+            designer_code,
+            class_scope=scope,
+            class_scopes=class_scopes,
+        )
+        control_types = dict(declarations)
+        control_types.update(initializers)
+        assignments = _csharp_designer_assignments(
+            designer_code,
+            designer_code,
+            class_scope=scope,
+            class_scopes=class_scopes,
+        )
+        if any(
+            _is_konelib_input_type(control_type)
+            and bool(_csharp_assignment_values(assignments, (control, "BindingField")))
+            for control, control_type in control_types.items()
+        ):
+            return True
+    return False
+
+
+def _designer_control_inventory(
+    declarations: Mapping[str, str],
+    initializers: Mapping[str, str],
+    assignments: Mapping[tuple[str, str], Sequence[Mapping[str, Any]]],
+) -> Dict[str, Dict[str, Any]]:
+    inventory: Dict[str, Dict[str, Any]] = {}
+    for name in sorted(set(declarations).union(initializers)):
+        declared_type = str(declarations.get(name) or "")
+        initialized_type = str(initializers.get(name) or "")
+        if not (
+            (name in declarations and name in initializers)
+            or
+            _is_designer_control_type(declared_type)
+            or _is_designer_control_type(initialized_type)
+        ):
+            continue
+        inventory[name] = {
+            "control": name,
+            "declared_type": declared_type,
+            "initialized_type": initialized_type,
+            "bindings": {},
+        }
+    for (name, property_path), records in assignments.items():
+        if property_path not in {"BindingField", "FieldName", "DataPropertyName"}:
+            continue
+        item = inventory.setdefault(
+            name,
+            {
+                "control": name,
+                "declared_type": str(declarations.get(name) or ""),
+                "initialized_type": str(initializers.get(name) or ""),
+                "bindings": {},
+            },
+        )
+        item["bindings"][property_path] = [
+            str(record.get("value") or "") for record in records
+        ]
+    return inventory
+
+
+def _validate_designer_initialize_component_ownership(
+    designer_code: str,
+    *,
+    class_scope: Mapping[str, Any] | None,
+    class_scopes: Iterable[Mapping[str, Any]],
+    initialize_scopes: Iterable[Mapping[str, Any]],
+    required: bool,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    all_class_scopes = list(class_scopes)
+    selected_initialize_scopes = list(initialize_scopes)
+    issues: List[Dict[str, Any]] = []
+    if required and len(selected_initialize_scopes) != 1:
+        issues.append(
+            {
+                "code": (
+                    "designer_initialize_component_missing"
+                    if not selected_initialize_scopes
+                    else "designer_initialize_component_ambiguous"
+                ),
+                "severity": "error",
+                "matching_method_count": len(selected_initialize_scopes),
+                "message": "The selected partial form requires exactly one InitializeComponent method.",
+            }
+        )
+    declarations, all_initializers = _designer_control_types(
+        designer_code,
+        class_scope=class_scope,
+        class_scopes=all_class_scopes,
+    )
+    ui_names = {
+        name
+        for name in set(declarations).union(all_initializers)
+        if (name in declarations and name in all_initializers)
+        or _is_designer_control_type(declarations.get(name, ""))
+        or _is_designer_control_type(all_initializers.get(name, ""))
+    }
+    initializer_pattern = re.compile(
+        r"(?m)^\s*this\.(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+"
+        r"(?P<type>(?:global::)?[A-Za-z_][A-Za-z0-9_.<>]*)\s*\("
+    )
+    outside: List[Dict[str, Any]] = []
+    for match in initializer_pattern.finditer(designer_code):
+        owner = _csharp_owning_class_scope(all_class_scopes, match.start())
+        if not _csharp_scope_is_selected(owner, class_scope):
+            continue
+        if _is_designer_control_type(match.group("type")) and not _csharp_position_in_scopes(
+            match.start(), selected_initialize_scopes
+        ):
+            outside.append(
+                {
+                    "control": match.group("name"),
+                    "category": "initializer",
+                }
+            )
+    all_assignments = _csharp_designer_assignments(
+        designer_code,
+        designer_code,
+        class_scope=class_scope,
+        class_scopes=all_class_scopes,
+    )
+    for (control, property_path), records in all_assignments.items():
+        if control not in ui_names:
+            continue
+        for record in records:
+            if not _csharp_position_in_scopes(
+                int(record.get("position", -1)), selected_initialize_scopes
+            ):
+                outside.append(
+                    {
+                        "control": control,
+                        "category": "property",
+                        "property": property_path,
+                    }
+                )
+    if required and outside:
+        issues.append(
+            {
+                "code": "designer_static_evidence_outside_initialize_component",
+                "severity": "error",
+                "findings": outside,
+                "message": (
+                    "Designer control initialization and static property evidence must be "
+                    "inside the selected partial form's InitializeComponent method."
+                ),
+            }
+        )
+    return issues, {
+        "status": "passed" if not issues else "blocked",
+        "required": required,
+        "initialize_component_count": len(selected_initialize_scopes),
+        "outside_findings": outside,
+    }
+
+
+def _validate_expected_control_contracts(
+    designer_source: str,
+    designer_code: str,
+    expected_control_contracts: Iterable[Any] | None,
+    *,
+    target_form_class: str = "",
+    expected_control_contract_required: bool = False,
+    no_control_contract_evidence: Any = None,
+    evidence_registry: Mapping[str, Mapping[str, Any]] | None = None,
+    structured_evidence_required: bool = False,
+    complete_inventory_required: bool = False,
+    initialize_component_scope_required: bool = False,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any], Dict[tuple[str, str], Any]]:
+    registry = dict(evidence_registry or {})
+    no_control_evidence, no_control_evidence_issues = _normalize_no_control_contract_evidence(
+        no_control_contract_evidence,
+        registry,
+        structured_required=structured_evidence_required,
+    )
+    contracts = None if expected_control_contracts is None else list(expected_control_contracts)
+    strict_scope = bool(expected_control_contract_required and designer_code.strip())
+    scope_issues, class_scope, class_scopes, scope_metadata = _resolve_csharp_designer_form_scope(
+        designer_code,
+        requested_form_class=target_form_class,
+        required=bool(strict_scope or contracts),
+    )
+    initialize_scopes = _csharp_initialize_component_scopes(
+        designer_code,
+        class_scope=class_scope,
+        class_scopes=class_scopes,
+    )
+    ownership_issues, ownership_metadata = _validate_designer_initialize_component_ownership(
+        designer_code,
+        class_scope=class_scope,
+        class_scopes=class_scopes,
+        initialize_scopes=initialize_scopes,
+        required=bool(initialize_component_scope_required and designer_code.strip()),
+    )
+    declarations, initializers = _designer_control_types(
+        designer_code,
+        class_scope=class_scope,
+        class_scopes=class_scopes,
+        initializer_scopes=(initialize_scopes if initialize_component_scope_required else None),
+    )
+    assignments = _csharp_designer_assignments(
+        designer_source,
+        designer_code,
+        class_scope=class_scope,
+        class_scopes=class_scopes,
+        method_scopes=(initialize_scopes if initialize_component_scope_required else None),
+    )
+    inventory = _designer_control_inventory(declarations, initializers, assignments)
+    inventory_names = set(inventory)
+    if contracts is None:
+        issues = list(scope_issues) + list(ownership_issues)
+        if expected_control_contract_required:
+            issues.append(
+                {
+                    "code": "expected_control_contracts_required",
+                    "severity": "error",
+                    "message": "Current packaged profile verification always requires expected_control_contracts.",
+                }
+            )
+        return issues, {
+            "status": "blocked" if issues else "not_requested",
+            "input_state": "omitted",
+            "contracts": [],
+            "designer_control_inventory": list(inventory.values()),
+            "form_scope": scope_metadata,
+            "initialize_component_ownership": ownership_metadata,
+            "no_control_contract_evidence": no_control_evidence,
+        }, {}
+
+    if not contracts:
+        issues = list(scope_issues) + list(ownership_issues) + list(no_control_evidence_issues)
+        if not no_control_evidence["provenance_valid"]:
+            issues.append(
+                {
+                    "code": "empty_control_contract_requires_no_control_evidence",
+                    "severity": "error",
+                    "message": (
+                        "An explicit empty control contract requires a reason and fully resolved "
+                        "structured source/user evidence."
+                    ),
+                }
+            )
+        if inventory_names:
+            issues.append(
+                {
+                    "code": "empty_control_contract_conflicts_with_designer_controls",
+                    "severity": "error",
+                    "controls": sorted(inventory_names),
+                    "message": "An explicit empty contract is invalid when the selected Designer scope contains generated controls.",
+                }
+            )
+        return issues, {
+            "status": "blocked" if issues else "proven_no_mapped_controls",
+            "input_state": "explicit_empty",
+            "contracts": [],
+            "designer_control_inventory": list(inventory.values()),
+            "form_scope": scope_metadata,
+            "initialize_component_ownership": ownership_metadata,
+            "no_control_contract_evidence": no_control_evidence,
+        }, {}
+
+    issues: List[Dict[str, Any]] = list(scope_issues) + list(ownership_issues)
+    results: List[Dict[str, Any]] = []
+    exact_properties: Dict[tuple[str, str], Any] = {}
+    seen_names: set[str] = set()
+
+    for index, raw_contract in enumerate(contracts):
+        if not isinstance(raw_contract, Mapping):
+            issues.append(
+                {
+                    "code": "control_contract_invalid",
+                    "severity": "error",
+                    "contract_index": index,
+                    "message": "Each expected control contract must be a mapping.",
+                }
+            )
+            continue
+        contract = dict(raw_contract)
+        name = str(
+            contract.get("instance_name")
+            or contract.get("control_name")
+            or contract.get("name")
+            or ""
+        ).strip()
+        expected_type = str(
+            contract.get("expected_type") or contract.get("type_name") or contract.get("type") or ""
+        ).strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or not expected_type:
+            issues.append(
+                {
+                    "code": "control_contract_invalid",
+                    "severity": "error",
+                    "contract_index": index,
+                    "message": "Each expected control contract requires a valid instance_name and expected_type.",
+                }
+            )
+            continue
+        if name in seen_names:
+            issues.append(
+                {
+                    "code": "control_contract_duplicate_instance",
+                    "severity": "error",
+                    "contract_index": index,
+                    "control": name,
+                    "message": "Expected control contracts must name each Designer instance once.",
+                }
+            )
+            continue
+        seen_names.add(name)
+
+        properties_value = contract.get("properties", contract.get("exact_properties", {}))
+        if not isinstance(properties_value, Mapping):
+            issues.append(
+                {
+                    "code": "control_contract_properties_invalid",
+                    "severity": "error",
+                    "contract_index": index,
+                    "control": name,
+                    "message": "Control contract properties must be a property-path to exact-value mapping.",
+                }
+            )
+            properties: Dict[str, Any] = {}
+        else:
+            properties = {str(key): value for key, value in properties_value.items()}
+        issues.extend(
+            _validate_control_contract_evidence_fields(
+                contract,
+                properties,
+                registry,
+                control=name,
+                structured_required=structured_evidence_required,
+            )
+        )
+        for property_path, expected_value in properties.items():
+            provenance = _control_property_provenance(
+                contract,
+                property_path,
+                registry,
+                structured_required=structured_evidence_required,
+            )
+            exact_properties[(name, property_path)] = {
+                "expected": expected_value,
+                "provenance": provenance,
+            }
+
+        declared_type = declarations.get(name, "")
+        initialized_type = initializers.get(name, "")
+        if not declared_type:
+            issues.append(
+                {
+                    "code": "control_contract_declaration_missing",
+                    "severity": "error",
+                    "control": name,
+                    "expected_type": expected_type,
+                    "message": "Expected Designer control declaration is missing.",
+                }
+            )
+        elif not _csharp_type_matches(declared_type, expected_type):
+            issues.append(
+                {
+                    "code": "control_contract_declaration_type_mismatch",
+                    "severity": "error",
+                    "control": name,
+                    "expected_type": expected_type,
+                    "actual_type": declared_type,
+                    "message": "Designer control declaration type does not match the expected contract.",
+                }
+            )
+        if not initialized_type:
+            issues.append(
+                {
+                    "code": "control_contract_initializer_missing",
+                    "severity": "error",
+                    "control": name,
+                    "expected_type": expected_type,
+                    "message": "Expected Designer control initialization is missing.",
+                }
+            )
+        elif not _csharp_type_matches(initialized_type, expected_type):
+            issues.append(
+                {
+                    "code": "control_contract_initializer_type_mismatch",
+                    "severity": "error",
+                    "control": name,
+                    "expected_type": expected_type,
+                    "actual_type": initialized_type,
+                    "message": "Designer control initialization type does not match the expected contract.",
+                }
+            )
+
+        bindings_value = contract.get("bindings", {})
+        if not isinstance(bindings_value, Mapping):
+            issues.append(
+                {
+                    "code": "control_contract_bindings_invalid",
+                    "severity": "error",
+                    "control": name,
+                    "message": "Control contract bindings must be a binding-property to exact-value mapping.",
+                }
+            )
+            expected_bindings: Dict[str, Any] = {}
+        else:
+            expected_bindings = {str(key): value for key, value in bindings_value.items()}
+        if "BindingField" in contract or "binding_field" in contract:
+            expected_bindings["BindingField"] = (
+                contract.get("BindingField")
+                if "BindingField" in contract
+                else contract.get("binding_field")
+            )
+        observed_binding_paths = set(inventory.get(name, {}).get("bindings", {}))
+        missing_binding_expectations = sorted(observed_binding_paths.difference(expected_bindings))
+        if complete_inventory_required and missing_binding_expectations:
+            issues.append(
+                {
+                    "code": "control_contract_binding_expectation_missing",
+                    "severity": "error",
+                    "control": name,
+                    "bindings": missing_binding_expectations,
+                    "message": "Every observed Designer binding must be declared in the expected control contract.",
+                }
+            )
+        actual_bindings: Dict[str, Any] = {}
+        for binding_path, expected_binding_value in expected_bindings.items():
+            actual_values = _csharp_assignment_values(assignments, (name, binding_path))
+            actual_raw: Any = (
+                actual_values[0]
+                if len(actual_values) == 1
+                else (actual_values if actual_values else None)
+            )
+            actual_value = (
+                _csharp_direct_string_value(actual_raw)
+                if isinstance(actual_raw, str)
+                else None
+            )
+            actual_bindings[binding_path] = actual_value
+            expected_string = str(expected_binding_value or "")
+            if not actual_values:
+                issues.append(
+                    {
+                        "code": "control_contract_binding_field_missing",
+                        "severity": "error",
+                        "control": name,
+                        "binding": binding_path,
+                        "expected": expected_string,
+                        "message": "Expected Designer binding assignment is missing.",
+                    }
+                )
+            elif len(actual_values) > 1:
+                issues.append(
+                    {
+                        "code": "control_contract_binding_field_assignment_ambiguous",
+                        "severity": "error",
+                        "control": name,
+                        "binding": binding_path,
+                        "expected": expected_string,
+                        "actual": actual_values,
+                        "message": "Designer bindings must have exactly one assignment.",
+                    }
+                )
+            elif actual_value != expected_string:
+                issues.append(
+                    {
+                        "code": "control_contract_binding_field_mismatch",
+                        "severity": "error",
+                        "control": name,
+                        "binding": binding_path,
+                        "expected": expected_string,
+                        "actual": actual_raw,
+                        "message": "Designer binding does not match the expected control contract.",
+                    }
+                )
+        expected_binding = str(expected_bindings.get("BindingField") or "")
+        actual_binding = actual_bindings.get("BindingField")
+
+        actual_properties: Dict[str, Any] = {}
+        for property_path, expected_value in properties.items():
+            actual_values = _csharp_assignment_values(
+                assignments, (name, property_path)
+            )
+            actual_value: Any = (
+                actual_values[0]
+                if len(actual_values) == 1
+                else (actual_values if actual_values else None)
+            )
+            actual_properties[property_path] = actual_value
+            if not actual_values:
+                issues.append(
+                    {
+                        "code": "control_contract_property_missing",
+                        "severity": "error",
+                        "control": name,
+                        "property": property_path,
+                        "expected": expected_value,
+                        "message": "Expected exact Designer property assignment is missing.",
+                    }
+                )
+            elif len(actual_values) > 1:
+                issues.append(
+                    {
+                        "code": "control_contract_property_assignment_ambiguous",
+                        "severity": "error",
+                        "control": name,
+                        "property": property_path,
+                        "expected": expected_value,
+                        "actual": actual_values,
+                        "message": "Protected Designer properties must have exactly one assignment.",
+                    }
+                )
+            elif not _csharp_exact_property_matches(actual_values[0], expected_value):
+                issues.append(
+                    {
+                        "code": "control_contract_property_mismatch",
+                        "severity": "error",
+                        "control": name,
+                        "property": property_path,
+                        "expected": expected_value,
+                        "actual": actual_value,
+                        "message": "Designer property assignment does not match the exact expected value.",
+                    }
+                )
+
+        results.append(
+            {
+                "contract_index": index,
+                "control": name,
+                "expected_type": expected_type,
+                "declared_type": declared_type,
+                "initialized_type": initialized_type,
+                "status": (
+                    "blocked"
+                    if class_scope is None
+                    or any(issue.get("control") == name for issue in issues)
+                    else "passed"
+                ),
+                "expected_binding_field": (
+                    expected_binding if "BindingField" in expected_bindings else None
+                ),
+                "actual_binding_field": actual_binding,
+                "expected_bindings": expected_bindings,
+                "actual_bindings": actual_bindings,
+                "expected_properties": properties,
+                "actual_properties": actual_properties,
+                "consumed_explicit_exceptions": [],
+            }
+        )
+
+    if complete_inventory_required:
+        missing_controls = sorted(inventory_names.difference(seen_names))
+        unexpected_controls = sorted(seen_names.difference(inventory_names))
+        if missing_controls or unexpected_controls:
+            issues.append(
+                {
+                    "code": "control_contract_inventory_incomplete",
+                    "severity": "error",
+                    "missing_controls": missing_controls,
+                    "unexpected_controls": unexpected_controls,
+                    "message": "Expected control contracts must exactly account for the selected Designer control inventory.",
+                }
+            )
+    return issues, {
+        "status": "passed" if not issues else "blocked",
+        "input_state": "provided",
+        "contracts": results,
+        "designer_control_inventory": list(inventory.values()),
+        "form_scope": scope_metadata,
+        "initialize_component_ownership": ownership_metadata,
+        "no_control_contract_evidence": no_control_evidence,
+    }, exact_properties
+
+
+def _is_konelib_input_type(type_name: str) -> bool:
+    short_name = _normalize_csharp_type_name(type_name).rsplit(".", 1)[-1].lower()
+    return short_name.startswith("u_") and (
+        short_name.endswith("edit")
+        or any(
+            token in short_name
+            for token in (
+                "textbox",
+                "combobox",
+                "memo",
+                "check",
+                "radio",
+                "numeric",
+                "masked",
+            )
+        )
+    )
+
+
+def _validate_konelib_default_guards(
+    designer_source: str,
+    designer_code: str,
+    exact_properties: Mapping[tuple[str, str], Any],
+    profile_rules: Mapping[str, Any],
+    *,
+    target_form_class: str = "",
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    designer_contract = profile_rules.get("designer_contract")
+    designer_contract = dict(designer_contract) if isinstance(designer_contract, Mapping) else {}
+    raw_defaults = designer_contract.get("konelib_defaults")
+    if not isinstance(raw_defaults, Mapping) or not raw_defaults:
+        return [], {
+            "status": "not_enabled",
+            "consumed_explicit_exceptions": [],
+            "form_scope": {
+                "status": "not_selected",
+                "requested_form_class": str(target_form_class or ""),
+                "selected_form_class": "",
+                "declared_form_classes": [],
+                "matching_class_count": 0,
+                "partial_declaration_count": 0,
+            },
+        }
+
+    _, class_scope, class_scopes, scope_metadata = _resolve_csharp_designer_form_scope(
+        designer_code,
+        requested_form_class=target_form_class,
+        required=False,
+    )
+    initialize_scopes = _csharp_initialize_component_scopes(
+        designer_code,
+        class_scope=class_scope,
+        class_scopes=class_scopes,
+    )
+    scope_initializers = (
+        initialize_scopes
+        if designer_contract.get("initialize_component_scope_required") is True
+        else None
+    )
+    declarations, initializers = _designer_control_types(
+        designer_code,
+        class_scope=class_scope,
+        class_scopes=class_scopes,
+        initializer_scopes=scope_initializers,
+    )
+    control_types = dict(declarations)
+    control_types.update(initializers)
+    assignments = _csharp_designer_assignments(
+        designer_source,
+        designer_code,
+        class_scope=class_scope,
+        class_scopes=class_scopes,
+        method_scopes=scope_initializers,
+    )
+    defaults = dict(raw_defaults)
+    auto_height_property = str(defaults.get("input_auto_height_property") or "Properties.AutoHeight")
+    label_defaults = defaults.get("label_alignment")
+    label_defaults = dict(label_defaults) if isinstance(label_defaults, Mapping) else {
+        "Appearance.TextOptions.HAlignment": "DevExpress.Utils.HorzAlignment.Far",
+        "Appearance.TextOptions.VAlignment": "DevExpress.Utils.VertAlignment.Center",
+    }
+    even_row_property = str(
+        defaults.get("even_row_back_color_property") or "Appearance.EvenRow.BackColor"
+    )
+    issues: List[Dict[str, Any]] = []
+    consumed_exceptions: List[Dict[str, Any]] = []
+    consumed_keys: set[tuple[str, str]] = set()
+
+    def authorization(
+        control: str, property_path: str
+    ) -> tuple[Any, Dict[str, Any]] | None:
+        key = (control, property_path)
+        raw_authorization = exact_properties.get(key)
+        if not isinstance(raw_authorization, Mapping):
+            return None
+        return (
+            raw_authorization.get("expected"),
+            dict(raw_authorization.get("provenance") or {}),
+        )
+
+    def explicitly_allowed(control: str, property_path: str, actual: str) -> bool:
+        resolved = authorization(control, property_path)
+        if resolved is None:
+            return False
+        expected, provenance = resolved
+        return bool(provenance.get("valid")) and _csharp_exact_property_matches(
+            actual, expected
+        )
+
+    def record_missing_provenance(
+        control: str, property_path: str, actual: str
+    ) -> None:
+        resolved = authorization(control, property_path)
+        if resolved is None:
+            return
+        expected, provenance = resolved
+        if provenance.get("valid") or not _csharp_exact_property_matches(
+            actual, expected
+        ):
+            return
+        if any(
+            issue.get("code") == "control_contract_override_provenance_missing"
+            and issue.get("control") == control
+            and issue.get("property") == property_path
+            for issue in issues
+        ):
+            return
+        issues.append(
+            {
+                "code": "control_contract_override_provenance_missing",
+                "severity": "error",
+                "control": control,
+                "property": property_path,
+                "actual": actual,
+                "message": (
+                    "A protected Designer default override requires non-empty "
+                    "evidence_refs or property_evidence provenance."
+                ),
+            }
+        )
+
+    def consume_exception(control: str, property_path: str, actual: str) -> None:
+        key = (control, property_path)
+        if key in consumed_keys:
+            return
+        consumed_keys.add(key)
+        resolved = authorization(control, property_path)
+        if resolved is None:
+            return
+        expected, provenance = resolved
+        consumed_exceptions.append(
+            {
+                "control": control,
+                "property": property_path,
+                "expected": expected,
+                "actual": actual,
+                "provenance": provenance,
+            }
+        )
+
+    for (control, property_path), assignment_records in assignments.items():
+        control_type = control_types.get(control, "")
+        short_type = _normalize_csharp_type_name(control_type).rsplit(".", 1)[-1]
+        protected_property = bool(
+            (
+                property_path == auto_height_property
+                and _is_konelib_input_type(control_type)
+            )
+            or (short_type.lower() == "u_label" and property_path in label_defaults)
+            or property_path == even_row_property
+        )
+        if not protected_property:
+            continue
+        if len(assignment_records) != 1:
+            issues.append(
+                {
+                    "code": "konelib_guard_assignment_ambiguous",
+                    "severity": "error",
+                    "control": control,
+                    "property": property_path,
+                    "actual": [str(item.get("value") or "") for item in assignment_records],
+                    "message": "Protected Designer properties must have exactly one unconditional assignment.",
+                }
+            )
+            continue
+        assignment = assignment_records[0]
+        actual = str(assignment.get("value") or "")
+        if assignment.get("conditional"):
+            issues.append(
+                {
+                    "code": "konelib_guard_conditional_assignment",
+                    "severity": "error",
+                    "control": control,
+                    "property": property_path,
+                    "actual": actual,
+                    "message": "Protected Designer properties must not be assigned conditionally.",
+                }
+            )
+            continue
+        parsed_actual = _parse_csharp_designer_value(re.sub(r"[\s()]", "", actual))
+        direct_member_value = bool(
+            re.fullmatch(
+                r"(?:global::)?[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+",
+                re.sub(r"\s+", "", actual),
+            )
+        )
+        if (
+            (property_path == auto_height_property and type(parsed_actual) is not bool)
+            or (
+                property_path != auto_height_property
+                and not direct_member_value
+            )
+        ):
+            issues.append(
+                {
+                    "code": "konelib_guard_nonliteral_assignment",
+                    "severity": "error",
+                    "control": control,
+                    "property": property_path,
+                    "actual": actual,
+                    "message": "Protected Designer properties require one direct literal or member value.",
+                }
+            )
+            continue
+        if (
+            property_path == auto_height_property
+            and _is_konelib_input_type(control_type)
+            and parsed_actual is True
+        ):
+            if explicitly_allowed(control, property_path, actual):
+                consume_exception(control, property_path, actual)
+            else:
+                record_missing_provenance(control, property_path, actual)
+                issues.append(
+                    {
+                        "code": "konelib_input_autoheight_true_override",
+                        "severity": "error",
+                        "control": control,
+                        "property": property_path,
+                        "actual": actual,
+                        "message": "KoneLib u_* input controls must not explicitly set Properties.AutoHeight to true unless the expected control contract requires it.",
+                    }
+                )
+        if short_type.lower() == "u_label" and property_path in label_defaults:
+            expected_default = str(label_defaults[property_path])
+            if not _csharp_exact_property_matches(actual, expected_default):
+                if explicitly_allowed(control, property_path, actual):
+                    consume_exception(control, property_path, actual)
+                else:
+                    record_missing_provenance(control, property_path, actual)
+                    issues.append(
+                        {
+                            "code": "konelib_label_alignment_override",
+                            "severity": "error",
+                            "control": control,
+                            "property": property_path,
+                            "expected_default": expected_default,
+                            "actual": actual,
+                            "message": "KoneLib u_Label alignment must preserve packaged Far/Center defaults unless the expected control contract requires an override.",
+                        }
+                    )
+        if property_path == even_row_property:
+            if explicitly_allowed(control, property_path, actual):
+                consume_exception(control, property_path, actual)
+            else:
+                record_missing_provenance(control, property_path, actual)
+                issues.append(
+                    {
+                        "code": "even_row_backcolor_override",
+                        "severity": "error",
+                        "control": control,
+                        "property": property_path,
+                        "actual": actual,
+                        "message": "Custom Appearance.EvenRow.BackColor assignments require an exact expected control contract.",
+                    }
+                )
+
+    return issues, {
+        "status": "passed" if not issues else "blocked",
+        "input_auto_height_property": auto_height_property,
+        "label_alignment_defaults": label_defaults,
+        "even_row_back_color_property": even_row_property,
+        "consumed_explicit_exceptions": consumed_exceptions,
+        "form_scope": scope_metadata,
+    }
+
+
+def _validate_baseline_designer_preservation(
+    designer_source: str,
+    designer_code: str,
+    baseline_source: str,
+    baseline_code: str,
+    exact_properties: Mapping[tuple[str, str], Any],
+    profile_rules: Mapping[str, Any],
+    *,
+    target_form_class: str,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if not baseline_code.strip():
+        return [], {
+            "status": "not_supplied",
+            "evaluated_controls": [],
+            "new_controls_not_evaluable": [],
+            "changes": [],
+        }
+    designer_contract = profile_rules.get("designer_contract")
+    designer_contract = dict(designer_contract) if isinstance(designer_contract, Mapping) else {}
+    defaults = designer_contract.get("konelib_defaults")
+    defaults = dict(defaults) if isinstance(defaults, Mapping) else {}
+    preserved_properties = [
+        str(item)
+        for item in defaults.get("preserve_existing_properties", [])
+        if str(item).strip()
+    ]
+    label_properties = [
+        str(item)
+        for item in dict(defaults.get("label_alignment") or {}).keys()
+        if str(item).strip()
+    ]
+    if not preserved_properties and not label_properties:
+        return [], {
+            "status": "not_enabled",
+            "evaluated_controls": [],
+            "new_controls_not_evaluable": [],
+            "changes": [],
+        }
+
+    def context(
+        source: str,
+        structural: str,
+    ) -> tuple[
+        List[Dict[str, Any]],
+        Dict[str, Dict[str, Any]],
+        Dict[tuple[str, str], List[Dict[str, Any]]],
+    ]:
+        scope_issues, class_scope, class_scopes, _ = _resolve_csharp_designer_form_scope(
+            structural,
+            requested_form_class=target_form_class,
+            required=True,
+        )
+        initialize_scopes = _csharp_initialize_component_scopes(
+            structural,
+            class_scope=class_scope,
+            class_scopes=class_scopes,
+        )
+        if len(initialize_scopes) != 1:
+            scope_issues.append(
+                {
+                    "code": "baseline_designer_initialize_component_invalid",
+                    "severity": "error",
+                    "matching_method_count": len(initialize_scopes),
+                    "message": "Baseline preservation requires exactly one selected InitializeComponent method.",
+                }
+            )
+        declarations, initializers = _designer_control_types(
+            structural,
+            class_scope=class_scope,
+            class_scopes=class_scopes,
+            initializer_scopes=initialize_scopes,
+        )
+        assignments = _csharp_designer_assignments(
+            source,
+            structural,
+            class_scope=class_scope,
+            class_scopes=class_scopes,
+            method_scopes=initialize_scopes,
+        )
+        return scope_issues, _designer_control_inventory(
+            declarations, initializers, assignments
+        ), assignments
+
+    current_context_issues, current_inventory, current_assignments = context(
+        designer_source,
+        designer_code,
+    )
+    baseline_context_issues, baseline_inventory, baseline_assignments = context(
+        baseline_source,
+        baseline_code,
+    )
+    issues = list(current_context_issues) + list(baseline_context_issues)
+    new_controls = sorted(set(current_inventory).difference(baseline_inventory))
+    removed_controls = sorted(set(baseline_inventory).difference(current_inventory))
+    if removed_controls:
+        issues.append(
+            {
+                "code": "baseline_designer_control_removed",
+                "severity": "error",
+                "controls": removed_controls,
+                "message": "Existing baseline Designer controls cannot disappear without an explicit migration contract.",
+            }
+        )
+    evaluated_controls: List[str] = []
+    changes: List[Dict[str, Any]] = []
+    for control in sorted(set(current_inventory).intersection(baseline_inventory)):
+        evaluated_controls.append(control)
+        current_type = (
+            current_inventory[control].get("declared_type")
+            or current_inventory[control].get("initialized_type")
+            or ""
+        )
+        property_paths = list(preserved_properties)
+        if _normalize_csharp_type_name(str(current_type)).rsplit(".", 1)[-1].lower() == "u_label":
+            property_paths.extend(label_properties)
+        for property_path in dict.fromkeys(property_paths):
+            current_values = _csharp_assignment_values(
+                current_assignments, (control, property_path)
+            )
+            baseline_values = _csharp_assignment_values(
+                baseline_assignments, (control, property_path)
+            )
+            if current_values == baseline_values:
+                continue
+            current_value: Any = current_values[0] if len(current_values) == 1 else current_values
+            baseline_value: Any = baseline_values[0] if len(baseline_values) == 1 else baseline_values
+            authorization = exact_properties.get((control, property_path))
+            authorized = bool(
+                isinstance(authorization, Mapping)
+                and dict(authorization.get("provenance") or {}).get("valid")
+                and len(current_values) == 1
+                and _csharp_exact_property_matches(
+                    current_values[0], authorization.get("expected")
+                )
+            )
+            change = {
+                "control": control,
+                "property": property_path,
+                "baseline": baseline_value if baseline_values else None,
+                "current": current_value if current_values else None,
+                "authorized": authorized,
+            }
+            changes.append(change)
+            if not authorized:
+                issues.append(
+                    {
+                        "code": "baseline_designer_property_changed_without_evidence",
+                        "severity": "error",
+                        **change,
+                        "message": "Existing Designer property changes require an exact contract value and resolved source/user evidence.",
+                    }
+                )
+    return issues, {
+        "status": "passed" if not issues else "blocked",
+        "evaluated_controls": evaluated_controls,
+        "new_controls_not_evaluable": new_controls,
+        "removed_controls": removed_controls,
+        "changes": changes,
+        "preserved_properties": preserved_properties,
+        "label_alignment_properties": label_properties,
+    }
 
 
 def _csharp_layout_value_matches(property_name: str, actual: str, expected: str) -> bool:
@@ -5102,7 +6988,9 @@ def _validate_devexpress_designer_grid_contract(
             item="Columns.AddRange",
         )
     for member, expected_value in ((grid_name, grid_name), (view_name, view_name)):
-        actual = _csharp_direct_string_value(assignments.get((member, "Name"), ""))
+        actual = _csharp_direct_string_value(
+            _csharp_last_assignment_value(assignments, (member, "Name"), "")
+        )
         if actual != expected_value:
             add_missing(
                 "grid_component_name_mismatch",
@@ -5112,7 +7000,7 @@ def _validate_devexpress_designer_grid_contract(
                 actual=actual,
             )
     for property_name, expected_value in DATAWINDOW_TO_CSHARP_GRIDVIEW_DEFAULTS:
-        actual = assignments.get((view_name, property_name))
+        actual = _csharp_last_assignment_value(assignments, (view_name, property_name))
         if actual is None:
             add_missing(
                 "authoritative_gridview_default_missing",
@@ -5130,7 +7018,7 @@ def _validate_devexpress_designer_grid_contract(
             )
     for property_name, expected_value in DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS.items():
         property_path = f"OptionsView.{property_name}"
-        actual = assignments.get((view_name, property_path))
+        actual = _csharp_last_assignment_value(assignments, (view_name, property_path))
         if actual is None:
             add_missing(
                 "authoritative_optionsview_default_missing",
@@ -5196,7 +7084,9 @@ def _validate_devexpress_designer_grid_contract(
         if item.get("caption") is not None:
             checks.insert(2, ("Caption", str(item["caption"]), "string"))
         for property_path, expected_value, value_kind in checks:
-            actual = assignments.get((column_name, property_path))
+            actual = _csharp_last_assignment_value(
+                assignments, (column_name, property_path)
+            )
             if actual is None:
                 add_missing(
                     "authoritative_grid_column_default_missing",
@@ -5225,7 +7115,11 @@ def _validate_devexpress_designer_grid_contract(
                     actual=actual,
                 )
         if item.get("caption") is None:
-            caption = _csharp_direct_string_value(assignments.get((column_name, "Caption"), ""))
+            caption = _csharp_direct_string_value(
+                _csharp_last_assignment_value(
+                    assignments, (column_name, "Caption"), ""
+                )
+            )
             if caption is None or caption == "":
                 add_missing(
                     "grid_column_caption_missing",
@@ -5238,7 +7132,9 @@ def _validate_devexpress_designer_grid_contract(
             declared_numeric is None and not normalized_expected and _is_numeric_grid_field_name(field_name)
         )
         if is_numeric:
-            repository_rhs = assignments.get((column_name, "ColumnEdit"), "")
+            repository_rhs = _csharp_last_assignment_value(
+                assignments, (column_name, "ColumnEdit"), ""
+            )
             repository_match = re.fullmatch(r"this\.(rpsSpin[A-Za-z0-9_]*)", repository_rhs)
             if not repository_match:
                 add_missing(
@@ -5318,6 +7214,15 @@ def verify_migration_generated_csharp_style(
     source_role: str = "code-behind",
     runtime_dynamic_ui_evidence: Any = None,
     result_fields: Iterable[str] | None = None,
+    expected_control_contracts: Iterable[Mapping[str, Any]] | None = None,
+    no_control_contract_evidence: Any = None,
+    evidence_registry: Any = None,
+    target_source_path: str | Path = "",
+    target_source_sha256: str = "",
+    target_designer_path: str | Path = "",
+    target_designer_sha256: str = "",
+    baseline_designer_path: str | Path = "",
+    baseline_designer_sha256: str = "",
     expected_grid_role: str = "",
     expected_grid_suffix: str = "",
     expected_grid_prefix: str = "",
@@ -5331,8 +7236,11 @@ def verify_migration_generated_csharp_style(
     excluded_paths: Any = None,
     require_author_tagged_evidence: bool = False,
 ) -> HarnessResult:
-    """Block generated C# patterns that do not match the target Designer/grid style."""
+    """Block generated C# patterns that do not match control, Designer, and grid contracts."""
     result_fields_list = None if result_fields is None else list(result_fields)
+    expected_control_contracts_list = (
+        None if expected_control_contracts is None else list(expected_control_contracts)
+    )
     expected_grid_columns_list = None if expected_grid_columns is None else list(expected_grid_columns)
     expected_grid_contracts_list = [dict(item) for item in (expected_grid_contracts or [])]
     source_view = _lex_csharp_non_code(source_text)
@@ -5362,6 +7270,83 @@ def verify_migration_generated_csharp_style(
         )
         issues.extend(applied_issues)
     profile_rules = dict(profile_context.get("rules") or {}) if isinstance(profile_context, dict) else {}
+    designer_contract_rules = profile_rules.get("designer_contract")
+    designer_contract_rules = (
+        dict(designer_contract_rules)
+        if isinstance(designer_contract_rules, Mapping)
+        else {}
+    )
+    target_artifact_required = bool(
+        designer_contract_rules.get("target_artifact_binding_required")
+    )
+    source_artifact_issues, source_artifact_binding, _ = _validate_text_artifact_binding(
+        source_text,
+        path_value=target_source_path,
+        expected_sha256=target_source_sha256,
+        role="source",
+        required=target_artifact_required,
+    )
+    issues.extend(source_artifact_issues)
+    designer_artifact_issues, designer_artifact_binding, _ = _validate_text_artifact_binding(
+        designer_source_text,
+        path_value=target_designer_path,
+        expected_sha256=target_designer_sha256,
+        role="designer",
+        required=bool(target_artifact_required and designer_source_text.strip()),
+    )
+    issues.extend(designer_artifact_issues)
+    baseline_artifact_issues, baseline_artifact_binding, baseline_designer_source = (
+        _validate_text_artifact_binding(
+            "",
+            path_value=baseline_designer_path,
+            expected_sha256=baseline_designer_sha256,
+            role="baseline_designer",
+            required=False,
+        )
+    )
+    if baseline_designer_source:
+        baseline_artifact_binding["readback_matches_supplied_text"] = True
+        baseline_artifact_issues = [
+            issue
+            for issue in baseline_artifact_issues
+            if issue.get("code") != "target_baseline_designer_artifact_text_mismatch"
+        ]
+        baseline_artifact_binding["status"] = (
+            "passed" if not baseline_artifact_issues else "blocked"
+        )
+    issues.extend(baseline_artifact_issues)
+    artifact_path_issues = _validate_target_artifact_path_separation(
+        source_artifact_binding,
+        designer_artifact_binding,
+        baseline_artifact_binding,
+    )
+    if artifact_path_issues:
+        for binding in (
+            source_artifact_binding,
+            designer_artifact_binding,
+            baseline_artifact_binding,
+        ):
+            if binding.get("status") == "passed":
+                binding["status"] = "blocked"
+    issues.extend(artifact_path_issues)
+    registry, registry_issues, registry_metadata = _normalize_evidence_registry(
+        evidence_registry,
+        required=bool(
+            designer_contract_rules.get("structured_evidence_registry_required")
+            and (
+                no_control_contract_evidence is not None
+                or any(
+                    isinstance(item, Mapping)
+                    and (
+                        item.get("evidence_refs")
+                        or item.get("property_evidence")
+                    )
+                    for item in (expected_control_contracts_list or [])
+                )
+            )
+        ),
+    )
+    issues.extend(registry_issues)
     program_form_issues, program_form_contract = _validate_csharp_program_form_contract(
         source_view.code,
         profile_rules,
@@ -5376,6 +7361,7 @@ def verify_migration_generated_csharp_style(
         designer_source=designer_view.code,
         runtime_dynamic_ui_evidence=runtime_dynamic_ui_evidence,
         require_designer_companion=require_designer_companion,
+        allow_empty_designer=expected_control_contracts_list == [],
     )
     issues.extend(designer_issues)
     result_field_issues, result_field_contract = _validate_csharp_result_field_contract(
@@ -5384,6 +7370,69 @@ def verify_migration_generated_csharp_style(
         result_fields_list,
     )
     issues.extend(result_field_issues)
+    control_designer_source = (
+        designer_source
+        if designer_view.code.strip()
+        else (source if str(source_role).lower() == "designer" else "")
+    )
+    control_designer_code = (
+        designer_view.code
+        if designer_view.code.strip()
+        else (source_view.code if str(source_role).lower() == "designer" else "")
+    )
+    control_contract_issues, control_contracts, exact_control_properties = (
+        _validate_expected_control_contracts(
+            control_designer_source,
+            control_designer_code,
+            expected_control_contracts_list,
+            target_form_class=str(program_form_contract.get("expected_form_class") or ""),
+            expected_control_contract_required=bool(
+                designer_contract_rules.get("expected_control_contract_required")
+            ),
+            no_control_contract_evidence=no_control_contract_evidence,
+            evidence_registry=registry,
+            structured_evidence_required=bool(
+                designer_contract_rules.get("structured_evidence_registry_required")
+            ),
+            complete_inventory_required=bool(
+                designer_contract_rules.get("control_contract_completeness_required")
+            ),
+            initialize_component_scope_required=bool(
+                designer_contract_rules.get("initialize_component_scope_required")
+            ),
+        )
+    )
+    issues.extend(control_contract_issues)
+    konelib_guard_issues, konelib_default_guards = _validate_konelib_default_guards(
+        control_designer_source,
+        control_designer_code,
+        exact_control_properties,
+        profile_rules,
+        target_form_class=str(program_form_contract.get("expected_form_class") or ""),
+    )
+    issues.extend(konelib_guard_issues)
+    baseline_view = _lex_csharp_non_code(baseline_designer_source)
+    baseline_preservation_issues, baseline_designer_preservation = (
+        _validate_baseline_designer_preservation(
+            control_designer_source,
+            control_designer_code,
+            baseline_view.comments_removed,
+            baseline_view.code,
+            exact_control_properties,
+            profile_rules,
+            target_form_class=str(program_form_contract.get("expected_form_class") or ""),
+        )
+    )
+    issues.extend(baseline_preservation_issues)
+    consumed_control_exceptions = konelib_default_guards.get(
+        "consumed_explicit_exceptions", []
+    )
+    for control_contract in control_contracts.get("contracts", []):
+        control_contract["consumed_explicit_exceptions"] = [
+            dict(item)
+            for item in consumed_control_exceptions
+            if item.get("control") == control_contract.get("control")
+        ]
     grid_designer_source = designer_source if designer_view.code.strip() else (source if str(source_role).lower() == "designer" else "")
     grid_designer_code = (
         designer_view.code
@@ -5461,7 +7510,15 @@ def verify_migration_generated_csharp_style(
     )
     if profile_consumption.get("consumed"):
         applied_groups = list(profile_consumption.get("applied_rule_groups", []))
-        for group in ("csharp.program_form_contract", "csharp.designer_contract"):
+        for group in (
+            "csharp.program_form_contract",
+            "csharp.designer_contract",
+            "csharp.control_contracts",
+            "csharp.konelib_defaults",
+            "csharp.target_artifact_binding",
+            "csharp.evidence_registry",
+            "csharp.baseline_designer_preservation",
+        ):
             if group not in applied_groups:
                 applied_groups.append(group)
         profile_consumption["applied_rule_groups"] = applied_groups
@@ -6040,6 +8097,15 @@ def verify_migration_generated_csharp_style(
         "program_form_contract": program_form_contract,
         "designer_owned_ui_contract": designer_owned_ui_contract,
         "result_field_contract": result_field_contract,
+        "control_contracts": control_contracts,
+        "konelib_default_guards": konelib_default_guards,
+        "target_artifact_binding": {
+            "source": source_artifact_binding,
+            "designer": designer_artifact_binding,
+            "baseline_designer": baseline_artifact_binding,
+        },
+        "control_evidence_registry": registry_metadata,
+        "baseline_designer_preservation": baseline_designer_preservation,
         "grid_designer_contract": grid_designer_contract,
         "input_tab_order_contract": input_tab_order_contract,
         "primary_style_evidence_paths": primary_paths,
@@ -6061,7 +8127,7 @@ def verify_migration_generated_csharp_style(
     return HarnessResult(
         success=passed,
         stdout=json.dumps({"status": metadata["status"], "issue_count": len(issues)}, ensure_ascii=False, sort_keys=True),
-        stderr="" if passed else "Generated C# style verification blocked by grid column issues.",
+        stderr="" if passed else "Generated C# style verification blocked by contract issues.",
         exit_code=0 if passed else 1,
         metadata=metadata,
     )
@@ -10371,6 +12437,15 @@ def orchestrate_pb_migration_validation(
     csharp_source_role: str = "code-behind",
     runtime_dynamic_ui_evidence: Any = None,
     result_fields: Iterable[str] | None = None,
+    expected_control_contracts: Iterable[Mapping[str, Any]] | None = None,
+    no_control_contract_evidence: Any = None,
+    evidence_registry: Any = None,
+    target_source_path: str | Path = "",
+    target_source_sha256: str = "",
+    target_designer_path: str | Path = "",
+    target_designer_sha256: str = "",
+    baseline_designer_path: str | Path = "",
+    baseline_designer_sha256: str = "",
     expected_grid_role: str = "",
     expected_grid_suffix: str = "",
     expected_grid_prefix: str = "",
@@ -10483,6 +12558,15 @@ def orchestrate_pb_migration_validation(
         source_role=csharp_source_role,
         runtime_dynamic_ui_evidence=runtime_dynamic_ui_evidence,
         result_fields=result_fields,
+        expected_control_contracts=expected_control_contracts,
+        no_control_contract_evidence=no_control_contract_evidence,
+        evidence_registry=evidence_registry,
+        target_source_path=target_source_path,
+        target_source_sha256=target_source_sha256,
+        target_designer_path=target_designer_path,
+        target_designer_sha256=target_designer_sha256,
+        baseline_designer_path=baseline_designer_path,
+        baseline_designer_sha256=baseline_designer_sha256,
         expected_grid_role=expected_grid_role,
         expected_grid_suffix=expected_grid_suffix,
         expected_grid_prefix=expected_grid_prefix,

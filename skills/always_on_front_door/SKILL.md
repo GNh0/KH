@@ -1,13 +1,13 @@
 ---
 name: always-on-front-door
-description: Use when plugin instructions request KH front-door routing for a new Codex, Antigravity-style, Claude Code, or local-agent task; the host must invoke it first and alone, and audit evidence must verify compliance because instructions cannot guarantee host auto-selection.
+description: Use when starting any conversation or receiving any new user request or task in Codex, an Antigravity-style host, Claude Code, or a local agent; invoke KH front-door before any response, including clarifying questions, without requiring the user to name KH, UAF, a skill, or a harness.
 ---
 
 # Always On Front Door
 
 ## Immediate Action
 
-When this skill is selected for a new user task, run the front-door command as the next standalone tool call. Do not decide that a request is too short or simple to enter KH. Do not spend a reasoning/planning pass here, do not read other skill files, and do not run target, memory, source, browser, document, QA, verification, or subagent tools before or alongside this command.
+At the start of every conversation and for every new user request or task, invoke this skill and run the front-door command as the next standalone tool call. This includes clarifying questions and requests that do not mention KH, UAF, a skill, a harness, a plugin, or routing. Do not decide that a request is too short or simple to enter KH. Do not spend a reasoning/planning pass here, do not read other skill files, and do not run target, memory, source, browser, document, QA, verification, or subagent tools before or alongside this command.
 
 Target bootstrap latency: under 10 seconds from reading this file to starting the command. If the command path is missing or stale, resolve the latest installed `kh-uaf` cache path or repo skill folder once, then run the command. If it still cannot run, report blocked with the missing path.
 
@@ -37,7 +37,7 @@ Use `--micro-summary` as the normal machine bootstrap for short/direct work. It 
 
 Only after the command returns should selected follow-up skills be read or applied.
 
-Plugin instructions request this routing order but cannot guarantee host auto-selection or plugin injection. Audit compliance from actual front-door receipts or session logs; manifest text alone is not execution evidence.
+This universal trigger is declared by the skill itself and does not depend on plugin manifest prompts or explicit KH naming. Skill metadata can improve host discovery but cannot guarantee host auto-selection or plugin injection. Audit compliance from actual front-door receipts or session logs; metadata, manifest text, or a SKILL.md read alone is not execution evidence.
 
 A bounded confirmation or status message may reuse current evidence only while the same task is unfinished and its scope is unchanged. Rerun front-door after task completion, for a new task, or when a message adds new work.
 

@@ -2,7 +2,7 @@
 
 ## When to use
 
-Plugin instructions request this skill first for every new user task handled by Codex, an Antigravity-style host, Claude Code, or a local worker. They cannot guarantee host auto-selection or plugin injection, so audit compliance from actual runtime receipts or session logs. The user does not need to say KH, UAF, skill, harness, plugin, front door, router, or catalog. Short/simple SQL formatting, translation, rewrite, lookup, arithmetic, and other light/direct requests still enter the runtime when the host follows the request; the runtime then decides whether to exit directly.
+Invoke this skill at the start of every conversation and for every new user request or task handled by Codex, an Antigravity-style host, Claude Code, or a local worker, including before clarifying questions. This trigger comes from the skill metadata and contract itself; it does not depend on plugin manifest prompts or explicit KH naming. Skill metadata cannot guarantee host auto-selection or plugin injection, so audit compliance from actual runtime receipts or session logs. The user does not need to say KH, UAF, skill, harness, plugin, front door, router, or catalog. Short/simple SQL formatting, translation, rewrite, lookup, arithmetic, and other light/direct requests still enter the runtime when the host follows the request; the runtime then decides whether to exit directly.
 
 Use it before any more specific skill for all requests, including:
 

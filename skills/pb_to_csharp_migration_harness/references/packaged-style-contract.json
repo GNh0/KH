@@ -9,6 +9,12 @@
     "profile_update_workflow": "profile-update-workflow.md",
     "profile_update_runs_during_normal_generation": false
   },
+  "source_authority": {
+    "behavior_sources": ["PB", "SRU", "SRD", "DataWindow", "supplied target project"],
+    "governs": ["behavior", "captions", "control roles", "bindings", "events", "database mapping"],
+    "packaged_contract_role": "style only",
+    "missing_evidence": "record a gap; do not invent UX business fields controls or helpers"
+  },
   "rules": {
     "csharp": {
       "required_patterns": [
@@ -213,6 +219,13 @@
     "devexpress",
     "winforms"
   ],
+  "wrapper_preservation": {
+    "target_project_inspection": "inspect only the supplied target project for available wrappers and APIs",
+    "precedence": ["target-project wrapper", "KoneLib wrapper", "declared framework control"],
+    "preserve_defaults": true,
+    "preserve_existing_properties": ["Size", "Location", "Margin", "MaximumSize", "Visible"],
+    "override_authority": "explicit source or user evidence"
+  },
   "designer_properties": [
     "Name",
     "BindingField",
@@ -231,6 +244,56 @@
     "Controls.Add",
     "Columns.AddRange"
   ],
+  "expected_control_contract": {
+    "required": ["instance_name", "expected_type"],
+    "optional": ["BindingField", "bindings", "properties", "property_evidence", "evidence_refs"],
+    "type_matching": "fully-qualified or short type name",
+    "complete_inventory_required": true,
+    "complete_inventory": "every selected-form Designer member constructed in InitializeComponent, including custom target wrappers and components, must have exactly one contract entry",
+    "initialize_component_scope_required": true,
+    "initialize_component_scope": "exactly one ordinary class-member InitializeComponent on the selected partial form; local functions and lookalike methods do not count",
+    "evidence_registry_required": true,
+    "properties": "exact Designer assignment values",
+    "bindings": "exact BindingField FieldName or DataPropertyName assignments; every observed binding must be declared",
+    "property_evidence": "property-path keyed evidence_id references resolved through evidence_registry; the property must be declared in the same contract entry",
+    "evidence_refs": "entry-level evidence_id references resolved through evidence_registry when property-specific evidence is unavailable; every supplied reference resolves even when no protected override consumes it",
+    "exceptions": "a protected default-guard override requires both an exact properties entry and non-empty property_evidence or evidence_refs provenance",
+    "role_binding": "lookup search and detail roles require the evidence-backed wrapper or repository and exact BindingField; text controls are not substitutes"
+  },
+  "no_control_contract_evidence": {
+    "use_only_with": "an explicit empty expected_control_contracts list",
+    "required": ["reason", "evidence_refs"],
+    "evidence_refs": "non-empty evidence_id references resolved through evidence_registry and proving there are intentionally no mapped controls",
+    "designer_inventory_must_be_empty": true,
+    "omitted_expected_control_contracts": "blocked"
+  },
+  "control_evidence_registry": {
+    "entry_required": ["evidence_id", "kind"],
+    "kind": ["source", "user"],
+    "stable_binding": "each entry requires locator using artifact file review user or memory URI syntax, or a SHA-256 digest",
+    "reference_semantics": "all evidence_refs and property_evidence values are unique evidence_id strings resolved through this registry, never free-form labels",
+    "malformed_entries": "blocked, including non-mapping list entries"
+  },
+  "target_artifact_binding": {
+    "required": ["target code-behind path and SHA-256 arguments", "target Designer path and SHA-256 arguments when a separate Designer text is supplied"],
+    "verification": "read the exact path, match SHA-256, decode UTF-8, and require byte-decoded text equality with the verified input",
+    "role_paths": "code-behind and Designer paths must be distinct",
+    "baseline": "existing Designer preservation uses separately captured pre-edit baseline path and SHA-256 arguments; the current target Designer path cannot authorize itself as its baseline"
+  },
+  "konelib_defaults": {
+    "input_auto_height_property": "Properties.AutoHeight",
+    "input_auto_height_forbidden_value": true,
+    "label_alignment": {
+      "Appearance.TextOptions.HAlignment": "DevExpress.Utils.HorzAlignment.Far",
+      "Appearance.TextOptions.VAlignment": "DevExpress.Utils.VertAlignment.Center"
+    },
+    "even_row_back_color_property": "Appearance.EvenRow.BackColor",
+    "enable_appearance_even_row_allowed": true,
+    "invent_even_row_color_forbidden": true,
+    "preserve_existing_properties": ["Size", "Location", "Margin", "MaximumSize", "Visible"],
+    "preserve_label_alignment_default": true,
+    "override_authority": "explicit source or user evidence"
+  },
   "tab_index_contract": {
     "scope": "each independent container",
     "controls": "located input controls only",
@@ -248,6 +311,8 @@
     "field_name_matches_result": true,
     "register_repository_before_column_edit": true,
     "numeric_uses_repository_editor": true,
+    "numeric_repository_type": "RepositoryItemSpinEdit",
+    "numeric_role_authority": "authoritative SQL or result shape",
     "numeric_grid_display_format_forbidden": true,
     "xml_column_edit_name_only": true,
     "layout_load_artifact_and_designer_required": true,
@@ -329,7 +394,10 @@
     "every procedure parameter has a caller source or documented external caller",
     "caller and procedure parameter order stay synchronized",
     "internal and derived values are local procedure variables",
-    "raw search and date values cross the caller boundary",
+    "raw search and date values cross the caller boundary through established target wrappers including evidenced YYYYMMDD APIs",
+    "procedure owns default date and wildcard derivation when target evidence says so",
+    "existing target clear query and save helpers precede generic assignments such as DataSource null",
+    "simple caller values do not require invented DTO or helper abstractions",
     "result fields match C# bindings and grid FieldName values"
   ],
   "stored_procedure_rules": {
@@ -504,7 +572,9 @@
   "forbidden_patterns": [
     "private packaged identifiers or fingerprints",
     "normal-generation discovery or profile refresh",
+    "invented UX business fields controls or helpers",
     "invented request or context DTOs",
+    "text-control substitution for lookup search or detail roles",
     "parallel query or save helpers",
     "inline C# wildcard shaping",
     "hidden query-path date defaults",
@@ -514,8 +584,19 @@
     "fixed-column runtime loops",
     "numeric DisplayFormat-only behavior",
     "source-unbacked result schemas",
+    "generic clear query or save assignments when a target helper exists",
     "unapproved dependency upgrades or semantic SQL rewrites"
   ],
+  "generated_csharp_verification": {
+    "frequency": "after every generated C# or Designer change",
+    "commands": ["verify_migration_generated_csharp_style", "orchestrate_pb_migration_validation"],
+    "required_inputs": ["expected_control_contracts", "actual target artifacts", "evidence_registry when evidence is referenced", "separately captured baseline Designer artifact when preserving an existing target"],
+    "non_execution_evidence": ["skill read", "reference read", "smoke check only"]
+  },
+  "analysis_to_implementation_handoff": {
+    "must_avoid_rediscovery": true,
+    "required": ["PB behavior", "event flow", "control-role map", "field and BindingField map", "SP and caller contract", "proven versus inferred labels", "unresolved gaps", "manual tests"]
+  },
   "evidence_requirements": [
     "contract id and version",
     "selected style families and fallback reasons",
@@ -526,6 +607,7 @@
     "caller-parameter and local-variable matrices",
     "Designer and repository plan",
     "Designer ownership inventory and code-behind static UI scan",
+    "analysis-to-implementation handoff complete without rediscovery",
     "procedure result write transaction and error contract",
     "forbidden-pattern scan",
     "verification results and residual blockers",

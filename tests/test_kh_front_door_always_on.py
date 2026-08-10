@@ -364,6 +364,42 @@ Do not claim unexecuted work.
             with self.subTest(required_example=required_example):
                 self.assertIn(required_example, combined)
 
+    def test_skill_frontmatter_is_a_direct_universal_trigger(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        skill_path = repo_root / "skills/always_on_front_door/SKILL.md"
+        skill_text = skill_path.read_text(encoding="utf-8")
+        frontmatter = skill_text.split("---", 2)[1].lower()
+
+        self.assertIn("starting any conversation", frontmatter)
+        self.assertIn("any new user request or task", frontmatter)
+        self.assertIn("including clarifying questions", frontmatter)
+        self.assertIn("without requiring the user to name kh", frontmatter)
+        self.assertNotIn("when plugin instructions request", frontmatter)
+
+        combined = "\n".join(
+            path.read_text(encoding="utf-8").lower()
+            for path in (
+                skill_path,
+                repo_root / "skills/always_on_front_door/references/usage.md",
+                repo_root / "skills/always_on_front_door/examples/minimal-workflow.md",
+            )
+        )
+        self.assertIn("does not depend on plugin manifest prompts", combined)
+        self.assertIn("cannot guarantee host auto-selection", combined)
+        self.assertIn("actual runtime receipts or session logs", combined)
+
+    def test_always_on_front_door_packages_openai_skill_metadata(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        metadata_path = repo_root / "skills/always_on_front_door/agents/openai.yaml"
+
+        self.assertTrue(metadata_path.is_file())
+        metadata = metadata_path.read_text(encoding="utf-8")
+        self.assertIn('display_name: "KH UAF Front Door"', metadata)
+        self.assertIn(
+            'short_description: "Route every new task through KH UAF intake"',
+            metadata,
+        )
+
     def test_minimal_workflow_requires_runtime_output_for_direct_exit(self):
         repo_root = Path(__file__).resolve().parents[1]
         example = (
@@ -393,7 +429,9 @@ Do not claim unexecuted work.
             with self.subTest(manifest=manifest["name"]):
                 self.assertIn("every new", manifest["description"].lower())
         default_prompt = manifests[0]["interface"]["defaultPrompt"]
-        self.assertIn("every new user request", default_prompt[0].lower())
+        self.assertGreaterEqual(len(default_prompt), 2)
+        self.assertLessEqual(len(default_prompt), 4)
+        self.assertNotIn("first and alone", "\n".join(default_prompt).lower())
 
     def test_micro_direct_path_skips_catalog_and_broad_host_skill_discovery(self):
         with (
@@ -414,7 +452,7 @@ Do not claim unexecuted work.
         collect_catalog.assert_not_called()
         discover_host_skills.assert_not_called()
         packet = result.to_micro_summary_dict()
-        self.assertEqual(packet["src"]["v"], "2.9.138")
+        self.assertEqual(packet["src"]["v"], "2.9.139")
         self.assertEqual(packet["cls"], {"c": "l", "x": "direct"})
         self.assertNotIn("next", packet)
 

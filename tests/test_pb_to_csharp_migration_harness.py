@@ -2,6 +2,8 @@ import hashlib
 import json
 import re
 import runpy
+import subprocess
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -38,9 +40,9 @@ from src.skills.pb_to_csharp_migration import (
     get_author_tagged_csharp_style_baseline,
     load_packaged_migration_profile,
     normalize_author_tagged_program_key,
-    orchestrate_pb_migration_validation as _orchestrate_pb_migration_validation,
+    orchestrate_pb_migration_validation as _raw_orchestrate_pb_migration_validation,
     resolve_author_tagged_style_evidence,
-    verify_migration_generated_csharp_style as _verify_migration_generated_csharp_style,
+    verify_migration_generated_csharp_style as _raw_verify_migration_generated_csharp_style,
     verify_pb_migration_analysis_document,
     verify_pb_migration_sp_generation_contract as _verify_pb_migration_sp_generation_contract,
     verify_pb_migration_sp_with_sql_formatting as _verify_pb_migration_sp_with_sql_formatting,
@@ -110,8 +112,73 @@ def write_test_artifact(name, text):
     root.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", name)
     path = root / f"{safe_name}-{digest[:12]}.txt"
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="")
     return path, digest
+
+
+def target_artifact_kwargs(source_text, designer_text="", *, prefix="generated"):
+    source_path, source_digest = write_test_artifact(f"{prefix}-source.cs", source_text)
+    result = {
+        "target_source_path": str(source_path),
+        "target_source_sha256": f"sha256:{source_digest}",
+    }
+    if designer_text:
+        designer_path, designer_digest = write_test_artifact(
+            f"{prefix}-designer.cs",
+            designer_text,
+        )
+        result.update(
+            {
+                "target_designer_path": str(designer_path),
+                "target_designer_sha256": f"sha256:{designer_digest}",
+            }
+        )
+    return result
+
+
+def test_evidence_registry(*entries):
+    default_entries = entries or (
+        {
+            "evidence_id": "user:no-generated-controls",
+            "kind": "user",
+            "locator": "user://test/no-generated-controls",
+        },
+    )
+    return {item["evidence_id"]: dict(item) for item in default_entries}
+
+
+def inferred_test_control_contracts(designer_text):
+    declarations = {
+        match.group("name"): match.group("type")
+        for match in re.finditer(
+            r"(?m)^\s*(?:public|protected|internal|private)\s+"
+            r"(?P<type>(?:global::)?[A-Za-z_][A-Za-z0-9_.<>]*)\s+"
+            r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*;",
+            designer_text,
+        )
+        if pb_migration._is_designer_control_type(match.group("type"))
+    }
+    contracts = []
+    lexical_view = pb_migration._lex_csharp_non_code(designer_text)
+    mappings, _ = pb_migration._extract_csharp_result_field_mappings(lexical_view)
+    mappings_by_control = {}
+    for mapping in mappings:
+        mappings_by_control.setdefault(mapping["member"], {})[
+            mapping["property"]
+        ] = mapping["field_name"]
+    for name, type_name in sorted(declarations.items()):
+        contract = {"instance_name": name, "expected_type": type_name}
+        if name in mappings_by_control:
+            contract["bindings"] = dict(mappings_by_control[name])
+        for property_name in ("BindingField", "FieldName", "DataPropertyName"):
+            match = re.search(
+                rf'this\.{re.escape(name)}\.{property_name}\s*=\s*"([^"\\]*)"\s*;',
+                designer_text,
+            )
+            if match:
+                contract.setdefault("bindings", {})[property_name] = match.group(1)
+        contracts.append(contract)
+    return contracts
 
 
 def complete_csharp_caller_artifact(method_body, *, class_name="CallerEvidence"):
@@ -503,7 +570,45 @@ def valid_devexpress_grid_designer(
     )
     if not plan.success:
         raise AssertionError(plan.to_dict())
-    return plan, f"partial class {form_class}\n{{\n{plan.stdout}\n}}"
+    return plan, designer_from_plans(form_class, plan)
+
+
+def designer_from_plans(form_class, *plans):
+    declarations = []
+    bodies = []
+    for plan in plans:
+        declarations.extend(plan.metadata["declarations"])
+        declaration_set = set(plan.metadata["declarations"])
+        bodies.extend(
+            line
+            for line in plan.stdout.splitlines()
+            if line.strip() not in declaration_set
+            and line.strip() != "// GridColumn field declarations"
+        )
+    return (
+        f"partial class {form_class}\n{{\n{chr(10).join(declarations)}\n"
+        f"private void InitializeComponent()\n{{\n{chr(10).join(bodies)}\n}}\n}}"
+    )
+
+
+def extend_designer_initialize_component(designer, extra):
+    declaration_lines = []
+    body_lines = []
+    for line in extra.splitlines():
+        if re.match(r"\s*(?:public|protected|internal|private)\s+", line):
+            declaration_lines.append(line.strip())
+        elif line.strip():
+            body_lines.append(line.strip())
+    method_marker = "private void InitializeComponent()"
+    extended = designer.replace(
+        method_marker,
+        "\n".join(declaration_lines + [method_marker]),
+        1,
+    )
+    closing = extended.rfind("\n}\n}")
+    if closing < 0:
+        raise AssertionError("Designer fixture does not have an InitializeComponent closing scope.")
+    return extended[:closing] + "\n" + "\n".join(body_lines) + extended[closing:]
 
 
 def observed_layout_load_evidence(path, *, grid_name="grdList", view_name="gvwList"):
@@ -581,6 +686,55 @@ def handwritten_grid_xml(field_name, prefix, *, view_name="gridView1"):
 
 def patch_runtime_profile_path(path):
     return mock.patch.object(pb_migration, "PACKAGED_MIGRATION_PROFILE_PATH", Path(path))
+
+
+def _prepare_csharp_verifier_kwargs(source, kwargs):
+    prepared = dict(kwargs)
+    designer = str(prepared.get("designer_source_text") or "")
+    for key, value in target_artifact_kwargs(source, designer).items():
+        prepared.setdefault(key, value)
+    if "expected_control_contracts" not in prepared:
+        contracts = inferred_test_control_contracts(
+            designer if designer else (source if prepared.get("source_role") == "designer" else "")
+        )
+        prepared["expected_control_contracts"] = contracts
+        if not contracts:
+            prepared.setdefault(
+                "no_control_contract_evidence",
+                {
+                    "reason": "The selected test Designer scope contains no generated controls.",
+                    "evidence_refs": ["user:no-generated-controls"],
+                },
+            )
+            prepared.setdefault("evidence_registry", test_evidence_registry())
+    return prepared
+
+
+def _verify_migration_generated_csharp_style(*args, **kwargs):
+    source = str(args[0] if args else kwargs.pop("source_text", ""))
+    prepared = _prepare_csharp_verifier_kwargs(source, kwargs)
+    return _raw_verify_migration_generated_csharp_style(source, **prepared)
+
+
+def _orchestrate_pb_migration_validation(*args, **kwargs):
+    prepared = dict(kwargs)
+    source = str(prepared.get("csharp_source_text") or "")
+    designer = str(prepared.get("designer_source_text") or "")
+    for key, value in target_artifact_kwargs(source, designer, prefix="orchestrated").items():
+        prepared.setdefault(key, value)
+    if "expected_control_contracts" not in prepared:
+        contracts = inferred_test_control_contracts(designer)
+        prepared["expected_control_contracts"] = contracts
+        if not contracts:
+            prepared.setdefault(
+                "no_control_contract_evidence",
+                {
+                    "reason": "The selected test Designer scope contains no generated controls.",
+                    "evidence_refs": ["user:no-generated-controls"],
+                },
+            )
+            prepared.setdefault("evidence_registry", test_evidence_registry())
+    return _raw_orchestrate_pb_migration_validation(*args, **prepared)
 
 
 def verify_migration_generated_csharp_style(*args, **kwargs):
@@ -811,6 +965,27 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertIn(
             "packaged_profile_contract_invalid",
             {issue["code"] for issue in loaded.metadata["issues"]},
+        )
+
+    def test_runtime_loader_accepts_schema_v2_without_konelib_defaults(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, payload, profile_hash = write_generalized_packaged_contract(
+                temp_dir,
+                mutate=lambda contract: contract.pop("konelib_defaults"),
+            )
+            with patch_runtime_profile_path(profile_path):
+                loaded = load_packaged_migration_profile(
+                    payload["contract_id"],
+                    payload["contract_version"],
+                    profile_hash,
+                )
+
+        self.assertTrue(loaded.success, loaded.to_dict())
+        self.assertEqual(
+            {},
+            loaded.metadata["profile_rules"]["csharp"]["designer_contract"][
+                "konelib_defaults"
+            ],
         )
 
     def test_plan_fails_closed_when_generalized_contract_is_missing_or_invalid(self):
@@ -1726,7 +1901,7 @@ END
         detail_plan = build_csharp_grid_column_designer_plan(
             detail_columns, input_format="detail", result_fields=["DETAIL_ID"]
         )
-        designer = f"partial class RecordsBrowseForm {{\n{list_plan.stdout}\n{detail_plan.stdout}\n}}"
+        designer = designer_from_plans("RecordsBrowseForm", list_plan, detail_plan)
         code_behind = "public partial class RecordsBrowseForm : System.Windows.Forms.Form { public RecordsBrowseForm() { InitializeComponent(); } private void CallSelectProcedure() { this.grdList.DataSource = result; } }"
         sql = sp_metadata_header("Master detail grid propagation") + """
 CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
@@ -1945,6 +2120,49 @@ END
         self.assertIn("src.skills.pb_to_csharp_migration", content)
         self.assertIn("Normal generation is offline", content)
 
+    def test_demo_cli_satisfies_fail_closed_csharp_artifact_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "skills.pb_to_csharp_migration_harness.scripts.demo",
+                    "--output-dir",
+                    temp_dir,
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+            evidence = json.loads(
+                (Path(temp_dir) / "offline_generation_evidence.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        demo_payload = json.loads(completed.stdout)
+        self.assertEqual("passed", demo_payload["success_case"]["status"])
+        self.assertEqual(0, demo_payload["verification"]["exit_code"])
+        runtime = evidence["runtime_validation"]
+        self.assertEqual(
+            {"source": "passed", "designer": "passed", "baseline_designer": "passed"},
+            {
+                role: binding["status"]
+                for role, binding in runtime["target_artifact_binding"].items()
+            },
+        )
+        self.assertEqual("passed", runtime["control_contracts"]["status"])
+        self.assertEqual(5, len(runtime["control_contracts"]["contracts"]))
+        self.assertEqual("passed", runtime["control_evidence_registry"]["status"])
+        self.assertEqual("passed", runtime["baseline_designer_preservation"]["status"])
+        self.assertIn(
+            "designer_owned_ui_in_code_behind",
+            runtime["misplaced_issue_codes"],
+        )
+
     def test_demo_sql_is_verified_by_sp_contract_with_distinct_evidence(self):
         script_path = Path("skills/pb_to_csharp_migration_harness/scripts/demo.py")
         demo_module = runpy.run_path(str(script_path))
@@ -1962,6 +2180,24 @@ END
             sql_text = Path(sql_artifact["path"]).read_text(encoding="utf-8")
 
         self.assertEqual("passed", evidence["runtime_validation"]["sp_generation_contract"])
+        runtime_validation = evidence["runtime_validation"]
+        self.assertEqual(
+            {"source": "passed", "designer": "passed", "baseline_designer": "passed"},
+            {
+                role: binding["status"]
+                for role, binding in runtime_validation["target_artifact_binding"].items()
+            },
+        )
+        self.assertEqual("passed", runtime_validation["control_contracts"]["status"])
+        self.assertEqual(5, len(runtime_validation["control_contracts"]["contracts"]))
+        self.assertEqual(
+            "passed",
+            runtime_validation["control_evidence_registry"]["status"],
+        )
+        self.assertEqual(
+            "passed",
+            runtime_validation["baseline_designer_preservation"]["status"],
+        )
         self.assertEqual([], evidence["runtime_validation"]["sp_issue_codes"])
         self.assertEqual(
             "bound",
@@ -2370,7 +2606,7 @@ column=(type=char(30) dbname="zx900t.record_code" name=record_code))
             purpose_name="Special",
             result_fields=["RATE#", "COST$"],
         )
-        designer = f"partial class SpecialBrowseForm {{\n{plan.stdout}\n}}"
+        designer = designer_from_plans("SpecialBrowseForm", plan)
         style = _verify_migration_generated_csharp_style(
             "public partial class SpecialBrowseForm : System.Windows.Forms.Form { public SpecialBrowseForm() { InitializeComponent(); } private void CallSelectProcedure() { this.grdSPECIAL.DataSource = result; } }",
             designer_source_text=designer,
@@ -2770,6 +3006,1143 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
 
         self.assertEqual(controls["lblInputValue"]["caption"], "기준년도")
         self.assertEqual(controls["lblInputValue"]["properties"]["Text"], "기준년도")
+
+    @staticmethod
+    def _control_contract_designer(
+        *,
+        lookup_type="KoneLib.Controls.u_ButtonEdit",
+        binding_field="LOOKUP_CODE",
+        auto_height="false",
+        horizontal_alignment="Far",
+        even_row_back_color="",
+    ):
+        even_row_assignment = (
+            f"this.gvwList.Appearance.EvenRow.BackColor = {even_row_back_color};"
+            if even_row_back_color
+            else ""
+        )
+        return f'''
+        partial class TestBrowseForm
+        {{
+            private {lookup_type} btnLookup;
+            private KoneLib.Controls.u_Label lblLookup;
+            private ExampleView gvwList;
+
+            private void InitializeComponent()
+            {{
+                this.btnLookup = new {lookup_type}();
+                this.lblLookup = new KoneLib.Controls.u_Label();
+                this.gvwList = new ExampleView();
+                this.btnLookup.BindingField = "{binding_field}";
+                this.btnLookup.Properties.AutoHeight = {auto_height};
+                this.lblLookup.Appearance.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.{horizontal_alignment};
+                this.lblLookup.Appearance.TextOptions.VAlignment = DevExpress.Utils.VertAlignment.Center;
+                {even_row_assignment}
+            }}
+        }}
+        '''
+
+    @staticmethod
+    def _expected_control_contracts(*, include_exact_defaults=True):
+        lookup = {
+            "instance_name": "btnLookup",
+            "expected_type": "KoneLib.Controls.u_ButtonEdit",
+            "BindingField": "LOOKUP_CODE",
+        }
+        if include_exact_defaults:
+            lookup["properties"] = {"Properties.AutoHeight": False}
+        return [
+            lookup,
+            {"instance_name": "lblLookup", "expected_type": "u_Label"},
+            {"instance_name": "gvwList", "expected_type": "ExampleView"},
+        ]
+
+    def _raw_control_verification(self, designer, **kwargs):
+        source, _ = valid_csharp_contract_sources(form_class="TestBrowseForm")
+        call_kwargs = {
+            "designer_source_text": designer,
+            "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
+            "program_key": "TestBrowse",
+            **target_artifact_kwargs(source, designer, prefix="raw-control"),
+            **kwargs,
+        }
+        return _raw_verify_migration_generated_csharp_style(source, **call_kwargs)
+
+    def test_current_profile_blocks_omitted_contract_for_unbound_konelib_control(self):
+        designer = self._control_contract_designer().replace(
+            'this.btnLookup.BindingField = "LOOKUP_CODE";',
+            "",
+        )
+
+        result = self._raw_control_verification(designer)
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "expected_control_contracts_required",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_explicit_no_control_evidence_cannot_hide_mapped_controls(self):
+        result = self._raw_control_verification(
+            self._control_contract_designer(),
+            expected_control_contracts=[],
+            no_control_contract_evidence={
+                "reason": "The migration claims no generated controls.",
+                "evidence_refs": ["user:no-controls"],
+            },
+            evidence_registry=test_evidence_registry(
+                {
+                    "evidence_id": "user:no-controls",
+                    "kind": "user",
+                    "locator": "user://directive/no-controls",
+                }
+            ),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "empty_control_contract_conflicts_with_designer_controls",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_nonempty_control_contract_requires_complete_designer_inventory(self):
+        designer = self._control_contract_designer().replace(
+            "private KoneLib.Controls.u_Label lblLookup;",
+            "private KoneLib.Controls.u_Label lblLookup;\n"
+            "private KoneLib.Controls.u_TextEdit txtUnverified;",
+        ).replace(
+            "this.lblLookup = new KoneLib.Controls.u_Label();",
+            "this.lblLookup = new KoneLib.Controls.u_Label();\n"
+            "this.txtUnverified = new KoneLib.Controls.u_TextEdit();\n"
+            'this.txtUnverified.BindingField = "WRONG_CODE";\n'
+            "this.txtUnverified.Properties.AutoHeight = false;",
+        )
+
+        result = self._raw_control_verification(
+            designer,
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        self.assertFalse(result.success)
+        missing = [
+            issue
+            for issue in result.metadata["issues"]
+            if issue["code"] == "control_contract_inventory_incomplete"
+        ]
+        self.assertEqual(["txtUnverified"], missing[0]["missing_controls"])
+
+    def test_complete_inventory_includes_custom_target_wrapper_without_name_heuristic(self):
+        designer = self._control_contract_designer().replace(
+            "private ExampleView gvwList;",
+            "private ExampleView gvwList;\n"
+            "private TargetProject.LegacyLookupWidget legacyLookup;",
+        ).replace(
+            "this.gvwList = new ExampleView();",
+            "this.gvwList = new ExampleView();\n"
+            "this.legacyLookup = new TargetProject.LegacyLookupWidget();",
+        )
+
+        result = self._raw_control_verification(
+            designer,
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        self.assertFalse(result.success)
+        incomplete = [
+            issue
+            for issue in result.metadata["issues"]
+            if issue["code"] == "control_contract_inventory_incomplete"
+        ]
+        self.assertEqual(["legacyLookup"], incomplete[0]["missing_controls"])
+
+    def test_protected_override_rejects_unbound_evidence_reference(self):
+        contracts = self._expected_control_contracts(include_exact_defaults=False)
+        contracts[0]["properties"] = {"Properties.AutoHeight": True}
+        contracts[0]["evidence_refs"] = ["invented"]
+
+        result = self._raw_control_verification(
+            self._control_contract_designer(auto_height="true"),
+            expected_control_contracts=contracts,
+            evidence_registry={},
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_evidence_reference_unresolved",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_contract_level_evidence_reference_must_resolve_even_without_properties(self):
+        contracts = self._expected_control_contracts()
+        contracts[1]["evidence_refs"] = ["invented:label-authority"]
+
+        result = self._raw_control_verification(
+            self._control_contract_designer(),
+            expected_control_contracts=contracts,
+            evidence_registry={},
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_evidence_reference_unresolved",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_property_evidence_cannot_authorize_an_undeclared_property(self):
+        contracts = self._expected_control_contracts()
+        contracts[1]["property_evidence"] = {
+            "Appearance.TextOptions.HAlignment": ["user:label-authority"]
+        }
+
+        result = self._raw_control_verification(
+            self._control_contract_designer(),
+            expected_control_contracts=contracts,
+            evidence_registry=test_evidence_registry(
+                {
+                    "evidence_id": "user:label-authority",
+                    "kind": "user",
+                    "locator": "user://directive/label-authority",
+                }
+            ),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_property_evidence_invalid",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_evidence_registry_rejects_non_mapping_entries(self):
+        contracts = self._expected_control_contracts()
+        contracts[1]["evidence_refs"] = ["user:label-authority"]
+
+        result = self._raw_control_verification(
+            self._control_contract_designer(),
+            expected_control_contracts=contracts,
+            evidence_registry=[
+                {
+                    "evidence_id": "user:label-authority",
+                    "kind": "user",
+                    "locator": "user://directive/label-authority",
+                },
+                "arbitrary-string",
+            ],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_evidence_registry_entry_invalid",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_no_control_evidence_requires_reason_and_bound_registry_entry(self):
+        designer = """
+        partial class TestBrowseForm
+        {
+            private void InitializeComponent() { }
+        }
+        """
+        unbound = self._raw_control_verification(
+            designer,
+            expected_control_contracts=[],
+            no_control_contract_evidence={
+                "reason": "No controls are generated.",
+                "evidence_refs": ["source:unbound-label"],
+            },
+            evidence_registry={},
+        )
+        missing_reason = self._raw_control_verification(
+            designer,
+            expected_control_contracts=[],
+            no_control_contract_evidence={
+                "evidence_refs": ["user:no-controls"],
+            },
+            evidence_registry=test_evidence_registry(
+                {
+                    "evidence_id": "user:no-controls",
+                    "kind": "user",
+                    "locator": "user://directive/no-controls",
+                }
+            ),
+        )
+
+        self.assertFalse(unbound.success)
+        self.assertFalse(missing_reason.success)
+        self.assertIn(
+            "no_control_evidence_reference_unresolved",
+            {issue["code"] for issue in unbound.metadata["issues"]},
+        )
+        self.assertIn(
+            "no_control_evidence_reason_required",
+            {issue["code"] for issue in missing_reason.metadata["issues"]},
+        )
+
+    def test_target_artifact_binding_blocks_missing_and_mismatched_files(self):
+        source, _ = valid_csharp_contract_sources(form_class="TestBrowseForm")
+        designer = self._control_contract_designer()
+        profile = loaded_test_profile(csharp_required_patterns=[])
+        missing = _raw_verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
+            profile_evidence=profile,
+            program_key="TestBrowse",
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+        artifact_args = target_artifact_kwargs(source, designer, prefix="wrong-sibling")
+        wrong_path, wrong_digest = write_test_artifact(
+            "wrong-sibling-designer.cs",
+            designer.replace("LOOKUP_CODE", "OTHER_CODE"),
+        )
+        artifact_args["target_designer_path"] = str(wrong_path)
+        artifact_args["target_designer_sha256"] = f"sha256:{wrong_digest}"
+        mismatched = _raw_verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
+            profile_evidence=profile,
+            program_key="TestBrowse",
+            expected_control_contracts=self._expected_control_contracts(),
+            **artifact_args,
+        )
+
+        self.assertFalse(missing.success)
+        self.assertFalse(mismatched.success)
+        self.assertIn(
+            "target_source_artifact_required",
+            {issue["code"] for issue in missing.metadata["issues"]},
+        )
+        self.assertIn(
+            "target_designer_artifact_text_mismatch",
+            {issue["code"] for issue in mismatched.metadata["issues"]},
+        )
+
+    def test_target_artifact_binding_rejects_source_designer_path_collision(self):
+        source, _ = valid_csharp_contract_sources(form_class="TestBrowseForm")
+        designer = self._control_contract_designer()
+        artifact_args = target_artifact_kwargs(source, designer, prefix="path-collision")
+        artifact_args["target_designer_path"] = artifact_args["target_source_path"]
+        artifact_args["target_designer_sha256"] = artifact_args["target_source_sha256"]
+
+        result = _raw_verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="TestBrowse",
+            expected_control_contracts=self._expected_control_contracts(),
+            **artifact_args,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "target_artifact_role_path_collision",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_designer_control_evidence_must_be_in_initialize_component(self):
+        designer = self._control_contract_designer().replace(
+            "private void InitializeComponent()",
+            "private void ConfigureAtRuntime()",
+        ).replace(
+            "partial class TestBrowseForm\n        {",
+            "partial class TestBrowseForm\n        {\n"
+            "            private void InitializeComponent() { }",
+        )
+
+        result = self._raw_control_verification(
+            designer,
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "designer_static_evidence_outside_initialize_component",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_local_function_cannot_impersonate_initialize_component(self):
+        designer = '''
+        partial class TestBrowseForm
+        {
+            private KoneLib.Controls.u_ButtonEdit btnLookup;
+            private KoneLib.Controls.u_Label lblLookup;
+            private ExampleView gvwList;
+
+            private void ConfigureAtRuntime()
+            {
+                void InitializeComponent()
+                {
+                    this.btnLookup = new KoneLib.Controls.u_ButtonEdit();
+                    this.lblLookup = new KoneLib.Controls.u_Label();
+                    this.gvwList = new ExampleView();
+                    this.btnLookup.BindingField = "LOOKUP_CODE";
+                    this.btnLookup.Properties.AutoHeight = false;
+                    this.lblLookup.Appearance.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.Far;
+                    this.lblLookup.Appearance.TextOptions.VAlignment = DevExpress.Utils.VertAlignment.Center;
+                }
+            }
+        }
+        '''
+
+        result = self._raw_control_verification(
+            designer,
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "designer_initialize_component_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_baseline_preservation_blocks_unexplained_existing_property_changes(self):
+        baseline = self._control_contract_designer().replace(
+            "this.btnLookup.Properties.AutoHeight = false;",
+            "this.btnLookup.Properties.AutoHeight = false;\n"
+            "this.btnLookup.Size = new System.Drawing.Size(120, 20);\n"
+            "this.btnLookup.Visible = true;",
+        )
+        current = baseline.replace(
+            "new System.Drawing.Size(120, 20)",
+            "new System.Drawing.Size(180, 20)",
+        )
+        baseline_path, baseline_digest = write_test_artifact(
+            "baseline-designer.cs",
+            baseline,
+        )
+
+        result = self._raw_control_verification(
+            current,
+            expected_control_contracts=self._expected_control_contracts(),
+            baseline_designer_path=str(baseline_path),
+            baseline_designer_sha256=f"sha256:{baseline_digest}",
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "baseline_designer_property_changed_without_evidence",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_baseline_preservation_covers_layout_visibility_and_label_alignment(self):
+        baseline = self._control_contract_designer().replace(
+            "this.btnLookup.Properties.AutoHeight = false;",
+            "this.btnLookup.Properties.AutoHeight = false;\n"
+            "this.btnLookup.Size = new System.Drawing.Size(120, 20);\n"
+            "this.btnLookup.Location = new System.Drawing.Point(10, 12);\n"
+            "this.btnLookup.Margin = new System.Windows.Forms.Padding(3);\n"
+            "this.btnLookup.MaximumSize = new System.Drawing.Size(65535, 23);\n"
+            "this.btnLookup.Visible = true;",
+        )
+        changes = {
+            "Size": (
+                "this.btnLookup.Size = new System.Drawing.Size(120, 20);",
+                "this.btnLookup.Size = new System.Drawing.Size(180, 20);",
+            ),
+            "Location": (
+                "this.btnLookup.Location = new System.Drawing.Point(10, 12);",
+                "this.btnLookup.Location = new System.Drawing.Point(30, 12);",
+            ),
+            "Margin": (
+                "this.btnLookup.Margin = new System.Windows.Forms.Padding(3);",
+                "this.btnLookup.Margin = new System.Windows.Forms.Padding(6);",
+            ),
+            "MaximumSize": (
+                "this.btnLookup.MaximumSize = new System.Drawing.Size(65535, 23);",
+                "this.btnLookup.MaximumSize = new System.Drawing.Size(500, 23);",
+            ),
+            "Visible": (
+                "this.btnLookup.Visible = true;",
+                "this.btnLookup.Visible = false;",
+            ),
+            "Appearance.TextOptions.HAlignment": (
+                "DevExpress.Utils.HorzAlignment.Far",
+                "DevExpress.Utils.HorzAlignment.Near",
+            ),
+            "Appearance.TextOptions.VAlignment": (
+                "DevExpress.Utils.VertAlignment.Center",
+                "DevExpress.Utils.VertAlignment.Top",
+            ),
+        }
+        baseline_path, baseline_digest = write_test_artifact(
+            "baseline-all-preserved-properties.cs",
+            baseline,
+        )
+
+        for property_path, (before, after) in changes.items():
+            with self.subTest(property=property_path):
+                result = self._raw_control_verification(
+                    baseline.replace(before, after),
+                    expected_control_contracts=self._expected_control_contracts(),
+                    baseline_designer_path=str(baseline_path),
+                    baseline_designer_sha256=f"sha256:{baseline_digest}",
+                )
+                matching = [
+                    issue
+                    for issue in result.metadata["issues"]
+                    if issue["code"]
+                    == "baseline_designer_property_changed_without_evidence"
+                    and issue.get("property") == property_path
+                ]
+
+                self.assertFalse(result.success)
+                self.assertEqual(1, len(matching), result.metadata["issues"])
+
+    def test_baseline_preservation_allows_exact_registry_bound_change(self):
+        baseline = self._control_contract_designer().replace(
+            "this.btnLookup.Properties.AutoHeight = false;",
+            "this.btnLookup.Properties.AutoHeight = false;\n"
+            "this.btnLookup.Size = new System.Drawing.Size(120, 20);",
+        )
+        current = baseline.replace(
+            "this.btnLookup.Size = new System.Drawing.Size(120, 20);",
+            "this.btnLookup.Size = new System.Drawing.Size(180, 20);",
+        )
+        contracts = self._expected_control_contracts()
+        contracts[0]["properties"]["Size"] = "new System.Drawing.Size(180, 20)"
+        contracts[0]["property_evidence"] = {"Size": ["user:resize-approved"]}
+        baseline_path, baseline_digest = write_test_artifact(
+            "baseline-authorized-size.cs",
+            baseline,
+        )
+
+        result = self._raw_control_verification(
+            current,
+            expected_control_contracts=contracts,
+            evidence_registry=test_evidence_registry(
+                {
+                    "evidence_id": "user:resize-approved",
+                    "kind": "user",
+                    "locator": "user://directive/resize-approved",
+                }
+            ),
+            baseline_designer_path=str(baseline_path),
+            baseline_designer_sha256=f"sha256:{baseline_digest}",
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        changes = result.metadata["baseline_designer_preservation"]["changes"]
+        self.assertEqual([True], [item["authorized"] for item in changes])
+
+    def test_baseline_preservation_rejects_current_designer_as_its_own_baseline(self):
+        designer = self._control_contract_designer()
+        source, _ = valid_csharp_contract_sources(form_class="TestBrowseForm")
+        artifact_args = target_artifact_kwargs(source, designer, prefix="baseline-collision")
+
+        result = _raw_verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="TestBrowse",
+            expected_control_contracts=self._expected_control_contracts(),
+            baseline_designer_path=artifact_args["target_designer_path"],
+            baseline_designer_sha256=artifact_args["target_designer_sha256"],
+            **artifact_args,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "baseline_designer_target_path_collision",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_baseline_preservation_records_new_controls_as_not_evaluable(self):
+        baseline = self._control_contract_designer()
+        current = baseline.replace(
+            "private ExampleView gvwList;",
+            "private ExampleView gvwList;\nprivate KoneLib.Controls.u_TextEdit txtNew;",
+        ).replace(
+            "this.gvwList = new ExampleView();",
+            "this.gvwList = new ExampleView();\n"
+            "this.txtNew = new KoneLib.Controls.u_TextEdit();\n"
+            "this.txtNew.Properties.AutoHeight = false;",
+        )
+        contracts = self._expected_control_contracts()
+        contracts.append(
+            {
+                "instance_name": "txtNew",
+                "expected_type": "KoneLib.Controls.u_TextEdit",
+            }
+        )
+        baseline_path, baseline_digest = write_test_artifact(
+            "baseline-new-control.cs",
+            baseline,
+        )
+
+        result = self._raw_control_verification(
+            current,
+            expected_control_contracts=contracts,
+            baseline_designer_path=str(baseline_path),
+            baseline_designer_sha256=f"sha256:{baseline_digest}",
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual(
+            ["txtNew"],
+            result.metadata["baseline_designer_preservation"][
+                "new_controls_not_evaluable"
+            ],
+        )
+
+    def test_generated_csharp_style_accepts_expected_control_contracts_and_konelib_defaults(self):
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(),
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual("passed", result.metadata["control_contracts"]["status"])
+        self.assertEqual("passed", result.metadata["konelib_default_guards"]["status"])
+        lookup = result.metadata["control_contracts"]["contracts"][0]
+        self.assertEqual("passed", lookup["status"])
+        self.assertEqual("LOOKUP_CODE", lookup["expected_binding_field"])
+        self.assertEqual("LOOKUP_CODE", lookup["actual_binding_field"])
+        self.assertEqual({"Properties.AutoHeight": False}, lookup["expected_properties"])
+        self.assertEqual({"Properties.AutoHeight": "false"}, lookup["actual_properties"])
+        self.assertEqual([], lookup["consumed_explicit_exceptions"])
+
+    def test_generated_csharp_style_blocks_omitted_required_control_contracts(self):
+        result = self._raw_control_verification(self._control_contract_designer())
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "expected_control_contracts_required",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+        self.assertEqual("omitted", result.metadata["control_contracts"]["input_state"])
+
+    def test_generated_csharp_style_requires_evidence_for_explicit_no_control_contract(self):
+        blocked = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(),
+            expected_control_contracts=[],
+        )
+        accepted = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text="""
+            partial class TestBrowseForm
+            {
+                private void InitializeComponent() { }
+            }
+            """,
+            expected_control_contracts=[],
+            no_control_contract_evidence={
+                "reason": "The reviewed migration mapping declares no mapped controls.",
+                "evidence_refs": ["user:no-mapped-controls"],
+            },
+            evidence_registry=test_evidence_registry(
+                {
+                    "evidence_id": "user:no-mapped-controls",
+                    "kind": "user",
+                    "locator": "user://directive/no-mapped-controls",
+                }
+            ),
+        )
+
+        self.assertFalse(blocked.success)
+        self.assertIn(
+            "empty_control_contract_requires_no_control_evidence",
+            {issue["code"] for issue in blocked.metadata["issues"]},
+        )
+        self.assertTrue(accepted.success, accepted.metadata["issues"])
+        self.assertEqual(
+            "proven_no_mapped_controls",
+            accepted.metadata["control_contracts"]["status"],
+        )
+
+    def test_orchestrated_validation_blocks_generated_designer_without_control_contract_or_rationale(self):
+        csharp, _ = valid_csharp_contract_sources(form_class="TestBrowseForm")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            with patch_runtime_profile_path(profile_path):
+                artifact_kwargs = target_artifact_kwargs(
+                    csharp,
+                    self._control_contract_designer(),
+                    prefix="orchestrated-omitted",
+                )
+                result = _raw_orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=self._control_contract_designer(),
+                    original_sql_text="",
+                    formatted_sql_text="",
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="TestBrowse",
+                    **artifact_kwargs,
+                )
+
+        self.assertFalse(result.success)
+        self.assertEqual(
+            ["load-profile", "validate-csharp"],
+            result.metadata["validation_contract"]["completed_stage_order"],
+        )
+        self.assertIn(
+            "expected_control_contracts_required",
+            {
+                issue["code"]
+                for issue in result.metadata["evidence"]["csharp"]["issues"]
+            },
+        )
+
+    def test_generated_csharp_style_blocks_lookup_control_text_type_mismatch(self):
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(
+                lookup_type="KoneLib.Controls.u_TextEdit"
+            ),
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("control_contract_declaration_type_mismatch", issue_codes)
+        self.assertIn("control_contract_initializer_type_mismatch", issue_codes)
+
+    def test_generated_csharp_style_blocks_control_binding_field_mismatch(self):
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(binding_field="OTHER_CODE"),
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("control_contract_binding_field_mismatch", issue_codes)
+
+    def test_generated_csharp_style_blocks_exact_control_property_mismatch(self):
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(auto_height="true"),
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("control_contract_property_mismatch", issue_codes)
+
+    def test_generated_csharp_style_blocks_konelib_input_autoheight_true_override(self):
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(auto_height="true"),
+            expected_control_contracts=self._expected_control_contracts(
+                include_exact_defaults=False
+            ),
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("konelib_input_autoheight_true_override", issue_codes)
+
+    def test_generated_csharp_style_blocks_konelib_label_alignment_override(self):
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(
+                horizontal_alignment="Near"
+            ),
+            expected_control_contracts=self._expected_control_contracts(
+                include_exact_defaults=False
+            ),
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("konelib_label_alignment_override", issue_codes)
+
+    def test_generated_csharp_style_blocks_even_row_backcolor_override(self):
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(
+                even_row_back_color="System.Drawing.Color.AliceBlue"
+            ),
+            expected_control_contracts=self._expected_control_contracts(
+                include_exact_defaults=False
+            ),
+        )
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("even_row_backcolor_override", issue_codes)
+
+    def test_generated_csharp_style_rejects_self_authorizing_default_overrides(self):
+        contracts = self._expected_control_contracts(include_exact_defaults=False)
+        contracts[0]["properties"] = {"Properties.AutoHeight": True}
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(auto_height="true"),
+            expected_control_contracts=contracts,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_override_provenance_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generated_csharp_style_allows_explicit_exact_default_overrides(self):
+        contracts = self._expected_control_contracts(include_exact_defaults=False)
+        contracts[0]["properties"] = {"Properties.AutoHeight": True}
+        contracts[0]["evidence_refs"] = ["source:pb-auto-height"]
+        contracts[1]["properties"] = {
+            "Appearance.TextOptions.HAlignment": "DevExpress.Utils.HorzAlignment.Near"
+        }
+        contracts[1]["property_evidence"] = {
+            "Appearance.TextOptions.HAlignment": ["user-approved:label-alignment"]
+        }
+        contracts[2]["properties"] = {
+            "Appearance.EvenRow.BackColor": "System.Drawing.Color.AliceBlue"
+        }
+        contracts[2]["evidence_refs"] = ["source:designer-even-row-color"]
+        registry = test_evidence_registry(
+            {
+                "evidence_id": "source:pb-auto-height",
+                "kind": "source",
+                "sha256": "sha256:" + "1" * 64,
+            },
+            {
+                "evidence_id": "user-approved:label-alignment",
+                "kind": "user",
+                "locator": "user://directive/label-alignment",
+            },
+            {
+                "evidence_id": "source:designer-even-row-color",
+                "kind": "source",
+                "sha256": "sha256:" + "2" * 64,
+            },
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(
+                auto_height="true",
+                horizontal_alignment="Near",
+                even_row_back_color="System.Drawing.Color.AliceBlue",
+            ),
+            expected_control_contracts=contracts,
+            evidence_registry=registry,
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        controls = {
+            item["control"]: item
+            for item in result.metadata["control_contracts"]["contracts"]
+        }
+        self.assertEqual(
+            ["Properties.AutoHeight"],
+            [
+                item["property"]
+                for item in controls["btnLookup"]["consumed_explicit_exceptions"]
+            ],
+        )
+        self.assertEqual(
+            ["Appearance.TextOptions.HAlignment"],
+            [
+                item["property"]
+                for item in controls["lblLookup"]["consumed_explicit_exceptions"]
+            ],
+        )
+        self.assertEqual(
+            ["Appearance.EvenRow.BackColor"],
+            [
+                item["property"]
+                for item in controls["gvwList"]["consumed_explicit_exceptions"]
+            ],
+        )
+        self.assertEqual(
+            ["source:pb-auto-height"],
+            controls["btnLookup"]["consumed_explicit_exceptions"][0][
+                "provenance"
+            ]["references"],
+        )
+
+    def test_generated_csharp_style_ignores_unrelated_same_named_controls_after_target_resolution(self):
+        target = self._control_contract_designer()
+        unrelated = self._control_contract_designer(
+            lookup_type="KoneLib.Controls.u_TextEdit",
+            binding_field="WRONG_CODE",
+            auto_height="true",
+        ).replace(
+            "TestBrowseForm",
+            "UnrelatedBrowseForm",
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=target + unrelated,
+            expected_control_contracts=self._expected_control_contracts(),
+            form_class="TestBrowseForm",
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual(
+            "KoneLib.Controls.u_ButtonEdit",
+            result.metadata["control_contracts"]["contracts"][0]["declared_type"],
+        )
+
+    def test_generated_csharp_style_merges_partial_target_class_declarations(self):
+        designer = self._control_contract_designer()
+        designer = designer.replace(
+            "private void InitializeComponent()",
+            "}\npartial class TestBrowseForm\n{\nprivate void InitializeComponent()",
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=self._expected_control_contracts(),
+            form_class="TestBrowseForm",
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual(
+            2,
+            result.metadata["control_contracts"]["form_scope"][
+                "partial_declaration_count"
+            ],
+        )
+
+    def test_generated_csharp_style_blocks_repeated_guarded_property_assignments(self):
+        designer = self._control_contract_designer().replace(
+            "this.btnLookup.Properties.AutoHeight = false;",
+            "this.btnLookup.Properties.AutoHeight = false;\n"
+            "this.btnLookup.Properties.AutoHeight = true;",
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        self.assertFalse(result.success)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+        self.assertIn("control_contract_property_assignment_ambiguous", issue_codes)
+        self.assertIn("konelib_guard_assignment_ambiguous", issue_codes)
+
+    def test_generated_csharp_style_blocks_conditional_guarded_property_assignment(self):
+        designer = self._control_contract_designer(auto_height="true").replace(
+            "this.btnLookup.Properties.AutoHeight = true;",
+            "if (allowAutoHeight)\n"
+            "{\n"
+            "    this.btnLookup.Properties.AutoHeight = true;\n"
+            "}",
+        )
+        contracts = self._expected_control_contracts(include_exact_defaults=False)
+        contracts[0]["properties"] = {"Properties.AutoHeight": True}
+        contracts[0]["evidence_refs"] = ["source:conditional-auto-height"]
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=contracts,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "konelib_guard_conditional_assignment",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generated_csharp_style_blocks_nonliteral_guarded_property_assignment(self):
+        designer = self._control_contract_designer(auto_height="ResolveAutoHeight()")
+        contracts = self._expected_control_contracts(include_exact_defaults=False)
+        contracts[0]["properties"] = {"Properties.AutoHeight": "ResolveAutoHeight()"}
+        contracts[0]["evidence_refs"] = ["source:dynamic-auto-height"]
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=contracts,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "konelib_guard_nonliteral_assignment",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_legacy_schema_v2_profile_does_not_enable_konelib_default_guards(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            profile_path, payload, profile_hash = write_generalized_packaged_contract(
+                temp_dir,
+                mutate=lambda contract: contract.pop("konelib_defaults"),
+            )
+            with patch_runtime_profile_path(profile_path):
+                profile = load_packaged_migration_profile(
+                    payload["contract_id"],
+                    payload["contract_version"],
+                    profile_hash,
+                )
+                csharp, _ = valid_csharp_contract_sources(
+                    form_class="TestBrowseForm"
+                )
+                contracts = self._expected_control_contracts(
+                    include_exact_defaults=False
+                )
+                contracts[0]["properties"] = {"Properties.AutoHeight": True}
+                result = _verify_migration_generated_csharp_style(
+                    csharp,
+                    designer_source_text=self._control_contract_designer(
+                        auto_height="true"
+                    ),
+                    profile_evidence=profile,
+                    program_key="TestBrowse",
+                    expected_control_contracts=contracts,
+                )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual(
+            "not_enabled",
+            result.metadata["konelib_default_guards"]["status"],
+        )
+
+    def test_generated_csharp_style_blocks_multiline_konelib_autoheight_override(self):
+        designer = self._control_contract_designer(
+            auto_height="(\n                    true\n                )"
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=self._expected_control_contracts(
+                include_exact_defaults=False
+            ),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "konelib_input_autoheight_true_override",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generated_csharp_style_blocks_multiline_konelib_label_override(self):
+        designer = self._control_contract_designer().replace(
+            "= DevExpress.Utils.HorzAlignment.Far;",
+            "= DevExpress.Utils.HorzAlignment.\n                    Near;",
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=self._expected_control_contracts(
+                include_exact_defaults=False
+            ),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "konelib_label_alignment_override",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generated_csharp_style_blocks_multiline_even_row_override(self):
+        designer = self._control_contract_designer(
+            even_row_back_color="System.Drawing.Color.\n                    AliceBlue"
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=self._expected_control_contracts(
+                include_exact_defaults=False
+            ),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "even_row_backcolor_override",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generated_csharp_style_blocks_missing_control_declaration(self):
+        designer = self._control_contract_designer().replace(
+            "private KoneLib.Controls.u_ButtonEdit btnLookup;",
+            "",
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_declaration_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generated_csharp_style_blocks_missing_control_initializer(self):
+        designer = self._control_contract_designer().replace(
+            "this.btnLookup = new KoneLib.Controls.u_ButtonEdit();",
+            "",
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_initializer_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generated_csharp_style_blocks_missing_control_binding(self):
+        designer = self._control_contract_designer().replace(
+            'this.btnLookup.BindingField = "LOOKUP_CODE";',
+            "",
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_binding_field_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generated_csharp_style_blocks_missing_control_property(self):
+        designer = self._control_contract_designer().replace(
+            "this.btnLookup.Properties.AutoHeight = false;",
+            "",
+        )
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=designer,
+            expected_control_contracts=self._expected_control_contracts(),
+        )
+
+        lookup = result.metadata["control_contracts"]["contracts"][0]
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_property_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+        self.assertEqual("blocked", lookup["status"])
+        self.assertEqual({"Properties.AutoHeight": None}, lookup["actual_properties"])
+
+    def test_generated_csharp_style_blocks_invalid_control_contract(self):
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(),
+            expected_control_contracts=[
+                {"instance_name": "invalid-name", "expected_type": "u_ButtonEdit"}
+            ],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_invalid",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generated_csharp_style_blocks_duplicate_control_contract(self):
+        duplicate = self._expected_control_contracts()[0]
+        result = verify_migration_generated_csharp_style(
+            "",
+            designer_source_text=self._control_contract_designer(),
+            expected_control_contracts=[duplicate, dict(duplicate)],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "control_contract_duplicate_instance",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
 
     def test_generated_csharp_style_blocks_runtime_columns_add_even_with_designer_members(self):
         generated = '''
@@ -3998,7 +5371,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         detail_columns = [{"field_name": "DETAIL_ID", "caption": "Detail", "data_type": "string"}]
         list_plan = build_csharp_grid_column_designer_plan(list_columns, input_format="list", result_fields=["MASTER_ID"])
         detail_plan = build_csharp_grid_column_designer_plan(detail_columns, input_format="detail", result_fields=["DETAIL_ID"])
-        designer = f"partial class RecordsBrowseForm {{\n{list_plan.stdout}\n{detail_plan.stdout}\n}}"
+        designer = designer_from_plans("RecordsBrowseForm", list_plan, detail_plan)
         code_behind = "public partial class RecordsBrowseForm : System.Windows.Forms.Form { public RecordsBrowseForm() { InitializeComponent(); } private void CallSelectProcedure() { this.grdList.DataSource = result; } }"
         common = {
             "designer_source_text": designer,
@@ -4359,7 +5732,10 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         def verify(extra):
             return _verify_migration_generated_csharp_style(
                 code_behind,
-                designer_source_text=base_designer + extra,
+                designer_source_text=extend_designer_initialize_component(
+                    base_designer,
+                    extra,
+                ),
                 profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
                 program_key="RecordsBrowse",
                 expected_grid_role="list",
