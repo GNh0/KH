@@ -95,10 +95,12 @@ The non-null default above is an example of a caller/source-provided default, no
 - For every join, including one whose source is a derived table, indent the join clause exactly eight columns from the current query scope's `FROM` column. Treat valid `LOOP`, `HASH`, `MERGE`, and `REMOTE` hints as part of the line-leading join clause.
 - Keep the complete join type/hint prefix and `JOIN` token on one line; do not split `LEFT OUTER` from `JOIN`.
 - Align `ON` and each actual line-leading same-join continuation `AND` or `OR`, including continuations inside grouping parentheses, to the `I` column of that join's `JOIN` token. Do not classify inline `AND`/`OR`, `BETWEEN`'s delimiter `AND`, `CASE`-internal predicates, or tokens inside a nested `SELECT` as outer continuation targets. Resolve nested `CASE` and `BETWEEN` ownership by ordered predicate context, so a `CASE` operand cannot consume an enclosing `BETWEEN` delimiter.
+- Determine the predicate column from each actual `JOIN` token. A fixed space count, `ON`-relative offset, or source-shaped exception is noncanonical and must be rejected.
 - Every non-`CROSS` join requires `ON` followed by a predicate expression. Bare `ON`, comment-only `ON`, and a join whose next top-level token starts another clause are invalid.
 - Compute indentation from the nested query/block's own `FROM`; do not use an absolute outer-query column.
 - Do not preserve a separate source-shaped exception for a join that introduces a derived table. Its top-level inner clauses start four columns inside the outer join clause, its closing parenthesis and alias align with the outer join clause on the same physical line, and joins inside it use that nested query's own `FROM` column. A detached hard-left alias is invalid.
 - Preserve join type, source order, and every condition.
+- Apply this layout through the packaged candidate-preparation helper and validate the exact final SQL with the packaged verifier. A task-local formatter and a checker that repeats its formula do not satisfy this contract.
 - Assign alias-family letters by each business-role family's first appearance in SQL. Keep members of one family in declaration order; a later source family cannot take an earlier letter. The main source remains `A`, distinct support families advance through `B`, `C`, `D`, and repeated members use numbered aliases from `1`.
 
 ```sql

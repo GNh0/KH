@@ -199,6 +199,8 @@ REQUIRED_GRID_IMPLEMENTATION_TARGETS = {
 }
 REQUIRED_SAVE_IMPLEMENTATION_TARGETS = {
     "src.skills.pb_to_csharp_migration.verify_pb_migration_save_field_contract",
+    "src.skills.pb_to_csharp_migration.verify_pb_migration_sp_with_sql_formatting",
+    "src.skills.pb_to_csharp_migration.orchestrate_pb_migration_validation",
 }
 SYNTHETIC_MAPPED_CSHARP = """
 public partial class CatalogBrowseForm : Form
@@ -733,8 +735,30 @@ def main() -> int:
     if (
         not isinstance(save_ownership, dict)
         or save_ownership.get("ownership_is_mutually_exclusive") is not True
-        or save_ownership.get("insert_and_update_projection_declared_separately") is not True
+        or save_ownership.get("field_contracts_require_nonempty_field_scoped_evidence") is not True
+        or save_ownership.get("field_evidence_sha256_is_recomputed_from_readable_path_or_inline_source") is not True
+        or save_ownership.get("csharp_payload_contract_required") is not True
+        or save_ownership.get("serialized_fields_require_row_assignment") is not True
+        or save_ownership.get("serialized_field_assignment_rhs_must_be_source_derived") is not True
+        or save_ownership.get("serialized_field_assignment_rejects_null_default_dbnull_and_constants") is not True
+        or save_ownership.get("serialized_fields_require_authoritative_type_contract") is not True
+        or save_ownership.get("staging_and_openxml_types_preserve_family_and_capacity") is not True
+        or save_ownership.get("single_argument_datacolumn_add_is_system_string") is not True
+        or save_ownership.get("explicit_csharp_datacolumn_types_are_correlated") is not True
+        or save_ownership.get("openxml_order_matches_csharp_payload") is not True
+        or save_ownership.get("insert_and_update_projection_are_ordered_field_expression_pairs") is not True
+        or save_ownership.get("pb_fixed_values_are_literal_safe_direct_target_expressions") is not True
+        or save_ownership.get("pb_fixed_values_are_direct_sql_literals_only") is not True
         or save_ownership.get("required_editable_values_fail_fast_before_first_write") is not True
+        or save_ownership.get("required_nonblank_validation_accepts_ISNULL_blank_predicate") is not True
+        or save_ownership.get("xml_handle_one_final_normal_cleanup_after_target_dml") is not True
+        or save_ownership.get("xml_handle_normal_cleanup_is_unconditional") is not True
+        or save_ownership.get("xml_handle_normal_cleanup_is_final_success_statement") is not True
+        or save_ownership.get("xml_handle_catch_cleanup_forbidden") is not True
+        or save_ownership.get("xml_handle_set_null_forbidden") is not True
+        or save_ownership.get("xml_handle_exceptional_retention_is_nonblocking_residual_risk") is not True
+        or save_ownership.get("insert_select_line_grouping_delegated_to_official_sql_verifier") is not True
+        or save_ownership.get("orchestrator_requires_correlated_sql_release") is not True
     ):
         issues.append({"code": "save_field_ownership_contract_missing"})
 

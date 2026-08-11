@@ -11096,27 +11096,296 @@ def _split_top_level_sql_items(body: str) -> List[str]:
     return items
 
 
-def _extract_openxml_field_names(sql: str) -> List[str]:
-    fields: List[str] = []
-    for match in re.finditer(r"\bOPENXML\s*\(", sql, flags=re.IGNORECASE):
-        call_open = sql.find("(", match.start())
-        call_end = _balanced_sql_parenthesis_end(sql, call_open)
+def _extract_sql_typed_field(item: str) -> Dict[str, Any]:
+    match = re.match(
+        r"\s*(?:\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_$#]*))\s+"
+        r"(?P<base>(?:\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$#]*)"
+        r"(?:\s*\.\s*(?:\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$#]*))?)"
+        r"(?P<args>\s*\([^)]*\))?",
+        str(item or ""),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return {}
+    field_name = _normalized_save_field_name(match.group(1) or match.group(2))
+    type_spec = f"{match.group('base')}{match.group('args') or ''}"
+    return {
+        "field": field_name,
+        "type_spec": type_spec,
+        "type": _parse_save_sql_type(type_spec),
+    }
+
+
+def _extract_openxml_field_schemas(sql: str) -> List[List[Dict[str, Any]]]:
+    source = _mask_sql_comments_and_strings(sql, mask_strings=True)
+    schemas: List[List[Dict[str, Any]]] = []
+    for match in re.finditer(r"\bOPENXML\s*\(", source, flags=re.IGNORECASE):
+        call_open = source.find("(", match.start())
+        call_end = _balanced_sql_parenthesis_end(source, call_open)
         if call_end is None:
             continue
-        with_match = re.match(r"\s*WITH\s*\(", sql[call_end + 1 :], flags=re.IGNORECASE)
+        with_match = re.match(r"\s*WITH\s*\(", source[call_end + 1 :], flags=re.IGNORECASE)
         if not with_match:
             continue
         with_open = call_end + 1 + with_match.end() - 1
-        with_end = _balanced_sql_parenthesis_end(sql, with_open)
+        with_end = _balanced_sql_parenthesis_end(source, with_open)
         if with_end is None:
             continue
-        for item in _split_top_level_sql_items(sql[with_open + 1 : with_end]):
-            field_match = re.match(r"\s*(?:\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_$#]*))", item)
-            if field_match:
-                field = _normalized_save_field_name(field_match.group(1) or field_match.group(2))
-                if field and field not in fields:
-                    fields.append(field)
+        schema: List[Dict[str, Any]] = []
+        for item in _split_top_level_sql_items(source[with_open + 1 : with_end]):
+            typed_field = _extract_sql_typed_field(item)
+            if typed_field:
+                schema.append(typed_field)
+        schemas.append(schema)
+    return schemas
+
+
+def _extract_openxml_field_names(sql: str) -> List[str]:
+    fields: List[str] = []
+    for schema in _extract_openxml_field_schemas(sql):
+        for item in schema:
+            field_name = str(item.get("field") or "")
+            if field_name and field_name not in fields:
+                fields.append(field_name)
     return fields
+
+
+def _extract_declared_table_variable_schemas(
+    sql: str,
+    table_variable: str,
+) -> List[List[Dict[str, Any]]]:
+    if not re.fullmatch(r"@[A-Za-z_][A-Za-z0-9_]*", table_variable):
+        return []
+    source = _mask_sql_comments_and_strings(sql, mask_strings=True)
+    schemas: List[List[Dict[str, Any]]] = []
+    pattern = rf"\bDECLARE\s+{re.escape(table_variable)}\s+TABLE\s*\("
+    for match in re.finditer(pattern, source, flags=re.IGNORECASE):
+        open_index = source.find("(", match.start())
+        close_index = _balanced_sql_parenthesis_end(source, open_index)
+        if close_index is None:
+            continue
+        schema = [
+            typed_field
+            for item in _split_top_level_sql_items(source[open_index + 1 : close_index])
+            if (typed_field := _extract_sql_typed_field(item))
+        ]
+        schemas.append(schema)
+    return schemas
+
+
+def _parse_save_sql_type(type_spec: Any) -> Dict[str, Any]:
+    raw = str(type_spec or "").strip()
+    compact = re.sub(r"\s+", "", raw.replace("[", "").replace("]", "")).upper()
+    match = re.fullmatch(
+        r"(?P<base>[A-Z_][A-Z0-9_$#]*(?:\.[A-Z_][A-Z0-9_$#]*)?)(?:\((?P<args>[^()]*)\))?",
+        compact,
+    )
+    if not match:
+        return {
+            "raw": raw,
+            "normalized": compact,
+            "valid": False,
+            "family": "unknown",
+        }
+    base = match.group("base").split(".")[-1]
+    aliases = {"NUMERIC": "DECIMAL", "INTEGER": "INT", "ROWVERSION": "BINARY"}
+    base = aliases.get(base, base)
+    args = [item.strip().upper() for item in (match.group("args") or "").split(",") if item.strip()]
+    normalized_args = ",".join(args)
+    normalized = f"{base}({normalized_args})" if args else base
+    descriptor: Dict[str, Any] = {
+        "raw": raw,
+        "normalized": normalized,
+        "base": base,
+        "args": args,
+        "valid": True,
+        "family": "other",
+    }
+    string_types = {"CHAR", "VARCHAR", "NCHAR", "NVARCHAR", "TEXT", "NTEXT"}
+    integer_digits = {"TINYINT": 3, "SMALLINT": 5, "INT": 10, "BIGINT": 19}
+    temporal_types = {"DATE", "SMALLDATETIME", "DATETIME", "DATETIME2", "DATETIMEOFFSET", "TIME"}
+    if base in string_types:
+        descriptor["family"] = "string"
+        descriptor["unicode"] = base.startswith("N") or base == "NTEXT"
+        descriptor["fixed_length"] = base in {"CHAR", "NCHAR"}
+        if base in {"TEXT", "NTEXT"} or (args and args[0] == "MAX"):
+            descriptor["length"] = None
+            descriptor["max_length"] = True
+        else:
+            try:
+                descriptor["length"] = int(args[0]) if args else 1
+            except ValueError:
+                descriptor["valid"] = False
+                descriptor["length"] = None
+            descriptor["max_length"] = False
+    elif base in integer_digits:
+        descriptor.update(
+            family="exact_numeric",
+            numeric_kind="integer",
+            precision=integer_digits[base],
+            scale=0,
+            integer_digits=integer_digits[base],
+        )
+    elif base == "DECIMAL":
+        try:
+            precision = int(args[0]) if args else 18
+            scale = int(args[1]) if len(args) > 1 else 0
+            if precision < 1 or precision > 38 or scale < 0 or scale > precision:
+                raise ValueError
+        except ValueError:
+            descriptor["valid"] = False
+            precision = scale = 0
+        descriptor.update(
+            family="exact_numeric",
+            numeric_kind="decimal",
+            precision=precision,
+            scale=scale,
+            integer_digits=precision - scale,
+        )
+    elif base in {"MONEY", "SMALLMONEY"}:
+        precision, scale = (19, 4) if base == "MONEY" else (10, 4)
+        descriptor.update(
+            family="exact_numeric",
+            numeric_kind="decimal",
+            precision=precision,
+            scale=scale,
+            integer_digits=precision - scale,
+        )
+    elif base in {"FLOAT", "REAL"}:
+        try:
+            precision = int(args[0]) if args else (24 if base == "REAL" else 53)
+        except ValueError:
+            precision = 0
+            descriptor["valid"] = False
+        descriptor.update(family="approximate_numeric", precision=precision)
+    elif base in temporal_types:
+        descriptor["family"] = "temporal"
+        try:
+            descriptor["temporal_precision"] = int(args[0]) if args else (7 if base in {"DATETIME2", "DATETIMEOFFSET", "TIME"} else None)
+        except ValueError:
+            descriptor["valid"] = False
+            descriptor["temporal_precision"] = None
+    elif base == "BIT":
+        descriptor["family"] = "boolean"
+    elif base == "UNIQUEIDENTIFIER":
+        descriptor["family"] = "guid"
+    elif base in {"BINARY", "VARBINARY", "IMAGE"}:
+        descriptor["family"] = "binary"
+    return descriptor
+
+
+def _save_sql_type_is_compatible(
+    authoritative: Mapping[str, Any],
+    actual: Mapping[str, Any],
+) -> tuple[bool, str]:
+    if not authoritative.get("valid") or not actual.get("valid"):
+        return False, "invalid_type_spec"
+    expected_family = authoritative.get("family")
+    actual_family = actual.get("family")
+    if expected_family != actual_family:
+        return False, "type_family_mismatch"
+    if expected_family == "string":
+        if authoritative.get("unicode") and not actual.get("unicode"):
+            return False, "unicode_narrowing"
+        expected_length = authoritative.get("length")
+        actual_length = actual.get("length")
+        if expected_length is not None and actual_length is not None and actual_length < expected_length:
+            return False, "string_length_narrowing"
+        return True, "compatible_string_capacity"
+    if expected_family == "exact_numeric":
+        expected_scale = int(authoritative.get("scale") or 0)
+        actual_scale = int(actual.get("scale") or 0)
+        if actual_scale < expected_scale:
+            return False, "numeric_scale_narrowing"
+        if int(actual.get("integer_digits") or 0) < int(authoritative.get("integer_digits") or 0):
+            return False, "numeric_integer_capacity_narrowing"
+        return True, "compatible_exact_numeric_capacity"
+    if expected_family == "approximate_numeric":
+        if int(actual.get("precision") or 0) < int(authoritative.get("precision") or 0):
+            return False, "numeric_precision_narrowing"
+        return True, "compatible_approximate_numeric_capacity"
+    if expected_family == "temporal":
+        expected_base = str(authoritative.get("base") or "")
+        actual_base = str(actual.get("base") or "")
+        allowed = {
+            "DATE": {"DATE", "SMALLDATETIME", "DATETIME", "DATETIME2", "DATETIMEOFFSET"},
+            "SMALLDATETIME": {"SMALLDATETIME", "DATETIME", "DATETIME2", "DATETIMEOFFSET"},
+            "DATETIME": {"DATETIME", "DATETIME2", "DATETIMEOFFSET"},
+            "DATETIME2": {"DATETIME2", "DATETIMEOFFSET"},
+            "DATETIMEOFFSET": {"DATETIMEOFFSET"},
+            "TIME": {"TIME"},
+        }
+        if actual_base not in allowed.get(expected_base, {expected_base}):
+            return False, "temporal_shape_narrowing"
+        expected_precision = authoritative.get("temporal_precision")
+        actual_precision = actual.get("temporal_precision")
+        if expected_precision is not None and actual_precision is not None and actual_precision < expected_precision:
+            return False, "temporal_precision_narrowing"
+        return True, "compatible_temporal_capacity"
+    if authoritative.get("normalized") != actual.get("normalized"):
+        return False, "nonstandard_type_mismatch"
+    return True, "exact_type_match"
+
+
+def _normalize_csharp_payload_type(type_name: Any) -> str:
+    normalized = re.sub(r"\s+", "", str(type_name or "")).replace("global::", "")
+    aliases = {
+        "string": "System.String",
+        "decimal": "System.Decimal",
+        "int": "System.Int32",
+        "long": "System.Int64",
+        "short": "System.Int16",
+        "byte": "System.Byte",
+        "double": "System.Double",
+        "float": "System.Single",
+        "bool": "System.Boolean",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized and "." not in normalized and normalized in {"DateTime", "DateTimeOffset", "TimeSpan", "Guid"}:
+        normalized = f"System.{normalized}"
+    return normalized.upper()
+
+
+def _csharp_payload_type_is_compatible(
+    csharp_type: str,
+    authoritative: Mapping[str, Any],
+) -> tuple[bool, str]:
+    normalized = _normalize_csharp_payload_type(csharp_type)
+    family = authoritative.get("family")
+    if normalized == "SYSTEM.STRING":
+        return (family == "string", "string_family" if family == "string" else "csharp_sql_family_mismatch")
+    numeric_capacity = {
+        "SYSTEM.BYTE": (3, 0),
+        "SYSTEM.INT16": (5, 0),
+        "SYSTEM.INT32": (10, 0),
+        "SYSTEM.INT64": (19, 0),
+        "SYSTEM.DECIMAL": (29, 28),
+    }
+    if normalized in numeric_capacity:
+        if family != "exact_numeric":
+            return False, "csharp_sql_family_mismatch"
+        digits, max_scale = numeric_capacity[normalized]
+        if int(authoritative.get("scale") or 0) > max_scale:
+            return False, "csharp_numeric_scale_narrowing"
+        if int(authoritative.get("precision") or 0) > digits:
+            return False, "csharp_numeric_precision_narrowing"
+        return True, "compatible_csharp_exact_numeric"
+    if normalized in {"SYSTEM.DOUBLE", "SYSTEM.SINGLE"}:
+        return (family == "approximate_numeric", "compatible_csharp_approximate_numeric" if family == "approximate_numeric" else "csharp_sql_family_mismatch")
+    if normalized == "SYSTEM.DATETIME":
+        return (
+            family == "temporal" and authoritative.get("base") in {"DATE", "SMALLDATETIME", "DATETIME", "DATETIME2"},
+            "compatible_csharp_datetime" if family == "temporal" else "csharp_sql_family_mismatch",
+        )
+    if normalized == "SYSTEM.DATETIMEOFFSET":
+        return (authoritative.get("base") == "DATETIMEOFFSET", "compatible_csharp_datetimeoffset" if authoritative.get("base") == "DATETIMEOFFSET" else "csharp_sql_family_mismatch")
+    if normalized == "SYSTEM.TIMESPAN":
+        return (authoritative.get("base") == "TIME", "compatible_csharp_time" if authoritative.get("base") == "TIME" else "csharp_sql_family_mismatch")
+    if normalized == "SYSTEM.BOOLEAN":
+        return (family == "boolean", "compatible_csharp_boolean" if family == "boolean" else "csharp_sql_family_mismatch")
+    if normalized == "SYSTEM.GUID":
+        return (family == "guid", "compatible_csharp_guid" if family == "guid" else "csharp_sql_family_mismatch")
+    return False, "unsupported_proven_csharp_type"
 
 
 def _normalized_contract_field_set(value: Any) -> set[str]:
@@ -11202,167 +11471,1234 @@ def _extract_save_target_update_fields(sql: str, target_table: str) -> set[str]:
     return fields
 
 
-def _first_save_target_write_index(sql: str, target_table: str) -> int | None:
+def _save_target_write_indexes(sql: str, target_table: str) -> List[int]:
     table_pattern = _save_target_table_pattern(target_table)
     if not table_pattern:
-        return None
-    stripped = _strip_sql_literals_and_comments_for_pb_contract(sql)
-    starts = [
-        match.start()
-        for pattern in (
-            rf"\bINSERT\s+INTO\s+{table_pattern}\b",
-            rf"\bUPDATE\s+{table_pattern}\b",
-            rf"\bUPDATE\b[\s\S]{{0,4000}}?\bFROM\s+{table_pattern}\b",
+        return []
+    stripped = _mask_sql_comments_and_strings(sql, mask_strings=True)
+    return sorted(
+        {
+            match.start()
+            for pattern in (
+                rf"\bINSERT\s+INTO\s+{table_pattern}\b",
+                rf"\bUPDATE\s+{table_pattern}\b",
+                rf"\bUPDATE\b[\s\S]{{0,4000}}?\bFROM\s+{table_pattern}\b",
+                rf"\bDELETE\s+FROM\s+{table_pattern}\b",
+                rf"\bDELETE\s+[A-Z_][A-Z0-9_$#]*\s+FROM\s+{table_pattern}\b",
+            )
+            for match in re.finditer(pattern, stripped, flags=re.IGNORECASE)
+        }
+    )
+
+
+def _first_save_target_write_index(sql: str, target_table: str) -> int | None:
+    starts = _save_target_write_indexes(sql, target_table)
+    return starts[0] if starts else None
+
+
+def _save_target_insert_projections(
+    sql: str,
+    target_table: str,
+) -> List[List[Dict[str, str]]]:
+    table_pattern = _save_target_table_pattern(target_table)
+    if not table_pattern:
+        return []
+    source = _mask_sql_comments_and_strings(sql, mask_strings=False)
+    searchable = _mask_sql_comments_and_strings(sql, mask_strings=True)
+    projections: List[List[Dict[str, str]]] = []
+
+    for match in re.finditer(
+        rf"\bINSERT\s+INTO\s+{table_pattern}\s*\(",
+        searchable,
+        flags=re.IGNORECASE,
+    ):
+        open_index = source.find("(", match.start())
+        close_index = _balanced_sql_parenthesis_end(source, open_index)
+        if close_index is None:
+            continue
+        fields = [
+            _normalized_save_field_name(item.split(".")[-1])
+            for item in _split_top_level_sql_items(source[open_index + 1 : close_index])
+        ]
+        remainder = source[close_index + 1 :]
+        select_match = re.match(r"\s*SELECT\b", remainder, flags=re.IGNORECASE)
+        values_match = re.match(r"\s*VALUES\s*\(", remainder, flags=re.IGNORECASE)
+        values: List[str] = []
+        if select_match:
+            select_body = remainder[select_match.end() :]
+            from_index = _pb_contract_find_top_level_keyword(select_body, "FROM")
+            if from_index >= 0:
+                values = _split_top_level_sql_items(select_body[:from_index])
+        elif values_match:
+            values_open = close_index + 1 + values_match.end() - 1
+            values_close = _balanced_sql_parenthesis_end(source, values_open)
+            if values_close is not None:
+                values = _split_top_level_sql_items(source[values_open + 1 : values_close])
+        if len(fields) != len(values):
+            projections.append([])
+            continue
+        projections.append(
+            [
+                {"field": field_name, "expression": expression.strip()}
+                for field_name, expression in zip(fields, values)
+                if field_name
+            ]
         )
-        for match in re.finditer(pattern, stripped, flags=re.IGNORECASE)
+    return projections
+
+
+def _save_target_update_projections(
+    sql: str,
+    target_table: str,
+) -> List[List[Dict[str, str]]]:
+    table_pattern = _save_target_table_pattern(target_table)
+    if not table_pattern:
+        return []
+    source = _mask_sql_comments_and_strings(sql, mask_strings=False)
+    searchable = _mask_sql_comments_and_strings(sql, mask_strings=True)
+
+    targets = {str(target_table).replace("[", "").replace("]", "").split(".")[-1].upper()}
+    for match in re.finditer(
+        rf"\b(?:FROM|JOIN)\s+{table_pattern}(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_$#]*))?",
+        searchable,
+        flags=re.IGNORECASE,
+    ):
+        alias = str(match.group(1) or "").upper()
+        if alias not in {"WHERE", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "JOIN", "ON"}:
+            targets.add(alias)
+    target_tokens = "|".join(re.escape(item) for item in sorted(targets, key=len, reverse=True) if item)
+    if not target_tokens:
+        return []
+    projections: List[List[Dict[str, str]]] = []
+    for match in re.finditer(
+        rf"\bUPDATE\s+(?:{table_pattern}|(?:{target_tokens}))\s+SET\b",
+        searchable,
+        flags=re.IGNORECASE,
+    ):
+        body = source[match.end() :]
+        boundaries = [
+            index
+            for keyword in ("FROM", "WHERE", "OUTPUT", "OPTION")
+            if (index := _pb_contract_find_top_level_keyword(body, keyword)) >= 0
+        ]
+        semicolon = body.find(";")
+        if semicolon >= 0:
+            boundaries.append(semicolon)
+        if boundaries:
+            body = body[: min(boundaries)]
+        projection: List[Dict[str, str]] = []
+        for assignment in _split_top_level_sql_items(body):
+            if "=" not in assignment:
+                continue
+            left, expression = assignment.split("=", 1)
+            field_name = _normalized_save_field_name(left.strip().split(".")[-1])
+            if field_name:
+                projection.append({"field": field_name, "expression": expression.strip()})
+        projections.append(projection)
+    return projections
+
+
+def _canonical_save_dml_expression(value: str) -> str:
+    source = str(value or "")
+    normalized: List[str] = []
+    index = 0
+    in_literal = False
+    while index < len(source):
+        char = source[index]
+        if in_literal:
+            normalized.append(char)
+            if char == "'":
+                if index + 1 < len(source) and source[index + 1] == "'":
+                    normalized.append(source[index + 1])
+                    index += 1
+                else:
+                    in_literal = False
+        elif char == "'":
+            in_literal = True
+            normalized.append(char)
+        elif char.isspace() or char in {"[", "]"}:
+            pass
+        else:
+            normalized.append(char.upper())
+        index += 1
+    return "".join(normalized)
+
+
+def _save_sql_expression_is_direct_literal(value: Any) -> bool:
+    expression = str(value or "").strip()
+    if not expression:
+        return False
+    return bool(
+        re.fullmatch(r"N?'(?:''|[^'])*'", expression, flags=re.IGNORECASE)
+        or re.fullmatch(
+            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?",
+            expression,
+        )
+        or re.fullmatch(r"NULL", expression, flags=re.IGNORECASE)
+        or re.fullmatch(r"0X[0-9A-F]+", expression, flags=re.IGNORECASE)
+    )
+
+
+def _normalize_save_projection(
+    value: Any,
+    *,
+    name: str,
+    issues: List[Dict[str, Any]],
+) -> List[Dict[str, str]]:
+    if not isinstance(value, (list, tuple)):
+        issues.append(
+            {
+                "code": f"save_{name}_projection_missing",
+                "severity": "error",
+                "message": f"Declare the ordered {name.upper()} field-to-expression projection, including an explicit empty list.",
+            }
+        )
+        return []
+    projection: List[Dict[str, str]] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            issues.append(
+                {
+                    "code": f"save_{name}_projection_entry_invalid",
+                    "severity": "error",
+                    "message": "Each projection entry requires a field and direct SQL expression.",
+                    "index": index,
+                }
+            )
+            continue
+        field_name = _normalized_save_field_name(item.get("field"))
+        expression = str(item.get("expression") or "").strip()
+        if not field_name or not expression:
+            issues.append(
+                {
+                    "code": f"save_{name}_projection_entry_invalid",
+                    "severity": "error",
+                    "message": "Each projection entry requires a valid field and nonblank direct SQL expression.",
+                    "index": index,
+                }
+            )
+            continue
+        projection.append({"field": field_name, "expression": expression})
+    duplicate_fields = sorted(
+        field_name
+        for field_name in {item["field"] for item in projection}
+        if sum(1 for item in projection if item["field"] == field_name) > 1
+    )
+    if duplicate_fields:
+        issues.append(
+            {
+                "code": f"save_{name}_projection_duplicate_field",
+                "severity": "error",
+                "message": "A target field may appear only once in one ordered projection.",
+                "fields": duplicate_fields,
+            }
+        )
+    return projection
+
+
+def _canonical_save_projection(value: Sequence[Mapping[str, Any]]) -> List[tuple[str, str]]:
+    return [
+        (
+            _normalized_save_field_name(item.get("field")),
+            _canonical_save_dml_expression(item.get("expression")),
+        )
+        for item in value
     ]
-    return min(starts) if starts else None
+
+
+def _save_evidence_entry_is_authoritative(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    kind = re.sub(r"[^a-z0-9]+", "_", str(value.get("kind") or "").lower()).strip("_")
+    source_tokens = {
+        "csharp",
+        "database",
+        "designer",
+        "pb",
+        "powerbuilder",
+        "schema",
+        "source",
+        "sql",
+        "stored",
+        "ui",
+    }
+    if not kind or not (set(kind.split("_")) & source_tokens):
+        return False
+    expected_hash = str(
+        value.get("content_sha256")
+        or value.get("artifact_sha256")
+        or value.get("sha256")
+        or ""
+    ).strip().lower()
+    if expected_hash.startswith("sha256:"):
+        expected_hash = expected_hash.split(":", 1)[1]
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        return False
+
+    if "source_text" in value or "content" in value:
+        inline_source = value.get("source_text") if "source_text" in value else value.get("content")
+        if not isinstance(inline_source, str) or not inline_source:
+            return False
+        actual_hash = hashlib.sha256(inline_source.encode("utf-8")).hexdigest()
+        return actual_hash == expected_hash
+
+    artifact_path = str(value.get("path") or "").strip()
+    if not artifact_path:
+        return False
+    try:
+        path = Path(artifact_path)
+        if not path.is_file():
+            return False
+        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        return False
+    return actual_hash == expected_hash
+
+
+def _csharp_assignment_rhs_source_derivation(rhs: str) -> tuple[bool, str]:
+    expression = str(rhs or "").strip()
+    if not expression:
+        return False, "empty_rhs"
+    active = _lex_csharp_non_code(expression).code
+    if re.search(r"\bDBNULL\s*\.\s*VALUE\b", active, flags=re.IGNORECASE):
+        return False, "dbnull_rhs"
+    if re.search(r"\bNULL\b|\bDEFAULT\b(?:\s*\(|\b)", active, flags=re.IGNORECASE):
+        return False, "null_or_default_rhs"
+    if re.fullmatch(
+        r"(?:@?\"(?:\"\"|[^\"])*\"|'(?:\\.|[^'])'|[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?|TRUE|FALSE)",
+        expression,
+        flags=re.IGNORECASE,
+    ):
+        return False, "literal_rhs"
+    if re.fullmatch(r"[A-Z_][A-Z0-9_]*", expression):
+        return False, "unbound_constant_rhs"
+    if re.fullmatch(
+        r"(?:STRING|GUID|DATETIME|DATETIMEOFFSET|TIMESPAN|DECIMAL)\s*\.\s*(?:EMPTY|MINVALUE|MAXVALUE)",
+        active,
+        flags=re.IGNORECASE,
+    ):
+        return False, "framework_constant_rhs"
+
+    source, code_positions, _, _ = _mask_csharp_comments_with_code_positions(expression)
+    source_patterns = (
+        r"\b(?:this\s*\.\s*)?[a-z_][A-Za-z0-9_]*\s*(?:\.\s*[A-Za-z_][A-Za-z0-9_]*)*\s*\[",
+        r"\b(?:this|[a-z_][A-Za-z0-9_]*)\s*\.\s*[A-Za-z_][A-Za-z0-9_]*",
+    )
+    for pattern in source_patterns:
+        for match in re.finditer(pattern, source):
+            if match.start() < len(code_positions) and code_positions[match.start()]:
+                return True, "source_member_or_indexer"
+    return False, "source_derivation_unproven"
+
+
+def _extract_csharp_save_payload_assignment_evidence(
+    source_text: str,
+    table_variable: str,
+) -> Dict[str, List[Dict[str, Any]]]:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_variable):
+        return {}
+    source, code_positions, _, _ = _mask_csharp_comments_with_code_positions(source_text)
+    lexical_code = _lex_csharp_non_code(source_text).code
+    candidate_rows = {
+        match.group("row")
+        for match in re.finditer(
+            rf"\b(?:DataRow\s+)?(?P<row>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+            rf"{re.escape(table_variable)}\s*\.\s*NewRow\s*\(\s*\)",
+            source,
+        )
+        if match.start() < len(code_positions) and code_positions[match.start()]
+    }
+    added_rows = {
+        match.group("row")
+        for match in re.finditer(
+            rf"\b{re.escape(table_variable)}\s*\.\s*Rows\s*\.\s*Add\s*\(\s*"
+            r"(?P<row>[A-Za-z_][A-Za-z0-9_]*)\s*\)",
+            source,
+        )
+        if match.start() < len(code_positions) and code_positions[match.start()]
+    }
+    evidence: Dict[str, List[Dict[str, Any]]] = {}
+    for row_name in sorted(candidate_rows & added_rows):
+        for match in re.finditer(
+            rf"\b{re.escape(row_name)}\s*\[\s*\"(?P<field>[^\"]+)\"\s*\]\s*=\s*(?!=)",
+            source,
+        ):
+            if match.start() >= len(code_positions) or not code_positions[match.start()]:
+                continue
+            statement_end = lexical_code.find(";", match.end())
+            if statement_end < 0:
+                continue
+            field_name = _normalized_save_field_name(match.group("field"))
+            if not field_name:
+                continue
+            rhs = source[match.end():statement_end].strip()
+            source_derived, reason = _csharp_assignment_rhs_source_derivation(rhs)
+            evidence.setdefault(field_name, []).append(
+                {
+                    "row": row_name,
+                    "rhs": rhs,
+                    "source_derived": source_derived,
+                    "reason": reason,
+                    "row_added_to_serialized_table": True,
+                }
+            )
+    return evidence
+
+
+def _extract_csharp_save_payload_assignments(
+    source_text: str,
+    table_variable: str,
+) -> List[str]:
+    return list(
+        _extract_csharp_save_payload_assignment_evidence(
+            source_text,
+            table_variable,
+        )
+    )
+
+
+def _extract_csharp_save_payload_schema(
+    source_text: str,
+    table_variable: str,
+) -> List[Dict[str, Any]]:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_variable):
+        return []
+    source, code_positions, _, _ = _mask_csharp_comments_with_code_positions(source_text)
+    pattern = (
+        rf"\b{re.escape(table_variable)}\s*\.\s*Columns\s*\.\s*Add\s*"
+        r"\(\s*\"(?P<field>[^\"]+)\""
+        r"(?:\s*,\s*typeof\s*\(\s*(?P<type>[A-Za-z_][A-Za-z0-9_.]*(?:::[A-Za-z_][A-Za-z0-9_.]*)?)\s*\))?"
+    )
+    return [
+        {
+            "field": field_name,
+            "csharp_type": (
+                _normalize_csharp_payload_type(match.group("type"))
+                if match.group("type")
+                else "SYSTEM.STRING"
+            ),
+            "type_proven": True,
+            "type_evidence": (
+                "explicit_typeof"
+                if match.group("type")
+                else "datacolumn_single_argument_default"
+            ),
+        }
+        for match in re.finditer(pattern, source)
+        if match.start() < len(code_positions) and code_positions[match.start()]
+        if (field_name := _normalized_save_field_name(match.group("field")))
+    ]
+
+
+def _extract_csharp_save_payload_fields(source_text: str, table_variable: str) -> List[str]:
+    return [
+        str(item.get("field") or "")
+        for item in _extract_csharp_save_payload_schema(source_text, table_variable)
+        if item.get("field")
+    ]
+
+
+def _csharp_save_serializer_is_correlated(source_text: str, table_variable: str) -> bool:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_variable):
+        return False
+    source, code_positions, _, _ = _mask_csharp_comments_with_code_positions(source_text)
+    patterns = (
+        rf"\b(?:[A-Za-z_][A-Za-z0-9_]*\s*\.\s*)*DataTableToXml\s*\(\s*{re.escape(table_variable)}\s*\)",
+        rf"\b{re.escape(table_variable)}\s*\.\s*WriteXml\s*\(",
+    )
+    return any(
+        match.start() < len(code_positions) and code_positions[match.start()]
+        for pattern in patterns
+        for match in re.finditer(pattern, source)
+    )
+
+
+def _extract_csharp_row_state_mapping(
+    source_text: str,
+    row_state_field: str,
+) -> Dict[str, str]:
+    field_name = _normalized_save_field_name(row_state_field)
+    if not field_name:
+        return {}
+    source, code_positions, _, _ = _mask_csharp_comments_with_code_positions(source_text)
+    lexical = _lex_csharp_non_code(source_text)
+    code = lexical.code
+    mapping: Dict[str, str] = {}
+    for state_name in ("added", "modified", "deleted"):
+        branch_match = re.search(
+            rf"\b(?:else\s+)?if\s*\([^)]*\bDataRowState\s*\.\s*{state_name}\b[^)]*\)\s*",
+            code,
+            flags=re.IGNORECASE,
+        )
+        if not branch_match:
+            continue
+        statement_start = branch_match.end()
+        if statement_start < len(code) and code[statement_start] == "{":
+            depth = 0
+            statement_end = statement_start
+            for position in range(statement_start, len(code)):
+                if code[position] == "{":
+                    depth += 1
+                elif code[position] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        statement_end = position + 1
+                        break
+            else:
+                continue
+        else:
+            statement_end = code.find(";", statement_start)
+            if statement_end < 0:
+                continue
+            statement_end += 1
+        block = source[statement_start:statement_end]
+        assignments = re.finditer(
+            rf"\[\s*\"{re.escape(field_name)}\"\s*\]\s*=\s*\"(?P<value>[^\"]*)\"",
+            block,
+            flags=re.IGNORECASE,
+        )
+        for assignment in assignments:
+            assignment_position = statement_start + assignment.start()
+            if assignment_position >= len(code_positions) or not code_positions[assignment_position]:
+                continue
+            mapping[state_name] = assignment.group("value")
+            break
+    return mapping
+
+
+def _save_statement_end(searchable_sql: str, start: int) -> int:
+    depth = 0
+    for index in range(start, len(searchable_sql)):
+        char = searchable_sql[index]
+        if char == "(":
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+        elif char == ";" and depth == 0:
+            return index + 1
+    return len(searchable_sql)
+
+
+def _save_target_operation_row_state_values(
+    sql: str,
+    target_table: str,
+    row_state_field: str,
+) -> Dict[str, List[str]]:
+    table_pattern = _save_target_table_pattern(target_table)
+    field_name = _normalized_save_field_name(row_state_field)
+    if not table_pattern or not field_name:
+        return {"added": [], "modified": [], "deleted": []}
+    source = _mask_sql_comments_and_strings(sql, mask_strings=False)
+    searchable = _mask_sql_comments_and_strings(sql, mask_strings=True)
+
+    targets = {str(target_table).replace("[", "").replace("]", "").split(".")[-1].upper()}
+    for match in re.finditer(
+        rf"\b(?:FROM|JOIN)\s+{table_pattern}(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_$#]*))?",
+        searchable,
+        flags=re.IGNORECASE,
+    ):
+        alias = str(match.group(1) or "").upper()
+        if alias not in {"WHERE", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "JOIN", "ON"}:
+            targets.add(alias)
+    target_tokens = "|".join(re.escape(item) for item in sorted(targets, key=len, reverse=True) if item)
+    operation_patterns = {
+        "added": rf"\bINSERT\s+INTO\s+{table_pattern}\b",
+        "modified": rf"\bUPDATE\s+(?:{table_pattern}|(?:{target_tokens}))\s+SET\b",
+        "deleted": rf"\bDELETE\s+(?:FROM\s+{table_pattern}|(?:{target_tokens})\s+FROM\s+{table_pattern})\b",
+    }
+    result: Dict[str, List[str]] = {name: [] for name in operation_patterns}
+    value_pattern = re.compile(
+        rf"\b{re.escape(field_name)}\b\s*=\s*N?'(?P<value>(?:''|[^'])*)'",
+        flags=re.IGNORECASE,
+    )
+    for operation, pattern in operation_patterns.items():
+        for match in re.finditer(pattern, searchable, flags=re.IGNORECASE):
+            end = _save_statement_end(searchable, match.start())
+            statement = source[match.start():end]
+            result[operation].extend(
+                item.group("value").replace("''", "'")
+                for item in value_pattern.finditer(statement)
+            )
+    return result
+
+
+def _normalize_row_state_mapping(value: Any) -> Dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(key).strip().lower(): str(item).strip()
+        for key, item in value.items()
+        if str(key).strip().lower() in {"added", "modified", "deleted"}
+        and str(item).strip()
+    }
+
+
+def _save_xml_cleanup_pattern(xml_handle: str) -> str:
+    return (
+        rf"\bEXEC(?:UTE)?\s+"
+        rf"(?:(?:\[?DBO\]?|[A-Z_][A-Z0-9_$#]*)\s*\.\s*)?"
+        rf"\[?SP_XML_REMOVEDOCUMENT\]?\s+{re.escape(xml_handle)}\b"
+    )
+
+
+def _analyze_save_xml_handle_flow(
+    sql: str,
+    xml_handle: str,
+    target_table: str,
+) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    issues: List[Dict[str, Any]] = []
+    metadata: Dict[str, Any] = {
+        "pattern": "unproven",
+        "normal_cleanup_count": 0,
+        "catch_cleanup_count": 0,
+        "null_marker_count": 0,
+        "flow_proven": False,
+        "risk_boundary": "static_control_flow_only",
+        "residual_risks": [],
+    }
+    if not re.fullmatch(r"@[A-Z_][A-Z0-9_]*", xml_handle):
+        return metadata, issues
+    source = _mask_sql_comments_and_strings(sql, mask_strings=True).upper()
+    cleanup_pattern = _save_xml_cleanup_pattern(xml_handle)
+    cleanup_matches = list(re.finditer(cleanup_pattern, source, flags=re.IGNORECASE))
+    marker_pattern = rf"\bSET\s+{re.escape(xml_handle)}\s*=\s*NULL\b"
+    marker_matches = list(re.finditer(marker_pattern, source, flags=re.IGNORECASE))
+    metadata["total_cleanup_statement_count"] = len(cleanup_matches)
+    metadata["null_marker_count"] = len(marker_matches)
+
+    try_catch_pattern = re.compile(
+        r"\bBEGIN\s+TRY\b(?P<try_body>[\s\S]*?)\bEND\s+TRY\b\s*;?\s*"
+        r"\bBEGIN\s+CATCH\b(?P<catch_body>[\s\S]*?)\bEND\s+CATCH\b",
+        flags=re.IGNORECASE,
+    )
+    blocks = list(try_catch_pattern.finditer(source))
+    metadata["try_catch_block_count"] = len(blocks)
+    catch_ranges = [(block.start("catch_body"), block.end("catch_body")) for block in blocks]
+    catch_cleanups = [
+        item
+        for item in cleanup_matches
+        if any(start <= item.start() < end for start, end in catch_ranges)
+    ]
+    normal_cleanups = [item for item in cleanup_matches if item not in catch_cleanups]
+    metadata["normal_cleanup_count"] = len(normal_cleanups)
+    metadata["catch_cleanup_count"] = len(catch_cleanups)
+    if catch_cleanups:
+        issues.append(
+            {
+                "code": "save_xml_handle_catch_cleanup_forbidden",
+                "severity": "error",
+                "message": "Generated SAVE SQL must not add an XML-handle cleanup block in CATCH; preserve the selected normal-path-only cleanup style.",
+                "count": len(catch_cleanups),
+            }
+        )
+    if marker_matches:
+        issues.append(
+            {
+                "code": "save_xml_handle_null_marker_forbidden",
+                "severity": "error",
+                "message": "Generated SAVE SQL must not add SET handle = NULL to the selected normal-path-only cleanup style.",
+                "count": len(marker_matches),
+            }
+        )
+    if len(normal_cleanups) == 0:
+        issues.append(
+            {
+                "code": "save_xml_handle_normal_path_cleanup_missing",
+                "severity": "error",
+                "message": "The generated successful SAVE path omits XML cleanup, creating a latent session memory leak risk after repeated execution.",
+            }
+        )
+    elif len(normal_cleanups) > 1:
+        issues.append(
+            {
+                "code": "save_xml_handle_normal_path_double_release",
+                "severity": "error",
+                "message": "The generated normal path releases the same XML handle more than once.",
+                "count": len(normal_cleanups),
+            }
+        )
+    if len(normal_cleanups) == 1:
+        normal_cleanup = normal_cleanups[0]
+        last_openxml_index = max(
+            (item.start() for item in re.finditer(rf"\bOPENXML\s*\(\s*{re.escape(xml_handle)}\b", source, flags=re.IGNORECASE)),
+            default=-1,
+        )
+        last_target_write_index = max(_save_target_write_indexes(sql, target_table) or [-1])
+        if normal_cleanup.start() <= max(last_openxml_index, last_target_write_index):
+            issues.append(
+                {
+                    "code": "save_xml_handle_cleanup_too_early",
+                    "severity": "error",
+                    "message": "Normal-path XML cleanup must occur after the last OPENXML consumption and target DML.",
+                }
+            )
+        trace = _sql_hierarchical_trace(sql)
+        cleanup_trace_indexes = [
+            index
+            for index, item in enumerate(trace)
+            if item.get("kind") == "EXEC"
+            and "SP_XML_REMOVEDOCUMENT" in str(item.get("preview") or "").upper()
+            and xml_handle in str(item.get("preview") or "").upper()
+        ]
+        metadata["cleanup_trace_match_count"] = len(cleanup_trace_indexes)
+        if len(cleanup_trace_indexes) != 1:
+            issues.append(
+                {
+                    "code": "save_xml_handle_cleanup_flow_unproven",
+                    "severity": "error",
+                    "message": "The normal cleanup statement could not be bound to exactly one executable control-flow event.",
+                    "count": len(cleanup_trace_indexes),
+                }
+            )
+        else:
+            cleanup_trace_index = cleanup_trace_indexes[0]
+            cleanup_trace = trace[cleanup_trace_index]
+            cleanup_path_arms = [
+                str(item.get("arm") or "")
+                for item in cleanup_trace.get("path") or []
+            ]
+            metadata["cleanup_path_arms"] = cleanup_path_arms
+            metadata["cleanup_unconditional"] = not any(
+                arm in {"then", "else", "loop"}
+                for arm in cleanup_path_arms
+            )
+            if not metadata["cleanup_unconditional"]:
+                issues.append(
+                    {
+                        "code": "save_xml_handle_cleanup_conditional",
+                        "severity": "error",
+                        "message": "The normal-path XML cleanup must be unconditional and cannot be nested under IF, ELSE, or WHILE control flow.",
+                        "path_arms": cleanup_path_arms,
+                    }
+                )
+            executable_after_cleanup = []
+            for item in trace[cleanup_trace_index + 1 :]:
+                item_arms = [
+                    str(path_item.get("arm") or "")
+                    for path_item in item.get("path") or []
+                ]
+                if "catch" in item_arms or item.get("kind") in {
+                    "CATCH_BEGIN",
+                    "CATCH_END",
+                }:
+                    continue
+                if item.get("order_kind") in {"statement", "branch"}:
+                    executable_after_cleanup.append(
+                        {
+                            "kind": item.get("kind"),
+                            "preview": item.get("preview"),
+                            "path": item.get("path"),
+                        }
+                    )
+            metadata["executable_after_cleanup"] = executable_after_cleanup
+            metadata["cleanup_final_on_success_path"] = not executable_after_cleanup
+            if executable_after_cleanup:
+                issues.append(
+                    {
+                        "code": "save_xml_handle_cleanup_not_final",
+                        "severity": "error",
+                        "message": "The normal XML cleanup must be the final executable statement on the successful SAVE path.",
+                        "statements_after_cleanup": executable_after_cleanup,
+                    }
+                )
+        metadata["pattern"] = "single-normal-path-cleanup"
+    metadata["residual_risks"].append(
+        {
+            "code": "save_xml_handle_exceptional_path_retention_unverified",
+            "severity": "warning",
+            "message": "An exception before normal cleanup has a residual risk of session-scoped parser memory retention until the database session ends; exceptional-path cleanup is intentionally outside this generated-style release gate.",
+            "blocks_release": False,
+        }
+    )
+    metadata["flow_proven"] = not issues
+    return metadata, issues
 
 
 def verify_pb_migration_save_field_contract(
     sql_text: str,
     save_field_contract: Any,
+    *,
+    csharp_source_text: str = "",
 ) -> HarnessResult:
-    """Verify evidence-backed ownership of XML and target-table fields in a PB migration SAVE flow."""
+    """Verify the correlated C#, XML, field-ownership, and ordered DML SAVE contract."""
     sql = str(sql_text or "")
     issues: List[Dict[str, Any]] = []
     contract = dict(save_field_contract) if isinstance(save_field_contract, Mapping) else {}
     target_table = str(contract.get("target_table") or "").strip()
-    screen_used = _normalized_contract_field_set(contract.get("screen_used_fields"))
-    payload = _normalized_contract_field_set(contract.get("payload_fields"))
-    technical = _normalized_contract_field_set(contract.get("technical_fields"))
-    required = _normalized_contract_field_set(contract.get("required_fields"))
-    required_nonblank = _normalized_contract_field_set(contract.get("required_nonblank_fields"))
-    database_defaults = _normalized_contract_field_set(contract.get("database_default_fields"))
-    server_derived = _normalized_contract_field_set(contract.get("server_derived_fields"))
-    nullable_unused = _normalized_contract_field_set(contract.get("nullable_unused_fields"))
-    expected_insert = _normalized_contract_field_set(contract.get("insert_fields"))
-    expected_update = _normalized_contract_field_set(contract.get("update_fields"))
-    fixed_values_raw = contract.get("pb_fixed_values")
-    fixed_values = {
-        _normalized_save_field_name(key): str(value).strip()
-        for key, value in (fixed_values_raw.items() if isinstance(fixed_values_raw, Mapping) else [])
-        if _normalized_save_field_name(key) and str(value).strip()
-    }
     registry = contract.get("evidence_registry")
-    evidence_refs = contract.get("evidence_refs")
     if not target_table:
         issues.append({"code": "save_target_table_missing", "severity": "error", "message": "SAVE field ownership requires one target table."})
     if not isinstance(registry, Mapping) or not registry:
-        issues.append({"code": "save_field_evidence_registry_missing", "severity": "error", "message": "SAVE field ownership requires a structured PB/UI/schema evidence registry."})
+        issues.append({"code": "save_field_evidence_registry_missing", "severity": "error", "message": "SAVE field ownership requires a nonempty structured evidence registry."})
         registry = {}
-    if not isinstance(evidence_refs, (list, tuple)) or not evidence_refs:
-        issues.append({"code": "save_field_evidence_refs_missing", "severity": "error", "message": "SAVE field ownership requires evidence references."})
-        evidence_refs = []
-    unresolved = sorted({str(item) for item in evidence_refs if str(item) not in registry})
-    if unresolved:
-        issues.append({"code": "save_field_evidence_ref_unresolved", "severity": "error", "message": "Every SAVE field evidence reference must resolve through the registry.", "evidence_refs": unresolved})
-    if "payload_fields" not in contract:
-        issues.append({"code": "save_payload_fields_missing", "severity": "error", "message": "Declare the exact screen/PB payload field inventory, including an explicit empty list when applicable."})
-    if "technical_fields" not in contract:
-        issues.append({"code": "save_technical_fields_missing", "severity": "error", "message": "Declare row-state and key fields separately, including an explicit empty list when applicable."})
-    if not payload and not technical:
-        issues.append({"code": "save_xml_field_ownership_empty", "severity": "error", "message": "An XML-based SAVE contract needs at least one payload or technical field."})
-    if required - payload:
-        issues.append({"code": "save_required_field_not_payload", "severity": "error", "message": "Every required field must be an actual payload field.", "fields": sorted(required - payload)})
-    if required_nonblank - required:
-        issues.append({"code": "save_nonblank_field_not_required", "severity": "error", "message": "Only required textual fields may require a nonblank check.", "fields": sorted(required_nonblank - required)})
-    extra_payload = payload - screen_used
-    if extra_payload:
-        issues.append({"code": "save_payload_field_not_screen_used", "severity": "error", "message": "XML must not serialize fields merely because the table contains them; payload fields require PB/UI use evidence.", "fields": sorted(extra_payload)})
-    ownership_groups = {
-        "payload": payload,
-        "technical": technical,
-        "pb_fixed": set(fixed_values),
-        "database_default": database_defaults,
-        "server_derived": server_derived,
-        "nullable_unused": nullable_unused,
-    }
-    ownership_by_field: Dict[str, List[str]] = {}
-    for owner, fields in ownership_groups.items():
-        for field_name in fields:
-            ownership_by_field.setdefault(field_name, []).append(owner)
-    classified_overlap = {
-        field_name: owners
-        for field_name, owners in ownership_by_field.items()
-        if len(owners) > 1
-    }
-    if classified_overlap:
-        issues.append({"code": "save_field_ownership_overlap", "severity": "error", "message": "Payload, technical, PB-fixed, DB-default, server-derived, and nullable-unused ownership must be mutually exclusive.", "fields": classified_overlap})
 
-    actual_xml_fields = set(_extract_openxml_field_names(sql))
-    expected_xml_fields = payload | technical
-    if actual_xml_fields != expected_xml_fields:
-        issues.append({
-            "code": "save_xml_field_inventory_mismatch",
-            "severity": "error",
-            "message": "OPENXML WITH fields must exactly match screen-used payload plus technical row/key fields.",
-            "missing": sorted(expected_xml_fields - actual_xml_fields),
-            "unexpected": sorted(actual_xml_fields - expected_xml_fields),
-        })
+    allowed_classifications = {
+        "editable_payload",
+        "technical_key",
+        "pb_fixed",
+        "db_default",
+        "server_derived",
+        "unused",
+    }
+    field_contracts_raw = contract.get("field_contracts")
+    if not isinstance(field_contracts_raw, (list, tuple)) or not field_contracts_raw:
+        issues.append(
+            {
+                "code": "save_field_contract_entries_missing",
+                "severity": "error",
+                "message": "Declare every SAVE field once in field_contracts with one supported classification and field-scoped evidence.",
+            }
+        )
+        field_contracts_raw = []
 
-    actual_insert = _extract_save_target_insert_fields(sql, target_table)
-    actual_update = _extract_save_target_update_fields(sql, target_table)
-    if actual_insert and "insert_fields" not in contract:
-        issues.append({"code": "save_insert_projection_contract_missing", "severity": "error", "message": "Declare the exact target INSERT field projection before release."})
-    elif actual_insert != expected_insert:
-        issues.append({"code": "save_insert_field_inventory_mismatch", "severity": "error", "message": "Target INSERT fields must exactly match the evidence-backed projection.", "missing": sorted(expected_insert - actual_insert), "unexpected": sorted(actual_insert - expected_insert)})
-    if actual_update and "update_fields" not in contract:
-        issues.append({"code": "save_update_projection_contract_missing", "severity": "error", "message": "Declare the exact target UPDATE field projection before release."})
-    elif actual_update != expected_update:
-        issues.append({"code": "save_update_field_inventory_mismatch", "severity": "error", "message": "Target UPDATE fields must exactly match the evidence-backed projection.", "missing": sorted(expected_update - actual_update), "unexpected": sorted(actual_update - expected_update)})
-    allowed_write_fields = payload | technical | set(fixed_values) | server_derived
-    invalid_expected_writes = (expected_insert | expected_update) - allowed_write_fields
+    field_contracts: Dict[str, Dict[str, Any]] = {}
+    classifications: Dict[str, set[str]] = {name: set() for name in allowed_classifications}
+    fixed_values: Dict[str, str] = {}
+    authoritative_sql_types: Dict[str, Dict[str, Any]] = {}
+    required: set[str] = set()
+    required_nonblank: set[str] = set()
+    for index, raw_entry in enumerate(field_contracts_raw):
+        if not isinstance(raw_entry, Mapping):
+            issues.append({"code": "save_field_contract_entry_invalid", "severity": "error", "message": "Each SAVE field contract entry must be an object.", "index": index})
+            continue
+        entry = dict(raw_entry)
+        field_name = _normalized_save_field_name(entry.get("field"))
+        classification = str(entry.get("classification") or "").strip().lower()
+        if not field_name or classification not in allowed_classifications:
+            issues.append({"code": "save_field_contract_entry_invalid", "severity": "error", "message": "Each SAVE field requires a valid name and supported classification.", "index": index, "field": field_name, "classification": classification})
+            continue
+        if field_name in field_contracts:
+            issues.append({"code": "save_field_classification_duplicate", "severity": "error", "message": "Each SAVE field must be classified exactly once.", "field": field_name})
+            continue
+        evidence_refs = entry.get("evidence_refs")
+        if not isinstance(evidence_refs, (list, tuple)) or not evidence_refs:
+            issues.append({"code": "save_field_scoped_evidence_missing", "severity": "error", "message": "Every classified field requires nonempty field-scoped evidence_refs.", "field": field_name})
+            evidence_refs = []
+        unresolved = sorted({str(ref) for ref in evidence_refs if str(ref) not in registry})
+        empty_evidence = sorted({str(ref) for ref in evidence_refs if str(ref) in registry and not _save_evidence_entry_is_authoritative(registry[str(ref)])})
+        if unresolved:
+            issues.append({"code": "save_field_scoped_evidence_unresolved", "severity": "error", "message": "Every field evidence reference must resolve through the SAVE evidence registry.", "field": field_name, "evidence_refs": unresolved})
+        if empty_evidence:
+            issues.append({"code": "save_field_scoped_evidence_empty", "severity": "error", "message": "Resolved field evidence must identify a source-grounded kind and locator/path plus a content hash or artifact binding.", "field": field_name, "evidence_refs": empty_evidence})
+        if classification == "pb_fixed":
+            fixed_value_sql = str(entry.get("fixed_value_sql") or "").strip()
+            if not fixed_value_sql:
+                issues.append({"code": "save_pb_fixed_value_missing", "severity": "error", "message": "A PB-fixed field requires fixed_value_sql.", "field": field_name})
+            else:
+                fixed_values[field_name] = fixed_value_sql
+                if not _save_sql_expression_is_direct_literal(fixed_value_sql):
+                    issues.append(
+                        {
+                            "code": "save_pb_fixed_value_not_literal",
+                            "severity": "error",
+                            "message": "A PB-fixed value must be one direct SQL literal, not a function, identifier, parameter, expression, or subquery.",
+                            "field": field_name,
+                            "fixed_value_sql": fixed_value_sql,
+                        }
+                    )
+            if entry.get("editable") is True or "initial_value" in entry:
+                issues.append({"code": "save_editable_initial_value_misclassified_fixed", "severity": "error", "message": "An editable control initial value is payload, not a PB-fixed SQL literal.", "field": field_name})
+        elif entry.get("fixed_value_sql") not in (None, ""):
+            issues.append({"code": "save_fixed_value_on_nonfixed_field", "severity": "error", "message": "Only pb_fixed fields may declare fixed_value_sql.", "field": field_name})
+        if entry.get("required") is True:
+            if classification != "editable_payload":
+                issues.append({"code": "save_required_field_not_editable_payload", "severity": "error", "message": "Only editable payload fields may be required client inputs.", "field": field_name})
+            required.add(field_name)
+        if entry.get("nonblank") is True:
+            if entry.get("required") is not True or classification != "editable_payload":
+                issues.append({"code": "save_nonblank_field_not_required", "severity": "error", "message": "Only required editable textual fields may reject blank values.", "field": field_name})
+            required_nonblank.add(field_name)
+        if classification in {"editable_payload", "technical_key"}:
+            type_contract = entry.get("type_contract")
+            if not isinstance(type_contract, Mapping):
+                issues.append(
+                    {
+                        "code": "save_serialized_field_type_contract_missing",
+                        "severity": "error",
+                        "message": "Every serialized SAVE field requires an authoritative SQL type contract.",
+                        "field": field_name,
+                    }
+                )
+            else:
+                type_refs = type_contract.get("evidence_refs")
+                if not isinstance(type_refs, (list, tuple)) or not type_refs:
+                    issues.append(
+                        {
+                            "code": "save_authoritative_type_evidence_missing",
+                            "severity": "error",
+                            "message": "Every serialized SAVE field type requires nonempty field-scoped evidence_refs.",
+                            "field": field_name,
+                        }
+                    )
+                    type_refs = []
+                unresolved_type_refs = sorted(
+                    {
+                        str(ref)
+                        for ref in type_refs
+                        if str(ref) not in registry
+                        or not _save_evidence_entry_is_authoritative(registry.get(str(ref)))
+                    }
+                )
+                if unresolved_type_refs:
+                    issues.append(
+                        {
+                            "code": "save_authoritative_type_evidence_unresolved",
+                            "severity": "error",
+                            "message": "Serialized-field type evidence must resolve to a nonempty registry entry.",
+                            "field": field_name,
+                            "evidence_refs": unresolved_type_refs,
+                        }
+                    )
+                authoritative_type = _parse_save_sql_type(type_contract.get("sql_type"))
+                if not authoritative_type.get("valid"):
+                    issues.append(
+                        {
+                            "code": "save_authoritative_sql_type_invalid",
+                            "severity": "error",
+                            "message": "Every serialized SAVE field requires a valid authoritative SQL type.",
+                            "field": field_name,
+                            "sql_type": str(type_contract.get("sql_type") or ""),
+                        }
+                    )
+                else:
+                    authoritative_sql_types[field_name] = authoritative_type
+        field_contracts[field_name] = entry
+        classifications[classification].add(field_name)
+
+    payload = classifications["editable_payload"]
+    technical = classifications["technical_key"]
+    database_defaults = classifications["db_default"]
+    server_derived = classifications["server_derived"]
+    unused = classifications["unused"]
+    fixed_fields = classifications["pb_fixed"]
+    serializable_fields = payload | technical
+
+    csharp_contract = contract.get("csharp_payload_contract")
+    if not isinstance(csharp_contract, Mapping):
+        issues.append({"code": "save_csharp_payload_contract_missing", "severity": "error", "message": "XML SAVE requires a correlated C# payload and row-state contract."})
+        csharp_contract = {}
+    csharp_refs = csharp_contract.get("evidence_refs")
+    if not isinstance(csharp_refs, (list, tuple)) or not csharp_refs:
+        issues.append({"code": "save_csharp_payload_evidence_missing", "severity": "error", "message": "The C# payload contract requires nonempty evidence_refs."})
+        csharp_refs = []
+    unresolved_csharp_refs = sorted({str(ref) for ref in csharp_refs if str(ref) not in registry or not _save_evidence_entry_is_authoritative(registry.get(str(ref)))})
+    if unresolved_csharp_refs:
+        issues.append({"code": "save_csharp_payload_evidence_unresolved", "severity": "error", "message": "C# payload evidence must resolve to nonempty registry entries.", "evidence_refs": unresolved_csharp_refs})
+    table_variable = str(csharp_contract.get("table_variable") or "").strip()
+    expected_csharp_fields = [
+        field_name
+        for item in (csharp_contract.get("serialized_fields") if isinstance(csharp_contract.get("serialized_fields"), (list, tuple)) else [])
+        if (field_name := _normalized_save_field_name(item))
+    ]
+    if not expected_csharp_fields:
+        issues.append({"code": "save_csharp_serialized_fields_missing", "severity": "error", "message": "Declare the ordered C# fields serialized to XML."})
+    if set(expected_csharp_fields) != serializable_fields or len(expected_csharp_fields) != len(serializable_fields):
+        issues.append({"code": "save_csharp_payload_contract_inventory_mismatch", "severity": "error", "message": "The declared C# payload must contain exactly editable payload and technical key fields.", "expected_serializable_fields": sorted(serializable_fields), "declared_serialized_fields": expected_csharp_fields})
+    actual_csharp_schema = _extract_csharp_save_payload_schema(csharp_source_text, table_variable)
+    actual_csharp_fields = [str(item.get("field") or "") for item in actual_csharp_schema]
+    actual_csharp_payload_types = {
+        str(item.get("field") or ""): item.get("csharp_type")
+        for item in actual_csharp_schema
+        if item.get("field")
+    }
+    actual_csharp_payload_assignments = _extract_csharp_save_payload_assignments(
+        csharp_source_text,
+        table_variable,
+    )
+    actual_csharp_payload_assignment_evidence = (
+        _extract_csharp_save_payload_assignment_evidence(
+            csharp_source_text,
+            table_variable,
+        )
+    )
+    if not str(csharp_source_text or "").strip():
+        issues.append({"code": "save_csharp_source_missing", "severity": "error", "message": "XML SAVE validation requires the exact C# serialization source."})
+    elif actual_csharp_fields != expected_csharp_fields:
+        issues.append({"code": "save_csharp_payload_inventory_mismatch", "severity": "error", "message": "The correlated C# DataTable/XML payload fields must exactly match the ordered contract.", "expected": expected_csharp_fields, "actual": actual_csharp_fields})
+    missing_csharp_assignments = [
+        field_name
+        for field_name in expected_csharp_fields
+        if field_name not in actual_csharp_payload_assignments
+    ]
+    if missing_csharp_assignments:
+        issues.append(
+            {
+                "code": "save_csharp_payload_assignment_missing",
+                "severity": "error",
+                "message": "Every serialized field must be assigned on a row added to the serialized DataTable; Columns.Add alone is insufficient.",
+                "fields": missing_csharp_assignments,
+            }
+        )
+    if not _csharp_save_serializer_is_correlated(csharp_source_text, table_variable):
+        issues.append({"code": "save_csharp_serializer_not_correlated", "severity": "error", "message": "The declared payload table must be passed directly to DataTableToXml or WriteXml."})
+    for field_name in expected_csharp_fields:
+        csharp_type = actual_csharp_payload_types.get(field_name)
+        authoritative_type = authoritative_sql_types.get(field_name)
+        if csharp_type and authoritative_type:
+            compatible, reason = _csharp_payload_type_is_compatible(csharp_type, authoritative_type)
+            if not compatible:
+                issues.append(
+                    {
+                        "code": "save_csharp_field_type_incompatible",
+                        "severity": "error",
+                        "message": "A source-proven C# DataColumn type is incompatible with the authoritative serialized-field SQL type.",
+                        "field": field_name,
+                        "authoritative_type": authoritative_type.get("normalized"),
+                        "actual_csharp_type": csharp_type,
+                        "reason": reason,
+                    }
+                )
+
+    row_state_field = _normalized_save_field_name(csharp_contract.get("row_state_field"))
+    expected_row_state_mapping = _normalize_row_state_mapping(csharp_contract.get("row_state_mapping"))
+    if not row_state_field or row_state_field not in technical:
+        issues.append({"code": "save_row_state_field_contract_invalid", "severity": "error", "message": "row_state_field must name one classified technical_key field."})
+    if not expected_row_state_mapping:
+        issues.append({"code": "save_row_state_mapping_contract_missing", "severity": "error", "message": "Declare the C# Added/Modified/Deleted row-state values used by the SAVE flow."})
+    actual_row_state_mapping = _extract_csharp_row_state_mapping(csharp_source_text, row_state_field)
+    if actual_row_state_mapping != expected_row_state_mapping:
+        issues.append({"code": "save_csharp_row_state_mapping_missing", "severity": "error", "message": "The C# source must map every declared DataRowState directly to the serialized row-state field and value.", "expected": expected_row_state_mapping, "actual": actual_row_state_mapping})
+    elif row_state_field in actual_csharp_payload_assignment_evidence:
+        for item in actual_csharp_payload_assignment_evidence[row_state_field]:
+            item["source_derived"] = True
+            item["reason"] = "correlated_row_state_branch_mapping"
+
+    for field_name in expected_csharp_fields:
+        field_assignment_evidence = actual_csharp_payload_assignment_evidence.get(
+            field_name,
+            [],
+        )
+        if field_assignment_evidence and not any(
+            item.get("source_derived") is True
+            for item in field_assignment_evidence
+        ):
+            issues.append(
+                {
+                    "code": "save_csharp_payload_assignment_not_source_derived",
+                    "severity": "error",
+                    "message": "A serialized editable or technical field must be populated from source-derived C# data on the row added to the serialized table.",
+                    "field": field_name,
+                    "assignment_evidence": field_assignment_evidence,
+                }
+            )
+
+    expected_openxml_fields = [
+        field_name
+        for item in (contract.get("openxml_fields") if isinstance(contract.get("openxml_fields"), (list, tuple)) else [])
+        if (field_name := _normalized_save_field_name(item))
+    ]
+    actual_openxml_schemas = _extract_openxml_field_schemas(sql)
+    actual_openxml_fields = _extract_openxml_field_names(sql)
+    if expected_openxml_fields != expected_csharp_fields:
+        issues.append({"code": "save_openxml_contract_not_correlated", "severity": "error", "message": "OPENXML field order must equal the C# serialized field order.", "csharp_fields": expected_csharp_fields, "openxml_fields": expected_openxml_fields})
+    if actual_openxml_fields != expected_openxml_fields:
+        issues.append({"code": "save_xml_field_inventory_mismatch", "severity": "error", "message": "OPENXML WITH fields must exactly match the ordered C# payload contract.", "expected": expected_openxml_fields, "actual": actual_openxml_fields})
+
+    staging_table_variable = str(contract.get("staging_table_variable") or "").strip().upper()
+    staging_schemas = _extract_declared_table_variable_schemas(sql, staging_table_variable)
+    actual_staging_schema = staging_schemas[0] if len(staging_schemas) == 1 else []
+    actual_staging_fields = [str(item.get("field") or "") for item in actual_staging_schema]
+    actual_staging_sql_types = {
+        str(item.get("field") or ""): item.get("type")
+        for item in actual_staging_schema
+        if item.get("field")
+    }
+    actual_openxml_sql_types: Dict[str, Dict[str, Any]] = {}
+    if not re.fullmatch(r"@[A-Z_][A-Z0-9_]*", staging_table_variable):
+        issues.append(
+            {
+                "code": "save_staging_table_variable_missing",
+                "severity": "error",
+                "message": "SAVE type correlation requires one explicit declared staging table variable.",
+            }
+        )
+    elif len(staging_schemas) != 1:
+        issues.append(
+            {
+                "code": "save_staging_table_declaration_count_invalid",
+                "severity": "error",
+                "message": "The declared SAVE staging table variable must have exactly one TABLE declaration.",
+                "table_variable": staging_table_variable,
+                "count": len(staging_schemas),
+            }
+        )
+    elif actual_staging_fields != expected_csharp_fields:
+        issues.append(
+            {
+                "code": "save_staging_field_inventory_mismatch",
+                "severity": "error",
+                "message": "The staging table fields must exactly match the ordered serialized-field contract.",
+                "expected": expected_csharp_fields,
+                "actual": actual_staging_fields,
+            }
+        )
+
+    for schema_index, schema in enumerate(actual_openxml_schemas):
+        for item in schema:
+            field_name = str(item.get("field") or "")
+            actual_type = item.get("type")
+            if field_name and field_name not in actual_openxml_sql_types:
+                actual_openxml_sql_types[field_name] = actual_type
+            authoritative_type = authoritative_sql_types.get(field_name)
+            if not authoritative_type or not isinstance(actual_type, Mapping):
+                continue
+            compatible, reason = _save_sql_type_is_compatible(authoritative_type, actual_type)
+            if not compatible:
+                issues.append(
+                    {
+                        "code": "save_openxml_field_type_incompatible",
+                        "severity": "error",
+                        "message": "An OPENXML WITH field type is incompatible with its authoritative serialized-field type.",
+                        "field": field_name,
+                        "schema_index": schema_index,
+                        "authoritative_type": authoritative_type.get("normalized"),
+                        "actual_type": actual_type.get("normalized"),
+                        "reason": reason,
+                    }
+                )
+    for field_name in expected_csharp_fields:
+        authoritative_type = authoritative_sql_types.get(field_name)
+        staging_type = actual_staging_sql_types.get(field_name)
+        if authoritative_type and isinstance(staging_type, Mapping):
+            compatible, reason = _save_sql_type_is_compatible(authoritative_type, staging_type)
+            if not compatible:
+                issues.append(
+                    {
+                        "code": "save_staging_field_type_incompatible",
+                        "severity": "error",
+                        "message": "A declared staging-table field type is incompatible with its authoritative serialized-field type.",
+                        "field": field_name,
+                        "authoritative_type": authoritative_type.get("normalized"),
+                        "actual_type": staging_type.get("normalized"),
+                        "reason": reason,
+                    }
+                )
+
+    expected_insert = _normalize_save_projection(contract.get("insert_projection"), name="insert", issues=issues)
+    expected_update = _normalize_save_projection(contract.get("update_projection"), name="update", issues=issues)
+    actual_insert_projections = _save_target_insert_projections(sql, target_table)
+    actual_update_projections = _save_target_update_projections(sql, target_table)
+    actual_insert = actual_insert_projections[0] if len(actual_insert_projections) == 1 else []
+    actual_update = actual_update_projections[0] if len(actual_update_projections) == 1 else []
+    if len(actual_insert_projections) != (1 if expected_insert else 0):
+        issues.append({"code": "save_insert_projection_cardinality_mismatch", "severity": "error", "message": "The target SAVE flow must contain exactly the declared number of target INSERT projections.", "expected": 1 if expected_insert else 0, "actual": len(actual_insert_projections)})
+    elif _canonical_save_projection(actual_insert) != _canonical_save_projection(expected_insert):
+        issues.append({"code": "save_insert_projection_mismatch", "severity": "error", "message": "INSERT columns and SELECT/VALUES expressions must match the declared order and direct field-to-expression pairs.", "expected": expected_insert, "actual": actual_insert})
+    if len(actual_update_projections) != (1 if expected_update else 0):
+        issues.append({"code": "save_update_projection_cardinality_mismatch", "severity": "error", "message": "The target SAVE flow must contain exactly the declared number of target UPDATE projections.", "expected": 1 if expected_update else 0, "actual": len(actual_update_projections)})
+    elif _canonical_save_projection(actual_update) != _canonical_save_projection(expected_update):
+        issues.append({"code": "save_update_projection_mismatch", "severity": "error", "message": "UPDATE assignments must match the declared order and direct field-to-expression pairs.", "expected": expected_update, "actual": actual_update})
+
+    expected_write_fields = {item["field"] for item in expected_insert + expected_update}
+    actual_write_fields = {item["field"] for item in actual_insert + actual_update}
+    allowed_write_fields = payload | technical | fixed_fields | server_derived
+    invalid_expected_writes = expected_write_fields - allowed_write_fields
     if invalid_expected_writes:
-        issues.append({"code": "save_projection_uses_unowned_field", "severity": "error", "message": "INSERT/UPDATE projections may use only payload, technical, PB-fixed, or server-derived fields.", "fields": sorted(invalid_expected_writes)})
-    forbidden_writes = (actual_insert | actual_update) & (database_defaults | nullable_unused)
+        issues.append({"code": "save_projection_uses_unowned_field", "severity": "error", "message": "Target DML may use only editable payload, technical key, PB-fixed, or server-derived fields.", "fields": sorted(invalid_expected_writes)})
+    forbidden_writes = actual_write_fields & (database_defaults | unused)
     if forbidden_writes:
-        issues.append({"code": "save_omitted_field_written", "severity": "error", "message": "DB-default and nullable-unused fields must be omitted from generated INSERT/UPDATE projections.", "fields": sorted(forbidden_writes)})
+        issues.append({"code": "save_omitted_field_written", "severity": "error", "message": "db_default and unused fields must be omitted from generated target DML.", "fields": sorted(forbidden_writes)})
+    forbidden_serialized = set(actual_csharp_fields + actual_openxml_fields) & (database_defaults | unused | fixed_fields | server_derived)
+    if forbidden_serialized:
+        issues.append({"code": "save_nonpayload_field_serialized", "severity": "error", "message": "C#/OPENXML may serialize only editable_payload and technical_key fields.", "fields": sorted(forbidden_serialized)})
 
-    stripped = _strip_sql_literals_and_comments_for_pb_contract(sql).upper()
-    for field in sorted(database_defaults):
-        if field in actual_xml_fields:
-            issues.append({"code": "save_database_default_field_serialized", "severity": "error", "message": "Fields owned by a DB default must be omitted from the payload.", "field": field})
-    for field in sorted(nullable_unused):
-        if field in actual_xml_fields:
-            issues.append({"code": "save_nullable_unused_field_serialized", "severity": "error", "message": "Nullable fields unused by the PB screen must be omitted from the payload.", "field": field})
-    for field, value_sql in sorted(fixed_values.items()):
-        if field in actual_xml_fields:
-            issues.append({"code": "save_pb_fixed_field_serialized", "severity": "error", "message": "A PB-fixed field must be emitted as its authoritative SQL literal, not accepted from XML.", "field": field})
-        if value_sql.upper() not in sql.upper():
-            issues.append({"code": "save_pb_fixed_value_missing", "severity": "error", "message": "The authoritative PB fixed value is absent from the SAVE SQL.", "field": field, "expected_value_sql": value_sql})
-        if field not in actual_insert | actual_update:
-            issues.append({"code": "save_pb_fixed_field_not_written", "severity": "error", "message": "A PB-fixed field must appear in an authorized target INSERT or UPDATE projection.", "field": field})
-    for field in sorted(payload | set(fixed_values)):
-        if re.search(rf"\b(?:ISNULL|NULLIF)\s*\(\s*(?:[A-Z_][A-Z0-9_$#]*\s*\.\s*)?{re.escape(field)}\b", stripped):
-            issues.append({"code": "save_field_silent_null_default_detected", "severity": "error", "message": "Do not silently rewrite PB payload or fixed fields with ISNULL/NULLIF in SAVE SQL.", "field": field})
+    actual_projection_map: Dict[str, List[str]] = {}
+    for item in actual_insert + actual_update:
+        actual_projection_map.setdefault(item["field"], []).append(item["expression"])
+    for field_name, value_sql in sorted(fixed_values.items()):
+        expressions = actual_projection_map.get(field_name, [])
+        if not any(_canonical_save_dml_expression(expression) == _canonical_save_dml_expression(value_sql) for expression in expressions):
+            issues.append({"code": "save_pb_fixed_value_not_direct_dml_expression", "severity": "error", "message": "A PB-fixed field must map directly to its authoritative literal in the target field expression; comments and unrelated text do not count.", "field": field_name, "expected_value_sql": value_sql, "actual_expressions": expressions})
+
+    executable_sql = _mask_sql_comments_and_strings(sql, mask_strings=False).upper()
+    control_sql = _mask_sql_comments_and_strings(sql, mask_strings=True).upper()
+    for projection in actual_insert + actual_update:
+        field_name = str(projection.get("field") or "")
+        if field_name not in payload | fixed_fields:
+            continue
+        expression = _mask_sql_comments_and_strings(
+            str(projection.get("expression") or ""),
+            mask_strings=True,
+        )
+        if re.search(r"\b(?:ISNULL|NULLIF)\s*\(", expression, flags=re.IGNORECASE):
+            issues.append(
+                {
+                    "code": "save_field_silent_null_default_detected",
+                    "severity": "error",
+                    "message": "Do not silently rewrite editable payload or PB-fixed target expressions with ISNULL/NULLIF in SAVE DML.",
+                    "field": field_name,
+                    "expression": projection.get("expression"),
+                }
+            )
+
+    sql_row_state_values = _save_target_operation_row_state_values(
+        sql,
+        target_table,
+        row_state_field,
+    )
+    for state_name, state_value in sorted(expected_row_state_mapping.items()):
+        if state_value not in sql_row_state_values.get(state_name, []):
+            issues.append({"code": "save_sql_row_state_operation_mismatch", "severity": "error", "message": "Each C# row-state value must be consumed by the matching target INSERT, UPDATE, or DELETE statement.", "row_state": state_name, "value": state_value, "actual_values": sql_row_state_values.get(state_name, [])})
+
     first_write_index = _first_save_target_write_index(sql, target_table)
     guard_blocks = list(
         re.finditer(
             r"\bIF\s+EXISTS\s*\((?P<query>[\s\S]{0,3200}?)\)\s*BEGIN\b(?P<body>[\s\S]{0,1600}?)\bEND\b",
-            stripped,
+            executable_sql,
         )
     )
     for field in sorted(required):
         null_pattern = rf"\b{re.escape(field)}\b\s+IS\s+NULL"
         blank_pattern = rf"\b{re.escape(field)}\b\s*=\s*''"
+        isnull_blank_pattern = (
+            rf"\bISNULL\s*\(\s*(?:[A-Z_][A-Z0-9_$#]*\s*\.\s*)?"
+            rf"{re.escape(field)}\s*,\s*''\s*\)\s*=\s*''"
+        )
         guard = next(
             (
                 item
                 for item in guard_blocks
-                if re.search(null_pattern, item.group("query"))
+                if (
+                    re.search(null_pattern, item.group("query"))
+                    or (
+                        field in required_nonblank
+                        and re.search(isnull_blank_pattern, item.group("query"))
+                    )
+                )
                 and (
                     field not in required_nonblank
                     or re.search(blank_pattern, item.group("query"))
+                    or re.search(isnull_blank_pattern, item.group("query"))
                 )
-                and re.search(r"\bRAISERROR\s*\(", item.group("body"))
-                and re.search(r"\bRETURN\s*;?", item.group("body"))
+                and re.search(
+                    r"\bRAISERROR\s*\([\s\S]*?\)\s*;?[\s\S]*?\bRETURN\s*;?",
+                    item.group("body"),
+                )
                 and (first_write_index is None or item.start() < first_write_index)
             ),
             None,
         )
         if not guard:
             issues.append({"code": "save_required_field_fail_fast_guard_missing", "severity": "error", "message": "A required editable field needs a type-appropriate IF EXISTS / BEGIN / RAISERROR / RETURN guard before the first write.", "field": field, "nonblank_required": field in required_nonblank})
+
+    xml_handle = str(contract.get("xml_handle_variable") or "").strip().upper()
+    if not re.fullmatch(r"@[A-Z_][A-Z0-9_]*", xml_handle):
+        issues.append({"code": "save_xml_handle_contract_missing", "severity": "error", "message": "XML SAVE requires one explicit xml_handle_variable."})
+    openxml_handles = [
+        match.group("handle").upper()
+        for match in re.finditer(r"\bOPENXML\s*\(\s*(?P<handle>@[A-Z_][A-Z0-9_]*)", control_sql, flags=re.IGNORECASE)
+    ]
+    if not openxml_handles or any(handle != xml_handle for handle in openxml_handles):
+        issues.append({"code": "save_xml_handle_openxml_mismatch", "severity": "error", "message": "Every OPENXML call must use the declared XML handle.", "expected": xml_handle, "actual": openxml_handles})
+    prepared_matches = list(re.finditer(rf"\bSP_XML_PREPAREDOCUMENT\s+{re.escape(xml_handle)}\s+OUTPUT\b", control_sql, flags=re.IGNORECASE)) if xml_handle else []
+    if len(prepared_matches) != 1:
+        issues.append({"code": "save_xml_handle_prepare_count_invalid", "severity": "error", "message": "The declared XML handle must be prepared exactly once.", "count": len(prepared_matches)})
+    xml_handle_flow, xml_handle_flow_issues = _analyze_save_xml_handle_flow(
+        sql,
+        xml_handle,
+        target_table,
+    )
+    issues.extend(xml_handle_flow_issues)
 
     status = "blocked" if issues else "passed"
     return HarnessResult(
@@ -11373,20 +12709,44 @@ def verify_pb_migration_save_field_contract(
         metadata={
             "status": status,
             "target_table": target_table,
-            "screen_used_fields": sorted(screen_used),
-            "payload_fields": sorted(payload),
-            "technical_fields": sorted(technical),
+            "contract_schema": "generalized-save-field-contract-v2",
+            "field_classifications": {
+                name: sorted(values)
+                for name, values in sorted(classifications.items())
+            },
+            "editable_payload_fields": sorted(payload),
+            "technical_key_fields": sorted(technical),
             "required_fields": sorted(required),
             "required_nonblank_fields": sorted(required_nonblank),
             "pb_fixed_values": dict(sorted(fixed_values.items())),
             "database_default_fields": sorted(database_defaults),
             "server_derived_fields": sorted(server_derived),
-            "nullable_unused_fields": sorted(nullable_unused),
-            "expected_insert_fields": sorted(expected_insert),
-            "actual_insert_fields": sorted(actual_insert),
-            "expected_update_fields": sorted(expected_update),
-            "actual_update_fields": sorted(actual_update),
-            "actual_openxml_fields": sorted(actual_xml_fields),
+            "unused_fields": sorted(unused),
+            "expected_csharp_payload_fields": expected_csharp_fields,
+            "actual_csharp_payload_fields": actual_csharp_fields,
+            "actual_csharp_payload_assignments": actual_csharp_payload_assignments,
+            "actual_csharp_payload_assignment_evidence": actual_csharp_payload_assignment_evidence,
+            "authoritative_sql_types": authoritative_sql_types,
+            "actual_csharp_payload_types": actual_csharp_payload_types,
+            "csharp_type_evidence_boundary": "single_argument_columns_add_defaults_to_system_string",
+            "staging_table_variable": staging_table_variable,
+            "actual_staging_fields": actual_staging_fields,
+            "actual_staging_sql_types": actual_staging_sql_types,
+            "expected_row_state_mapping": expected_row_state_mapping,
+            "actual_row_state_mapping": actual_row_state_mapping,
+            "sql_row_state_values": sql_row_state_values,
+            "expected_insert_projection": expected_insert,
+            "actual_insert_projection": actual_insert,
+            "expected_update_projection": expected_update,
+            "actual_update_projection": actual_update,
+            "expected_openxml_fields": expected_openxml_fields,
+            "actual_openxml_fields": actual_openxml_fields,
+            "actual_openxml_sql_types": actual_openxml_sql_types,
+            "xml_handle_variable": xml_handle,
+            "xml_handle_flow": xml_handle_flow,
+            "sql_verifier_receipt_required": True,
+            "insert_select_line_grouping": "delegated_to_official_sql_final_response_binding",
+            "completion_authorized": False,
             "issues": issues,
         },
     )
@@ -11403,6 +12763,7 @@ def verify_pb_migration_sp_generation_contract(
     caller_parameter_contract: Any = None,
     external_caller_contract: Any = None,
     save_field_contract: Any = None,
+    save_csharp_source_text: str = "",
 ) -> HarnessResult:
     """Check that generated SELECT/SAVE SP work is evidence-gated before it is presented as migration output."""
     sql = str(sql_text or "")
@@ -12511,6 +13872,7 @@ def verify_pb_migration_sp_generation_contract(
         save_field_result = verify_pb_migration_save_field_contract(
             sql,
             save_field_contract,
+            csharp_source_text=save_csharp_source_text,
         )
         issues.extend(save_field_result.metadata.get("issues", []))
     elif generated_xml_save:
@@ -12550,7 +13912,15 @@ def verify_pb_migration_sp_generation_contract(
             else {"status": "missing" if generated_xml_save else "not_applicable"}
         ),
         "release_readiness": {
-            "status": "ready" if passed else "pending" if has_pending and not has_errors else "blocked"
+            "status": (
+                "contract_passed_requires_sql_verifier"
+                if passed
+                else "pending"
+                if has_pending and not has_errors
+                else "blocked"
+            ),
+            "completion_authorized": False,
+            "required_final_gate": "official_sql_final_response_binding",
         },
         "issues": issues,
         "sp_generation_contract": (
@@ -12740,6 +14110,7 @@ def verify_pb_migration_sp_with_sql_formatting(
     caller_parameter_contract: Any = None,
     external_caller_contract: Any = None,
     save_field_contract: Any = None,
+    save_csharp_source_text: str = "",
     draft_final_response: str = "",
     sql_provider_path: str | Path = "",
     selected_active_sql_provider_path: str | Path | None = None,
@@ -12757,6 +14128,7 @@ def verify_pb_migration_sp_with_sql_formatting(
         caller_parameter_contract=caller_parameter_contract,
         external_caller_contract=external_caller_contract,
         save_field_contract=save_field_contract,
+        save_csharp_source_text=save_csharp_source_text,
     )
     binding_success = False
     binding_receipt: Dict[str, Any] = {
@@ -12886,11 +14258,21 @@ def orchestrate_pb_migration_validation(
             evidence.get("profile", {}).get("status") == "loaded"
             and (not profile_consumptions or len(identities) <= 1)
         )
+        sql_binding = evidence.get("sql_final_response_binding", {})
+        sql_release = evidence.get("sql_final_response_release", {})
+        sql_release_correlated = bool(
+            isinstance(sql_binding, Mapping)
+            and sql_binding.get("status") == "bound"
+            and isinstance(sql_release, Mapping)
+            and sql_release.get("status") == "passed"
+            and sql_release.get("binding") == sql_binding
+        )
         completion_allowed = bool(
             success
             and completed_order == required_order
             and identity_match
             and all(item.get("consumed") for item in profile_consumptions)
+            and sql_release_correlated
         )
         contract = {
             "contract_id": "offline-packaged-pb-migration-validation-v1",
@@ -12898,6 +14280,7 @@ def orchestrate_pb_migration_validation(
             "completed_stage_order": completed_order,
             "stages": stages,
             "profile_identity_match": identity_match,
+            "sql_release_correlated": sql_release_correlated,
             "completion_allowed": completion_allowed,
             "database_execution_attempted": False,
             "database_execution_allowed": False,
@@ -12992,6 +14375,7 @@ def orchestrate_pb_migration_validation(
         caller_parameter_contract=caller_parameter_contract,
         external_caller_contract=external_caller_contract,
         save_field_contract=save_field_contract,
+        save_csharp_source_text=csharp_source_text,
     )
     stages.append(
         {

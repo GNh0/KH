@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import re
@@ -115,6 +116,16 @@ def write_test_artifact(name, text):
     path = root / f"{safe_name}-{digest[:12]}.txt"
     path.write_text(text, encoding="utf-8", newline="")
     return path, digest
+
+
+def synthetic_save_evidence(locator, *, kind="pb_source"):
+    source_text = f"synthetic SAVE evidence::{locator}"
+    return {
+        "kind": kind,
+        "locator": locator,
+        "source_text": source_text,
+        "content_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+    }
 
 
 def target_artifact_kwargs(source_text, designer_text="", *, prefix="generated"):
@@ -781,6 +792,351 @@ def orchestrate_pb_migration_validation(*args, **kwargs):
     kwargs.setdefault("selected_active_sql_provider_path", SQL_PROVIDER_PATH)
     kwargs.setdefault("sql_provider_selection", sql_provider_selection())
     return _orchestrate_pb_migration_validation(*args, **kwargs)
+
+
+def generalized_save_contract():
+    field_contracts = [
+        {
+            "field": "RECORD_ID",
+            "classification": "technical_key",
+            "evidence_refs": ["field:record-id"],
+            "type_contract": {
+                "sql_type": "VARCHAR(20)",
+                "evidence_refs": ["type:record-id"],
+            },
+        },
+        {
+            "field": "ROWSTATE",
+            "classification": "technical_key",
+            "evidence_refs": ["field:row-state"],
+            "type_contract": {
+                "sql_type": "VARCHAR(1)",
+                "evidence_refs": ["type:row-state"],
+            },
+        },
+        {
+            "field": "OUTINSPEC",
+            "classification": "editable_payload",
+            "editable": True,
+            "initial_value": "N",
+            "required": True,
+            "nonblank": True,
+            "evidence_refs": ["field:outinspec"],
+            "type_contract": {
+                "sql_type": "VARCHAR(1)",
+                "evidence_refs": ["type:outinspec"],
+            },
+        },
+        {
+            "field": "STATUSCD",
+            "classification": "pb_fixed",
+            "editable": False,
+            "fixed_value_sql": "'A'",
+            "evidence_refs": ["field:statuscd"],
+        },
+        {"field": "CREATED_BY", "classification": "db_default", "evidence_refs": ["field:created-by"]},
+        {"field": "REGDT", "classification": "server_derived", "evidence_refs": ["field:regdt"]},
+        {"field": "MODDT", "classification": "server_derived", "evidence_refs": ["field:moddt"]},
+        {"field": "REMARK", "classification": "unused", "evidence_refs": ["field:remark"]},
+    ]
+    registry = {
+        ref: synthetic_save_evidence(ref, kind="pb_source")
+        for ref in [
+            "field:record-id",
+            "field:row-state",
+            "field:outinspec",
+            "field:statuscd",
+            "field:created-by",
+            "field:regdt",
+            "field:moddt",
+            "field:remark",
+            "type:record-id",
+            "type:row-state",
+            "type:outinspec",
+            "csharp:save-payload",
+        ]
+    }
+    return {
+        "target_table": "SYNTHETIC_TARGET",
+        "field_contracts": field_contracts,
+        "csharp_payload_contract": {
+            "table_variable": "saveRows",
+            "serialized_fields": ["RECORD_ID", "ROWSTATE", "OUTINSPEC"],
+            "row_state_field": "ROWSTATE",
+            "row_state_mapping": {"added": "I", "modified": "U"},
+            "evidence_refs": ["csharp:save-payload"],
+        },
+        "staging_table_variable": "@ROWS",
+        "openxml_fields": ["RECORD_ID", "ROWSTATE", "OUTINSPEC"],
+        "insert_projection": [
+            {"field": "RECORD_ID", "expression": "A.RECORD_ID"},
+            {"field": "OUTINSPEC", "expression": "A.OUTINSPEC"},
+            {"field": "STATUSCD", "expression": "'A'"},
+            {"field": "REGDT", "expression": "GETDATE()"},
+        ],
+        "update_projection": [
+            {"field": "OUTINSPEC", "expression": "B.OUTINSPEC"},
+            {"field": "MODDT", "expression": "GETDATE()"},
+        ],
+        "xml_handle_variable": "@DOC",
+        "evidence_registry": registry,
+    }
+
+
+def generalized_save_csharp(*, extra_serialized_field="", include_modified_mapping=True):
+    extra_column = (
+        f'        saveRows.Columns.Add("{extra_serialized_field}");\n'
+        if extra_serialized_field
+        else ""
+    )
+    modified_mapping = (
+        '            saveRow["ROWSTATE"] = "U";\n'
+        if include_modified_mapping
+        else ""
+    )
+    return f"""
+private string BuildSaveXml(DataTable sourceRows)
+{{
+    DataTable saveRows = new DataTable();
+    saveRows.Columns.Add("RECORD_ID");
+    saveRows.Columns.Add("ROWSTATE");
+    saveRows.Columns.Add("OUTINSPEC");
+{extra_column}    foreach (DataRow sourceRow in sourceRows.Rows)
+    {{
+        DataRow saveRow = saveRows.NewRow();
+        saveRow["RECORD_ID"] = sourceRow["RECORD_ID"];
+        saveRow["OUTINSPEC"] = sourceRow["OUTINSPEC"];
+        if (sourceRow.RowState == DataRowState.Added)
+            saveRow["ROWSTATE"] = "I";
+        else if (sourceRow.RowState == DataRowState.Modified)
+{modified_mapping}        saveRows.Rows.Add(saveRow);
+    }}
+    return DataUtil.DataTableToXml(saveRows);
+}}
+"""
+
+
+def generalized_save_sql(*, insert_expressions=None, guard_before=True, cleanup_count=1, fixed_comment=False):
+    expressions = insert_expressions or ["A.RECORD_ID", "A.OUTINSPEC", "'A'", "GETDATE()"]
+    guard = """
+IF EXISTS (
+          SELECT 1
+          FROM @ROWS A
+          WHERE A.OUTINSPEC IS NULL
+             OR A.OUTINSPEC = ''
+          )
+BEGIN
+    RAISERROR('Required value is missing.', 16, 1);
+    RETURN;
+END
+"""
+    fixed_comment_sql = "-- STATUSCD must remain 'A'\n" if fixed_comment else ""
+    cleanup = "\n".join("EXEC SP_XML_REMOVEDOCUMENT @DOC;" for _ in range(cleanup_count))
+    before = guard if guard_before else ""
+    after = "" if guard_before else guard
+    return f"""
+DECLARE @DOC INT;
+EXEC SP_XML_PREPAREDOCUMENT @DOC OUTPUT, @ROWS_XML;
+DECLARE @ROWS TABLE
+(
+      RECORD_ID   VARCHAR(20)
+    , ROWSTATE    VARCHAR(1)
+    , OUTINSPEC   VARCHAR(1)
+);
+
+INSERT INTO @ROWS (RECORD_ID, ROWSTATE, OUTINSPEC)
+SELECT RECORD_ID, ROWSTATE, OUTINSPEC
+FROM OPENXML(@DOC, '/ROOT/ROW', 2)
+WITH (RECORD_ID VARCHAR(20), ROWSTATE VARCHAR(1), OUTINSPEC VARCHAR(1));
+{before}
+{fixed_comment_sql}INSERT INTO SYNTHETIC_TARGET (RECORD_ID, OUTINSPEC, STATUSCD, REGDT)
+SELECT {expressions[0]}, {expressions[1]}, {expressions[2]}, {expressions[3]}
+FROM @ROWS A
+WHERE A.ROWSTATE = 'I';
+
+UPDATE A
+SET A.OUTINSPEC = B.OUTINSPEC
+  , A.MODDT = GETDATE()
+FROM SYNTHETIC_TARGET A
+    INNER JOIN @ROWS B
+        ON A.RECORD_ID = B.RECORD_ID
+WHERE B.ROWSTATE = 'U';
+{after}
+{cleanup}
+"""
+
+
+def typed_save_contract():
+    field_specs = [
+        ("ENTITY_KEY", "technical_key", "VARCHAR(24)"),
+        ("ROW_STATE", "technical_key", "CHAR(1)"),
+        ("MEASURE_VALUE", "editable_payload", "DECIMAL(18, 4)"),
+        ("DESCRIPTION_TEXT", "editable_payload", "NVARCHAR(120)"),
+        ("EFFECTIVE_DATE", "editable_payload", "DATE"),
+    ]
+    registry = {}
+    field_contracts = []
+    for field_name, classification, sql_type in field_specs:
+        field_ref = f"field:{field_name.lower()}"
+        type_ref = f"type:{field_name.lower()}"
+        registry[field_ref] = synthetic_save_evidence(
+            field_ref,
+            kind="pb_source",
+        )
+        registry[type_ref] = synthetic_save_evidence(
+            type_ref,
+            kind="schema_source",
+        )
+        field_contracts.append(
+            {
+                "field": field_name,
+                "classification": classification,
+                "editable": classification == "editable_payload",
+                "evidence_refs": [field_ref],
+                "type_contract": {
+                    "sql_type": sql_type,
+                    "evidence_refs": [type_ref],
+                },
+            }
+        )
+    registry["csharp:typed-payload"] = synthetic_save_evidence(
+        "csharp:typed-payload",
+        kind="csharp_source",
+    )
+    return {
+        "target_table": "SYNTHETIC_LEDGER",
+        "field_contracts": field_contracts,
+        "csharp_payload_contract": {
+            "table_variable": "saveRows",
+            "serialized_fields": [item[0] for item in field_specs],
+            "row_state_field": "ROW_STATE",
+            "row_state_mapping": {"added": "I"},
+            "evidence_refs": ["csharp:typed-payload"],
+        },
+        "staging_table_variable": "@ROWS",
+        "openxml_fields": [item[0] for item in field_specs],
+        "insert_projection": [
+            {"field": "ENTITY_KEY", "expression": "A.ENTITY_KEY"},
+            {"field": "MEASURE_VALUE", "expression": "A.MEASURE_VALUE"},
+            {"field": "DESCRIPTION_TEXT", "expression": "A.DESCRIPTION_TEXT"},
+            {"field": "EFFECTIVE_DATE", "expression": "A.EFFECTIVE_DATE"},
+        ],
+        "update_projection": [],
+        "xml_handle_variable": "@DOC",
+        "evidence_registry": registry,
+    }
+
+
+def typed_save_csharp(*, measure_type="decimal", explicit_types=True):
+    type_names = {
+        "ENTITY_KEY": "string",
+        "ROW_STATE": "string",
+        "MEASURE_VALUE": measure_type,
+        "DESCRIPTION_TEXT": "string",
+        "EFFECTIVE_DATE": "DateTime",
+    }
+    column_lines = []
+    for field_name, type_name in type_names.items():
+        if explicit_types:
+            column_lines.append(
+                f'    saveRows.Columns.Add("{field_name}", typeof({type_name}));'
+            )
+        else:
+            column_lines.append(f'    saveRows.Columns.Add("{field_name}");')
+    return """
+private string BuildSaveXml(DataTable sourceRows)
+{
+    DataTable saveRows = new DataTable();
+%s
+    foreach (DataRow sourceRow in sourceRows.Rows)
+    {
+        DataRow saveRow = saveRows.NewRow();
+        saveRow["ENTITY_KEY"] = sourceRow["ENTITY_KEY"];
+        saveRow["MEASURE_VALUE"] = sourceRow["MEASURE_VALUE"];
+        saveRow["DESCRIPTION_TEXT"] = sourceRow["DESCRIPTION_TEXT"];
+        saveRow["EFFECTIVE_DATE"] = sourceRow["EFFECTIVE_DATE"];
+        if (sourceRow.RowState == DataRowState.Added)
+            saveRow["ROW_STATE"] = "I";
+        saveRows.Rows.Add(saveRow);
+    }
+    return DataUtil.DataTableToXml(saveRows);
+}
+""" % "\n".join(column_lines)
+
+
+def typed_save_sql(*, staging_overrides=None, openxml_overrides=None, cleanup_shape="preferred"):
+    staging_types = {
+        "ENTITY_KEY": "VARCHAR(24)",
+        "ROW_STATE": "CHAR(1)",
+        "MEASURE_VALUE": "NUMERIC(18, 4)",
+        "DESCRIPTION_TEXT": "NVARCHAR(120)",
+        "EFFECTIVE_DATE": "DATE",
+    }
+    openxml_types = dict(staging_types)
+    staging_types.update(staging_overrides or {})
+    openxml_types.update(openxml_overrides or {})
+    field_order = list(staging_types)
+    staging_columns = "\n        , ".join(
+        f"{field_name} {staging_types[field_name]}" for field_name in field_order
+    )
+    openxml_columns = ", ".join(
+        f"{field_name} {openxml_types[field_name]}" for field_name in field_order
+    )
+    normal_cleanup = "    EXEC SP_XML_REMOVEDOCUMENT @DOC;"
+    pre_target_cleanup = ""
+    post_cleanup = ""
+    catch_body = "    THROW;"
+    if cleanup_shape == "marker":
+        normal_cleanup += "\n    SET @DOC = NULL;"
+    elif cleanup_shape == "catch_guard":
+        catch_body = """    IF @DOC IS NOT NULL
+    BEGIN
+        EXEC SP_XML_REMOVEDOCUMENT @DOC;
+    END
+    THROW;"""
+    elif cleanup_shape == "missing_normal":
+        normal_cleanup = ""
+    elif cleanup_shape == "early":
+        pre_target_cleanup = "    EXEC SP_XML_REMOVEDOCUMENT @DOC;\n"
+        normal_cleanup = ""
+    elif cleanup_shape == "unconditional_double":
+        normal_cleanup += "\n    EXEC SP_XML_REMOVEDOCUMENT @DOC;"
+    elif cleanup_shape == "conditional_if":
+        normal_cleanup = """    IF EXISTS (SELECT 1 FROM @ROWS)
+    BEGIN
+        EXEC SP_XML_REMOVEDOCUMENT @DOC;
+    END"""
+    elif cleanup_shape == "conditional_while":
+        normal_cleanup = """    WHILE 1 = 0
+    BEGIN
+        EXEC SP_XML_REMOVEDOCUMENT @DOC;
+    END"""
+    elif cleanup_shape == "post_cleanup_statement":
+        post_cleanup = "    RAISERROR('Post-cleanup statement.', 16, 1);"
+    return f"""
+DECLARE @DOC INT;
+BEGIN TRY
+    EXEC SP_XML_PREPAREDOCUMENT @DOC OUTPUT, @ROWS_XML;
+    DECLARE @ROWS TABLE
+    (
+          {staging_columns}
+    );
+    INSERT INTO @ROWS ({', '.join(field_order)})
+    SELECT {', '.join(field_order)}
+    FROM OPENXML(@DOC, '/ROOT/ROW', 2)
+    WITH ({openxml_columns});
+{pre_target_cleanup}
+    INSERT INTO SYNTHETIC_LEDGER (ENTITY_KEY, MEASURE_VALUE, DESCRIPTION_TEXT, EFFECTIVE_DATE)
+    SELECT A.ENTITY_KEY, A.MEASURE_VALUE, A.DESCRIPTION_TEXT, A.EFFECTIVE_DATE
+    FROM @ROWS A
+    WHERE A.ROW_STATE = 'I';
+{normal_cleanup}
+{post_cleanup}
+END TRY
+BEGIN CATCH
+{catch_body}
+END CATCH
+"""
 
 
 class PbToCSharpMigrationHarnessTests(unittest.TestCase):
@@ -1737,6 +2093,7 @@ END
             passed.metadata["validation_contract"]["completed_stage_order"],
         )
         self.assertTrue(passed.metadata["validation_contract"]["completion_allowed"])
+        self.assertTrue(passed.metadata["validation_contract"]["sql_release_correlated"])
         self.assertFalse(passed.metadata["validation_contract"]["database_execution_attempted"])
         self.assertFalse(mismatched.success)
         self.assertEqual(["load-profile"], mismatched.metadata["validation_contract"]["completed_stage_order"])
@@ -5805,84 +6162,32 @@ END
         self.assertIn("missing_pb_or_db_source_evidence_for_sp_generation", issue_codes)
 
     def test_save_field_contract_accepts_source_owned_minimal_projections(self):
-        sql = """
-DECLARE @DOC INT;
-DECLARE @ROWS TABLE
-(
-      RECORD_ID   VARCHAR(20)
-    , ROWSTATE    VARCHAR(1)
-    , OUTINSPEC   VARCHAR(1)
-);
-
-INSERT INTO @ROWS (RECORD_ID, ROWSTATE, OUTINSPEC)
-SELECT RECORD_ID, ROWSTATE, OUTINSPEC
-FROM OPENXML(@DOC, '/ROOT/ROW', 2)
-WITH
-(
-      RECORD_ID   VARCHAR(20)
-    , ROWSTATE    VARCHAR(1)
-    , OUTINSPEC   VARCHAR(1)
-);
-
-IF EXISTS (
-          SELECT 1
-          FROM @ROWS A
-          WHERE A.OUTINSPEC IS NULL
-             OR A.OUTINSPEC = ''
-          )
-BEGIN
-    RAISERROR('Required value is missing.', 16, 1);
-    RETURN;
-END
-
-INSERT INTO SYNTHETIC_TARGET
-(
-      RECORD_ID
-    , OUTINSPEC
-    , STATUSCD
-    , REGDT
-)
-SELECT A.RECORD_ID
-     , A.OUTINSPEC
-     , 'A'
-     , GETDATE()
-FROM @ROWS A;
-
-UPDATE A
-SET A.OUTINSPEC = B.OUTINSPEC
-  , A.MODDT = GETDATE()
-FROM SYNTHETIC_TARGET A
-    INNER JOIN @ROWS B
-        ON A.RECORD_ID = B.RECORD_ID;
-"""
-        contract = {
-            "target_table": "SYNTHETIC_TARGET",
-            "screen_used_fields": ["OUTINSPEC"],
-            "payload_fields": ["OUTINSPEC"],
-            "technical_fields": ["RECORD_ID", "ROWSTATE"],
-            "required_fields": ["OUTINSPEC"],
-            "required_nonblank_fields": ["OUTINSPEC"],
-            "pb_fixed_values": {"STATUSCD": "'A'"},
-            "database_default_fields": ["CREATED_BY"],
-            "server_derived_fields": ["REGDT", "MODDT"],
-            "nullable_unused_fields": ["REMARK"],
-            "insert_fields": ["RECORD_ID", "OUTINSPEC", "STATUSCD", "REGDT"],
-            "update_fields": ["OUTINSPEC", "MODDT"],
-            "evidence_registry": {"pb:save": {"kind": "pb_behavior"}},
-            "evidence_refs": ["pb:save"],
-        }
-
-        result = verify_pb_migration_save_field_contract(sql, contract)
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
 
         self.assertTrue(result.success, result.metadata["issues"])
         self.assertEqual(
-            result.metadata["actual_insert_fields"],
-            ["OUTINSPEC", "RECORD_ID", "REGDT", "STATUSCD"],
+            [item["field"] for item in result.metadata["actual_insert_projection"]],
+            ["RECORD_ID", "OUTINSPEC", "STATUSCD", "REGDT"],
         )
-        self.assertEqual(result.metadata["actual_update_fields"], ["MODDT", "OUTINSPEC"])
+        self.assertEqual(
+            [item["field"] for item in result.metadata["actual_update_projection"]],
+            ["OUTINSPEC", "MODDT"],
+        )
 
     def test_save_field_contract_allows_null_only_guard_for_required_numeric_field(self):
         sql = """
+DECLARE @DOC INT;
+EXEC SP_XML_PREPAREDOCUMENT @DOC OUTPUT, @ROWS_XML;
+DECLARE @ROWS TABLE (RECORD_ID VARCHAR(20), ROWSTATE VARCHAR(1), QTY DECIMAL(18, 4));
+INSERT INTO @ROWS (RECORD_ID, ROWSTATE, QTY)
+SELECT RECORD_ID, ROWSTATE, QTY
+FROM OPENXML(@DOC, '/ROOT/ROW', 2)
+WITH (RECORD_ID VARCHAR(20), ROWSTATE VARCHAR(1), QTY DECIMAL(18, 4));
+
 IF EXISTS (
           SELECT 1
           FROM @ROWS A
@@ -5895,27 +6200,60 @@ END
 
 INSERT INTO SYNTHETIC_TARGET (RECORD_ID, QTY)
 SELECT A.RECORD_ID, A.QTY
-FROM OPENXML(@DOC, '/ROOT/ROW', 2)
-WITH (RECORD_ID VARCHAR(20), QTY DECIMAL(18, 4)) A;
+FROM @ROWS A
+WHERE A.ROWSTATE = 'I';
+EXEC SP_XML_REMOVEDOCUMENT @DOC;
 """
         contract = {
             "target_table": "SYNTHETIC_TARGET",
-            "screen_used_fields": ["QTY"],
-            "payload_fields": ["QTY"],
-            "technical_fields": ["RECORD_ID"],
-            "required_fields": ["QTY"],
-            "required_nonblank_fields": [],
-            "pb_fixed_values": {},
-            "database_default_fields": [],
-            "server_derived_fields": [],
-            "nullable_unused_fields": [],
-            "insert_fields": ["RECORD_ID", "QTY"],
-            "update_fields": [],
-            "evidence_registry": {"pb:save": {"kind": "pb_behavior"}},
-            "evidence_refs": ["pb:save"],
+            "field_contracts": [
+                {"field": "RECORD_ID", "classification": "technical_key", "evidence_refs": ["field:key"], "type_contract": {"sql_type": "VARCHAR(20)", "evidence_refs": ["type:key"]}},
+                {"field": "ROWSTATE", "classification": "technical_key", "evidence_refs": ["field:state"], "type_contract": {"sql_type": "VARCHAR(1)", "evidence_refs": ["type:state"]}},
+                {"field": "QTY", "classification": "editable_payload", "editable": True, "required": True, "evidence_refs": ["field:qty"], "type_contract": {"sql_type": "DECIMAL(18, 4)", "evidence_refs": ["type:qty"]}},
+            ],
+            "csharp_payload_contract": {
+                "table_variable": "saveRows",
+                "serialized_fields": ["RECORD_ID", "ROWSTATE", "QTY"],
+                "row_state_field": "ROWSTATE",
+                "row_state_mapping": {"added": "I"},
+                "evidence_refs": ["csharp:payload"],
+            },
+            "staging_table_variable": "@ROWS",
+            "openxml_fields": ["RECORD_ID", "ROWSTATE", "QTY"],
+            "insert_projection": [
+                {"field": "RECORD_ID", "expression": "A.RECORD_ID"},
+                {"field": "QTY", "expression": "A.QTY"},
+            ],
+            "update_projection": [],
+            "xml_handle_variable": "@DOC",
+            "evidence_registry": {
+                key: synthetic_save_evidence(key, kind=kind)
+                for key, kind in {
+                    "field:key": "pb_source",
+                    "field:state": "pb_source",
+                    "field:qty": "ui_source",
+                    "type:key": "schema_source",
+                    "type:state": "schema_source",
+                    "type:qty": "schema_source",
+                    "csharp:payload": "csharp_source",
+                }.items()
+            },
         }
+        csharp = """
+DataTable saveRows = new DataTable();
+saveRows.Columns.Add("RECORD_ID", typeof(string));
+saveRows.Columns.Add("ROWSTATE", typeof(string));
+saveRows.Columns.Add("QTY", typeof(decimal));
+DataRow saveRow = saveRows.NewRow();
+saveRow["RECORD_ID"] = sourceRow["RECORD_ID"];
+saveRow["QTY"] = sourceRow["QTY"];
+if (sourceRow.RowState == DataRowState.Added)
+    saveRow["ROWSTATE"] = "I";
+saveRows.Rows.Add(saveRow);
+return DataUtil.DataTableToXml(saveRows);
+"""
 
-        result = verify_pb_migration_save_field_contract(sql, contract)
+        result = verify_pb_migration_save_field_contract(sql, contract, csharp_source_text=csharp)
 
         self.assertTrue(result.success, result.metadata["issues"])
 
@@ -5926,33 +6264,863 @@ SELECT A.RECORD_ID, ISNULL(A.OUTINSPEC, 'A'), A.REMARK, 'A'
 FROM OPENXML(@DOC, '/ROOT/ROW', 2)
 WITH (RECORD_ID VARCHAR(20), OUTINSPEC VARCHAR(1), REMARK VARCHAR(200)) A;
 """
-        contract = {
-            "target_table": "SYNTHETIC_TARGET",
-            "screen_used_fields": ["OUTINSPEC"],
-            "payload_fields": ["OUTINSPEC"],
-            "technical_fields": ["RECORD_ID"],
-            "required_fields": ["OUTINSPEC"],
-            "required_nonblank_fields": ["OUTINSPEC"],
-            "pb_fixed_values": {"STATUSCD": "'A'"},
-            "database_default_fields": [],
-            "server_derived_fields": [],
-            "nullable_unused_fields": ["REMARK"],
-            "insert_fields": ["RECORD_ID", "OUTINSPEC", "STATUSCD"],
-            "update_fields": [],
-            "evidence_registry": {"pb:save": {"kind": "pb_behavior"}},
-            "evidence_refs": ["pb:save"],
-        }
+        contract = generalized_save_contract()
 
-        result = verify_pb_migration_save_field_contract(sql, contract)
+        result = verify_pb_migration_save_field_contract(
+            sql,
+            contract,
+            csharp_source_text=generalized_save_csharp(extra_serialized_field="REMARK"),
+        )
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
 
         self.assertFalse(result.success)
         self.assertIn("save_xml_field_inventory_mismatch", issue_codes)
-        self.assertIn("save_insert_field_inventory_mismatch", issue_codes)
-        self.assertIn("save_omitted_field_written", issue_codes)
-        self.assertIn("save_nullable_unused_field_serialized", issue_codes)
+        self.assertIn("save_insert_projection_mismatch", issue_codes)
+        self.assertIn("save_csharp_payload_inventory_mismatch", issue_codes)
+        self.assertIn("save_nonpayload_field_serialized", issue_codes)
         self.assertIn("save_field_silent_null_default_detected", issue_codes)
         self.assertIn("save_required_field_fail_fast_guard_missing", issue_codes)
+
+    def test_save_field_contract_requires_fixed_literal_on_its_target_expression(self):
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(
+                insert_expressions=["A.RECORD_ID", "A.OUTINSPEC", "A.STATUSCD", "GETDATE()"],
+                fixed_comment=True,
+            ),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_pb_fixed_value_not_direct_dml_expression",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_accepts_correlated_csharp_openxml_and_ordered_dml(self):
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual(
+            [item["field"] for item in result.metadata["actual_insert_projection"]],
+            ["RECORD_ID", "OUTINSPEC", "STATUSCD", "REGDT"],
+        )
+        self.assertEqual(
+            result.metadata["actual_openxml_fields"],
+            ["RECORD_ID", "ROWSTATE", "OUTINSPEC"],
+        )
+        self.assertTrue(result.metadata["sql_verifier_receipt_required"])
+        self.assertEqual(
+            result.metadata["insert_select_line_grouping"],
+            "delegated_to_official_sql_final_response_binding",
+        )
+
+    def test_generalized_save_contract_blocks_swapped_insert_expressions(self):
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(
+                insert_expressions=["A.OUTINSPEC", "A.RECORD_ID", "'A'", "GETDATE()"]
+            ),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_insert_projection_mismatch",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_blocks_comment_only_fixed_literal(self):
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(
+                insert_expressions=["A.RECORD_ID", "A.OUTINSPEC", "A.STATUSCD", "GETDATE()"],
+                fixed_comment=True,
+            ),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_pb_fixed_value_not_direct_dml_expression",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_blocks_required_guard_after_first_target_dml(self):
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(guard_before=False),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_required_field_fail_fast_guard_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+        delete_before_guard = generalized_save_sql().replace(
+            "IF EXISTS (",
+            "DELETE FROM SYNTHETIC_TARGET WHERE RECORD_ID = 'obsolete';\n\nIF EXISTS (",
+            1,
+        )
+        delete_result = verify_pb_migration_save_field_contract(
+            delete_before_guard,
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+        self.assertIn(
+            "save_required_field_fail_fast_guard_missing",
+            {issue["code"] for issue in delete_result.metadata["issues"]},
+        )
+
+        reversed_fail_fast = generalized_save_sql().replace(
+            "    RAISERROR('Required value is missing.', 16, 1);\n    RETURN;",
+            "    RETURN;\n    RAISERROR('Required value is missing.', 16, 1);",
+        )
+        reversed_result = verify_pb_migration_save_field_contract(
+            reversed_fail_fast,
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+        self.assertIn(
+            "save_required_field_fail_fast_guard_missing",
+            {issue["code"] for issue in reversed_result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_accepts_authoritative_isnull_blank_guard(self):
+        sql = generalized_save_sql().replace(
+            "WHERE A.OUTINSPEC IS NULL\n             OR A.OUTINSPEC = ''",
+            "WHERE ISNULL(A.OUTINSPEC, '') = ''",
+        )
+
+        result = verify_pb_migration_save_field_contract(
+            sql,
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertNotIn(
+            "save_field_silent_null_default_detected",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_requires_nonempty_field_scoped_evidence(self):
+        contract = generalized_save_contract()
+        contract["field_contracts"][2]["evidence_refs"] = []
+
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            contract,
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_field_scoped_evidence_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+        empty_registry_entry = generalized_save_contract()
+        empty_registry_entry["evidence_registry"]["field:outinspec"] = {}
+        empty_result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            empty_registry_entry,
+            csharp_source_text=generalized_save_csharp(),
+        )
+        self.assertIn(
+            "save_field_scoped_evidence_empty",
+            {issue["code"] for issue in empty_result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_rejects_unbound_or_nonsource_evidence_decoys(self):
+        decoys = (
+            {
+                "kind": "note",
+                "locator": "memo://field",
+                "content_sha256": "a" * 64,
+            },
+            {
+                "kind": "pb_source",
+                "content_sha256": "b" * 64,
+            },
+            {
+                "kind": "pb_source",
+                "locator": "artifact://field",
+            },
+        )
+        for decoy in decoys:
+            with self.subTest(decoy=decoy):
+                contract = generalized_save_contract()
+                contract["evidence_registry"]["field:outinspec"] = decoy
+                result = verify_pb_migration_save_field_contract(
+                    generalized_save_sql(),
+                    contract,
+                    csharp_source_text=generalized_save_csharp(),
+                )
+                self.assertIn(
+                    "save_field_scoped_evidence_empty",
+                    {issue["code"] for issue in result.metadata["issues"]},
+                )
+
+    def test_generalized_save_contract_recomputes_inline_and_file_evidence_hashes(self):
+        inline_mismatch = generalized_save_contract()
+        inline_mismatch["evidence_registry"]["field:outinspec"]["content_sha256"] = "f" * 64
+        inline_result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            inline_mismatch,
+            csharp_source_text=generalized_save_csharp(),
+        )
+        locator_only = generalized_save_contract()
+        locator_only["evidence_registry"]["field:outinspec"] = {
+            "kind": "pb_source",
+            "locator": "pb://unresolved/field",
+            "content_sha256": "a" * 64,
+        }
+        locator_result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            locator_only,
+            csharp_source_text=generalized_save_csharp(),
+        )
+        artifact_path, artifact_digest = write_test_artifact(
+            "save-field-evidence.pb",
+            "source-bound field evidence",
+        )
+        file_bound = generalized_save_contract()
+        file_bound["evidence_registry"]["field:outinspec"] = {
+            "kind": "pb_source",
+            "path": str(artifact_path),
+            "content_sha256": artifact_digest,
+        }
+        file_result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            file_bound,
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertIn(
+            "save_field_scoped_evidence_empty",
+            {issue["code"] for issue in inline_result.metadata["issues"]},
+        )
+        self.assertIn(
+            "save_field_scoped_evidence_empty",
+            {issue["code"] for issue in locator_result.metadata["issues"]},
+        )
+        self.assertTrue(file_result.success, file_result.metadata["issues"])
+
+    def test_generalized_save_contract_requires_assignment_for_every_serialized_field(self):
+        source = generalized_save_csharp().replace(
+            '        saveRow["OUTINSPEC"] = sourceRow["OUTINSPEC"];',
+            '        string decoy = "saveRow[\\\"OUTINSPEC\\\"] = sourceRow[\\\"OUTINSPEC\\\"];";',
+        )
+
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            generalized_save_contract(),
+            csharp_source_text=source,
+        )
+
+        issue = next(
+            item
+            for item in result.metadata["issues"]
+            if item["code"] == "save_csharp_payload_assignment_missing"
+        )
+        self.assertEqual(issue["fields"], ["OUTINSPEC"])
+
+    def test_generalized_save_contract_requires_source_derived_assignment_rhs(self):
+        invalid_rhs_values = (
+            "DBNull.Value",
+            "null",
+            "default",
+            "default(string)",
+            '"UNRELATED"',
+            "UNRELATED_CONSTANT",
+        )
+        for rhs in invalid_rhs_values:
+            with self.subTest(rhs=rhs):
+                source = generalized_save_csharp().replace(
+                    'saveRow["OUTINSPEC"] = sourceRow["OUTINSPEC"]',
+                    f'saveRow["OUTINSPEC"] = {rhs}',
+                )
+                if rhs == '"UNRELATED"':
+                    source = source.replace(
+                        'saveRow["OUTINSPEC"] = "UNRELATED";',
+                        'string decoy = "sourceRow[\\\"OUTINSPEC\\\"]";\n'
+                        '        saveRow["OUTINSPEC"] = "UNRELATED";',
+                    )
+                result = verify_pb_migration_save_field_contract(
+                    generalized_save_sql(),
+                    generalized_save_contract(),
+                    csharp_source_text=source,
+                )
+                issue = next(
+                    item
+                    for item in result.metadata["issues"]
+                    if item["code"] == "save_csharp_payload_assignment_not_source_derived"
+                )
+                self.assertEqual(issue["field"], "OUTINSPEC")
+
+        valid = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+        rhs_evidence = valid.metadata["actual_csharp_payload_assignment_evidence"]
+        self.assertTrue(rhs_evidence["OUTINSPEC"][0]["source_derived"])
+        self.assertIn('sourceRow["OUTINSPEC"]', rhs_evidence["OUTINSPEC"][0]["rhs"])
+
+    def test_save_projection_canonicalization_preserves_string_literal_content(self):
+        for expected_literal, actual_literal in (("N'A B'", "N'AB'"), ("'[A]'", "'A'")):
+            with self.subTest(expected_literal=expected_literal, actual_literal=actual_literal):
+                contract = generalized_save_contract()
+                contract["field_contracts"][3]["fixed_value_sql"] = expected_literal
+                contract["insert_projection"][2]["expression"] = expected_literal
+                result = verify_pb_migration_save_field_contract(
+                    generalized_save_sql(
+                        insert_expressions=[
+                            "A.RECORD_ID",
+                            "A.OUTINSPEC",
+                            actual_literal,
+                            "GETDATE()",
+                        ]
+                    ),
+                    contract,
+                    csharp_source_text=generalized_save_csharp(),
+                )
+                self.assertIn(
+                    "save_pb_fixed_value_not_direct_dml_expression",
+                    {issue["code"] for issue in result.metadata["issues"]},
+                )
+
+    def test_save_projection_canonicalization_normalizes_identifier_brackets_only(self):
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(
+                insert_expressions=[
+                    "[A].[RECORD_ID]",
+                    "[A].[OUTINSPEC]",
+                    "'A'",
+                    "GETDATE()",
+                ]
+            ),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+
+    def test_pb_fixed_contract_accepts_only_direct_sql_literals(self):
+        for literal in ("N'A B'", "-12.50", "NULL", "0", "1", "0xABCD"):
+            with self.subTest(valid_literal=literal):
+                contract = generalized_save_contract()
+                contract["field_contracts"][3]["fixed_value_sql"] = literal
+                contract["insert_projection"][2]["expression"] = literal
+                result = verify_pb_migration_save_field_contract(
+                    generalized_save_sql(
+                        insert_expressions=[
+                            "A.RECORD_ID",
+                            "A.OUTINSPEC",
+                            literal,
+                            "GETDATE()",
+                        ]
+                    ),
+                    contract,
+                    csharp_source_text=generalized_save_csharp(),
+                )
+                self.assertNotIn(
+                    "save_pb_fixed_value_not_literal",
+                    {issue["code"] for issue in result.metadata["issues"]},
+                )
+
+        for expression in (
+            "GETDATE()",
+            "@STATUS",
+            "A.STATUSCD",
+            "N'A' + N'B'",
+            "ABS(1)",
+            "(SELECT N'A')",
+        ):
+            with self.subTest(invalid_expression=expression):
+                contract = generalized_save_contract()
+                contract["field_contracts"][3]["fixed_value_sql"] = expression
+                contract["insert_projection"][2]["expression"] = expression
+                result = verify_pb_migration_save_field_contract(
+                    generalized_save_sql(
+                        insert_expressions=[
+                            "A.RECORD_ID",
+                            "A.OUTINSPEC",
+                            expression,
+                            "GETDATE()",
+                        ]
+                    ),
+                    contract,
+                    csharp_source_text=generalized_save_csharp(),
+                )
+                self.assertIn(
+                    "save_pb_fixed_value_not_literal",
+                    {issue["code"] for issue in result.metadata["issues"]},
+                )
+
+    def test_generalized_save_contract_does_not_treat_editable_initial_value_as_fixed(self):
+        contract = generalized_save_contract()
+        editable_entry = copy.deepcopy(contract["field_contracts"][2])
+        editable_entry["classification"] = "pb_fixed"
+        editable_entry["fixed_value_sql"] = "'N'"
+        contract["field_contracts"][2] = editable_entry
+
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            contract,
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_editable_initial_value_misclassified_fixed",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_blocks_swapped_update_assignments(self):
+        contract = generalized_save_contract()
+        contract["update_projection"] = [
+            {"field": "OUTINSPEC", "expression": "GETDATE()"},
+            {"field": "MODDT", "expression": "B.OUTINSPEC"},
+        ]
+
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            contract,
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_update_projection_mismatch",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_blocks_overbroad_csharp_payload(self):
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(extra_serialized_field="REMARK"),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_csharp_payload_inventory_mismatch",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_ignores_string_literal_payload_decoys(self):
+        source = generalized_save_csharp().replace(
+            "    return DataUtil.DataTableToXml(saveRows);",
+            '    string decoy = "saveRows.Columns.Add(\\\"REMARK\\\")";\n'
+            "    return DataUtil.DataTableToXml(saveRows);",
+        )
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            generalized_save_contract(),
+            csharp_source_text=source,
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+
+    def test_generalized_save_contract_blocks_string_literal_only_serializer(self):
+        source = generalized_save_csharp().replace(
+            "    return DataUtil.DataTableToXml(saveRows);",
+            '    string decoy = "DataUtil.DataTableToXml(saveRows)";\n'
+            "    return string.Empty;",
+        )
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            generalized_save_contract(),
+            csharp_source_text=source,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_csharp_serializer_not_correlated",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_blocks_missing_csharp_row_state_mapping(self):
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(include_modified_mapping=False),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_csharp_row_state_mapping_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_blocks_string_literal_row_state_decoy(self):
+        source = generalized_save_csharp(include_modified_mapping=False).replace(
+            "        else if (sourceRow.RowState == DataRowState.Modified)\n"
+            "        saveRows.Rows.Add(saveRow);",
+            "        else if (sourceRow.RowState == DataRowState.Modified)\n"
+            '            string decoy = "saveRow[\\\"ROWSTATE\\\"] = \\\"U\\\";";\n'
+            "        saveRows.Rows.Add(saveRow);",
+        )
+        result = verify_pb_migration_save_field_contract(
+            generalized_save_sql(),
+            generalized_save_contract(),
+            csharp_source_text=source,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_csharp_row_state_mapping_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_blocks_row_state_values_on_wrong_dml_operations(self):
+        sql = generalized_save_sql()
+        sql = sql.replace("WHERE A.ROWSTATE = 'I'", "WHERE A.ROWSTATE = 'U'")
+        sql = sql.replace("WHERE B.ROWSTATE = 'U'", "WHERE B.ROWSTATE = 'I'")
+
+        result = verify_pb_migration_save_field_contract(
+            sql,
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_sql_row_state_operation_mismatch",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_generalized_save_contract_blocks_redundant_xml_cleanup(self):
+        duplicate = verify_pb_migration_save_field_contract(
+            generalized_save_sql(cleanup_count=2),
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+        set_null = verify_pb_migration_save_field_contract(
+            generalized_save_sql() + "\nSET @DOC = NULL;\n",
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+
+        self.assertIn(
+            "save_xml_handle_normal_path_double_release",
+            {issue["code"] for issue in duplicate.metadata["issues"]},
+        )
+        self.assertIn(
+            "save_xml_handle_null_marker_forbidden",
+            {issue["code"] for issue in set_null.metadata["issues"]},
+        )
+
+        cleanup_before_delete = verify_pb_migration_save_field_contract(
+            generalized_save_sql()
+            + "\nDELETE FROM SYNTHETIC_TARGET WHERE RECORD_ID = 'obsolete';\n",
+            generalized_save_contract(),
+            csharp_source_text=generalized_save_csharp(),
+        )
+        self.assertIn(
+            "save_xml_handle_cleanup_too_early",
+            {issue["code"] for issue in cleanup_before_delete.metadata["issues"]},
+        )
+
+    def test_typed_save_contract_accepts_compatible_sql_synonyms_and_exact_csharp_types(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual(
+            result.metadata["authoritative_sql_types"]["MEASURE_VALUE"]["normalized"],
+            "DECIMAL(18,4)",
+        )
+        self.assertEqual(
+            result.metadata["actual_staging_sql_types"]["MEASURE_VALUE"]["normalized"],
+            "DECIMAL(18,4)",
+        )
+        self.assertEqual(
+            result.metadata["actual_openxml_sql_types"]["MEASURE_VALUE"]["normalized"],
+            "DECIMAL(18,4)",
+        )
+        self.assertEqual(
+            result.metadata["actual_csharp_payload_types"]["MEASURE_VALUE"],
+            "SYSTEM.DECIMAL",
+        )
+
+    def test_typed_save_contract_blocks_decimal_narrowed_to_integer_in_both_sql_boundaries(self):
+        sql = typed_save_sql(
+            staging_overrides={"MEASURE_VALUE": "INT"},
+            openxml_overrides={"MEASURE_VALUE": "INT"},
+        ).replace(
+            "MEASURE_VALUE INT",
+            "MEASURE_VALUE INT /* DECIMAL(18, 4) is only a comment decoy */",
+        )
+        result = verify_pb_migration_save_field_contract(
+            sql,
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+        self.assertFalse(result.success)
+        self.assertIn("save_staging_field_type_incompatible", issue_codes)
+        self.assertIn("save_openxml_field_type_incompatible", issue_codes)
+
+    def test_typed_save_contract_blocks_string_length_narrowing(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(
+                staging_overrides={"DESCRIPTION_TEXT": "NVARCHAR(40)"},
+                openxml_overrides={"DESCRIPTION_TEXT": "NVARCHAR(40)"},
+            ),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+        self.assertIn("save_staging_field_type_incompatible", issue_codes)
+        self.assertIn("save_openxml_field_type_incompatible", issue_codes)
+
+    def test_typed_save_contract_blocks_incompatible_sql_type_families(self):
+        for field_name, incompatible_type in (
+            ("MEASURE_VALUE", "VARCHAR(30)"),
+            ("DESCRIPTION_TEXT", "DECIMAL(18, 4)"),
+            ("EFFECTIVE_DATE", "BIGINT"),
+        ):
+            with self.subTest(field_name=field_name, incompatible_type=incompatible_type):
+                result = verify_pb_migration_save_field_contract(
+                    typed_save_sql(
+                        staging_overrides={field_name: incompatible_type},
+                        openxml_overrides={field_name: incompatible_type},
+                    ),
+                    typed_save_contract(),
+                    csharp_source_text=typed_save_csharp(),
+                )
+                issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+                self.assertIn("save_staging_field_type_incompatible", issue_codes)
+                self.assertIn("save_openxml_field_type_incompatible", issue_codes)
+
+    def test_typed_save_contract_treats_single_argument_columns_add_as_proven_string(self):
+        narrowed = verify_pb_migration_save_field_contract(
+            typed_save_sql(),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(measure_type="int"),
+        )
+        untyped = verify_pb_migration_save_field_contract(
+            typed_save_sql(),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(explicit_types=False),
+        )
+
+        self.assertIn(
+            "save_csharp_field_type_incompatible",
+            {issue["code"] for issue in narrowed.metadata["issues"]},
+        )
+        untyped_issues = [
+            issue
+            for issue in untyped.metadata["issues"]
+            if issue["code"] == "save_csharp_field_type_incompatible"
+        ]
+        self.assertEqual(
+            {issue["field"] for issue in untyped_issues},
+            {"MEASURE_VALUE", "EFFECTIVE_DATE"},
+        )
+        self.assertEqual(
+            untyped.metadata["csharp_type_evidence_boundary"],
+            "single_argument_columns_add_defaults_to_system_string",
+        )
+        self.assertTrue(
+            all(
+                value == "SYSTEM.STRING"
+                for value in untyped.metadata["actual_csharp_payload_types"].values()
+            )
+        )
+
+    def test_typed_save_contract_requires_authoritative_type_evidence_for_every_serialized_field(self):
+        missing_contract = typed_save_contract()
+        del missing_contract["field_contracts"][2]["type_contract"]
+        empty_evidence = typed_save_contract()
+        empty_evidence["field_contracts"][2]["type_contract"]["evidence_refs"] = []
+
+        missing_result = verify_pb_migration_save_field_contract(
+            typed_save_sql(),
+            missing_contract,
+            csharp_source_text=typed_save_csharp(),
+        )
+        empty_result = verify_pb_migration_save_field_contract(
+            typed_save_sql(),
+            empty_evidence,
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        self.assertIn(
+            "save_serialized_field_type_contract_missing",
+            {issue["code"] for issue in missing_result.metadata["issues"]},
+        )
+        self.assertIn(
+            "save_authoritative_type_evidence_missing",
+            {issue["code"] for issue in empty_result.metadata["issues"]},
+        )
+
+    def test_xml_handle_flow_accepts_one_final_normal_cleanup_without_catch_cleanup_or_marker(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(cleanup_shape="preferred"),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual(result.metadata["xml_handle_flow"]["pattern"], "single-normal-path-cleanup")
+        self.assertEqual(result.metadata["xml_handle_flow"]["normal_cleanup_count"], 1)
+        self.assertEqual(result.metadata["xml_handle_flow"]["catch_cleanup_count"], 0)
+
+    def test_xml_handle_flow_rejects_generated_catch_cleanup_guard(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(cleanup_shape="catch_guard"),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        self.assertIn(
+            "save_xml_handle_catch_cleanup_forbidden",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_xml_handle_flow_rejects_generated_null_marker(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(cleanup_shape="marker"),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        self.assertIn(
+            "save_xml_handle_null_marker_forbidden",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_xml_handle_flow_reports_exceptional_retention_as_nonblocking_residual_risk(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(cleanup_shape="preferred"),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        residual = result.metadata["xml_handle_flow"]["residual_risks"]
+        self.assertEqual(len(residual), 1)
+        self.assertEqual(residual[0]["severity"], "warning")
+        self.assertIn("session-scoped parser memory retention", residual[0]["message"].lower())
+        self.assertFalse(residual[0]["blocks_release"])
+
+    def test_xml_handle_flow_blocks_missing_normal_cleanup_with_precise_memory_risk(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(cleanup_shape="missing_normal"),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        issue = next(
+            item
+            for item in result.metadata["issues"]
+            if item["code"] == "save_xml_handle_normal_path_cleanup_missing"
+        )
+        self.assertEqual(issue["severity"], "error")
+        self.assertIn("latent session memory leak", issue["message"].lower())
+        self.assertNotIn("functional failure", issue["message"].lower())
+
+    def test_xml_handle_flow_blocks_unconditional_double_cleanup(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(cleanup_shape="unconditional_double"),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        self.assertIn(
+            "save_xml_handle_normal_path_double_release",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_xml_handle_flow_blocks_cleanup_before_last_target_dml(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(cleanup_shape="early"),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        self.assertIn(
+            "save_xml_handle_cleanup_too_early",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_xml_handle_flow_blocks_conditional_normal_cleanup(self):
+        for cleanup_shape in ("conditional_if", "conditional_while"):
+            with self.subTest(cleanup_shape=cleanup_shape):
+                result = verify_pb_migration_save_field_contract(
+                    typed_save_sql(cleanup_shape=cleanup_shape),
+                    typed_save_contract(),
+                    csharp_source_text=typed_save_csharp(),
+                )
+                self.assertIn(
+                    "save_xml_handle_cleanup_conditional",
+                    {issue["code"] for issue in result.metadata["issues"]},
+                )
+
+    def test_xml_handle_flow_blocks_executable_success_statement_after_cleanup(self):
+        result = verify_pb_migration_save_field_contract(
+            typed_save_sql(cleanup_shape="post_cleanup_statement"),
+            typed_save_contract(),
+            csharp_source_text=typed_save_csharp(),
+        )
+
+        self.assertIn(
+            "save_xml_handle_cleanup_not_final",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_sp_contract_propagates_csharp_save_contract_but_never_authorizes_release_alone(self):
+        sql = sp_metadata_header("Synthetic SAVE contract") + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SAVE]
+      @WORKTYPE VARCHAR(20)
+    , @ROWS_XML XML
+AS
+BEGIN
+""" + generalized_save_sql() + """
+END
+"""
+        with_csharp = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[existing_sp_evidence(sql, object_name="SP_ZX123456_SAVE")],
+            operation="existing_sp_cleanup",
+            original_sp_text=sql,
+            save_field_contract=generalized_save_contract(),
+            save_csharp_source_text=generalized_save_csharp(),
+        )
+        without_csharp = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=[existing_sp_evidence(sql, object_name="SP_ZX123456_SAVE")],
+            operation="existing_sp_cleanup",
+            original_sp_text=sql,
+            save_field_contract=generalized_save_contract(),
+        )
+
+        self.assertEqual("passed", with_csharp.metadata["save_field_contract"]["status"])
+        self.assertEqual(
+            "contract_passed_requires_sql_verifier",
+            with_csharp.metadata["release_readiness"]["status"],
+        )
+        self.assertFalse(with_csharp.metadata["release_readiness"]["completion_authorized"])
+        self.assertEqual("blocked", without_csharp.metadata["save_field_contract"]["status"])
+        self.assertIn(
+            "save_csharp_source_missing",
+            {issue["code"] for issue in without_csharp.metadata["save_field_contract"]["issues"]},
+        )
 
     def test_xml_save_generation_requires_field_contract(self):
         sql = sp_metadata_header() + """

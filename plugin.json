@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.140",
+  "version": "2.9.141",
   "description": "KH UAF provides an auditable front-door runtime, packaged workflow skills, development progress state, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows. The packaged always-on-front-door skill directly requests KH intake for every new conversation and user task but cannot guarantee host auto-selection; runtime receipts and session audits prove actual use.",
   "author": "KH UAF",
   "entrypoint": "cli.py",

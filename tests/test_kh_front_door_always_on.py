@@ -452,7 +452,7 @@ Do not claim unexecuted work.
         collect_catalog.assert_not_called()
         discover_host_skills.assert_not_called()
         packet = result.to_micro_summary_dict()
-        self.assertEqual(packet["src"]["v"], "2.9.140")
+        self.assertEqual(packet["src"]["v"], "2.9.141")
         self.assertEqual(packet["cls"], {"c": "l", "x": "direct"})
         self.assertNotIn("next", packet)
 
@@ -508,6 +508,51 @@ Do not claim unexecuted work.
             payload["provider_selection_receipt"]["external_authenticity"],
             "unverified",
         )
+        self.assertEqual(completed.stderr, "")
+
+    def test_front_door_cli_korean_pb_save_request_is_structurally_blocked(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            prompt_path = Path(temp_dir) / "prompt.txt"
+            prompt_path.write_text(
+                "SP_PR300510_SAVE 관련내용을 PB TO C# 하네스에 분석해서 넣어줘.",
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.orchestration.kh_front_door",
+                    "--prompt-file",
+                    str(prompt_path),
+                    "--project",
+                    str(repo_root),
+                    "--host",
+                    "local",
+                    "--summary",
+                    "--strict-execution-gate",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                encoding="utf-8",
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 3, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertNotIn("Traceback", completed.stdout)
+        payload = json.loads(completed.stdout)
+        self.assertIn(
+            "pb-to-csharp-migration-harness",
+            payload["immediate_next_skills"],
+        )
+        self.assertNotIn("provider_selection_receipt", payload)
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertEqual(
+            payload["execution_authorization"]["status"],
+            "blocked_by_execution_gate",
+        )
 
     def test_front_door_cli_pb_save_harness_analysis_returns_structured_route(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -562,6 +607,8 @@ Do not claim unexecuted work.
                 str(repo_root),
                 "--host",
                 "local",
+                "--summary",
+                "--strict-execution-gate",
             ],
             cwd=repo_root,
             capture_output=True,
@@ -570,7 +617,9 @@ Do not claim unexecuted work.
             check=False,
         )
 
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.returncode, 3, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        self.assertNotIn("Traceback", completed.stdout)
         payload = json.loads(completed.stdout)
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertNotIn("provider_selection_receipt", payload)

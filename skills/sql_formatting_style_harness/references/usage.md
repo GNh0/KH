@@ -58,6 +58,8 @@ result = verify_sql_formatting_style(
 
 Formatting compares the complete ordered lexer token stream. It ignores only whitespace, safe case normalization, and substitutions approved by a complete alias plan. Comments, strings, quoted identifiers, operators, literals, statement order, projections, predicates, assignments, values, control flow, and statement families remain visible to the comparison.
 
+For a delivered candidate, use the packaged `scripts/prepare_candidate.py` and `verify_sql_formatting_style(...)`/module CLI on the same final file. Do not create a task-local formatter and then prove it with a task-local checker that uses the same indentation calculation. That only proves the two local implementations agree and can reproduce the same defect. Any edit after verification invalidates the result and requires preparation and verification again.
+
 ### Alias Plan
 
 Reviewer/LLM judgment establishes roles. Python checks only completeness and consistency.
@@ -199,7 +201,7 @@ For eight or more target/value mappings, the verifier measures each source expre
 
 ### JOIN and Query-List Layout
 
-Do not preserve noncanonical source indentation. For every ordinary or derived-table join, place the complete join clause exactly eight columns to the right of the current query scope's `FROM` column. Keep the join type/hint prefix and `JOIN` token on one line. Align `ON` and each actual line-leading same-join continuation `AND` or `OR` to the `I` column of that `JOIN` token. Nested queries compute the same rule from their own `FROM`. After the host has placed those clauses on separate lines, run `normalize_sql_join_layout(...)` to apply their leading whitespace mechanically. The helper intentionally does not split inline joins, join prefixes, or derived-table inner clauses; the verifier keeps those cases blocked until the host revises their line structure.
+Do not preserve noncanonical source indentation. For every ordinary or derived-table join, place the complete join clause exactly eight columns to the right of the current query scope's `FROM` column. Keep the join type/hint prefix and `JOIN` token on one line. Align `ON` and each actual line-leading same-join continuation `AND` or `OR` to the `I` column of that actual `JOIN` token, not to a fixed space count or a column inferred from the source `ON`. Nested queries compute the same rule from their own `FROM`. After the host has placed those clauses on separate lines, run `normalize_sql_join_layout(...)` to apply their leading whitespace mechanically. The helper intentionally does not split inline joins, join prefixes, or derived-table inner clauses; the verifier keeps those cases blocked until the host revises their line structure.
 
 For query-level `GROUP BY` and `ORDER BY`, the verifier splits only at commas whose token depth matches the clause. It keeps function/subquery commas, comments, `ASC`/`DESC`, and `COLLATE` within the item. Simple lists whose compact rendering fits the 100-column preferred width must remain inline; inline lists wider than 100 are rejected and must wrap compactly without exceeding the 120-column hard ceiling. Complex items remain atomic. Nested query clauses are evaluated in their own scope, while window and ordered-aggregate `ORDER BY` are excluded by their deeper token depth.
 

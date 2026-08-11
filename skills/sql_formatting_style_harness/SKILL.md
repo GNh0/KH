@@ -25,7 +25,7 @@ Use this harness after selecting the host-local `sql-formatting` contract or the
 4. For formatting, preserve every token except whitespace, safe case normalization, and substitutions from a complete verified alias plan. Every scalar function remains present.
 5. For every outer multi-source formatted scope, create a complete per-scope role plan from concrete source/reviewer evidence before emitting the candidate. An unchanged derived-internal multi-source scope whose explicit aliases stay in the documented `T` family is exempt; alias changes in any scope still require a complete plan.
 6. For a scalar-function-to-join request, inspect the actual function definition through DB/MCP/project source when available. Supply `scalar_function_refactor`; never infer behavior from a function or table name.
-7. Run `verify_sql_formatting_style(...)` or the module CLI against the exact pair. Skill selection or file reads are not verifier evidence.
+7. Run the packaged `prepare_candidate.py` path when mechanical JOIN/alias preparation is needed, then run `verify_sql_formatting_style(...)` or the packaged module CLI against the exact original and exact final candidate. Do not substitute a task-local formatter or a checker derived from the same task-local indentation formula. Skill selection, file reads, and self-consistent ad hoc checks are not verifier evidence.
 
 ## Independent Gates
 
@@ -108,6 +108,8 @@ Query-level `GROUP BY` and `ORDER BY` lists use a 100-column preferred width and
 ## Common mistakes
 
 - Do not substitute `alias_checks`, `alias_status`, marker text, or a copied JSON sample for `alias_role_plan_validation`.
+- Do not accept an ad hoc formatter plus an ad hoc checker as equivalent to the packaged preparation and verifier path, even when both agree. Their shared defect can produce a false pass.
+- Do not verify a pre-final candidate and then alter whitespace or retype the delivered SQL; the exact delivered SQL hash must be the verifier's `formatted_sha256`.
 - Do not accept verifier output without a preceding correlated verifier call.
 - Do not bind a hash to unfenced, multiple, or otherwise non-extractable final SQL.
 - Do not infer alias roles from table names, repeated source names, or remembered project policy.

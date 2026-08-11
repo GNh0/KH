@@ -110,6 +110,18 @@ _JOIN_PREFIX_WORDS = {
     "REMOTE",
     "RIGHT",
 }
+_JOIN_PREDICATE_BOUNDARIES = {
+    "APPLY",
+    "EXCEPT",
+    "FROM",
+    "GROUP",
+    "HAVING",
+    "INTERSECT",
+    "JOIN",
+    "ORDER",
+    "UNION",
+    "WHERE",
+}
 _FROM_SOURCE_LIST_BOUNDARIES = {
     "EXCEPT",
     "FOR",
@@ -3479,20 +3491,19 @@ def _same_join_predicate_indexes(
     predicate_indexes: List[int] = []
     on_seen = False
     contexts: List[str] = []
-    clause_boundaries = {"FROM", "JOIN", "WHERE", "GROUP", "HAVING", "ORDER", "UNION", "EXCEPT", "INTERSECT"}
     for index in range(join_index + 1, scope_end):
         token = tokens[index]
         if token.kind in {"line_comment", "block_comment"}:
             continue
+        if token.depth < depth:
+            break
+        if _is_join_predicate_boundary(tokens, index, scope_end, depth):
+            break
         if not on_seen:
             if token.depth == depth and token.normalized == "ON":
                 predicate_indexes.append(index)
                 on_seen = True
             continue
-        if token.depth < depth:
-            break
-        if token.depth == depth and token.normalized in clause_boundaries:
-            break
         if token.text == "(":
             contexts.append("group")
             continue
@@ -3571,17 +3582,6 @@ def _join_on_has_expression(
     scope_end: int,
     depth: int,
 ) -> bool:
-    boundaries = {
-        "FROM",
-        "JOIN",
-        "WHERE",
-        "GROUP",
-        "HAVING",
-        "ORDER",
-        "UNION",
-        "EXCEPT",
-        "INTERSECT",
-    }
     invalid_leading_tokens = {
         ";",
         ",",
@@ -3600,9 +3600,7 @@ def _join_on_has_expression(
             continue
         if token.depth < depth:
             return False
-        if token.depth == depth and (
-            token.normalized in boundaries or token.text == ";"
-        ):
+        if _is_join_predicate_boundary(tokens, index, scope_end, depth):
             return False
         if token.text == "(":
             continue
@@ -3610,6 +3608,27 @@ def _join_on_has_expression(
             return False
         return True
     return False
+
+
+def _is_join_predicate_boundary(
+    tokens: Sequence[_SqlToken],
+    index: int,
+    scope_end: int,
+    depth: int,
+) -> bool:
+    token = tokens[index]
+    if token.depth != depth:
+        return False
+    if token.normalized in _JOIN_PREDICATE_BOUNDARIES or token.text == ";":
+        return True
+    if token.normalized not in {"CROSS", "OUTER"}:
+        return False
+    next_index = _next_code_token(tokens, index + 1, min(scope_end, len(tokens)))
+    return (
+        next_index is not None
+        and tokens[next_index].depth == depth
+        and tokens[next_index].normalized == "APPLY"
+    )
 
 
 def _token_line_position(sql: str, token: _SqlToken) -> Tuple[int, int, bool]:

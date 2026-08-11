@@ -196,6 +196,7 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
         verify_composite_business_key_display_contract,
         verify_devexpress_grid_xml_contract,
         verify_migration_generated_csharp_style,
+        verify_pb_migration_save_field_contract,
         verify_pb_migration_sp_generation_contract,
         verify_pb_migration_sp_with_sql_formatting,
     )
@@ -528,6 +529,120 @@ Run the packaged `sql-formatting-style-harness` deterministic verifier and accep
         sql_provider_path=sql_provider_path,
         selected_active_sql_provider_path=sql_provider_path,
         sql_provider_selection=provider_selection,
+    )
+    save_csharp_source = """
+private string BuildSaveXml(DataTable sourceRows)
+{
+    DataTable saveRows = new DataTable();
+    saveRows.Columns.Add("RECORD_ID", typeof(string));
+    saveRows.Columns.Add("ROWSTATE", typeof(string));
+    saveRows.Columns.Add("EDITABLE_VALUE", typeof(string));
+    foreach (DataRow sourceRow in sourceRows.Rows)
+    {
+        DataRow saveRow = saveRows.NewRow();
+        saveRow["RECORD_ID"] = sourceRow["RECORD_ID"];
+        saveRow["EDITABLE_VALUE"] = sourceRow["EDITABLE_VALUE"];
+        if (sourceRow.RowState == DataRowState.Added)
+            saveRow["ROWSTATE"] = "I";
+        else if (sourceRow.RowState == DataRowState.Modified)
+            saveRow["ROWSTATE"] = "U";
+        saveRows.Rows.Add(saveRow);
+    }
+    return DataUtil.DataTableToXml(saveRows);
+}
+"""
+    save_sql = """
+DECLARE @DOC INT;
+EXEC SP_XML_PREPAREDOCUMENT @DOC OUTPUT, @ROWS_XML;
+DECLARE @ROWS TABLE (RECORD_ID VARCHAR(20), ROWSTATE VARCHAR(1), EDITABLE_VALUE VARCHAR(20));
+INSERT INTO @ROWS (RECORD_ID, ROWSTATE, EDITABLE_VALUE)
+SELECT RECORD_ID, ROWSTATE, EDITABLE_VALUE
+FROM OPENXML(@DOC, '/ROOT/ROW', 2)
+WITH (RECORD_ID VARCHAR(20), ROWSTATE VARCHAR(1), EDITABLE_VALUE VARCHAR(20));
+IF EXISTS (SELECT 1 FROM @ROWS A WHERE ISNULL(A.EDITABLE_VALUE, '') = '')
+BEGIN
+    RAISERROR('Required value is missing.', 16, 1);
+    RETURN;
+END
+INSERT INTO SYNTHETIC_TARGET (RECORD_ID, EDITABLE_VALUE, STATUSCD, REGDT)
+SELECT A.RECORD_ID, A.EDITABLE_VALUE, 'A', GETDATE()
+FROM @ROWS A
+WHERE A.ROWSTATE = 'I';
+UPDATE A
+SET A.EDITABLE_VALUE = B.EDITABLE_VALUE
+  , A.MODDT = GETDATE()
+FROM SYNTHETIC_TARGET A
+    INNER JOIN @ROWS B
+        ON A.RECORD_ID = B.RECORD_ID
+WHERE B.ROWSTATE = 'U';
+EXEC SP_XML_REMOVEDOCUMENT @DOC;
+"""
+    save_evidence_registry = {
+        key: {
+            "kind": (
+                "schema_source"
+                if key.startswith("type:")
+                else "csharp_source"
+                if key.startswith("csharp:")
+                else "pb_source"
+            ),
+            "locator": key,
+            "source_text": f"synthetic SAVE demo evidence::{key}",
+            "content_sha256": hashlib.sha256(
+                f"synthetic SAVE demo evidence::{key}".encode("utf-8")
+            ).hexdigest(),
+        }
+        for key in (
+            "field:record-id",
+            "field:row-state",
+            "field:editable-value",
+            "field:status",
+            "field:created-at",
+            "field:modified-at",
+            "field:unused-note",
+            "type:record-id",
+            "type:row-state",
+            "type:editable-value",
+            "csharp:payload",
+        )
+    }
+    save_field_contract = {
+        "target_table": "SYNTHETIC_TARGET",
+        "field_contracts": [
+            {"field": "RECORD_ID", "classification": "technical_key", "evidence_refs": ["field:record-id"], "type_contract": {"sql_type": "VARCHAR(20)", "evidence_refs": ["type:record-id"]}},
+            {"field": "ROWSTATE", "classification": "technical_key", "evidence_refs": ["field:row-state"], "type_contract": {"sql_type": "VARCHAR(1)", "evidence_refs": ["type:row-state"]}},
+            {"field": "EDITABLE_VALUE", "classification": "editable_payload", "editable": True, "required": True, "nonblank": True, "evidence_refs": ["field:editable-value"], "type_contract": {"sql_type": "VARCHAR(20)", "evidence_refs": ["type:editable-value"]}},
+            {"field": "STATUSCD", "classification": "pb_fixed", "editable": False, "fixed_value_sql": "'A'", "evidence_refs": ["field:status"]},
+            {"field": "REGDT", "classification": "server_derived", "evidence_refs": ["field:created-at"]},
+            {"field": "MODDT", "classification": "server_derived", "evidence_refs": ["field:modified-at"]},
+            {"field": "UNUSED_NOTE", "classification": "unused", "evidence_refs": ["field:unused-note"]},
+        ],
+        "csharp_payload_contract": {
+            "table_variable": "saveRows",
+            "serialized_fields": ["RECORD_ID", "ROWSTATE", "EDITABLE_VALUE"],
+            "row_state_field": "ROWSTATE",
+            "row_state_mapping": {"added": "I", "modified": "U"},
+            "evidence_refs": ["csharp:payload"],
+        },
+        "staging_table_variable": "@ROWS",
+        "openxml_fields": ["RECORD_ID", "ROWSTATE", "EDITABLE_VALUE"],
+        "insert_projection": [
+            {"field": "RECORD_ID", "expression": "A.RECORD_ID"},
+            {"field": "EDITABLE_VALUE", "expression": "A.EDITABLE_VALUE"},
+            {"field": "STATUSCD", "expression": "'A'"},
+            {"field": "REGDT", "expression": "GETDATE()"},
+        ],
+        "update_projection": [
+            {"field": "EDITABLE_VALUE", "expression": "B.EDITABLE_VALUE"},
+            {"field": "MODDT", "expression": "GETDATE()"},
+        ],
+        "xml_handle_variable": "@DOC",
+        "evidence_registry": save_evidence_registry,
+    }
+    save_contract_result = verify_pb_migration_save_field_contract(
+        save_sql,
+        save_field_contract,
+        csharp_source_text=save_csharp_source,
     )
     unsupported_body_sql = sql.replace(
         "    WHERE A.DISPLAY_NAME LIKE ISNULL(@FILTER_TEXT, N'') + N'%';",
@@ -1378,6 +1493,7 @@ END;
         or runtime_unrelated.success
         or runtime_misplaced.success
         or not sp_contract.success
+        or not save_contract_result.success
         or not branch_position_valid_result.success
         or not sibling_order_valid_result.success
         or not grid_plan.success
@@ -1393,6 +1509,7 @@ END;
                     "runtime_unrelated_rejected": not runtime_unrelated.success,
                     "runtime_misplaced_rejected": not runtime_misplaced.success,
                     "sp_contract": sp_contract.to_dict(),
+                    "save_contract": save_contract_result.to_dict(),
                     "source_backed_branch_contract": branch_position_valid_result.to_dict(),
                     "grid_plan": grid_plan.to_dict(),
                     "grid_xml_contract": grid_xml_contract.to_dict(),
@@ -1453,6 +1570,7 @@ END;
                 "baseline_designer_preservation"
             ],
             "sp_generation_contract": "passed" if sp_contract.success else "blocked",
+            "save_field_contract": save_contract_result.metadata,
             "branch_contract": {
                 "status": "verified",
                 "target_procedure": "DBO.SP_CATALOG_SELECT",
@@ -1626,6 +1744,7 @@ END;
             "exact distinct C# source Designer and baseline artifacts were SHA-256 bound",
             "complete control inventory and structured evidence registry passed",
             "demo SQL passed the PB SP contract and actual final-response binder",
+            "synthetic SAVE passed artifact-bound evidence, C# row assignment and type correlation, ordered DML, authoritative guard, and final normal-path XML cleanup checks",
             "generated View XML and matching DevExpress Designer source passed static contract verification",
             "actual live DevExpress Layout Load was not observed",
             "no external discovery or profile update ran",

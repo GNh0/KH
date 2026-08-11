@@ -4361,6 +4361,164 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
             self.assertEqual(lines[join_index + 2].index("AND"), expected_column)
         self.assertTrue(repaired.success, repaired.to_dict())
 
+    def test_session_019f58fd_join_predicates_align_to_each_join_i_column(self):
+        malformed = (
+            "SELECT A.ORGDIV\n"
+            "     , A.ORDNUM\n"
+            "FROM SA101T A\n"
+            "        LEFT OUTER JOIN SA100T B1 -- order header\n"
+            "                     ON A.ORGDIV = B1.ORGDIV\n"
+            "                    AND A.ORDNUM = B1.ORDNUM\n"
+            "        LEFT OUTER JOIN PR100T B2\n"
+            "                   ON A.ORGDIV = B2.ORGDIV\n"
+            "                     -- preserve this business comment\n"
+            "                  OR A.ITEMCD = B2.ITEMCD;\n"
+        )
+
+        invalid = verify_sql_formatting_style(
+            malformed,
+            malformed,
+            alias_role_plan=self._role_plan(numbered_support=True),
+        )
+        normalized = normalize_sql_join_layout(malformed)
+        repaired = verify_sql_formatting_style(
+            malformed,
+            normalized,
+            alias_role_plan=self._role_plan(numbered_support=True),
+        )
+        lines = normalized.splitlines()
+
+        self.assertIn("join_predicate_alignment_invalid", _issue_codes(invalid))
+        for join_line_index, predicate_line_indexes in (
+            (3, (4, 5)),
+            (6, (7, 9)),
+        ):
+            expected_column = lines[join_line_index].index("JOIN") + 2
+            for predicate_line_index in predicate_line_indexes:
+                keyword = lines[predicate_line_index].lstrip().split(maxsplit=1)[0]
+                self.assertEqual(
+                    lines[predicate_line_index].index(keyword),
+                    expected_column,
+                )
+        self.assertIn(
+            "                     -- preserve this business comment",
+            normalized,
+        )
+        self.assertNotIn("join_predicate_alignment_invalid", _issue_codes(repaired))
+        self.assertEqual(repaired.metadata["formatting_preservation"]["status"], "verified")
+
+    def test_join_normalizer_preserves_nested_case_between_comments_hints_and_apply(self):
+        malformed = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT HASH JOIN DETAIL_PRIMARY B\n"
+            "                 ON A.ID = B.ID\n"
+            "            AND B.EVENT_DT BETWEEN CASE WHEN A.MODE_CD = 'X'\n"
+            "          OR A.CODE = B.CODE THEN A.START_DT ELSE A.DEFAULT_DT END\n"
+            "             AND A.END_DT\n"
+            "            AND B.MATCH_ID = (\n"
+            "                    SELECT X.MATCH_ID\n"
+            "                    FROM MATCH_TABLE X\n"
+            "                    WHERE X.ID = B.ID\n"
+            "          OR X.ACTIVE_YN = 'Y'\n"
+            "                )\n"
+            "            OR B.FALLBACK_ID = A.ID -- same JOIN continuation\n"
+            "CROSS APPLY DBO.F_SPLIT(A.CSV) F;\n"
+        )
+
+        normalized = normalize_sql_join_layout(malformed)
+        verified = verify_sql_formatting_style(malformed, normalized)
+        lines = normalized.splitlines()
+        expected_column = lines[3].index("JOIN") + 2
+
+        self.assertEqual(lines[4].index("ON"), expected_column)
+        self.assertEqual(lines[5].index("AND"), expected_column)
+        self.assertEqual(lines[8].index("AND"), expected_column)
+        self.assertEqual(lines[14].index("OR"), expected_column)
+        self.assertEqual(lines[6], "          OR A.CODE = B.CODE THEN A.START_DT ELSE A.DEFAULT_DT END")
+        self.assertEqual(lines[7], "             AND A.END_DT")
+        self.assertEqual(lines[12], "          OR X.ACTIVE_YN = 'Y'")
+        self.assertEqual(lines[15], "CROSS APPLY DBO.F_SPLIT(A.CSV) F;")
+        self.assertIn("-- same JOIN continuation", normalized)
+        self.assertEqual(normalize_sql_join_layout(normalized), normalized)
+        self.assertEqual(
+            verified.metadata["formatting_preservation"]["status"],
+            "verified",
+        )
+        self.assertNotIn(
+            "join_predicate_alignment_invalid",
+            _issue_codes(verified),
+        )
+
+    def test_join_on_expression_cannot_start_with_cross_or_outer_apply(self):
+        for apply_clause in ("CROSS APPLY", "OUTER APPLY"):
+            with self.subTest(apply_clause=apply_clause):
+                sql = (
+                    "SELECT A.ID\n"
+                    "FROM HEADER_TABLE A\n"
+                    "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+                    "                     ON\n"
+                    f"{apply_clause} DBO.F_SPLIT(A.CSV) F;\n"
+                )
+
+                result = verify_sql_formatting_style(sql, sql)
+
+                self.assertIn("join_predicate_expression_missing", _issue_codes(result))
+
+    def test_join_predicate_cannot_resume_after_cross_or_outer_apply(self):
+        for apply_clause in ("CROSS APPLY", "OUTER APPLY"):
+            with self.subTest(apply_clause=apply_clause):
+                sql = (
+                    "SELECT A.ID\n"
+                    "FROM HEADER_TABLE A\n"
+                    "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+                    f"{apply_clause} DBO.F_SPLIT(A.CSV) F\n"
+                    "                     ON A.ID = B.ID;\n"
+                )
+
+                result = verify_sql_formatting_style(sql, sql)
+
+                self.assertIn("join_predicate_missing", _issue_codes(result))
+
+    def test_nested_apply_scope_is_a_join_boundary(self):
+        sql = (
+            "SELECT A.ID\n"
+            "FROM (\n"
+            "    SELECT T.ID\n"
+            "    FROM HEADER_TABLE T\n"
+            "            LEFT OUTER JOIN DETAIL_PRIMARY T1\n"
+            "    CROSS APPLY DBO.F_SPLIT(T.CSV) T2\n"
+            "                         ON T.ID = T1.ID\n"
+            ") A;\n"
+        )
+
+        result = verify_sql_formatting_style(sql, sql)
+
+        self.assertIn("join_predicate_missing", _issue_codes(result))
+
+    def test_apply_boundary_ignores_nested_scope_comments_and_strings(self):
+        for apply_clause in ("CROSS APPLY", "OUTER APPLY"):
+            with self.subTest(apply_clause=apply_clause):
+                sql = (
+                    "SELECT A.ID\n"
+                    "FROM (\n"
+                    "    SELECT T.ID\n"
+                    "    FROM HEADER_TABLE T\n"
+                    "            LEFT OUTER JOIN DETAIL_PRIMARY T1\n"
+                    "                         ON T.ID = T1.ID -- CROSS APPLY stays comment text\n"
+                    "                         AND T1.NOTE = 'OUTER APPLY'\n"
+                    f"    {apply_clause} DBO.F_SPLIT(T.CSV) T2\n"
+                    ") A;\n"
+                )
+
+                result = verify_sql_formatting_style(sql, sql)
+
+                self.assertTrue(result.success, result.to_dict())
+                self.assertEqual(normalize_sql_join_layout(sql), sql)
+                self.assertNotIn("join_predicate_missing", _issue_codes(result))
+                self.assertNotIn("join_predicate_expression_missing", _issue_codes(result))
+
     def test_tsql_join_hints_are_part_of_the_line_leading_join_clause(self):
         cases = {
             "loop": ("INNER LOOP JOIN", 21),
