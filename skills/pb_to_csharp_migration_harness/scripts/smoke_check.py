@@ -197,6 +197,9 @@ REQUIRED_GRID_IMPLEMENTATION_TARGETS = {
     "src.skills.pb_to_csharp_migration.generate_devexpress_grid_xml",
     "src.skills.pb_to_csharp_migration.verify_devexpress_grid_xml_contract",
 }
+REQUIRED_SAVE_IMPLEMENTATION_TARGETS = {
+    "src.skills.pb_to_csharp_migration.verify_pb_migration_save_field_contract",
+}
 SYNTHETIC_MAPPED_CSHARP = """
 public partial class CatalogBrowseForm : Form
 {
@@ -718,6 +721,22 @@ def main() -> int:
     missing_grid_targets = sorted(REQUIRED_GRID_IMPLEMENTATION_TARGETS - set(targets))
     if missing_grid_targets:
         issues.append({"code": "grid_implementation_targets_missing", "targets": missing_grid_targets})
+    missing_save_targets = sorted(REQUIRED_SAVE_IMPLEMENTATION_TARGETS - set(targets))
+    if missing_save_targets:
+        issues.append({"code": "save_implementation_targets_missing", "targets": missing_save_targets})
+    stored_procedure_rules = contract.get("stored_procedure_rules", {})
+    save_ownership = (
+        stored_procedure_rules.get("save_field_ownership", {})
+        if isinstance(stored_procedure_rules, dict)
+        else {}
+    )
+    if (
+        not isinstance(save_ownership, dict)
+        or save_ownership.get("ownership_is_mutually_exclusive") is not True
+        or save_ownership.get("insert_and_update_projection_declared_separately") is not True
+        or save_ownership.get("required_editable_values_fail_fast_before_first_write") is not True
+    ):
+        issues.append({"code": "save_field_ownership_contract_missing"})
 
     if repo_root is not None:
         issues.extend(validate_generated_grid_xml_drift(repo_root))

@@ -1174,13 +1174,27 @@ def _looks_like_stored_procedure_output_request(lowered: str) -> bool:
     )
     if not _has_stored_procedure_subject(lowered):
         return False
-    if not any(marker in lowered for marker in action_markers):
+    if not _contains_stored_procedure_action(lowered, action_markers):
         return False
     if _has_sql_equivalence_question_without_output_request(lowered):
         return False
     if _has_sql_diagnostic_question_without_output_request(lowered):
         return False
     return True
+
+
+def _contains_stored_procedure_action(lowered: str, markers: Iterable[str]) -> bool:
+    """Match action words without treating an SP name suffix as an imperative."""
+    for marker in markers:
+        if marker.isascii():
+            if re.search(
+                rf"(?<![a-z0-9_]){re.escape(marker)}(?![a-z0-9_])",
+                lowered,
+            ):
+                return True
+        elif marker in lowered:
+            return True
+    return False
 
 
 def _has_stored_procedure_subject(lowered: str) -> bool:

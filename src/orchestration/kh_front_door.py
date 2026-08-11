@@ -23,6 +23,7 @@ from src.skills.uaf_skill_validator import (
     validate_skill_file,
 )
 from src.skills.sql_formatting_provider import (
+    SQL_PROVIDER_SELECTION_GATE_STATUSES,
     SQL_PROVIDER_SELECTION_SCHEMA_VERSION,
     attach_sql_provider_selection_runtime_receipt,
     inspect_host_sql_formatting_provider,
@@ -1130,6 +1131,13 @@ def _selected_sql_formatting_provider_skill(plugin_route: Dict[str, Any]) -> str
             continue
         return str(role.get("provider_id") or "")
     return ""
+
+
+def _sql_provider_selection_receipt_allowed(execution_gate: Dict[str, Any]) -> bool:
+    return bool(
+        execution_gate.get("can_execute") is True
+        and execution_gate.get("status") in SQL_PROVIDER_SELECTION_GATE_STATUSES
+    )
 
 
 def _needs_sql_formatting_style_harness(classification: Dict[str, Any], plugin_route: Dict[str, Any]) -> bool:
@@ -2707,7 +2715,15 @@ def main() -> int:
                 "execution_gate": dict(result.execution_gate),
             }
         )
-        payload = attach_sql_provider_selection_runtime_receipt(payload)
+        if _sql_provider_selection_receipt_allowed(result.execution_gate):
+            payload = attach_sql_provider_selection_runtime_receipt(payload)
+        else:
+            payload["sql_provider_selection_status"] = {
+                "status": "blocked_by_execution_gate",
+                "provider_id": selected_sql_provider,
+                "execution_gate_status": result.execution_gate.get("status"),
+                "reason": result.execution_gate.get("reason"),
+            }
     if args.summary or args.micro_summary:
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     else:

@@ -2,7 +2,7 @@ import argparse
 import json
 import re
 from dataclasses import asdict, dataclass, field, replace
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 
 COMPLEXITIES = {"light", "medium", "heavy", "high_risk", "ambiguous"}
@@ -3727,12 +3727,29 @@ def _looks_like_stored_procedure_generation_request(normalized: str) -> bool:
     }
     if not _has_stored_procedure_subject(normalized):
         return False
-    if not _contains_any(normalized, generation_terms):
+    if not _contains_stored_procedure_generation_action(normalized, generation_terms):
         return False
     return not (
         _is_sql_equivalence_question_without_output_request(normalized)
         or _is_sql_diagnostic_question_without_output_request(normalized)
     )
+
+
+def _contains_stored_procedure_generation_action(
+    normalized: str,
+    generation_terms: Iterable[str],
+) -> bool:
+    """Require English generation verbs to be standalone request tokens."""
+    for term in generation_terms:
+        if term.isascii():
+            if re.search(
+                rf"(?<![a-z0-9_]){re.escape(term)}(?![a-z0-9_])",
+                normalized,
+            ):
+                return True
+        elif term in normalized:
+            return True
+    return False
 
 
 def _has_stored_procedure_subject(normalized: str) -> bool:

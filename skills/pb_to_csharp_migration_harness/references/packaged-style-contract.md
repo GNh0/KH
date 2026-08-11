@@ -368,6 +368,11 @@ The metadata parser accepts the normal SSMS `USE`/`GO`, Object block comment, `S
 ### Save Family
 
 - Parse the supplied payload using the target-compatible XML or structured-row method.
+- Build a field-provenance matrix before SQL. Every target field used by the flow has one owner: editable payload, technical row/key data, PB-fixed literal, database default, server-derived value, or nullable unused field.
+- XML contains only editable payload and technical row/key fields. Nullable fields unused by the PB screen and database-default fields are omitted from XML, INSERT, and UPDATE rather than populated with empty/zero values or `ISNULL`/`NULLIF` coercion.
+- Exact INSERT and UPDATE projections are independent evidence-backed lists. Generated writes may use only payload, technical, PB-fixed, or server-derived fields from the matrix.
+- PB fixed values are direct authoritative SQL literals. A control's initial value is not fixed when the user can edit it; required editable values use an explicit pre-target-write `IF` / `BEGIN` / `RAISERROR` / `RETURN` guard and the supplied value is saved unchanged. `required_nonblank_fields` is an explicit subset of required textual fields; numeric/date fields use null checks without empty-string coercion.
+- Run `verify_pb_migration_save_field_contract` and pass its contract through `verify_pb_migration_sp_generation_contract`, `verify_pb_migration_sp_with_sql_formatting`, or `orchestrate_pb_migration_validation`. XML-based SAVE output without this contract is blocked.
 - Stage rows in a table variable when that matches the selected contract.
 - Validate before opening the transaction where possible.
 - Use an explicit transaction for writes and the supplied error/logging contract.

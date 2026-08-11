@@ -452,7 +452,7 @@ Do not claim unexecuted work.
         collect_catalog.assert_not_called()
         discover_host_skills.assert_not_called()
         packet = result.to_micro_summary_dict()
-        self.assertEqual(packet["src"]["v"], "2.9.139")
+        self.assertEqual(packet["src"]["v"], "2.9.140")
         self.assertEqual(packet["cls"], {"c": "l", "x": "direct"})
         self.assertNotIn("next", packet)
 
@@ -507,6 +507,76 @@ Do not claim unexecuted work.
         self.assertEqual(
             payload["provider_selection_receipt"]["external_authenticity"],
             "unverified",
+        )
+
+    def test_front_door_cli_pb_save_harness_analysis_returns_structured_route(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "src.orchestration.kh_front_door",
+                "--prompt",
+                (
+                    "Analyze the PB-to-C# migration harness handling for SP_PR300510_SAVE. "
+                    "Trace provider receipt ordering and determine the smallest safe fix; do not edit."
+                ),
+                "--project",
+                str(repo_root),
+                "--host",
+                "local",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            encoding="utf-8",
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertIn(
+            "pb_to_csharp_migration_request",
+            payload["classification"]["reasons"],
+        )
+        selected_roles = [payload["plugin_route"].get("controller", {})]
+        selected_roles.extend(payload["plugin_route"].get("assistants", []))
+        self.assertFalse(
+            any(role.get("capability") == "sql_formatting" for role in selected_roles)
+        )
+        self.assertNotIn("provider_selection_receipt", payload)
+
+    def test_front_door_cli_blocked_sql_route_does_not_issue_receipt_or_crash(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "src.orchestration.kh_front_door",
+                "--prompt",
+                (
+                    "Run a full skill lifecycle audit and format this SQL without semantic changes: "
+                    "SELECT A.ORDER_ID FROM ORDER_HEADER A"
+                ),
+                "--project",
+                str(repo_root),
+                "--host",
+                "local",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            encoding="utf-8",
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertNotIn("provider_selection_receipt", payload)
+        self.assertEqual(
+            payload["sql_provider_selection_status"]["status"],
+            "blocked_by_execution_gate",
         )
 
     def test_micro_sql_path_prefers_canonical_host_local_provider(self):

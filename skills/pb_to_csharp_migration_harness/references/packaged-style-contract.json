@@ -541,6 +541,28 @@
       "SET_QUOTED_IDENTIFIER_GO"
     ],
     "approved_inferred_draft_release_status": "pending",
+    "save_field_ownership": {
+      "required_for": "generated XML-based SAVE procedures",
+      "ownership_classes": [
+        "editable_payload",
+        "technical_row_or_key",
+        "pb_fixed_literal",
+        "database_default",
+        "server_derived",
+        "nullable_unused"
+      ],
+      "ownership_is_mutually_exclusive": true,
+      "xml_contains": ["editable_payload", "technical_row_or_key"],
+      "write_projection_contains": ["editable_payload", "technical_row_or_key", "pb_fixed_literal", "server_derived"],
+      "omitted_from_xml_and_writes": ["database_default", "nullable_unused"],
+      "insert_and_update_projection_declared_separately": true,
+      "pb_fixed_values_are_direct_literals": true,
+      "editable_initial_values_are_not_sp_defaults": true,
+      "required_editable_values_fail_fast_before_first_write": true,
+      "required_nonblank_fields_are_explicit_subset_of_required_fields": true,
+      "silent_ISNULL_NULLIF_empty_zero_fill_forbidden": true,
+      "verifier": "src.skills.pb_to_csharp_migration.verify_pb_migration_save_field_contract"
+    },
     "set_nocount": true,
     "parameter_layout": "leading-comma",
     "select_column_layout": "leading-comma",

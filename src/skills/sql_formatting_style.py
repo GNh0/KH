@@ -83,7 +83,7 @@ _QUERY_LIST_LAYOUT_CONTRACT = {
 _JOIN_LAYOUT_CONTRACT = {
     "join_indent_from_from": 8,
     "join_prefix_and_token": "single_line",
-    "predicate_alignment": "ON and line-leading same-join continuation AND align to the I column of JOIN",
+    "predicate_alignment": "ON and line-leading same-join continuation AND/OR align to the I column of JOIN",
     "indentation_basis": "current_query_scope_from_column",
     "ordinary_table_joins": "enforced",
     "derived_table_joins": "same_relative_contract_as_ordinary_joins",
@@ -92,10 +92,10 @@ _JOIN_LAYOUT_CONTRACT = {
     "join_hints": ["LOOP", "HASH", "MERGE", "REMOTE"],
     "predicate_context": "ordered_group_subquery_case_between_stack",
     "predicate_exclusions": [
-        "inline_AND",
+        "inline_AND_OR",
         "BETWEEN_AND",
-        "CASE_internal_AND",
-        "nested_subquery_AND",
+        "CASE_internal_AND_OR",
+        "nested_subquery_AND_OR",
     ],
 }
 _JOIN_PREFIX_WORDS = {
@@ -943,7 +943,7 @@ def _alias_plan_binding_conflicts(
 
 
 def normalize_sql_join_layout(sql: str) -> str:
-    """Normalize line-leading JOIN, ON, and same-join AND indentation only."""
+    """Normalize line-leading JOIN, ON, and same-join AND/OR indentation only."""
     if not isinstance(sql, str):
         raise TypeError("sql must be a string")
     tokens, integrity_issues = _analyze_sql_integrity(sql, check_kind="join_layout")
@@ -3346,7 +3346,7 @@ def _check_join_layout(
                     SqlFormattingIssue(
                         code="join_predicate_alignment_invalid",
                         severity="error",
-                        message="ON and same-join AND keywords must align to the I column of JOIN.",
+                        message="ON and same-join AND/OR keywords must align to the I column of JOIN.",
                         evidence=predicate_conflicts[:16],
                         check_kind="style",
                     )
@@ -3540,7 +3540,7 @@ def _same_join_predicate_indexes(
         if token.normalized == "BETWEEN":
             contexts.append("between")
             continue
-        if token.normalized != "AND":
+        if token.normalized not in {"AND", "OR"}:
             continue
         last_case = max(
             (position for position, context in enumerate(contexts) if context == "case"),
@@ -3554,7 +3554,7 @@ def _same_join_predicate_indexes(
             ),
             default=-1,
         )
-        if last_between > last_case:
+        if token.normalized == "AND" and last_between > last_case:
             del contexts[last_between]
             continue
         if last_case >= 0:

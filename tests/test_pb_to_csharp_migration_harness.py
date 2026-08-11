@@ -44,6 +44,7 @@ from src.skills.pb_to_csharp_migration import (
     resolve_author_tagged_style_evidence,
     verify_migration_generated_csharp_style as _raw_verify_migration_generated_csharp_style,
     verify_pb_migration_analysis_document,
+    verify_pb_migration_save_field_contract,
     verify_pb_migration_sp_generation_contract as _verify_pb_migration_sp_generation_contract,
     verify_pb_migration_sp_with_sql_formatting as _verify_pb_migration_sp_with_sql_formatting,
     resolve_csharp_grid_control_names,
@@ -5802,6 +5803,181 @@ END
         issue_codes = {issue["code"] for issue in unbacked.metadata["issues"]}
         self.assertFalse(unbacked.success)
         self.assertIn("missing_pb_or_db_source_evidence_for_sp_generation", issue_codes)
+
+    def test_save_field_contract_accepts_source_owned_minimal_projections(self):
+        sql = """
+DECLARE @DOC INT;
+DECLARE @ROWS TABLE
+(
+      RECORD_ID   VARCHAR(20)
+    , ROWSTATE    VARCHAR(1)
+    , OUTINSPEC   VARCHAR(1)
+);
+
+INSERT INTO @ROWS (RECORD_ID, ROWSTATE, OUTINSPEC)
+SELECT RECORD_ID, ROWSTATE, OUTINSPEC
+FROM OPENXML(@DOC, '/ROOT/ROW', 2)
+WITH
+(
+      RECORD_ID   VARCHAR(20)
+    , ROWSTATE    VARCHAR(1)
+    , OUTINSPEC   VARCHAR(1)
+);
+
+IF EXISTS (
+          SELECT 1
+          FROM @ROWS A
+          WHERE A.OUTINSPEC IS NULL
+             OR A.OUTINSPEC = ''
+          )
+BEGIN
+    RAISERROR('Required value is missing.', 16, 1);
+    RETURN;
+END
+
+INSERT INTO SYNTHETIC_TARGET
+(
+      RECORD_ID
+    , OUTINSPEC
+    , STATUSCD
+    , REGDT
+)
+SELECT A.RECORD_ID
+     , A.OUTINSPEC
+     , 'A'
+     , GETDATE()
+FROM @ROWS A;
+
+UPDATE A
+SET A.OUTINSPEC = B.OUTINSPEC
+  , A.MODDT = GETDATE()
+FROM SYNTHETIC_TARGET A
+    INNER JOIN @ROWS B
+        ON A.RECORD_ID = B.RECORD_ID;
+"""
+        contract = {
+            "target_table": "SYNTHETIC_TARGET",
+            "screen_used_fields": ["OUTINSPEC"],
+            "payload_fields": ["OUTINSPEC"],
+            "technical_fields": ["RECORD_ID", "ROWSTATE"],
+            "required_fields": ["OUTINSPEC"],
+            "required_nonblank_fields": ["OUTINSPEC"],
+            "pb_fixed_values": {"STATUSCD": "'A'"},
+            "database_default_fields": ["CREATED_BY"],
+            "server_derived_fields": ["REGDT", "MODDT"],
+            "nullable_unused_fields": ["REMARK"],
+            "insert_fields": ["RECORD_ID", "OUTINSPEC", "STATUSCD", "REGDT"],
+            "update_fields": ["OUTINSPEC", "MODDT"],
+            "evidence_registry": {"pb:save": {"kind": "pb_behavior"}},
+            "evidence_refs": ["pb:save"],
+        }
+
+        result = verify_pb_migration_save_field_contract(sql, contract)
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual(
+            result.metadata["actual_insert_fields"],
+            ["OUTINSPEC", "RECORD_ID", "REGDT", "STATUSCD"],
+        )
+        self.assertEqual(result.metadata["actual_update_fields"], ["MODDT", "OUTINSPEC"])
+
+    def test_save_field_contract_allows_null_only_guard_for_required_numeric_field(self):
+        sql = """
+IF EXISTS (
+          SELECT 1
+          FROM @ROWS A
+          WHERE A.QTY IS NULL
+          )
+BEGIN
+    RAISERROR('Required value is missing.', 16, 1);
+    RETURN;
+END
+
+INSERT INTO SYNTHETIC_TARGET (RECORD_ID, QTY)
+SELECT A.RECORD_ID, A.QTY
+FROM OPENXML(@DOC, '/ROOT/ROW', 2)
+WITH (RECORD_ID VARCHAR(20), QTY DECIMAL(18, 4)) A;
+"""
+        contract = {
+            "target_table": "SYNTHETIC_TARGET",
+            "screen_used_fields": ["QTY"],
+            "payload_fields": ["QTY"],
+            "technical_fields": ["RECORD_ID"],
+            "required_fields": ["QTY"],
+            "required_nonblank_fields": [],
+            "pb_fixed_values": {},
+            "database_default_fields": [],
+            "server_derived_fields": [],
+            "nullable_unused_fields": [],
+            "insert_fields": ["RECORD_ID", "QTY"],
+            "update_fields": [],
+            "evidence_registry": {"pb:save": {"kind": "pb_behavior"}},
+            "evidence_refs": ["pb:save"],
+        }
+
+        result = verify_pb_migration_save_field_contract(sql, contract)
+
+        self.assertTrue(result.success, result.metadata["issues"])
+
+    def test_save_field_contract_blocks_unused_columns_silent_defaults_and_missing_guard(self):
+        sql = """
+INSERT INTO SYNTHETIC_TARGET (RECORD_ID, OUTINSPEC, REMARK, STATUSCD)
+SELECT A.RECORD_ID, ISNULL(A.OUTINSPEC, 'A'), A.REMARK, 'A'
+FROM OPENXML(@DOC, '/ROOT/ROW', 2)
+WITH (RECORD_ID VARCHAR(20), OUTINSPEC VARCHAR(1), REMARK VARCHAR(200)) A;
+"""
+        contract = {
+            "target_table": "SYNTHETIC_TARGET",
+            "screen_used_fields": ["OUTINSPEC"],
+            "payload_fields": ["OUTINSPEC"],
+            "technical_fields": ["RECORD_ID"],
+            "required_fields": ["OUTINSPEC"],
+            "required_nonblank_fields": ["OUTINSPEC"],
+            "pb_fixed_values": {"STATUSCD": "'A'"},
+            "database_default_fields": [],
+            "server_derived_fields": [],
+            "nullable_unused_fields": ["REMARK"],
+            "insert_fields": ["RECORD_ID", "OUTINSPEC", "STATUSCD"],
+            "update_fields": [],
+            "evidence_registry": {"pb:save": {"kind": "pb_behavior"}},
+            "evidence_refs": ["pb:save"],
+        }
+
+        result = verify_pb_migration_save_field_contract(sql, contract)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+
+        self.assertFalse(result.success)
+        self.assertIn("save_xml_field_inventory_mismatch", issue_codes)
+        self.assertIn("save_insert_field_inventory_mismatch", issue_codes)
+        self.assertIn("save_omitted_field_written", issue_codes)
+        self.assertIn("save_nullable_unused_field_serialized", issue_codes)
+        self.assertIn("save_field_silent_null_default_detected", issue_codes)
+        self.assertIn("save_required_field_fail_fast_guard_missing", issue_codes)
+
+    def test_xml_save_generation_requires_field_contract(self):
+        sql = sp_metadata_header() + """
+CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SAVE]
+      @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    INSERT INTO SYNTHETIC_TARGET (RECORD_ID)
+    SELECT A.RECORD_ID
+    FROM OPENXML(@DOC, '/ROOT/ROW', 2)
+    WITH (RECORD_ID VARCHAR(20)) A;
+END
+"""
+
+        result = verify_pb_migration_sp_generation_contract(
+            sql,
+            source_evidence=False,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "save_field_contract_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+        self.assertEqual(result.metadata["save_field_contract"]["status"], "missing")
 
         bool_flag = verify_pb_migration_sp_generation_contract(
             """

@@ -368,6 +368,25 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertTrue(any(role.provider_id == "sql-formatting" for role in decision.assistants))
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
 
+    def test_pb_harness_analysis_does_not_treat_save_suffix_as_sql_action(self):
+        decision = compose_plugin_route(
+            "Analyze the PB-to-C# migration harness handling for SP_PR300510_SAVE. "
+            "Trace request classification and provider receipt ordering; do not edit.",
+            providers=[
+                {"provider_id": "kh", "capabilities": ["workflow_control"]},
+                {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+            ],
+        )
+
+        self.assertEqual(decision.controller.provider_id, "kh")
+        self.assertFalse(
+            any(role.provider_id == "sql-formatting" for role in decision.assistants)
+        )
+        self.assertNotIn(
+            "specialist_trigger:sql-formatting:sql_formatting",
+            decision.reasons,
+        )
+
     def test_concise_korean_save_procedure_generation_adds_sql_formatting_assistant(self):
         decision = compose_plugin_route(
             "\ud604\uc7ac MA600110 \uae30\uc900\uc73c\ub85c SAVE "

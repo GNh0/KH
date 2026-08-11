@@ -1521,6 +1521,17 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertNotIn("pb_to_csharp_migration_request", result.reasons)
         self.assertIn("audit_findings", result.evidence_required)
 
+    def test_pb_harness_analysis_with_save_sp_name_is_not_sql_formatting(self):
+        result = classify_request(
+            "Analyze the PB-to-C# migration harness handling for SP_PR300510_SAVE and "
+            "determine the smallest safe runtime fix.",
+            context={"domain": "software"},
+        )
+
+        self.assertIn("pb_to_csharp_migration_request", result.reasons)
+        self.assertNotIn("sql_formatting_style_request", result.reasons)
+        self.assertIn("pb-to-csharp-migration-harness", result.recommended_skills)
+
     def test_side_wave_document_history_and_simple_drafting_boundaries(self):
         cases = [
             ("same as earlier", {}, "ambiguous", "general", "clarify"),

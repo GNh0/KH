@@ -11035,6 +11035,363 @@ def _source_metadata_values(items: List[Dict[str, Any]]) -> tuple[set[str], set[
     return authors, dates
 
 
+def _normalized_save_field_name(value: Any) -> str:
+    name = str(value or "").strip().strip("[]").upper()
+    return name if re.fullmatch(r"[A-Z_][A-Z0-9_$#]*", name) else ""
+
+
+def _balanced_sql_parenthesis_end(sql: str, open_index: int) -> int | None:
+    depth = 0
+    index = open_index
+    quote = ""
+    while index < len(sql):
+        char = sql[index]
+        if quote:
+            if char == quote:
+                if index + 1 < len(sql) and sql[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = ""
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _split_top_level_sql_items(body: str) -> List[str]:
+    items: List[str] = []
+    start = 0
+    depth = 0
+    quote = ""
+    index = 0
+    while index < len(body):
+        char = body[index]
+        if quote:
+            if char == quote:
+                if index + 1 < len(body) and body[index + 1] == quote:
+                    index += 2
+                    continue
+                quote = ""
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            items.append(body[start:index].strip())
+            start = index + 1
+        index += 1
+    tail = body[start:].strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
+def _extract_openxml_field_names(sql: str) -> List[str]:
+    fields: List[str] = []
+    for match in re.finditer(r"\bOPENXML\s*\(", sql, flags=re.IGNORECASE):
+        call_open = sql.find("(", match.start())
+        call_end = _balanced_sql_parenthesis_end(sql, call_open)
+        if call_end is None:
+            continue
+        with_match = re.match(r"\s*WITH\s*\(", sql[call_end + 1 :], flags=re.IGNORECASE)
+        if not with_match:
+            continue
+        with_open = call_end + 1 + with_match.end() - 1
+        with_end = _balanced_sql_parenthesis_end(sql, with_open)
+        if with_end is None:
+            continue
+        for item in _split_top_level_sql_items(sql[with_open + 1 : with_end]):
+            field_match = re.match(r"\s*(?:\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_$#]*))", item)
+            if field_match:
+                field = _normalized_save_field_name(field_match.group(1) or field_match.group(2))
+                if field and field not in fields:
+                    fields.append(field)
+    return fields
+
+
+def _normalized_contract_field_set(value: Any) -> set[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return set()
+    return {
+        normalized
+        for item in value
+        if (normalized := _normalized_save_field_name(item))
+    }
+
+
+def _save_target_table_pattern(target_table: str) -> str:
+    object_name = str(target_table or "").strip().replace("[", "").replace("]", "")
+    table_name = object_name.split(".")[-1]
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$#]*", table_name):
+        return ""
+    return rf"(?:\[?[A-Za-z_][A-Za-z0-9_$#]*\]?\s*\.\s*)?\[?{re.escape(table_name)}\]?"
+
+
+def _extract_save_target_insert_fields(sql: str, target_table: str) -> set[str]:
+    table_pattern = _save_target_table_pattern(target_table)
+    if not table_pattern:
+        return set()
+    stripped = _strip_sql_literals_and_comments_for_pb_contract(sql)
+    fields: set[str] = set()
+    for match in re.finditer(
+        rf"\bINSERT\s+INTO\s+{table_pattern}\s*\(",
+        stripped,
+        flags=re.IGNORECASE,
+    ):
+        open_index = stripped.find("(", match.start())
+        close_index = _balanced_sql_parenthesis_end(stripped, open_index)
+        if close_index is None:
+            continue
+        for item in _split_top_level_sql_items(stripped[open_index + 1 : close_index]):
+            field = _normalized_save_field_name(item.split(".")[-1])
+            if field:
+                fields.add(field)
+    return fields
+
+
+def _extract_save_target_update_fields(sql: str, target_table: str) -> set[str]:
+    table_pattern = _save_target_table_pattern(target_table)
+    if not table_pattern:
+        return set()
+    stripped = _strip_sql_literals_and_comments_for_pb_contract(sql)
+    targets = {str(target_table).replace("[", "").replace("]", "").split(".")[-1].upper()}
+    for match in re.finditer(
+        rf"\b(?:FROM|JOIN)\s+{table_pattern}(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_$#]*))?",
+        stripped,
+        flags=re.IGNORECASE,
+    ):
+        alias = str(match.group(1) or "").upper()
+        if alias not in {"WHERE", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "JOIN", "ON"}:
+            targets.add(alias)
+    fields: set[str] = set()
+    target_tokens = "|".join(re.escape(item) for item in sorted(targets, key=len, reverse=True) if item)
+    if not target_tokens:
+        return fields
+    for match in re.finditer(
+        rf"\bUPDATE\s+(?:{table_pattern}|(?:{target_tokens}))\s+SET\b",
+        stripped,
+        flags=re.IGNORECASE,
+    ):
+        body_start = match.end()
+        body = stripped[body_start:]
+        boundaries = [
+            index
+            for keyword in ("FROM", "WHERE", "OUTPUT", "OPTION")
+            if (index := _pb_contract_find_top_level_keyword(body, keyword)) >= 0
+        ]
+        semicolon = body.find(";")
+        if semicolon >= 0:
+            boundaries.append(semicolon)
+        if boundaries:
+            body = body[: min(boundaries)]
+        for assignment in _split_top_level_sql_items(body):
+            left = assignment.split("=", 1)[0].strip().split(".")[-1]
+            field = _normalized_save_field_name(left)
+            if field:
+                fields.add(field)
+    return fields
+
+
+def _first_save_target_write_index(sql: str, target_table: str) -> int | None:
+    table_pattern = _save_target_table_pattern(target_table)
+    if not table_pattern:
+        return None
+    stripped = _strip_sql_literals_and_comments_for_pb_contract(sql)
+    starts = [
+        match.start()
+        for pattern in (
+            rf"\bINSERT\s+INTO\s+{table_pattern}\b",
+            rf"\bUPDATE\s+{table_pattern}\b",
+            rf"\bUPDATE\b[\s\S]{{0,4000}}?\bFROM\s+{table_pattern}\b",
+        )
+        for match in re.finditer(pattern, stripped, flags=re.IGNORECASE)
+    ]
+    return min(starts) if starts else None
+
+
+def verify_pb_migration_save_field_contract(
+    sql_text: str,
+    save_field_contract: Any,
+) -> HarnessResult:
+    """Verify evidence-backed ownership of XML and target-table fields in a PB migration SAVE flow."""
+    sql = str(sql_text or "")
+    issues: List[Dict[str, Any]] = []
+    contract = dict(save_field_contract) if isinstance(save_field_contract, Mapping) else {}
+    target_table = str(contract.get("target_table") or "").strip()
+    screen_used = _normalized_contract_field_set(contract.get("screen_used_fields"))
+    payload = _normalized_contract_field_set(contract.get("payload_fields"))
+    technical = _normalized_contract_field_set(contract.get("technical_fields"))
+    required = _normalized_contract_field_set(contract.get("required_fields"))
+    required_nonblank = _normalized_contract_field_set(contract.get("required_nonblank_fields"))
+    database_defaults = _normalized_contract_field_set(contract.get("database_default_fields"))
+    server_derived = _normalized_contract_field_set(contract.get("server_derived_fields"))
+    nullable_unused = _normalized_contract_field_set(contract.get("nullable_unused_fields"))
+    expected_insert = _normalized_contract_field_set(contract.get("insert_fields"))
+    expected_update = _normalized_contract_field_set(contract.get("update_fields"))
+    fixed_values_raw = contract.get("pb_fixed_values")
+    fixed_values = {
+        _normalized_save_field_name(key): str(value).strip()
+        for key, value in (fixed_values_raw.items() if isinstance(fixed_values_raw, Mapping) else [])
+        if _normalized_save_field_name(key) and str(value).strip()
+    }
+    registry = contract.get("evidence_registry")
+    evidence_refs = contract.get("evidence_refs")
+    if not target_table:
+        issues.append({"code": "save_target_table_missing", "severity": "error", "message": "SAVE field ownership requires one target table."})
+    if not isinstance(registry, Mapping) or not registry:
+        issues.append({"code": "save_field_evidence_registry_missing", "severity": "error", "message": "SAVE field ownership requires a structured PB/UI/schema evidence registry."})
+        registry = {}
+    if not isinstance(evidence_refs, (list, tuple)) or not evidence_refs:
+        issues.append({"code": "save_field_evidence_refs_missing", "severity": "error", "message": "SAVE field ownership requires evidence references."})
+        evidence_refs = []
+    unresolved = sorted({str(item) for item in evidence_refs if str(item) not in registry})
+    if unresolved:
+        issues.append({"code": "save_field_evidence_ref_unresolved", "severity": "error", "message": "Every SAVE field evidence reference must resolve through the registry.", "evidence_refs": unresolved})
+    if "payload_fields" not in contract:
+        issues.append({"code": "save_payload_fields_missing", "severity": "error", "message": "Declare the exact screen/PB payload field inventory, including an explicit empty list when applicable."})
+    if "technical_fields" not in contract:
+        issues.append({"code": "save_technical_fields_missing", "severity": "error", "message": "Declare row-state and key fields separately, including an explicit empty list when applicable."})
+    if not payload and not technical:
+        issues.append({"code": "save_xml_field_ownership_empty", "severity": "error", "message": "An XML-based SAVE contract needs at least one payload or technical field."})
+    if required - payload:
+        issues.append({"code": "save_required_field_not_payload", "severity": "error", "message": "Every required field must be an actual payload field.", "fields": sorted(required - payload)})
+    if required_nonblank - required:
+        issues.append({"code": "save_nonblank_field_not_required", "severity": "error", "message": "Only required textual fields may require a nonblank check.", "fields": sorted(required_nonblank - required)})
+    extra_payload = payload - screen_used
+    if extra_payload:
+        issues.append({"code": "save_payload_field_not_screen_used", "severity": "error", "message": "XML must not serialize fields merely because the table contains them; payload fields require PB/UI use evidence.", "fields": sorted(extra_payload)})
+    ownership_groups = {
+        "payload": payload,
+        "technical": technical,
+        "pb_fixed": set(fixed_values),
+        "database_default": database_defaults,
+        "server_derived": server_derived,
+        "nullable_unused": nullable_unused,
+    }
+    ownership_by_field: Dict[str, List[str]] = {}
+    for owner, fields in ownership_groups.items():
+        for field_name in fields:
+            ownership_by_field.setdefault(field_name, []).append(owner)
+    classified_overlap = {
+        field_name: owners
+        for field_name, owners in ownership_by_field.items()
+        if len(owners) > 1
+    }
+    if classified_overlap:
+        issues.append({"code": "save_field_ownership_overlap", "severity": "error", "message": "Payload, technical, PB-fixed, DB-default, server-derived, and nullable-unused ownership must be mutually exclusive.", "fields": classified_overlap})
+
+    actual_xml_fields = set(_extract_openxml_field_names(sql))
+    expected_xml_fields = payload | technical
+    if actual_xml_fields != expected_xml_fields:
+        issues.append({
+            "code": "save_xml_field_inventory_mismatch",
+            "severity": "error",
+            "message": "OPENXML WITH fields must exactly match screen-used payload plus technical row/key fields.",
+            "missing": sorted(expected_xml_fields - actual_xml_fields),
+            "unexpected": sorted(actual_xml_fields - expected_xml_fields),
+        })
+
+    actual_insert = _extract_save_target_insert_fields(sql, target_table)
+    actual_update = _extract_save_target_update_fields(sql, target_table)
+    if actual_insert and "insert_fields" not in contract:
+        issues.append({"code": "save_insert_projection_contract_missing", "severity": "error", "message": "Declare the exact target INSERT field projection before release."})
+    elif actual_insert != expected_insert:
+        issues.append({"code": "save_insert_field_inventory_mismatch", "severity": "error", "message": "Target INSERT fields must exactly match the evidence-backed projection.", "missing": sorted(expected_insert - actual_insert), "unexpected": sorted(actual_insert - expected_insert)})
+    if actual_update and "update_fields" not in contract:
+        issues.append({"code": "save_update_projection_contract_missing", "severity": "error", "message": "Declare the exact target UPDATE field projection before release."})
+    elif actual_update != expected_update:
+        issues.append({"code": "save_update_field_inventory_mismatch", "severity": "error", "message": "Target UPDATE fields must exactly match the evidence-backed projection.", "missing": sorted(expected_update - actual_update), "unexpected": sorted(actual_update - expected_update)})
+    allowed_write_fields = payload | technical | set(fixed_values) | server_derived
+    invalid_expected_writes = (expected_insert | expected_update) - allowed_write_fields
+    if invalid_expected_writes:
+        issues.append({"code": "save_projection_uses_unowned_field", "severity": "error", "message": "INSERT/UPDATE projections may use only payload, technical, PB-fixed, or server-derived fields.", "fields": sorted(invalid_expected_writes)})
+    forbidden_writes = (actual_insert | actual_update) & (database_defaults | nullable_unused)
+    if forbidden_writes:
+        issues.append({"code": "save_omitted_field_written", "severity": "error", "message": "DB-default and nullable-unused fields must be omitted from generated INSERT/UPDATE projections.", "fields": sorted(forbidden_writes)})
+
+    stripped = _strip_sql_literals_and_comments_for_pb_contract(sql).upper()
+    for field in sorted(database_defaults):
+        if field in actual_xml_fields:
+            issues.append({"code": "save_database_default_field_serialized", "severity": "error", "message": "Fields owned by a DB default must be omitted from the payload.", "field": field})
+    for field in sorted(nullable_unused):
+        if field in actual_xml_fields:
+            issues.append({"code": "save_nullable_unused_field_serialized", "severity": "error", "message": "Nullable fields unused by the PB screen must be omitted from the payload.", "field": field})
+    for field, value_sql in sorted(fixed_values.items()):
+        if field in actual_xml_fields:
+            issues.append({"code": "save_pb_fixed_field_serialized", "severity": "error", "message": "A PB-fixed field must be emitted as its authoritative SQL literal, not accepted from XML.", "field": field})
+        if value_sql.upper() not in sql.upper():
+            issues.append({"code": "save_pb_fixed_value_missing", "severity": "error", "message": "The authoritative PB fixed value is absent from the SAVE SQL.", "field": field, "expected_value_sql": value_sql})
+        if field not in actual_insert | actual_update:
+            issues.append({"code": "save_pb_fixed_field_not_written", "severity": "error", "message": "A PB-fixed field must appear in an authorized target INSERT or UPDATE projection.", "field": field})
+    for field in sorted(payload | set(fixed_values)):
+        if re.search(rf"\b(?:ISNULL|NULLIF)\s*\(\s*(?:[A-Z_][A-Z0-9_$#]*\s*\.\s*)?{re.escape(field)}\b", stripped):
+            issues.append({"code": "save_field_silent_null_default_detected", "severity": "error", "message": "Do not silently rewrite PB payload or fixed fields with ISNULL/NULLIF in SAVE SQL.", "field": field})
+    first_write_index = _first_save_target_write_index(sql, target_table)
+    guard_blocks = list(
+        re.finditer(
+            r"\bIF\s+EXISTS\s*\((?P<query>[\s\S]{0,3200}?)\)\s*BEGIN\b(?P<body>[\s\S]{0,1600}?)\bEND\b",
+            stripped,
+        )
+    )
+    for field in sorted(required):
+        null_pattern = rf"\b{re.escape(field)}\b\s+IS\s+NULL"
+        blank_pattern = rf"\b{re.escape(field)}\b\s*=\s*''"
+        guard = next(
+            (
+                item
+                for item in guard_blocks
+                if re.search(null_pattern, item.group("query"))
+                and (
+                    field not in required_nonblank
+                    or re.search(blank_pattern, item.group("query"))
+                )
+                and re.search(r"\bRAISERROR\s*\(", item.group("body"))
+                and re.search(r"\bRETURN\s*;?", item.group("body"))
+                and (first_write_index is None or item.start() < first_write_index)
+            ),
+            None,
+        )
+        if not guard:
+            issues.append({"code": "save_required_field_fail_fast_guard_missing", "severity": "error", "message": "A required editable field needs a type-appropriate IF EXISTS / BEGIN / RAISERROR / RETURN guard before the first write.", "field": field, "nonblank_required": field in required_nonblank})
+
+    status = "blocked" if issues else "passed"
+    return HarnessResult(
+        success=not issues,
+        stdout="save_field_contract_ok=1" if not issues else "save_field_contract_ok=0",
+        stderr="" if not issues else "SAVE field ownership contract failed",
+        exit_code=0 if not issues else 1,
+        metadata={
+            "status": status,
+            "target_table": target_table,
+            "screen_used_fields": sorted(screen_used),
+            "payload_fields": sorted(payload),
+            "technical_fields": sorted(technical),
+            "required_fields": sorted(required),
+            "required_nonblank_fields": sorted(required_nonblank),
+            "pb_fixed_values": dict(sorted(fixed_values.items())),
+            "database_default_fields": sorted(database_defaults),
+            "server_derived_fields": sorted(server_derived),
+            "nullable_unused_fields": sorted(nullable_unused),
+            "expected_insert_fields": sorted(expected_insert),
+            "actual_insert_fields": sorted(actual_insert),
+            "expected_update_fields": sorted(expected_update),
+            "actual_update_fields": sorted(actual_update),
+            "actual_openxml_fields": sorted(actual_xml_fields),
+            "issues": issues,
+        },
+    )
+
+
 def verify_pb_migration_sp_generation_contract(
     sql_text: str,
     *,
@@ -11045,6 +11402,7 @@ def verify_pb_migration_sp_generation_contract(
     original_sp_text: str | None = None,
     caller_parameter_contract: Any = None,
     external_caller_contract: Any = None,
+    save_field_contract: Any = None,
 ) -> HarnessResult:
     """Check that generated SELECT/SAVE SP work is evidence-gated before it is presented as migration output."""
     sql = str(sql_text or "")
@@ -12143,6 +12501,30 @@ def verify_pb_migration_sp_generation_contract(
             }
         )
 
+    save_field_result: HarnessResult | None = None
+    generated_xml_save = bool(
+        effective_operation != "existing_sp_cleanup"
+        and re.search(r"\bOPENXML\s*\(", upper_unprotected)
+        and re.search(r"\b(?:INSERT\s+INTO|UPDATE)\b", upper_unprotected)
+    )
+    if save_field_contract is not None:
+        save_field_result = verify_pb_migration_save_field_contract(
+            sql,
+            save_field_contract,
+        )
+        issues.extend(save_field_result.metadata.get("issues", []))
+    elif generated_xml_save:
+        issues.append(
+            {
+                "code": "save_field_contract_missing",
+                "severity": "error",
+                "message": (
+                    "XML-based generated SAVE procedures require an evidence-backed field ownership, "
+                    "required-input, and exact INSERT/UPDATE projection contract."
+                ),
+            }
+        )
+
     has_errors = any(issue["severity"] == "error" for issue in issues)
     has_pending = any(issue["severity"] == "pending" for issue in issues)
     passed = not has_errors and not has_pending
@@ -12162,6 +12544,11 @@ def verify_pb_migration_sp_generation_contract(
         "external_caller_contract": external_contract,
         "declared_external_caller_contract": declared_external_contract,
         "body_traceability": body_traceability,
+        "save_field_contract": (
+            save_field_result.metadata
+            if save_field_result is not None
+            else {"status": "missing" if generated_xml_save else "not_applicable"}
+        ),
         "release_readiness": {
             "status": "ready" if passed else "pending" if has_pending and not has_errors else "blocked"
         },
@@ -12352,6 +12739,7 @@ def verify_pb_migration_sp_with_sql_formatting(
     original_sp_text: str | None = None,
     caller_parameter_contract: Any = None,
     external_caller_contract: Any = None,
+    save_field_contract: Any = None,
     draft_final_response: str = "",
     sql_provider_path: str | Path = "",
     selected_active_sql_provider_path: str | Path | None = None,
@@ -12368,6 +12756,7 @@ def verify_pb_migration_sp_with_sql_formatting(
         original_sp_text=original_sp_text,
         caller_parameter_contract=caller_parameter_contract,
         external_caller_contract=external_caller_contract,
+        save_field_contract=save_field_contract,
     )
     binding_success = False
     binding_receipt: Dict[str, Any] = {
@@ -12462,6 +12851,7 @@ def orchestrate_pb_migration_validation(
     sp_operation: str = "new_generation",
     caller_parameter_contract: Any = None,
     external_caller_contract: Any = None,
+    save_field_contract: Any = None,
     draft_final_response: str = "",
     sql_provider_path: str | Path = "",
     selected_active_sql_provider_path: str | Path | None = None,
@@ -12601,6 +12991,7 @@ def orchestrate_pb_migration_validation(
         original_sp_text=original_sql_text if sp_operation == "existing_sp_cleanup" else None,
         caller_parameter_contract=caller_parameter_contract,
         external_caller_contract=external_caller_contract,
+        save_field_contract=save_field_contract,
     )
     stages.append(
         {

@@ -4327,6 +4327,40 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         self.assertIn("join_predicate_alignment_invalid", _issue_codes(wrong_on))
         self.assertIn("join_predicate_alignment_invalid", _issue_codes(wrong_and))
 
+    def test_each_join_on_and_align_to_that_join_token_i_column(self):
+        malformed = (
+            "SELECT A.ID\n"
+            "     , B1.VALUE\n"
+            "     , B2.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B1\n"
+            "                    ON A.ID = B1.ID\n"
+            "                    AND A.TYPE_CD = B1.TYPE_CD\n"
+            "        LEFT OUTER JOIN DETAIL_SECONDARY B2\n"
+            "                              ON A.ID = B2.ID\n"
+            "                              AND A.TYPE_CD = B2.TYPE_CD;\n"
+        )
+
+        invalid = verify_sql_formatting_style(
+            malformed,
+            malformed,
+            alias_role_plan=self._role_plan(numbered_support=True),
+        )
+        normalized = normalize_sql_join_layout(malformed)
+        repaired = verify_sql_formatting_style(
+            normalized,
+            normalized,
+            alias_role_plan=self._role_plan(numbered_support=True),
+        )
+        lines = normalized.splitlines()
+
+        self.assertIn("join_predicate_alignment_invalid", _issue_codes(invalid))
+        for join_index in (4, 7):
+            expected_column = lines[join_index].index("JOIN") + 2
+            self.assertEqual(lines[join_index + 1].index("ON"), expected_column)
+            self.assertEqual(lines[join_index + 2].index("AND"), expected_column)
+        self.assertTrue(repaired.success, repaired.to_dict())
+
     def test_tsql_join_hints_are_part_of_the_line_leading_join_clause(self):
         cases = {
             "loop": ("INNER LOOP JOIN", 21),
@@ -4393,6 +4427,71 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
 
         self.assertFalse(result.success, result.to_dict())
         self.assertIn("join_predicate_alignment_invalid", _issue_codes(result))
+
+    def test_line_leading_same_join_or_must_align_and_normalizer_repairs_it(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                     ON A.ID = B.ID\n"
+            "              OR B.FALLBACK_ID = A.ID;\n"
+        )
+
+        invalid = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+        normalized = normalize_sql_join_layout(sql)
+        repaired = verify_sql_formatting_style(
+            normalized,
+            normalized,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertIn("join_predicate_alignment_invalid", _issue_codes(invalid))
+        self.assertIn("                     OR B.FALLBACK_ID = A.ID;", normalized)
+        self.assertTrue(repaired.success, repaired.to_dict())
+
+    def test_grouped_or_aligns_but_case_and_nested_select_or_are_excluded(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "                     ON (\n"
+            "                         A.ID = B.ID\n"
+            "                    OR A.TYPE_CD = B.TYPE_CD\n"
+            "                        )\n"
+            "                     AND B.FLAG_YN = CASE WHEN A.MODE_CD = 'X'\n"
+            "          OR A.CODE = B.CODE THEN 'Y' ELSE 'N' END\n"
+            "                     AND B.MATCH_ID = (\n"
+            "                             SELECT X.MATCH_ID\n"
+            "                             FROM MATCH_TABLE X\n"
+            "                             WHERE X.ID = B.ID\n"
+            "          OR X.ACTIVE_YN = 'Y'\n"
+            "                         );\n"
+        )
+
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=self._role_plan(),
+        )
+        normalized = normalize_sql_join_layout(sql)
+        repaired = verify_sql_formatting_style(
+            normalized,
+            normalized,
+            alias_role_plan=self._role_plan(),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("join_predicate_alignment_invalid", _issue_codes(result))
+        self.assertIn("                     OR A.TYPE_CD = B.TYPE_CD", normalized)
+        self.assertIn("          OR A.CODE = B.CODE", normalized)
+        self.assertIn("          OR X.ACTIVE_YN = 'Y'", normalized)
+        self.assertTrue(repaired.success, repaired.to_dict())
 
     def test_nested_select_and_is_not_an_outer_join_continuation(self):
         sql = (
