@@ -9,13 +9,8 @@ from typing import Any, Dict, Iterable, List, Sequence
 
 from src.orchestration.plugin_composition import CapabilityProvider, compose_plugin_route
 from src.orchestration.goal_runtime import build_goal_activation
+from src.orchestration.request_act_parser import parse_request_act
 from src.orchestration.request_classifier import classify_request
-from src.orchestration.skill_application import (
-    BUNDLE_MEMBER_SKILLS,
-    SkillApplicationStatus,
-    build_large_work_orchestration_bundle,
-    validate_large_work_orchestration_bundle,
-)
 from src.skills.token_optimizer import compare_token_usage
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 from src.skills.uaf_skill_validator import (
@@ -365,7 +360,13 @@ def build_kh_front_door(
         },
     )
     context = _normalize_active_resume_goal_context(context)
-    classification = classify_request(prompt, context).to_dict()
+    request_analysis = parse_request_act(prompt, context)
+    classification_result = classify_request(
+        prompt,
+        context,
+        request_analysis=request_analysis,
+    )
+    classification = classification_result.to_dict()
     goal_activation = build_goal_activation(
         classification,
         str(project_path),
@@ -382,7 +383,13 @@ def build_kh_front_door(
             include_canonical_host_sql=micro,
         )
     )
-    plugin_route = compose_plugin_route(prompt, providers=provider_snapshot, context=context).to_dict()
+    plugin_route = compose_plugin_route(
+        prompt,
+        providers=provider_snapshot,
+        context=context,
+        classification=classification_result,
+        request_analysis=request_analysis,
+    ).to_dict()
     recommended_skills = _recommended_skills(classification, plugin_route)
     if micro and skill_source.exists:
         targeted_names = _micro_packaged_skill_names(recommended_skills, plugin_route)
@@ -439,6 +446,8 @@ def build_kh_front_door(
     large_work_bundle = None
     large_work_validation = None
     if classification.get("complexity") in {"heavy", "high_risk"}:
+        from src.orchestration.skill_application import validate_large_work_orchestration_bundle
+
         bundle = _build_front_door_bundle(
             prompt,
             classification,
@@ -1402,13 +1411,14 @@ def _status(
     evidence_keys: Sequence[str],
     blocked_reason: str = "",
 ) -> Dict[str, Any]:
-    return SkillApplicationStatus(
-        status=status,
-        application_mode=application_mode,
-        evidence_note=evidence_note,
-        evidence_keys=list(evidence_keys),
-        blocked_reason=blocked_reason,
-    ).to_dict()
+    return {
+        "status": status,
+        "application_mode": application_mode,
+        "evidence_note": evidence_note,
+        "evidence_keys": list(evidence_keys),
+        "blocked_reason": blocked_reason,
+        "metadata": {},
+    }
 
 
 def _build_front_door_bundle(
@@ -1419,6 +1429,11 @@ def _build_front_door_bundle(
     project: str = "",
     context: Dict[str, Any] | None = None,
 ):
+    from src.orchestration.skill_application import (
+        BUNDLE_MEMBER_SKILLS,
+        build_large_work_orchestration_bundle,
+    )
+
     context = context or {}
     overrides: Dict[str, Dict[str, Any]] = {}
     for skill in BUNDLE_MEMBER_SKILLS:
@@ -2291,9 +2306,12 @@ def _execution_gate(
     reasons = set(classification.get("reasons", []) or [])
     intent = classification.get("intent", {})
     if (
-        isinstance(intent, dict)
-        and intent.get("execution_authorization") is False
-        and intent.get("conversation_pause_requested") is not True
+        (
+            isinstance(intent, dict)
+            and intent.get("execution_authorization") is False
+            and intent.get("conversation_pause_requested") is not True
+        )
+        or "execution_authorization_pending" in reasons
     ):
         return {
             "status": "blocked_until_execution_authorization",
@@ -2314,7 +2332,12 @@ def _execution_gate(
                 "completion_claim",
             ],
         }
-    if reasons & {"readonly_source_audit_request", "readonly_source_condition_question"}:
+    if reasons & {
+        "readonly_source_audit_request",
+        "readonly_source_condition_question",
+        "structural_readonly_inspection",
+        "current_source_security_inspection",
+    }:
         return {
             "status": "execution_allowed_readonly_analysis",
             "can_execute": True,
@@ -2399,7 +2422,20 @@ def _execution_gate(
                 "automatic_goal_continuation",
             ],
         }
-    if "credential-safety-harness" in recommended_skills and _needs_credential_safety_harness(classification):
+    credential_access_priority = "credential_access_gate_priority" in set(
+        classification.get("reasons", []) or []
+    )
+    if (
+        "credential-safety-harness" in recommended_skills
+        and _needs_credential_safety_harness(classification)
+        and (
+            credential_access_priority
+            or (
+                classification.get("complexity") not in {"heavy", "high_risk"}
+                and classification.get("recommended_execution") != "role_dag"
+            )
+        )
+    ):
         return {
             "status": "blocked_until_credential_safety_gate",
             "can_execute": False,

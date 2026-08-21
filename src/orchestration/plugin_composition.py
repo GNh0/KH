@@ -4,6 +4,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Iterable, List, Set
 
+from src.orchestration.request_act_parser import RequestActAnalysis, parse_request_act
 from src.orchestration.request_classifier import RequestClassification, classify_request
 
 
@@ -126,12 +127,15 @@ SPECIALIST_TRIGGERS = {
 }
 
 SQL_STATEMENT_PATTERN = re.compile(
-    r"\b(?:select|insert\s+into|update|delete\s+from|merge|exec(?:ute)?|if\s+exists|raiserror|throw|openxml|begin\s+tran|rollback|create\s+(?:or\s+alter\s+)?procedure)\b",
+    r"\b(?:select|insert\s+into|update\s+[\[\]a-z0-9_.]+(?:\s+with\s*\([^)]*\))?\s+set|delete\s+from|merge|"
+    r"drop\s+(?:table|database|schema|view|index|procedure)|truncate\s+table|"
+    r"alter\s+(?:table|view|procedure)|create\s+(?:or\s+alter\s+)?(?:table|view|procedure)|"
+    r"exec(?:ute)?|if\s+exists|raiserror|throw|openxml|begin\s+tran|rollback)\b",
     re.IGNORECASE,
 )
 SQL_NAMED_DML_PATTERN = re.compile(r"\b(?:insert|update|delete|merge)\b", re.IGNORECASE)
 SQL_CONTEXT_PATTERN = re.compile(
-    r"\b(?:from|where|join|set|values|group\s+by|order\s+by|procedure|proc|exec(?:ute)?|raiserror|openxml|if\s+exists|저장\s*프로시저|프로시저)\b|@[a-z_][a-z0-9_]*",
+    r"\b(?:from|where|join|set|values|group\s+by|order\s+by|table|database|schema|view|index|procedure|proc|exec(?:ute)?|raiserror|openxml|if\s+exists|저장\s*프로시저|프로시저)\b|@[a-z_][a-z0-9_]*",
     re.IGNORECASE,
 )
 SQL_OUTPUT_REQUEST_MARKERS = (
@@ -143,6 +147,9 @@ SQL_OUTPUT_REQUEST_MARKERS = (
     "organize",
     "standardize",
     "refactor",
+    "review",
+    "inspect",
+    "check",
     "rewrite",
     "write",
     "create",
@@ -160,6 +167,10 @@ SQL_OUTPUT_REQUEST_MARKERS = (
     "change",
     "modify",
     "\uc815\ub9ac",
+    "\ud3ec\ub9f7",
+    "\uac80\ud1a0",
+    "\ub9ac\ubdf0",
+    "\uc810\uac80",
     "\uc791\uc131",
     "\ub9cc\ub4e4",
     "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800",
@@ -428,20 +439,63 @@ def compose_plugin_route(
     text: str,
     providers: Iterable[CapabilityProvider | Dict[str, Any]] | None = None,
     context: Dict[str, Any] | None = None,
+    classification: RequestClassification | None = None,
+    request_analysis: RequestActAnalysis | None = None,
 ) -> PluginCompositionDecision:
-    """Choose a direct, single-provider, hybrid, or clarification route by capability."""
+    """Choose a route by capability, reusing an upstream classification when supplied."""
     context = context or {}
     provider_list = [_normalize_provider(provider) for provider in providers or []]
     available = [provider for provider in provider_list if _provider_is_compatible(provider)]
-    classification = classify_request(text, context)
-    lowered = str(text or "").lower()
+    request_analysis = request_analysis or parse_request_act(text, context)
+    classification = classification or classify_request(
+        text,
+        context,
+        request_analysis=request_analysis,
+    )
+    lowered = str(request_analysis.outer_text or text or "").lower()
     reasons: List[str] = []
+    active_sql_specialist = bool(
+        "sql_formatting_style_request" in classification.reasons
+        or looks_like_sql_output_request(text, request_analysis)
+    )
+    blocked_specialist_capabilities = (
+        {"sql_formatting"}
+        if "outer_database_execution_authorized" in classification.reasons
+        else set()
+    )
 
     def decide(**kwargs: Any) -> PluginCompositionDecision:
         return _decision(provider_evidence=provider_list, **kwargs)
 
     sql_meta_review = _has_sql_meta_review_context(lowered)
-    explicit_provider = None if sql_meta_review else _explicit_provider_request(lowered, provider_list)
+    explicit_provider = (
+        None
+        if sql_meta_review
+        else _explicit_provider_request(lowered, provider_list)
+    )
+    if (
+        explicit_provider is not None
+        and "sql_formatting" in blocked_specialist_capabilities
+        and "sql_formatting" in explicit_provider.capabilities
+    ):
+        explicit_provider = None
+    explicit_provider_invoked = bool(
+        explicit_provider
+        and _provider_invocation_requested(lowered, explicit_provider)
+    )
+    if (
+        classification.recommended_execution == "direct_answer"
+        and not active_sql_specialist
+        and not explicit_provider_invoked
+    ):
+        return decide(
+            route="direct",
+            controller=_none_role(),
+            providers=available,
+            classification=classification,
+            reasons=["classification:direct_answer"],
+            unavailable_capabilities={},
+        )
     if explicit_provider:
         if not _provider_is_compatible(explicit_provider):
             compatibility = str(
@@ -454,7 +508,14 @@ def compose_plugin_route(
                 f"provider:{explicit_provider.provider_id}": provider_reason
             }
             if "sql_formatting" in explicit_provider.capabilities:
-                unavailable.update(_unavailable_specialists(lowered, available, provider_list))
+                unavailable.update(
+                    _unavailable_specialists(
+                        lowered,
+                        available,
+                        provider_list,
+                        sql_output_request=active_sql_specialist,
+                    )
+                )
                 reasons.append(f"explicit_provider_unavailable:{explicit_provider.provider_id}")
                 return decide(
                     route="blocked",
@@ -469,7 +530,13 @@ def compose_plugin_route(
             fallback_provider = _best_controller_provider(classification, available)
             if fallback_provider and classification.complexity not in {"light", "ambiguous"}:
                 controller = _controller_role(fallback_provider, "fallback_after_explicit_provider_unavailable")
-                assistants = _assistant_roles(lowered, available, {fallback_provider.provider_id})
+                assistants = _assistant_roles(
+                    lowered,
+                    available,
+                    {fallback_provider.provider_id},
+                    blocked_specialist_capabilities,
+                    sql_output_request=active_sql_specialist,
+                )
                 reasons.extend(
                     [
                         f"explicit_provider_unavailable:{explicit_provider.provider_id}",
@@ -502,7 +569,13 @@ def compose_plugin_route(
                 confidence=min(classification.confidence, 0.55),
             )
         controller = _controller_role(explicit_provider, "explicit_user_request")
-        assistants = _assistant_roles(lowered, available, {explicit_provider.provider_id})
+        assistants = _assistant_roles(
+            lowered,
+            available,
+            {explicit_provider.provider_id},
+            blocked_specialist_capabilities,
+            sql_output_request=active_sql_specialist,
+        )
         reasons.append(f"explicit_user_request:{explicit_provider.provider_id}")
         return decide(
             route="hybrid" if assistants else "single",
@@ -514,14 +587,56 @@ def compose_plugin_route(
             explicit_user_request=True,
         )
 
-    specialist_controller = _single_specialist_controller(lowered, available)
-    if specialist_controller and _allow_single_specialist_controller(
+    specialist_controller = _single_specialist_controller(
         lowered,
-        specialist_controller,
-        classification.complexity,
+        available,
+        blocked_specialist_capabilities,
+        sql_output_request=active_sql_specialist,
+    )
+    specialist_from_classification = bool(
+        specialist_controller is not None
+        and specialist_controller.capability == "sql_formatting"
+        and "sql_formatting_style_request" in classification.reasons
+        and not _looks_like_stored_procedure_output_request(lowered)
+        and "sql_formatting" not in blocked_specialist_capabilities
+    )
+    if (
+        specialist_controller is None
+        and "sql_formatting_style_request" in classification.reasons
+        and not _looks_like_stored_procedure_output_request(lowered)
+        and "sql_formatting" not in blocked_specialist_capabilities
+    ):
+        sql_provider = _best_provider_for_capability(
+            "sql_formatting",
+            available,
+            set(),
+        )
+        if sql_provider is not None:
+            specialist_from_classification = True
+            specialist_controller = ProviderRole(
+                provider_id=sql_provider.provider_id,
+                capability="sql_formatting",
+                scope=_scope_for_capability("sql_formatting"),
+                reason="classification_trigger",
+                metadata=dict(sql_provider.metadata),
+            )
+    if specialist_controller and (
+        specialist_from_classification
+        or _allow_single_specialist_controller(
+            lowered,
+            specialist_controller,
+            classification.complexity,
+            sql_output_request=active_sql_specialist,
+        )
     ):
         reasons.append(f"specialist_trigger:{specialist_controller.provider_id}:{specialist_controller.capability}")
-        assistants = _assistant_roles(lowered, available, {specialist_controller.provider_id})
+        assistants = _assistant_roles(
+            lowered,
+            available,
+            {specialist_controller.provider_id},
+            blocked_specialist_capabilities,
+            sql_output_request=active_sql_specialist,
+        )
         return decide(
             route="hybrid" if assistants else "single",
             controller=specialist_controller,
@@ -529,13 +644,24 @@ def compose_plugin_route(
             providers=available,
             classification=classification,
             reasons=reasons,
-            unavailable_capabilities=_unavailable_specialists(lowered, available, provider_list),
+            unavailable_capabilities=_unavailable_specialists(
+                lowered,
+                available,
+                provider_list,
+                sql_output_request=active_sql_specialist,
+            ),
         )
 
     project_provider = _project_context_provider(context, available)
     if project_provider and classification.complexity != "light":
         controller = _controller_role(project_provider, f"project_context:{project_provider.provider_id}")
-        assistants = _assistant_roles(lowered, available, {project_provider.provider_id})
+        assistants = _assistant_roles(
+            lowered,
+            available,
+            {project_provider.provider_id},
+            blocked_specialist_capabilities,
+            sql_output_request=active_sql_specialist,
+        )
         reasons.append(f"project_context:{project_provider.provider_id}")
         return decide(
             route="hybrid" if assistants else "single",
@@ -544,7 +670,12 @@ def compose_plugin_route(
             providers=available,
             classification=classification,
             reasons=reasons,
-            unavailable_capabilities=_unavailable_specialists(lowered, available, provider_list),
+            unavailable_capabilities=_unavailable_specialists(
+                lowered,
+                available,
+                provider_list,
+                sql_output_request=active_sql_specialist,
+            ),
         )
 
     if classification.complexity == "ambiguous":
@@ -558,7 +689,12 @@ def compose_plugin_route(
         )
 
     if classification.complexity == "light":
-        unavailable = _unavailable_specialists(lowered, available, provider_list)
+        unavailable = _unavailable_specialists(
+            lowered,
+            available,
+            provider_list,
+            sql_output_request=active_sql_specialist,
+        )
         return decide(
             route="blocked" if "sql_formatting" in unavailable else "direct",
             controller=_none_role(),
@@ -575,7 +711,14 @@ def compose_plugin_route(
     controller_provider = _best_controller_provider(classification, available)
     if controller_provider is None:
         missing = {"workflow_control": "host_default_or_direct_execution"} if classification.complexity in {"heavy", "high_risk"} else {}
-        missing.update(_unavailable_specialists(lowered, available, provider_list))
+        missing.update(
+            _unavailable_specialists(
+                lowered,
+                available,
+                provider_list,
+                sql_output_request=active_sql_specialist,
+            )
+        )
         return decide(
             route=(
                 "blocked"
@@ -591,8 +734,19 @@ def compose_plugin_route(
             confidence=min(classification.confidence, 0.55),
         )
 
-    assistants = _assistant_roles(lowered, available, {controller_provider.provider_id})
-    unavailable = _unavailable_specialists(lowered, available, provider_list)
+    assistants = _assistant_roles(
+        lowered,
+        available,
+        {controller_provider.provider_id},
+        blocked_specialist_capabilities,
+        sql_output_request=active_sql_specialist,
+    )
+    unavailable = _unavailable_specialists(
+        lowered,
+        available,
+        provider_list,
+        sql_output_request=active_sql_specialist,
+    )
     reasons.extend(_controller_reasons(controller_provider))
     return decide(
         route="hybrid" if assistants else "single",
@@ -743,6 +897,21 @@ def _explicit_provider_request(text: str, providers: List[CapabilityProvider]) -
     return matches[0] if matches else None
 
 
+def _provider_invocation_requested(text: str, provider: CapabilityProvider) -> bool:
+    names = {provider.provider_id, provider.display_name.lower(), *provider.aliases}
+    for name in names:
+        normalized = str(name or "").strip().lower()
+        if not normalized:
+            continue
+        if f"@{normalized}" in text or f"plugin://{normalized}" in text:
+            return True
+        if _has_invocation_context(text, normalized):
+            return True
+        if _explicit_provider_is_required(text, provider):
+            return True
+    return False
+
+
 def _explicit_provider_name_match(text: str, name: str) -> bool:
     normalized = str(name or "").strip().lower()
     if not normalized:
@@ -765,8 +934,7 @@ def _contains_provider_name(text: str, name: str) -> bool:
 def _has_invocation_context(text: str, name: str) -> bool:
     lead = "|".join(re.escape(item) for item in EXPLICIT_PROVIDER_LEADS)
     lead_pattern = rf"(?<![a-z0-9])(?:{lead})(?:\s+(?:the|a|an))?\s+{re.escape(name)}(?![a-z0-9])"
-    suffix_pattern = rf"(?<![a-z0-9]){re.escape(name)}\s+(?:plugin|tool|skill|provider|connector)(?![a-z0-9])"
-    return bool(re.search(lead_pattern, text) or re.search(suffix_pattern, text))
+    return bool(re.search(lead_pattern, text))
 
 
 def _has_provider_mention_only_context(text: str, name: str) -> bool:
@@ -859,11 +1027,22 @@ def _assistant_roles(
     text: str,
     providers: List[CapabilityProvider],
     excluded_provider_ids: Set[str],
+    excluded_capabilities: Set[str] | None = None,
+    *,
+    sql_output_request: bool | None = None,
 ) -> List[ProviderRole]:
     roles: List[ProviderRole] = []
     used_capabilities: Set[str] = set()
+    excluded_capabilities = excluded_capabilities or set()
     for capability, triggers in SPECIALIST_TRIGGERS.items():
-        if not _contains_specialist_trigger(text, capability, triggers):
+        if capability in excluded_capabilities:
+            continue
+        if not _contains_specialist_trigger(
+            text,
+            capability,
+            triggers,
+            sql_output_request=sql_output_request,
+        ):
             continue
         provider = _best_provider_for_capability(capability, providers, excluded_provider_ids)
         if provider is None or capability in used_capabilities:
@@ -884,8 +1063,17 @@ def _assistant_roles(
 def _single_specialist_controller(
     text: str,
     providers: List[CapabilityProvider],
+    excluded_capabilities: Set[str] | None = None,
+    *,
+    sql_output_request: bool | None = None,
 ) -> ProviderRole | None:
-    roles = _assistant_roles(text, providers, set())
+    roles = _assistant_roles(
+        text,
+        providers,
+        set(),
+        excluded_capabilities,
+        sql_output_request=sql_output_request,
+    )
     if not roles:
         return None
     provider_ids = {role.provider_id for role in roles}
@@ -901,7 +1089,12 @@ def _single_specialist_controller(
     )
 
 
-def _allow_single_sql_specialist_for_one_off_request(text: str, role: ProviderRole) -> bool:
+def _allow_single_sql_specialist_for_one_off_request(
+    text: str,
+    role: ProviderRole,
+    *,
+    sql_output_request: bool | None = None,
+) -> bool:
     if role.capability != "sql_formatting":
         return False
     broad_markers = (
@@ -930,7 +1123,9 @@ def _allow_single_sql_specialist_for_one_off_request(text: str, role: ProviderRo
     )
     if any(marker in f" {text} " for marker in broad_markers):
         return False
-    if looks_like_sql_output_request(text):
+    if sql_output_request is True:
+        return True
+    if sql_output_request is None and looks_like_sql_output_request(text):
         return True
     return _looks_like_one_off_sql_style_request(text)
 
@@ -947,6 +1142,13 @@ def _looks_like_one_off_sql_style_request(text: str) -> bool:
             " refactor ",
             " readability ",
             " align ",
+            " review ",
+            " inspect ",
+            " check ",
+            " \uac80\ud1a0 ",
+            " \ub9ac\ubdf0 ",
+            " \uc810\uac80 ",
+            " \ud3ec\ub9f7",
         ]
     ) and any(
         marker in normalized
@@ -959,9 +1161,19 @@ def _looks_like_one_off_sql_style_request(text: str) -> bool:
     )
 
 
-def _allow_single_specialist_controller(text: str, role: ProviderRole, complexity: str) -> bool:
+def _allow_single_specialist_controller(
+    text: str,
+    role: ProviderRole,
+    complexity: str,
+    *,
+    sql_output_request: bool | None = None,
+) -> bool:
     if role.capability == "sql_formatting":
-        return _allow_single_sql_specialist_for_one_off_request(text, role)
+        return complexity in {"light", "medium"} and _allow_single_sql_specialist_for_one_off_request(
+            text,
+            role,
+            sql_output_request=sql_output_request,
+        )
     return complexity in {"light", "medium"}
 
 
@@ -969,11 +1181,18 @@ def _unavailable_specialists(
     text: str,
     providers: List[CapabilityProvider],
     all_providers: List[CapabilityProvider] | None = None,
+    *,
+    sql_output_request: bool | None = None,
 ) -> Dict[str, str]:
     unavailable: Dict[str, str] = {}
     all_providers = all_providers or providers
     for capability, triggers in SPECIALIST_TRIGGERS.items():
-        if not _contains_specialist_trigger(text, capability, triggers):
+        if not _contains_specialist_trigger(
+            text,
+            capability,
+            triggers,
+            sql_output_request=sql_output_request,
+        ):
             continue
         if _best_provider_for_capability(capability, providers, set()) is None:
             if capability == "sql_formatting":
@@ -1097,7 +1316,15 @@ def _contains_any(text: str, needles: Iterable[str]) -> bool:
     return False
 
 
-def _contains_specialist_trigger(text: str, capability: str, needles: Iterable[str]) -> bool:
+def _contains_specialist_trigger(
+    text: str,
+    capability: str,
+    needles: Iterable[str],
+    *,
+    sql_output_request: bool | None = None,
+) -> bool:
+    if capability == "sql_formatting" and sql_output_request is not None:
+        return sql_output_request
     if capability == "sql_formatting" and _has_sql_meta_review_context(text):
         return False
     if capability == "sql_formatting" and looks_like_sql_output_request(text):
@@ -1128,16 +1355,28 @@ def _contains_specialist_trigger(text: str, capability: str, needles: Iterable[s
     return False
 
 
-def looks_like_sql_output_request(text: str) -> bool:
+def looks_like_sql_output_request(
+    text: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
     """Detect actionable SQL/T-SQL output requests without requiring the user to name a skill."""
-    lowered = str(text or "").lower()
+    analysis = analysis or parse_request_act(text)
+    lowered = str(analysis.outer_text or text or "").lower()
+    if analysis.outer_database_execution:
+        return False
+    if analysis.bounded_sql_request:
+        return True
     if _has_sql_meta_review_context(lowered):
         return False
     if _looks_like_named_dml_sql_style_request(lowered):
         return True
     if _looks_like_stored_procedure_output_request(lowered):
         return True
-    if not SQL_STATEMENT_PATTERN.search(lowered) or not SQL_CONTEXT_PATTERN.search(lowered):
+    has_sql_payload = any(span.kind == "sql" for span in analysis.payload_spans)
+    if not has_sql_payload and (
+        not SQL_STATEMENT_PATTERN.search(lowered)
+        or not SQL_CONTEXT_PATTERN.search(lowered)
+    ):
         return False
     if _has_sql_equivalence_question_without_output_request(lowered):
         return False

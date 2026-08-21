@@ -163,7 +163,8 @@ class KhFrontDoorTests(unittest.TestCase):
                 )
         summary = result.to_summary_dict()
 
-        self.assertEqual(summary["classification"]["complexity"], "light")
+        self.assertEqual(summary["classification"]["complexity"], "medium")
+        self.assertEqual(summary["classification"]["recommended_execution"], "skill_read")
         self.assertEqual(summary["plugin_route"]["route"], "single")
         self.assertEqual(summary["plugin_route"]["controller"], "sql-formatting")
         self.assertTrue(

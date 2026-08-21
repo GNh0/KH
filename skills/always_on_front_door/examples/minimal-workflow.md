@@ -10,14 +10,14 @@ Create the approved project-appropriate deliverables in this folder and verify t
 
 The user did not name KH, UAF, skills, or harnesses.
 
-The same bootstrap applies to short requests such as `1+1?`, `Translate hello`, or `Format this SQL: SELECT ...`.
+The same semantic intake applies to short requests. `1+1?` and a context-free `Translate hello` may use the host-native fast path. `Format this SQL: SELECT ...` requires the SQL specialist runtime route.
 
 It also applies before a clarification such as `Which folder should I use?`; asking a question is still a response to a new user task.
 
 ## Expected steps
 
 1. Recognize this as work-bearing because it edits project files and needs verification.
-2. Run front-door intake before reading source files, doing a memory quick pass, checking the target folder, or writing output:
+2. Because this request requires files, an artifact, and verification, reject the host-native fast path and run governed front-door intake before reading source files, doing a memory quick pass, checking the target folder, or writing output:
 
 ```bash
 python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd>" --host codex --summary --strict-execution-gate
@@ -28,7 +28,7 @@ python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt f
 5. Keep implementation, QA, review, and completion skills as selected-not-executed until their own evidence exists.
 6. Continue with the implementation plan and fresh verification.
 
-For short/direct work, use `--micro-summary` as the normal machine bootstrap. The runtime may return a micro packet with `cls.x=direct`, `g.ok=true`, and no `next` list. Answer directly at that point without opening another skill. For SQL formatting, the ordered next skills must be `sql-formatting` followed by `sql-formatting-style-harness`.
+For a high-confidence direct/meta, non-specialist, non-stateful request with no read-only tool/source need, mutation, persistence, credentials, risk, artifact, verification, or governed work, use the host-native semantic fast path. Do not launch Python or open another skill. Record `governed_runtime_executed=false`, `runtime_applied_skills=[]`, and Token Optimizer `considered_not_needed` or `passthrough`. For SQL formatting, invoke runtime; the ordered next skills must be `sql-formatting` followed by `sql-formatting-style-harness`.
 
 A bounded confirmation may reuse the current receipt only while this same task remains unfinished and unchanged. After completion, for a new task, or when the user adds work, run front-door again.
 
@@ -46,7 +46,7 @@ A bounded confirmation may reuse the current receipt only while this same task r
 
 - The assistant starts with `ls`, source reads, memory quick pass, image generation, browser testing, or file writes before intake.
 - The assistant reads this `SKILL.md` and searches `MEMORY.md` in the same first parallel batch before the front-door command.
-- The host decides a request is trivial and answers, translates, rewrites, looks up, calculates, or reads the SQL provider before running front-door.
+- The host uses the fast path for a current lookup, ambiguous rewrite/translation, SQL specialist request, source read, mutation, state, artifact, or verification.
 - The manifest is treated as proof that the host auto-selected KH; compliance was not audited from runtime evidence.
 - The assistant reads `SKILL.md` but never runs front-door intake.
 - The assistant waits for `/KH`, a KH/UAF mention, or a plugin manifest prompt before invoking this skill.
@@ -57,4 +57,4 @@ A bounded confirmation may reuse the current receipt only while this same task r
 
 The task is done when the requested artifact is created, fresh verification is reported, and the session audit shows front-door runtime evidence.
 
-A direct response is allowed only when valid runtime output for the current request reports a direct classification and execution authorization.
+A direct response is allowed after either a valid host-native eligibility decision with no tool/skill boundary, or valid runtime output reporting a direct classification and execution authorization.

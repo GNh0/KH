@@ -8,7 +8,7 @@ The user did not mention KH, UAF, plugins, skills, harnesses, routing, or orches
 
 ## Expected steps
 
-1. Run the automatic intake command against the target folder.
+1. Reject the host-native fast path because the request needs a target-folder read, artifact creation, and verification, then run the automatic intake command against the target folder.
 2. Confirm the request is implementation work rather than a direct answer.
 3. Record the selected development, goal, verification, and review-related skills as selected for follow-up.
 4. Only mark the intake components as runtime-applied at this stage.
@@ -37,10 +37,12 @@ The user did not mention KH, UAF, plugins, skills, harnesses, routing, or orches
 - The agent reports every selected skill as applied.
 - A long log summary is routed as full implementation instead of command-output/token optimization work.
 - A simple definition is made heavy without project or risk evidence.
+- A host-native direct turn claims `runtime_applied_skills` or governed execution merely because `SKILL.md` was read.
+- A request needing source/tool access, a specialist, mutation, state, credentials, risk handling, an artifact, or verification bypasses runtime.
 
 ## Done criteria
 
-The user can give an ordinary task without naming KH. Plugin instructions request intake, and the audit proves whether the host actually invoked it or records a bootstrap miss; manifest text alone is never treated as automatic execution evidence.
+The user can give an ordinary task without naming KH. Plugin instructions request semantic intake, and the evidence distinguishes a no-tool host-native direct decision from governed runtime execution or a bootstrap miss; manifest or skill text alone is never treated as execution evidence.
 
 ## Runtime binding
 

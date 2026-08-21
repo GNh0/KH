@@ -22,6 +22,7 @@ from src.skills.sql_formatting_provider import (
     attach_sql_provider_selection_runtime_receipt,
     sql_provider_selection_sha256,
 )
+from src.skills.sql_formatting_style import verify_sql_formatting_style
 
 
 class SessionSkillAuditTests(unittest.TestCase):
@@ -3801,6 +3802,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         candidate_path = root / "candidate.sql"
         response_path = root / "response.md"
         selection_path = root / "provider-selection.json"
+        history_path = root / "verifier-history.json"
         session_id = "session-audit"
         invocation_nonce = "real-cli-session-0001"
         provider_selection = self.sql_front_door_output(
@@ -3812,6 +3814,12 @@ class SessionSkillAuditTests(unittest.TestCase):
         response_path.write_text(final_response, encoding="utf-8")
         selection_path.write_text(
             json.dumps(provider_selection),
+            encoding="utf-8",
+        )
+        history_path.write_text(
+            json.dumps(
+                [verify_sql_formatting_style(original_sql, formatted_sql).to_dict()]
+            ),
             encoding="utf-8",
         )
         command = [
@@ -3830,6 +3838,8 @@ class SessionSkillAuditTests(unittest.TestCase):
             str(provider_path),
             "--provider-selection-file",
             str(selection_path),
+            "--verifier-history-file",
+            str(history_path),
             "--session-id",
             session_id,
             "--invocation-nonce",
@@ -8012,7 +8022,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_kh_front_door_output_from_plugin_cache_counts_as_runtime_status_split(self):
+    def test_uncorrelated_plugin_cache_front_door_output_is_claimed_unverified(self):
         front_door_output = {
             "front_door_status": "ok",
             "classification": {"complexity": "heavy", "domain": "software"},
@@ -8059,18 +8069,11 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         rows = {row["name"]: row for row in audit.skills}
 
-        self.assertEqual(rows["always-on-front-door"]["acceptance"]["status"], "passed")
-        self.assertEqual(rows["automatic-intake-harness"]["acceptance"]["status"], "passed")
-        self.assertIn("plugin-composition-policy", audit.coverage["runtime_applied_skill_names"])
-        self.assertIn("request-complexity-router", audit.coverage["runtime_applied_skill_names"])
-        self.assertIn("skill-catalog", audit.coverage["runtime_applied_skill_names"])
-        self.assertFalse(
-            any(
-                issue["skill"] in {"always-on-front-door", "automatic-intake-harness"}
-                and issue["status"] == "missing_outputs"
-                for issue in audit.issues
-            )
-        )
+        self.assertEqual(rows["always-on-front-door"]["status"], "claimed_unverified")
+        self.assertEqual(rows["automatic-intake-harness"]["status"], "claimed_unverified")
+        self.assertNotIn("plugin-composition-policy", audit.coverage["runtime_applied_skill_names"])
+        self.assertNotIn("request-complexity-router", audit.coverage["runtime_applied_skill_names"])
+        self.assertNotIn("skill-catalog", audit.coverage["runtime_applied_skill_names"])
 
     def test_immediate_next_skill_requires_followup_runtime_evidence(self):
         front_door_output = {
@@ -9725,7 +9728,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_direct_compact_front_door_receipt_satisfies_empty_status_split(self):
+    def test_uncorrelated_direct_compact_front_door_receipt_is_unverified(self):
         receipt = build_kh_front_door(
             "What is 1 + 1?",
             project=Path(__file__).resolve().parents[1],
@@ -9763,19 +9766,9 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         front_door = next(skill for skill in audit.skills if skill["name"] == "always-on-front-door")
 
-        self.assertEqual(front_door["acceptance"]["status"], "passed")
-        self.assertEqual(
-            front_door["acceptance"]["satisfied_outputs"],
-            ["intake_evidence", "status_split"],
-        )
-        self.assertEqual(front_door["acceptance"]["missing_outputs"], [])
-        self.assertFalse(
-            any(
-                issue["skill"] == "always-on-front-door"
-                and issue["status"] == "missing_outputs"
-                for issue in audit.issues
-            )
-        )
+        self.assertEqual(front_door["status"], "claimed_unverified")
+        self.assertEqual(front_door["acceptance"]["status"], "missing_application")
+        self.assertEqual(front_door["acceptance"]["satisfied_outputs"], [])
 
     def test_micro_front_door_token_decision_is_auditable_runtime_evidence(self):
         receipt = self.producer_micro_receipt()
@@ -12936,7 +12929,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_aggregate_applied_status_accepts_nonempty_runtime_evidence(self):
+    def test_uncorrelated_aggregate_runtime_evidence_remains_unverified(self):
         front_door_output = {
             "front_door_status": "ok",
             "runtime_applied_skills": ["always-on-front-door", "workflow-usability-harness"],
@@ -12968,7 +12961,11 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         rows = {row["name"]: row for row in audit.skills}
 
-        self.assertEqual(rows["workflow-usability-harness"]["status"], "applied")
+        self.assertEqual(rows["workflow-usability-harness"]["status"], "claimed_unverified")
+        self.assertNotIn(
+            "workflow-usability-harness",
+            audit.coverage["runtime_applied_skill_names"],
+        )
 
     def test_required_delegation_rejects_controller_self_waiver_without_runtime_receipts(self):
         receipt = self.producer_micro_receipt()

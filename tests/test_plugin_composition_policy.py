@@ -1,12 +1,34 @@
 import unittest
 import json
 from pathlib import Path
+from unittest import mock
 
 from src.orchestration.kh_front_door import build_kh_front_door
 from src.orchestration.plugin_composition import compose_plugin_route
+from src.orchestration.request_classifier import classify_request
 
 
 class PluginCompositionPolicyTests(unittest.TestCase):
+    def test_reuses_precomputed_classification_without_reclassifying(self):
+        request = "What is PER?"
+        context = {"host": "codex"}
+        classification = classify_request(request, context)
+
+        with mock.patch(
+            "src.orchestration.plugin_composition.classify_request",
+            side_effect=AssertionError("classification must be reused"),
+        ) as classifier:
+            decision = compose_plugin_route(
+                request,
+                providers=[],
+                context=context,
+                classification=classification,
+            )
+
+        classifier.assert_not_called()
+        self.assertEqual(decision.classification, classification.to_dict())
+        self.assertEqual(decision.route, "direct")
+
     def test_light_question_ignores_provider_self_forcing(self):
         decision = compose_plugin_route(
             "What is PER?",
@@ -321,6 +343,43 @@ class PluginCompositionPolicyTests(unittest.TestCase):
         self.assertEqual(decision.controller.provider_id, "sql-formatting")
         self.assertEqual(decision.controller.capability, "sql_formatting")
         self.assertIn("specialist_trigger:sql-formatting:sql_formatting", decision.reasons)
+
+    def test_database_execution_uses_kh_only_without_sql_specialist_assistant(self):
+        prompts = [
+            "Review this query:\n```sql\nDELETE A FROM T A\n```\nthen run it against production.",
+            "Format this query: DELETE A FROM T A then apply it against staging",
+            "이 SQL을 검토해: DELETE FROM T; 그 뒤 운영 DB에 돌려.",
+        ]
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                decision = compose_plugin_route(
+                    prompt,
+                    providers=[
+                        {"provider_id": "kh", "capabilities": ["workflow_control", "tdd_review"]},
+                        {"provider_id": "sql-formatting", "capabilities": ["sql_formatting"]},
+                    ],
+                    context={"project_markers": [".kh"]},
+                )
+
+                self.assertEqual(decision.route, "single")
+                self.assertEqual(decision.controller.provider_id, "kh")
+                self.assertFalse(
+                    any(role.provider_id == "sql-formatting" for role in decision.assistants)
+                )
+                self.assertIn(
+                    "outer_database_execution_authorized",
+                    decision.classification["reasons"],
+                )
+
+    def test_light_direct_classification_wins_in_kh_project_context(self):
+        decision = compose_plugin_route(
+            "Explain what a request-act clause is.",
+            providers=[{"provider_id": "kh", "capabilities": ["workflow_control"]}],
+            context={"project_markers": [".kh"]},
+        )
+
+        self.assertEqual(decision.route, "direct")
+        self.assertEqual(decision.controller.provider_id, "none")
 
     def test_sql_formatting_meta_review_does_not_invoke_provider(self):
         decision = compose_plugin_route(

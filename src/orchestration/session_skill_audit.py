@@ -30,6 +30,7 @@ from src.skills.uaf_skill_catalog import collect_packaged_skills
 
 STATUS_RANK = {
     "absent": 0,
+    "claimed_unverified": 1,
     "mentioned": 1,
     "inspected": 2,
     "considered": 3,
@@ -433,6 +434,9 @@ class SessionTextRecord:
     name: str = ""
     arguments: str = ""
     exit_codes: tuple[Any, ...] = ()
+    trusted_host_native_fast_path: bool = False
+    trusted_front_door_runtime: bool = False
+    trusted_correlated_tool_runtime: bool = False
 
 
 @dataclass(frozen=True)
@@ -1160,6 +1164,8 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     task_route_checked = False
     active_goal = False
     latest_assistant_text = ""
+    trigger_text = ""
+    work_activity_since_trigger = False
 
     for event_index, event in enumerate(events):
         payload = event.get("payload", {})
@@ -1204,6 +1210,8 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
             task_route_checked = False
             task_unfinished = True
             trigger_sample = _short(text)
+            trigger_text = text
+            work_activity_since_trigger = False
             if _is_kh_front_door_request(lowered):
                 trigger_kind = "explicit_kh"
             elif looks_like_sql_output_request(lowered):
@@ -1218,6 +1226,17 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                 trigger_kind = "universal_request"
             continue
 
+        if waiting_for_front_door and _is_trusted_host_native_fast_path_receipt(
+            payload,
+            text,
+            trigger_text,
+            work_activity_since_trigger,
+        ):
+            front_door_seen = True
+            task_route_checked = True
+            waiting_for_front_door = False
+            continue
+
         if not waiting_for_front_door:
             if payload_type == "task_complete":
                 task_unfinished = False
@@ -1230,6 +1249,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
             continue
 
         if _is_non_kh_work_start(payload, lowered) and not front_door_seen:
+            work_activity_since_trigger = True
             issues.append(
                 {
                     "skill": "always-on-front-door",
@@ -3916,6 +3936,7 @@ def _sql_final_response_cli_invocation(record: SessionTextRecord) -> Dict[str, A
     optional_flags = {
         "--style-contract",
         "--alias-role-plan-file",
+        "--verifier-history-file",
         "--cte-temp-table-reason",
     }
     arguments: Dict[str, str] = {}
@@ -9657,15 +9678,16 @@ def _session_texts(path: Path) -> List[str]:
 
 def _session_text_records(path: Path) -> List[SessionTextRecord]:
     texts: List[SessionTextRecord] = []
+    events = _session_payload_events(path)
+    correlated_front_door_outputs = set(_correlated_front_door_receipts(events))
+    correlated_tool_outputs = {
+        receipt.output_index for receipt in _correlated_tool_receipts(events)
+    }
     previous_call_was_passive = False
     untrusted_assessment_active = False
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
-        try:
-            event = load_json_without_duplicate_keys(line)
-        except (json.JSONDecodeError, DuplicateJsonKeyError):
-            continue
+    latest_user_trigger = ""
+    work_activity_since_trigger = False
+    for event_index, event in enumerate(events):
         payload = event.get("payload")
         if not isinstance(payload, dict):
             continue
@@ -9685,6 +9707,14 @@ def _session_text_records(path: Path) -> List[SessionTextRecord]:
                     untrusted_assessment_active = True
                 elif not _is_synthetic_context_message(text):
                     untrusted_assessment_active = False
+                    latest_user_trigger = text
+                    work_activity_since_trigger = False
+            trusted_host_native_fast_path = _is_trusted_host_native_fast_path_receipt(
+                payload,
+                text,
+                latest_user_trigger,
+                work_activity_since_trigger,
+            )
             passive = untrusted_assessment_active or _is_synthetic_context_message(text) or _passive_reference(lowered) or (
                 payload_type in {"function_call_output", "custom_tool_call_output"}
                 and previous_call_was_passive
@@ -9700,8 +9730,17 @@ def _session_text_records(path: Path) -> List[SessionTextRecord]:
                     name=str(payload.get("name", "")),
                     arguments=_payload_arguments_text(payload),
                     exit_codes=_payload_exit_codes(payload),
+                    trusted_host_native_fast_path=trusted_host_native_fast_path,
+                    trusted_front_door_runtime=event_index in correlated_front_door_outputs,
+                    trusted_correlated_tool_runtime=event_index in correlated_tool_outputs,
                 )
             )
+            if (
+                not trusted_host_native_fast_path
+                and not (payload_type == "message" and role == "user")
+                and _is_non_kh_work_start(payload, lowered)
+            ):
+                work_activity_since_trigger = True
             previous_call_was_passive = payload_type in {"function_call", "custom_tool_call"} and passive
         else:
             previous_call_was_passive = False
@@ -9714,6 +9753,11 @@ def _payload_text(payload: Dict[str, Any]) -> str:
         return _content_text(payload.get("content"))
     if payload_type == "agent_message":
         return _content_text(payload.get("message") or payload.get("content"))
+    if payload_type in {"host_front_door", "host_native_front_door"}:
+        packet = payload.get("packet") or payload.get("content") or payload.get("output")
+        if isinstance(packet, Mapping):
+            return json.dumps(dict(packet), ensure_ascii=False, sort_keys=True)
+        return _content_text(packet)
     if payload_type in {"function_call", "custom_tool_call"}:
         return f"{payload.get('name', '')} {payload.get('arguments') or payload.get('input') or ''}"
     if payload_type in {"function_call_output", "custom_tool_call_output"}:
@@ -9793,6 +9837,7 @@ def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str],
     runtime_hits = 0
     passive_references = 0
     considered = 0
+    claimed_unverified = 0
     evidence: List[str] = []
     active_evidence: List[str] = []
     runtime_markers = RUNTIME_MARKERS.get(skill_name, [])
@@ -9802,15 +9847,59 @@ def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str],
             text = item.text
             payload_type = item.payload_type
             role = item.role
+            trusted_host_native_fast_path = item.trusted_host_native_fast_path
+            trusted_front_door_runtime = item.trusted_front_door_runtime
+            trusted_correlated_tool_runtime = item.trusted_correlated_tool_runtime
         else:
             text = str(item)
             payload_type = ""
             role = ""
+            trusted_host_native_fast_path = False
+            trusted_front_door_runtime = False
+            trusted_correlated_tool_runtime = False
         passive = _is_passive_text(text)
         clean_text = _strip_passive_prefix(text)
         lowered = clean_text.lower()
+        host_native_packet_shape = _is_valid_host_native_front_door_packet(clean_text)
+        host_native_front_door = bool(
+            host_native_packet_shape and trusted_host_native_fast_path
+        )
         normalized_front_door = _front_door_json(clean_text)
-        front_door_status = _front_door_skill_status(clean_text, skill_name)
+        front_door_claim_status = _front_door_skill_status(clean_text, skill_name)
+        front_door_packet_claim = bool(
+            host_native_packet_shape
+            or normalized_front_door
+            or _looks_like_front_door_runtime_output(lowered)
+        )
+        structured_application_claim = _looks_like_structured_skill_application_claim(
+            clean_text
+        )
+        untrusted_front_door_claim = bool(
+            (front_door_packet_claim or structured_application_claim)
+            and not trusted_front_door_runtime
+            and not trusted_correlated_tool_runtime
+            and not host_native_front_door
+        )
+        if untrusted_front_door_claim:
+            claim_mentions_skill = bool(
+                (host_native_packet_shape and skill_name == "always-on-front-door")
+                or (normalized_front_door and skill_name == "always-on-front-door")
+                or front_door_claim_status
+                or any(alias.lower() in lowered for alias in aliases)
+            )
+            if claim_mentions_skill:
+                mentions += 1
+                claimed_unverified += 1
+                if len(evidence) < 8:
+                    evidence.append(_short(clean_text))
+            continue
+        front_door_status = (
+            front_door_claim_status
+            if trusted_front_door_runtime
+            else ""
+        )
+        if host_native_front_door and skill_name == "always-on-front-door":
+            front_door_status = "considered"
         if (
             skill_name == "token-optimizer"
             and front_door_status
@@ -9818,7 +9907,11 @@ def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str],
         ):
             front_door_status = ""
         alias_hit = bool(front_door_status) or any(alias.lower() in lowered for alias in aliases)
-        runtime_marker_hit = not front_door_status and any(marker.lower() in lowered for marker in runtime_markers)
+        runtime_marker_hit = bool(
+            not host_native_front_door
+            and not front_door_status
+            and any(marker.lower() in lowered for marker in runtime_markers)
+        )
         if skill_name == "token-optimizer" and runtime_marker_hit:
             runtime_marker_hit = _is_token_optimizer_runtime_source(payload_type, role, lowered)
         runtime_hit = front_door_status == "applied" or runtime_marker_hit
@@ -9854,6 +9947,8 @@ def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str],
     status = "absent"
     if mentions:
         status = "mentioned"
+    if claimed_unverified and not runtime_hits:
+        status = "claimed_unverified"
     if inspections:
         status = "inspected"
     if considered and not runtime_hits:
@@ -9865,6 +9960,7 @@ def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str],
         "mentions": mentions,
         "inspections": inspections,
         "runtime_hits": runtime_hits,
+        "claimed_unverified": claimed_unverified,
         "passive_references": passive_references,
         "evidence": evidence,
         "active_evidence": active_evidence,
@@ -10005,6 +10101,58 @@ def _front_door_json(text: str) -> Dict[str, Any]:
     if "token_optimizer_decision" in data:
         return _normalize_full_summary_front_door_packet(data)
     return data
+
+
+def _is_valid_host_native_front_door_packet(text: str) -> bool:
+    data = _standalone_json_object_from_text(text)
+    if not data:
+        return False
+    runtime_applied = data.get("runtime_applied_skills")
+    return bool(
+        data.get("intake_mode") == "host_native_semantic_fast_path"
+        and data.get("route") == "direct"
+        and type(data.get("governed_runtime_executed")) is bool
+        and data["governed_runtime_executed"] is False
+        and isinstance(runtime_applied, list)
+        and not runtime_applied
+        and data.get("token_optimizer_status") in {"considered_not_needed", "passthrough"}
+        and str(data.get("eligibility_rationale", "")).strip()
+        and "front_door_status" not in data
+    )
+
+
+def _is_trusted_host_native_fast_path_receipt(
+    payload: Mapping[str, Any],
+    text: str,
+    trigger_text: str,
+    work_activity_since_trigger: bool,
+) -> bool:
+    if not _is_valid_host_native_front_door_packet(text):
+        return False
+    payload_type = str(payload.get("type", ""))
+    if payload_type in {"host_front_door", "host_native_front_door"}:
+        return bool(
+            str(payload.get("origin", "")).strip().lower() == "host"
+            and str(payload.get("event_id", "")).strip()
+        )
+    return False
+
+
+def _host_native_fast_path_trigger_is_eligible(trigger_text: str) -> bool:
+    if not str(trigger_text or "").strip():
+        return False
+    try:
+        classification = classify_request(
+            trigger_text,
+            {"kh_session_audit": True, "host_native_fast_path_check": True},
+        )
+    except Exception:
+        return False
+    return bool(
+        classification.complexity == "light"
+        and classification.recommended_execution == "direct_answer"
+        and not classification.evidence_required
+    )
 
 
 def _is_valid_micro_front_door_packet(data: Dict[str, Any]) -> bool:
@@ -10397,6 +10545,17 @@ def _json_object_from_text(text: str) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _standalone_json_object_from_text(text: str) -> Dict[str, Any]:
+    candidate = str(text or "").strip()
+    if not candidate.startswith("{") or not candidate.endswith("}"):
+        return {}
+    try:
+        data = load_json_without_duplicate_keys(candidate)
+    except (json.JSONDecodeError, DuplicateJsonKeyError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _structured_front_door_acceptance_outputs(
     skill_name: str,
     observations: Dict[str, Any],
@@ -10407,7 +10566,11 @@ def _structured_front_door_acceptance_outputs(
     satisfied: Set[str] = set()
     split_fields = ACCEPTANCE_OUTPUT_MARKERS[skill_name]["status_split"]
     for text in observations.get("active_evidence", []):
-        data = _front_door_json(_strip_passive_prefix(str(text)))
+        clean_text = _strip_passive_prefix(str(text))
+        if _is_valid_host_native_front_door_packet(clean_text):
+            satisfied.update({"intake_evidence", "status_split"})
+            continue
+        data = _front_door_json(clean_text)
         if not _is_valid_compact_front_door_packet(data):
             continue
         satisfied.add("intake_evidence")
@@ -10775,6 +10938,57 @@ def _looks_like_front_door_runtime_output(lowered: str) -> bool:
             or "'required_next_action_codes'" in lowered
         )
     )
+
+
+_STRUCTURED_SKILL_CLAIM_KEYS = {
+    "application_mode",
+    "runtime_applied_skills",
+    "runtime_evidence",
+    "selected_not_executed_skills",
+    "skill_status_summary",
+}
+
+
+def _looks_like_structured_skill_application_claim(text: str) -> bool:
+    lowered = str(text or "").lower()
+    if "{" not in lowered or "}" not in lowered:
+        return False
+    data = _json_object_from_text(text)
+    if data and _contains_structured_skill_application_claim(data):
+        return True
+    has_skill_accounting = any(
+        f'"{key}"' in lowered or f"'{key}'" in lowered
+        for key in _STRUCTURED_SKILL_CLAIM_KEYS
+    )
+    has_applied_claim = any(
+        marker in lowered
+        for marker in [
+            '"status": "applied"',
+            '"status":"applied"',
+            "'status': 'applied'",
+            "'status':'applied'",
+            "runtime-applied",
+        ]
+    )
+    return has_skill_accounting and has_applied_claim
+
+
+def _contains_structured_skill_application_claim(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        normalized = {str(key).strip().lower(): item for key, item in value.items()}
+        if set(normalized) & _STRUCTURED_SKILL_CLAIM_KEYS:
+            return True
+        if str(normalized.get("status", "")).strip().lower() == "applied" and (
+            set(normalized) & {"name", "skill", "skill_name", "provider"}
+        ):
+            return True
+        return any(
+            _contains_structured_skill_application_claim(item)
+            for item in normalized.values()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_structured_skill_application_claim(item) for item in value)
+    return False
 
 
 def _has_front_door_success_or_blocked_evidence(text: str) -> bool:

@@ -1,8 +1,12 @@
 import argparse
 import json
 import re
+import unicodedata
 from dataclasses import asdict, dataclass, field, replace
+from functools import lru_cache
 from typing import Dict, Iterable, List
+
+from src.orchestration.request_act_parser import RequestActAnalysis, parse_request_act
 
 
 COMPLEXITIES = {"light", "medium", "heavy", "high_risk", "ambiguous"}
@@ -659,14 +663,21 @@ READONLY_SOURCE_AUDIT_TERMS = {
     "audit",
     "review",
     "inspect",
+    "trace",
+    "trace source",
+    "trace the source",
     "find issues",
     "find the issues",
     "report issues",
     "report the issues",
     "issue report",
     "bug report",
+    "report findings",
+    "report only",
     "\uac10\uc0ac",
     "\uac80\ud1a0",
+    "\ucd94\uc801",
+    "\ubcf4\uace0",
 }
 READONLY_SOURCE_AUDIT_BOUNDARY_TERMS = {
     "read-only",
@@ -687,6 +698,12 @@ READONLY_SOURCE_AUDIT_BOUNDARY_TERMS = {
     "no edits",
     "no edit",
     "no changes",
+    "no file changes",
+    "make no file changes",
+    "do not change files",
+    "don't change files",
+    "do not write files",
+    "without file changes",
     "without editing",
     "without modifying",
     "without changing",
@@ -703,6 +720,10 @@ READONLY_SOURCE_AUDIT_BOUNDARY_TERMS = {
     "\uc218\uc815 \uc5c6\uc774",
     "\ubcc0\uacbd\ud558\uc9c0",
     "\ubcc0\uacbd \uc5c6\uc774",
+    "\ud30c\uc77c\uc740 \ubcc0\uacbd\ud558\uc9c0",
+    "\ud30c\uc77c\uc744 \ubcc0\uacbd\ud558\uc9c0",
+    "\ud30c\uc77c \ubcc0\uacbd \uc5c6\uc774",
+    "\ubcf4\uace0\ub9cc",
     "\uace0\uce58\uc9c0",
 }
 READONLY_SOURCE_AUDIT_SOURCE_TERMS = {
@@ -835,6 +856,75 @@ CONDITIONAL_MUTATION_COMMAND_RE = re.compile(
     f"(?:{'|'.join(map(re.escape, DIRECT_MUTATION_ACTION_FORMS))}))"
     f"\\s*(?:{REQUEST_COMMAND_SUFFIX_RE})?(?=$|[\\s.!?])"
 )
+
+# Request-act routing deliberately operates on the user's active instruction,
+# not on quoted examples, code, or risk descriptions. These expressions are
+# language-shape rules; they are not prompt allowlists.
+REQUEST_ACT_EVALUATION_TERMS = {
+    "status",
+    "seems slow",
+    "slower",
+    "latency",
+    "response time",
+    "processing time",
+    "delay",
+    "lag",
+    "quality",
+    "evaluate",
+    "evaluation",
+    "classification",
+    "classified",
+    "overclassify",
+    "overclassification",
+    "routing",
+    "request act",
+    "request-act",
+    "which route",
+    "what route",
+    "상태",
+    "느려",
+    "느린",
+    "느려지",
+    "품질",
+    "평가",
+    "분류",
+    "과분류",
+    "라우팅",
+    "지연",
+    "응답 속도",
+    "처리 시간",
+    "어느 route",
+    "어떤 route",
+}
+REQUEST_ACT_ROUTING_META_TERMS = {
+    "kh",
+    "uaf",
+    "runtime",
+    "skill",
+    "skills",
+    "harness",
+    "harnesses",
+    "front-door",
+    "front door",
+    "router",
+    "routing",
+    "classifier",
+    "classification",
+    "request act",
+    "request-act",
+    "heavy",
+    "light",
+    "preflight",
+    "role dag",
+    "스킬",
+    "하네스",
+    "프런트도어",
+    "라우터",
+    "라우팅",
+    "분류기",
+    "분류",
+    "과분류",
+}
 LOCALIZED_PATCH_ACTION_TERMS = {
     "add",
     "delete",
@@ -961,6 +1051,12 @@ LOCALIZED_PATCH_POST_BROAD_NEGATION_RE = re.compile(
 KOREAN_POST_BROAD_NEGATION_MARKERS = ("\ud558\uc9c0\ub9c8", "\ud558\uc9c0 \ub9d0", "\ud558\uc9c0\ub9d0", "\ub9d0\uace0", "\uc81c\uc678", "\ube7c\uace0")
 FILE_REFERENCE_RE = re.compile(
     r"(?<![a-z0-9_])[\w.-]+\.(?:html|css|js|jsx|ts|tsx|py|cs|sql|md|json|xml|xaml)(?=$|[^A-Za-z0-9_.-])"
+)
+NAMED_LOCAL_FILE_RE = re.compile(
+    r"(?<![a-z0-9_.-])(?:[a-z]:\\|\.?[a-z0-9_/-]*[a-z0-9_-])"
+    r"\.(?:txt|log|tmp|bak|md|json|xml|yaml|yml|html|css|js|jsx|ts|tsx|py|cs|sql|xaml)"
+    r"(?=$|[^a-z0-9_.-])",
+    re.IGNORECASE,
 )
 CSS_SELECTOR_REFERENCE_RE = re.compile(
     r"(?<![a-z0-9_])[#.](?!env\b|git\b|gitignore\b|editorconfig\b|prettierrc\b|eslintrc\b|npmrc\b)[a-z][a-z0-9_-]*(?=$|[^A-Za-z0-9_-])"
@@ -2331,17 +2427,38 @@ class RequestClassification:
         return asdict(self)
 
 
-def classify_request(text: str, context: dict | None = None) -> RequestClassification:
+def classify_request(
+    text: str,
+    context: dict | None = None,
+    *,
+    request_analysis: RequestActAnalysis | None = None,
+) -> RequestClassification:
     context = context or {}
-    result = _classify_request(text, context)
-    return replace(result, intent=resolve_request_intent(text, context))
+    analysis = request_analysis or parse_request_act(text, context)
+    request_intent = resolve_request_intent(text, context)
+    result = _classify_request(
+        text,
+        context,
+        request_analysis=analysis,
+        request_intent=request_intent,
+    )
+    return replace(result, intent=request_intent)
 
 
-def _classify_request(text: str, context: dict | None = None) -> RequestClassification:
+def _classify_request(
+    text: str,
+    context: dict | None = None,
+    *,
+    request_analysis: RequestActAnalysis | None = None,
+    request_intent: Dict[str, object] | None = None,
+) -> RequestClassification:
     """Classify a user request before choosing how much UAF machinery to run."""
     context = context or {}
     normalized = _normalize(text)
-    domain = _detect_domain(normalized, context)
+    request_analysis = request_analysis or parse_request_act(text, context)
+    request_act_text = request_analysis.outer_text
+    request_act = _normalize(request_act_text)
+    domain = _detect_domain(normalized, context, request_analysis)
     cross_cutting = ["token-optimizer"]
     evidence_required: List[str] = []
     reasons: List[str] = []
@@ -2355,12 +2472,18 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
     if _requires_resume_context(context):
         evidence_required.append("resume_handoff")
         reasons.append("resume_context_required")
-    if _needs_credential_safety(normalized):
+    credential_safety_required = _needs_credential_safety(
+        normalized,
+        request_analysis,
+    )
+    if credential_safety_required:
         cross_cutting.append("credential-safety-harness")
         evidence_required.append("credential_safety_status")
         reasons.append("credential_or_secret_boundary")
+        if not request_analysis.has_mutation_authorization:
+            reasons.append("credential_access_gate_priority")
 
-    request_intent = resolve_request_intent(text, context)
+    request_intent = request_intent or resolve_request_intent(text, context)
     if _is_structured_active_goal_resume(context, request_intent):
         return _heavy_classification(
             domain,
@@ -2423,10 +2546,93 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
     if memory_requested:
         return _memory_state_classification(domain, cross_cutting, evidence_required, reasons)
 
-    if _is_high_risk(normalized, domain, context):
-        return _high_risk_classification(domain, cross_cutting, evidence_required, reasons)
+    pb_migration_requested = _is_pb_to_csharp_migration_request(normalized)
+    if _is_readonly_source_audit_request(normalized, domain, request_analysis):
+        readonly_skills = ["request-complexity-router"]
+        readonly_reasons = [*reasons, "readonly_source_audit_request"]
+        if pb_migration_requested and _has_concrete_pb_migration_subject(normalized):
+            readonly_skills.append("pb-to-csharp-migration-harness")
+            readonly_reasons.append("pb_to_csharp_migration_request")
+        return _classification(
+            complexity="medium",
+            domain="software" if domain == "general" else domain,
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=readonly_skills,
+            evidence_required=_dedupe([*evidence_required, "source_summary", "audit_findings"]),
+            reasons=readonly_reasons,
+            confidence=0.84 if request_analysis.readonly_inspection else 0.8,
+        )
 
-    if _is_repository_mutation_command(normalized):
+    if _is_current_source_security_question(normalized, request_analysis):
+        return _classification(
+            complexity="medium",
+            domain="security",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "source_summary", "audit_findings"]),
+            reasons=[*reasons, "current_source_security_inspection"],
+            confidence=0.84,
+        )
+
+    if any(
+        clause.approval_state in {"denied", "pending"}
+        for clause in request_analysis.clauses
+    ) and (
+        request_analysis.has_inspection
+        or request_analysis.has_mutation_authorization
+    ):
+        return _classification(
+            complexity="medium",
+            domain="software" if domain == "general" else domain,
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "execution_authorization"]),
+            reasons=[*reasons, "execution_authorization_pending"],
+            confidence=0.86,
+        )
+
+    if _is_high_risk(request_act, domain, context, request_analysis):
+        high_risk_reasons = list(reasons)
+        if request_analysis.outer_database_execution:
+            high_risk_reasons.append("outer_database_execution_authorized")
+        if request_analysis.authorized_high_impact_destructive:
+            high_risk_reasons.append("authorized_high_impact_change_obligation")
+        return _high_risk_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            high_risk_reasons,
+        )
+
+    if request_analysis.outer_database_execution:
+        return _heavy_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "outer_database_execution_authorized"],
+        )
+
+    if _is_nonexecuting_destructive_discussion(
+        request_act,
+        normalized,
+        domain,
+        request_analysis,
+    ):
+        return _classification(
+            complexity="light",
+            domain=domain,
+            recommended_execution="direct_answer",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=evidence_required,
+            reasons=[*reasons, "nonexecuting_destructive_discussion"],
+            confidence=0.86,
+        )
+
+    if _is_repository_mutation_command(request_act):
         return _heavy_classification(
             "software",
             cross_cutting,
@@ -2434,20 +2640,53 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
             [*reasons, "repository_mutation_command"],
         )
 
-    pb_migration_requested = _is_pb_to_csharp_migration_request(normalized)
-    if _is_readonly_source_audit_request(normalized, domain):
+    if _is_contextual_audit_repair_request(request_act, context, request_analysis):
+        return _heavy_classification(
+            _contextual_audit_repair_domain(domain, context),
+            cross_cutting,
+            evidence_required,
+            [*reasons, "contextual_audit_repair_request"],
+        )
+
+    if _is_direct_runtime_latency_meta_question(request_act, domain, request_analysis):
         return _classification(
-            complexity="medium",
-            domain="software" if domain == "general" else domain,
-            recommended_execution="skill_read",
+            complexity="light",
+            domain="software" if domain in {"general", "security", "education"} else domain,
+            recommended_execution="direct_answer",
             cross_cutting=cross_cutting,
             recommended_skills=["request-complexity-router"],
-            evidence_required=_dedupe([*evidence_required, "source_summary", "audit_findings"]),
-            reasons=[*reasons, "readonly_source_audit_request"],
-            confidence=0.8,
+            evidence_required=evidence_required,
+            reasons=[*reasons, "routing_meta_question_without_mutation_authorization"],
+            confidence=0.86,
+        )
+
+    if _is_routing_meta_question(request_act, domain, request_analysis):
+        return _classification(
+            complexity="light",
+            domain="software" if domain in {"general", "security", "education"} else domain,
+            recommended_execution="direct_answer",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=evidence_required,
+            reasons=[*reasons, "routing_meta_question_without_mutation_authorization"],
+            confidence=0.86,
         )
 
     if _is_provider_meta_review_request(normalized):
+        if _is_structural_non_mutating_question(request_act, normalized, domain, request_analysis) and not _is_structural_readonly_inspection_request(
+            request_act,
+            domain,
+        ):
+            return _classification(
+                complexity="light",
+                domain="software",
+                recommended_execution="direct_answer",
+                cross_cutting=cross_cutting,
+                recommended_skills=["request-complexity-router"],
+                evidence_required=evidence_required,
+                reasons=[*reasons, "non_mutating_provider_meta_question"],
+                confidence=0.84,
+            )
         return _classification(
             complexity="medium",
             domain="software",
@@ -2514,7 +2753,7 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
             extra_harnesses=["pb-to-csharp-migration-harness"],
         )
 
-    if _is_sql_formatting_style_request(normalized):
+    if _is_bounded_sql_specialist_request(normalized, request_act, request_analysis):
         return _classification(
             complexity="medium",
             domain="software",
@@ -2536,6 +2775,38 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
             evidence_required=_dedupe([*evidence_required, "source_summary", "sql_diagnostic_summary"]),
             reasons=[*reasons, "sql_diagnostic_question"],
             confidence=0.77,
+        )
+
+    if _is_structural_readonly_inspection_request(request_act, domain, request_analysis):
+        return _classification(
+            complexity="medium",
+            domain="software" if domain == "general" else domain,
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "source_summary", "audit_findings"]),
+            reasons=[*reasons, "structural_readonly_inspection"],
+            confidence=0.84,
+        )
+
+    if _is_contextual_audit_repair_request(request_act, context, request_analysis):
+        return _heavy_classification(
+            _contextual_audit_repair_domain(domain, context),
+            cross_cutting,
+            evidence_required,
+            [*reasons, "contextual_audit_repair_request"],
+        )
+
+    if _is_routing_meta_question(request_act, domain, request_analysis):
+        return _classification(
+            complexity="light",
+            domain="software" if domain in {"general", "security", "education"} else domain,
+            recommended_execution="direct_answer",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=evidence_required,
+            reasons=[*reasons, "routing_meta_question_without_mutation_authorization"],
+            confidence=0.86,
         )
 
     if _is_kh_runtime_status_question(normalized, context):
@@ -2568,14 +2839,6 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
             ),
             reasons=[*reasons, "compound_handoff_request"],
             confidence=0.8,
-        )
-
-    if _is_contextual_audit_repair_request(normalized, context):
-        return _heavy_classification(
-            _contextual_audit_repair_domain(domain, context),
-            cross_cutting,
-            evidence_required,
-            [*reasons, "contextual_audit_repair_request"],
         )
 
     if _is_complex_extraction_deliverable_request(normalized):
@@ -2624,7 +2887,12 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
             normalized,
         )
 
-    if _is_unapproved_product_discovery_request(normalized, context, domain):
+    if _is_unapproved_product_discovery_request(
+        normalized,
+        context,
+        domain,
+        request_analysis,
+    ):
         return _brainstorming_classification(domain, cross_cutting, evidence_required, reasons, normalized)
 
     if _is_localized_patch_continuation(normalized, context):
@@ -2667,6 +2935,19 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
             [*reasons, "persistent_completion_request"],
         )
 
+    if _is_approved_active_artifact_execution_followup(
+        request_act,
+        context,
+        domain,
+        request_analysis,
+    ):
+        return _heavy_classification(
+            "software" if domain == "general" else domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "approved_active_artifact_execution_followup"],
+        )
+
     if _is_ambiguous_visual_query_order_request(normalized, context):
         return _classification(
             complexity="ambiguous",
@@ -2678,7 +2959,7 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
             confidence=0.58,
         )
 
-    if _is_ambiguous(normalized, context):
+    if _is_ambiguous(normalized, context, request_analysis):
         return _classification(
             complexity="ambiguous",
             domain=domain,
@@ -2771,6 +3052,17 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
             [*reasons, "dotfile_config_mutation"],
         )
 
+    if _is_governed_mutation_request(request_act, domain, context, request_analysis):
+        return _heavy_classification(
+            "software"
+            if domain == "general"
+            and _has_software_mutation_scope(request_act, domain, context, request_analysis)
+            else domain,
+            cross_cutting,
+            evidence_required,
+            [*reasons, "explicit_mutation_authorization"],
+        )
+
     if _is_light_direct_task(normalized) or _is_tiny_inline_transform(normalized):
         return _classification(
             complexity="light",
@@ -2789,7 +3081,7 @@ def _classify_request(text: str, context: dict | None = None) -> RequestClassifi
     if _is_medium_analysis_request(normalized):
         return _medium_classification(domain, cross_cutting, evidence_required, reasons, normalized)
 
-    if _is_heavy_work(normalized, domain):
+    if _is_heavy_work(request_act, domain):
         return _heavy_classification(domain, cross_cutting, evidence_required, reasons)
 
     if _is_contextual_review_request(normalized, context):
@@ -3037,6 +3329,14 @@ def _is_pb_to_csharp_migration_request(normalized: str) -> bool:
     return _contains_any(normalized, {"converter", "layout", "grid", "retrieve", "update", "save"})
 
 
+def _has_concrete_pb_migration_subject(normalized: str) -> bool:
+    return bool(
+        re.search(r"(?<![a-z0-9_])sp_[a-z0-9_]+\b", normalized)
+        or re.search(r"\b[a-z0-9_]+\.(?:pbl|srw|sru|srd)\b", normalized)
+        or _contains_any(normalized, {"datawindow object", "powerbuilder object", "데이터윈도우 객체", "pb 객체"})
+    )
+
+
 def _memory_state_classification(
     domain: str,
     cross_cutting: List[str],
@@ -3134,9 +3434,13 @@ def _heavy_classification(
     )
 
 
-def _detect_domain(normalized: str, context: dict) -> str:
+def _detect_domain(
+    normalized: str,
+    context: dict,
+    analysis: RequestActAnalysis | None = None,
+) -> str:
     explicit_domain = str(context.get("domain", "")).strip()
-    context_override = _domain_override_from_text(normalized)
+    context_override = _domain_override_from_text(normalized, analysis)
     if context_override:
         return context_override
     if explicit_domain:
@@ -3340,7 +3644,16 @@ def _is_strong_software_product_request(normalized: str) -> bool:
     )
 
 
-def _domain_override_from_text(normalized: str) -> str:
+def _domain_override_from_text(
+    normalized: str,
+    analysis: RequestActAnalysis | None = None,
+) -> str:
+    if analysis is not None and analysis.has_sql_payload:
+        return "software"
+    if _is_current_source_security_question(normalized, analysis):
+        return "security"
+    if _is_named_local_file_removal(normalized):
+        return "software"
     if _looks_like_sql_or_tsql_payload(normalized):
         return "software"
     if _contains_any(
@@ -3500,6 +3813,7 @@ SQL_FORMATTING_STYLE_ACTION_TERMS = {
     "rewrite",
     "save",
     "standardize",
+    "style",
     "write",
     "\uc815\ub9ac",
     "\uc815\ub82c",
@@ -3522,6 +3836,13 @@ SQL_FORMATTING_STYLE_SUBJECT_TERMS = {
     "\uc800\uc7a5 \ud504\ub85c\uc2dc\uc800",
 }
 SQL_NAMED_DML_RE = re.compile(r"\b(?:insert|update|delete|merge)\b", re.IGNORECASE)
+SQL_BROAD_COLLECTION_RE = re.compile(
+    r"(?:\b(?:every|all)\b[\s\S]{0,48}\b(?:files?|project|folder|repository|repo)\b"
+    r"|\b(?:project|folder|repository|repo)\b[\s\S]{0,48}\b(?:files?|sql)\b)"
+)
+SQL_BROAD_WORKFLOW_RE = re.compile(
+    r"(?<![a-z0-9_])(?:verification|verify|tests?|evidence|commit|publish|release)(?![a-z0-9_])"
+)
 
 
 def _is_full_skill_lifecycle_audit_request(normalized: str) -> bool:
@@ -3708,7 +4029,38 @@ def _is_sql_formatting_style_request(normalized: str) -> bool:
         return True
     if _looks_like_stored_procedure_generation_request(normalized):
         return True
-    return _looks_like_sql_or_tsql_payload(normalized)
+    return True
+
+
+def _is_bounded_sql_specialist_request(
+    normalized: str,
+    request_act: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    """Keep SQL text transformation/review separate from database execution."""
+    analysis = analysis or parse_request_act(normalized)
+    if analysis.outer_database_execution:
+        return False
+    if _is_broad_sql_workflow_request(request_act):
+        return False
+    if analysis.bounded_sql_request:
+        return True
+    if (
+        analysis.has_sql_payload
+        and _contains_any(request_act, SQL_FORMATTING_STYLE_ACTION_TERMS)
+        and _contains_any(request_act, SQL_FORMATTING_STYLE_SUBJECT_TERMS)
+    ):
+        return True
+    if _is_sql_formatting_style_request(request_act):
+        return True
+    return False
+
+
+def _is_broad_sql_workflow_request(normalized: str) -> bool:
+    return bool(
+        SQL_BROAD_COLLECTION_RE.search(normalized)
+        and SQL_BROAD_WORKFLOW_RE.search(normalized)
+    )
 
 
 def _looks_like_stored_procedure_generation_request(normalized: str) -> bool:
@@ -3840,8 +4192,39 @@ def _is_provider_meta_review_request(normalized: str) -> bool:
     return not _contains_any(normalized, READONLY_SOURCE_AUDIT_MUTATION_TERMS)
 
 
-def _is_high_risk(normalized: str, domain: str, context: dict) -> bool:
+def _has_authorized_high_impact_destructive_act(
+    normalized: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    """Fail closed only when an outer destructive command has high-impact scope."""
+    analysis = analysis or parse_request_act(normalized)
+    return analysis.authorized_high_impact_destructive
+
+
+def _is_high_risk(
+    normalized: str,
+    domain: str,
+    context: dict,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized, context)
+    if analysis.nonexecuting_destructive_discussion or analysis.readonly_inspection:
+        return False
+    if (
+        domain == "security"
+        and _contains_any(normalized, CREDENTIAL_SAFETY_TERMS)
+        and not analysis.has_mutation_authorization
+        and not analysis.credential_access_requested
+        and (
+            analysis.has_question
+            or analysis.has_inspection
+            or analysis.has_readonly_boundary
+        )
+    ):
+        return False
     if _contains_any(normalized, SAFETY_CRISIS_TERMS):
+        return True
+    if _has_authorized_high_impact_destructive_act(normalized, analysis):
         return True
     if context.get("transaction_intent") and domain in {
         "investment",
@@ -3887,7 +4270,7 @@ def _is_high_risk(normalized: str, domain: str, context: dict) -> bool:
         return True
     if domain == "security" and not _is_defensive_security_work(normalized) and (
         _contains_any(normalized, SECURITY_HIGH_RISK_TERMS | EXTRA_SECURITY_HIGH_RISK_TERMS)
-        or _contains_any(normalized, DESTRUCTIVE_ACTION_TERMS | EXTRA_DESTRUCTIVE_ACTION_TERMS)
+        or _has_authorized_high_impact_destructive_act(normalized)
         or _contains_any(
             normalized,
             {"delete duplicates", "github token", "token was committed", "committed to main", "roll back production", "rollback production"},
@@ -3973,6 +4356,56 @@ def _has_active_artifact(context: dict) -> bool:
         or context.get("active_doc")
         or context.get("data_artifact")
         or context.get("current_file")
+    )
+
+
+def _is_approved_active_artifact_execution_followup(
+    normalized: str,
+    context: dict,
+    domain: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    if not _has_active_artifact(context):
+        return False
+    if domain not in {"general", "software", "devops", "cloud", "security"}:
+        return False
+
+    analysis = analysis or parse_request_act(normalized, context)
+    if analysis.context_execution_approved is not True or analysis.approval_blocked:
+        return False
+    if _is_execution_readiness_question(normalized, analysis):
+        return False
+
+    return any(
+        clause.authorized
+        and clause.mutating
+        and clause.referential_target
+        for clause in analysis.clauses
+    )
+
+
+def _is_execution_readiness_question(
+    normalized: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    if not analysis.has_question:
+        return False
+    return _contains_any(
+        normalized,
+        {
+            "ready to",
+            "safe to",
+            "okay to",
+            "ok to",
+            "can we",
+            "could we",
+            "should we",
+            "준비됐",
+            "준비되",
+            "해도 될",
+            "진행 가능",
+        },
     )
 
 
@@ -4225,6 +4658,8 @@ def _is_heavy_work(normalized: str, domain: str) -> bool:
 def _is_localized_patch_continuation(normalized: str, context: dict) -> bool:
     if not _contains_any(normalized, LOCALIZED_PATCH_ACTION_TERMS):
         return False
+    if _is_named_local_file_removal(normalized):
+        return False
     if _has_conditional_mutation_command(normalized):
         return False
     if _has_unnegated_localized_patch_broad_terms(normalized):
@@ -4251,6 +4686,26 @@ def _is_localized_patch_continuation(normalized: str, context: dict) -> bool:
 
     token_count = len(normalized.split())
     return token_count <= 32 or bool(context_scope)
+
+
+def _is_named_local_file_removal(normalized: str) -> bool:
+    if NAMED_LOCAL_FILE_RE.search(normalized) is None:
+        return False
+    english = re.search(
+        r"(?:^|[.!?;]\s*)(?:please\s+|kindly\s+|go\s+ahead\s*,?\s+)?"
+        r"(?:delete|remove)\s+(?:the\s+)?(?:(?:named|noncritical|local)\s+)*(?:file\s+)?"
+        r"(?:[a-z]:\\|\.?[a-z0-9_/-]*[a-z0-9_-])\.[a-z0-9]{1,12}\b",
+        normalized,
+        re.IGNORECASE,
+    )
+    korean = re.search(
+        r"(?:\ub85c\uceec\s*)?(?:\ud30c\uc77c\s*)?"
+        r"(?:[a-z]:\\|\.?[a-z0-9_/-]*[a-z0-9_-])\.[a-z0-9]{1,12}"
+        r"(?:\uc744|\ub97c)?\s*(?:\uc0ad\uc81c|\uc81c\uac70|\uc9c0\uc6cc)",
+        normalized,
+        re.IGNORECASE,
+    )
+    return bool(english or korean)
 
 
 def _has_unnegated_localized_patch_broad_terms(normalized: str) -> bool:
@@ -4313,7 +4768,16 @@ def _is_readonly_source_condition_question(normalized: str) -> bool:
     return _has_source_condition_context(normalized) and _contains_any(normalized, READONLY_SOURCE_QUESTION_TERMS)
 
 
-def _is_readonly_source_audit_request(normalized: str, domain: str) -> bool:
+def _is_readonly_source_audit_request(
+    normalized: str,
+    domain: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    if analysis.readonly_inspection:
+        return True
+    if analysis.has_mutation_authorization:
+        return False
     if _contains_any(normalized, SECURITY_HIGH_RISK_TERMS | EXTRA_SECURITY_HIGH_RISK_TERMS):
         return False
     if not _contains_any(normalized, READONLY_SOURCE_AUDIT_BOUNDARY_TERMS):
@@ -4618,6 +5082,236 @@ def _has_source_condition_context(normalized: str) -> bool:
     return _contains_any(normalized, READONLY_SOURCE_CONDITION_TERMS)
 
 
+def _is_nonexecuting_destructive_discussion(
+    request_act: str,
+    original_normalized: str,
+    domain: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(original_normalized)
+    return analysis.nonexecuting_destructive_discussion
+
+
+def _has_structural_mutation_authorization(
+    normalized: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    return analysis.has_mutation_authorization or _has_conditional_mutation_command(normalized)
+
+
+def _has_software_mutation_scope(
+    normalized: str,
+    domain: str,
+    context: dict,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized, context)
+    contextual_domain = str(context.get("domain") or "").strip().lower()
+    if domain not in {"general", "software", "devops", "cloud", "security"}:
+        return False
+    if contextual_domain and contextual_domain not in {"software", "devops", "cloud", "security"}:
+        return False
+    return bool(
+        contextual_domain in {"software", "devops", "cloud", "security"}
+        or _is_kh_project_context(context)
+        or any("source" in clause.target_classes for clause in analysis.clauses)
+        or _contains_any(
+            normalized,
+            SOFTWARE_DOMAIN_TERMS
+            | EXTRA_SOFTWARE_DOMAIN_TERMS
+            | {
+                "migration",
+                "release",
+                "deployment",
+                "command",
+                "script",
+                "database",
+                "table",
+                "plugin",
+                "skill",
+                "harness",
+                "마이그레이션",
+                "릴리스",
+                "배포",
+                "명령",
+                "스크립트",
+                "데이터베이스",
+                "테이블",
+                "플러그인",
+                "스킬",
+                "하네스",
+            },
+        )
+    )
+
+
+def _is_governed_mutation_request(
+    normalized: str,
+    domain: str,
+    context: dict,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized, context)
+    if not _has_structural_mutation_authorization(normalized, analysis):
+        return False
+    if _is_named_local_file_removal(normalized):
+        return True
+    if _has_software_mutation_scope(normalized, domain, context, analysis):
+        return True
+    return bool(
+        any(
+            clause.authorized
+            and clause.action_classes & {"destructive", "execute"}
+            for clause in analysis.clauses
+        )
+        or domain in {"security", "devops", "cloud"}
+    )
+
+
+def _is_structural_readonly_inspection_request(
+    normalized: str,
+    domain: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    return analysis.readonly_inspection
+
+
+def _is_current_source_security_question(
+    normalized: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    has_current_source = bool(
+        _contains_any(
+            normalized,
+            {"current source", "current code", "현재 소스", "현재 코드", "소스 구현", "코드 구현"},
+        )
+        or (
+            _contains_any(normalized, {"current", "현재"})
+            and any("source" in clause.target_classes for clause in analysis.clauses)
+        )
+    )
+    has_security_subject = _contains_any(
+        normalized,
+        SECURITY_TERMS
+        | SECURITY_HIGH_RISK_TERMS
+        | EXTRA_SECURITY_HIGH_RISK_TERMS
+        | {"authentication", "authorization", "credential checks", "인증", "권한"},
+    )
+    return bool(
+        has_current_source
+        and has_security_subject
+        and (
+            analysis.has_question
+            or analysis.has_inspection
+            or _contains_any(normalized, READONLY_SOURCE_AUDIT_TERMS)
+        )
+    )
+
+
+def _is_routing_meta_question(
+    normalized: str,
+    domain: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    if analysis.has_mutation_authorization:
+        return False
+    if analysis.readonly_inspection:
+        return False
+    if (
+        _is_provider_meta_review_request(normalized)
+        or _is_full_skill_lifecycle_audit_request(normalized)
+        or _is_pb_to_csharp_migration_request(normalized)
+    ):
+        return False
+    routing_terms = set(REQUEST_ACT_ROUTING_META_TERMS)
+    if re.search(r"\b(?:angular|react|vue)\s+router\b", normalized):
+        routing_terms.discard("router")
+    return bool(
+        any(
+            (
+                re.search(rf"(?<![\uac00-\ud7a3]){re.escape(term)}", normalized)
+                is not None
+                if term == "\ubd84\ub958"
+                else _contains_term(normalized, term)
+            )
+            for term in routing_terms
+        )
+        and (
+            analysis.has_question
+            or analysis.has_inspection
+            or _contains_any(normalized, REQUEST_ACT_EVALUATION_TERMS)
+        )
+    )
+
+
+def _is_direct_runtime_latency_meta_question(
+    normalized: str,
+    domain: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    if analysis.has_mutation_authorization:
+        return False
+    if analysis.readonly_inspection:
+        return False
+    return bool(
+        _contains_any(normalized, {"kh", "uaf", "runtime", "front-door", "front door"})
+        and _contains_any(
+            normalized,
+            {
+                "delay",
+                "lag",
+                "latency",
+                "processing time",
+                "response time",
+                "status",
+                "응답 속도",
+                "지연",
+                "처리 시간",
+            },
+        )
+        and (
+            analysis.has_question
+            or _contains_any(normalized, REQUEST_ACT_EVALUATION_TERMS)
+        )
+    )
+
+
+def _is_structural_non_mutating_question(
+    request_act: str,
+    original_normalized: str,
+    domain: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(request_act)
+    if analysis.has_mutation_authorization:
+        return False
+    if analysis.readonly_inspection:
+        return False
+    if any(
+        not clause.negated
+        and set(clause.action_verbs)
+        & {"analyze", "check", "inspect", "read", "review", "trace", "\ud655\uc778", "\uac80\ud1a0", "\uc810\uac80", "\ucd94\uc801", "\uc77d"}
+        for clause in analysis.clauses
+    ):
+        return False
+    if _requires_external_or_current_evidence(original_normalized, domain):
+        return False
+    if domain in {"medical", "legal", "investment", "finance", "booking", "privacy"} and not _contains_any(
+        request_act,
+        {"routing", "classifier", "classification", "request act", "라우팅", "분류", "과분류"},
+    ):
+        return False
+    return bool(
+        analysis.has_question
+        or _contains_any(request_act, REQUEST_ACT_EVALUATION_TERMS)
+    )
+
+
 def _has_mutation_command(normalized: str) -> bool:
     return _contains_any(normalized, SOURCE_MUTATION_COMMAND_TERMS) or _has_inflected_mutation_command(normalized)
 
@@ -4828,10 +5522,21 @@ def _is_privacy_read_only(normalized: str) -> bool:
     return _contains_any(normalized, {"are customer emails in", "is there", "does this contain", "contains ssns"})
 
 
-def _is_unapproved_product_discovery_request(normalized: str, context: dict, domain: str) -> bool:
+def _is_unapproved_product_discovery_request(
+    normalized: str,
+    context: dict,
+    domain: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
     if _has_active_artifact(context):
         return False
     if _is_approved_brainstorm_continuation(normalized, context):
+        return False
+    analysis = analysis or parse_request_act(normalized, context)
+    if any(
+        clause.authorized and "execute" in clause.action_classes
+        for clause in analysis.clauses
+    ):
         return False
     if _is_conceptual_request(normalized):
         return False
@@ -4902,13 +5607,25 @@ def _is_unreviewed_brainstorm_implementation_request(normalized: str, context: d
 
 
 def _has_reviewed_brainstorm_execution_context(context: dict) -> bool:
-    has_handoff = bool(context.get("has_brainstorm_handoff") or context.get("brainstorm_handoff_approved"))
-    design_reviewed = bool(context.get("design_review_approved") or context.get("brainstorm_handoff_approved"))
-    execution_approved = bool(
-        context.get("implementation_approved")
-        or context.get("execution_approved")
-        or context.get("separate_implementation_approval")
-    )
+    handoff_approved = type(context.get("brainstorm_handoff_approved")) is bool and context.get(
+        "brainstorm_handoff_approved"
+    ) is True
+    has_handoff = (
+        type(context.get("has_brainstorm_handoff")) is bool
+        and context.get("has_brainstorm_handoff") is True
+    ) or handoff_approved
+    design_reviewed = (
+        type(context.get("design_review_approved")) is bool
+        and context.get("design_review_approved") is True
+    ) or handoff_approved
+    execution_values = [
+        context.get("implementation_approved"),
+        context.get("execution_approved"),
+        context.get("separate_implementation_approval"),
+    ]
+    execution_approved = not any(
+        type(value) is bool and value is False for value in execution_values
+    ) and any(type(value) is bool and value is True for value in execution_values)
     return has_handoff and design_reviewed and execution_approved
 
 
@@ -4967,12 +5684,16 @@ def _is_memory_state_request(normalized: str) -> bool:
     return False
 
 
-def _is_contextual_audit_repair_request(normalized: str, context: dict) -> bool:
-    has_repair_action = _contains_any(normalized, CONTEXTUAL_REPAIR_ACTION_TERMS)
+def _is_contextual_audit_repair_request(
+    normalized: str,
+    context: dict,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    mutation_authorized = _has_structural_mutation_authorization(normalized, analysis)
+    has_repair_action = mutation_authorized and _contains_any(normalized, CONTEXTUAL_REPAIR_ACTION_TERMS)
     has_failure_signal = _contains_any(normalized, CONTEXTUAL_REPAIR_FAILURE_TERMS)
-    if not has_repair_action:
-        if not has_failure_signal:
-            return False
+    if not has_repair_action and not has_failure_signal:
+        return False
     if has_failure_signal and not has_repair_action and _is_explanation_only_request(normalized):
         return False
     has_subject = _contains_any(normalized, STRICT_CONTEXTUAL_REPAIR_SUBJECT_TERMS)
@@ -5147,8 +5868,15 @@ def _has_visual_query_order_target_context(context: dict) -> bool:
     return current_file.endswith(('.sql', '.spsql'))
 
 
-def _is_ambiguous(normalized: str, context: dict) -> bool:
-    domain = _detect_domain(normalized, context)
+def _is_ambiguous(
+    normalized: str,
+    context: dict,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized, context)
+    domain = _detect_domain(normalized, context, analysis)
+    if _is_unresolved_mutation_pronoun(normalized, context, analysis):
+        return True
     if _is_light_direct_task(normalized):
         return False
     if _is_structured_medium_work(normalized, domain):
@@ -5177,6 +5905,13 @@ def _is_ambiguous(normalized: str, context: dict) -> bool:
         return True
     if _has_active_artifact(context) or context.get("domain"):
         return False
+    if analysis.has_mutation_authorization and _has_software_mutation_scope(
+        normalized,
+        domain,
+        context,
+        analysis,
+    ):
+        return False
     if _contains_any(normalized, CONTEXT_FREE_AMBIGUOUS_TERMS):
         return True
     strong_terms = (
@@ -5201,6 +5936,45 @@ def _is_ambiguous(normalized: str, context: dict) -> bool:
     ):
         return True
     return False
+
+
+def _is_unresolved_mutation_pronoun(
+    normalized: str,
+    context: dict,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized, context)
+    if analysis.unresolved_referential_mutation:
+        inline_approval_granted = any(
+            clause.approval_state == "granted" for clause in analysis.clauses
+        )
+        if not inline_approval_granted or analysis.approval_blocked:
+            return True
+    proceed_reference = re.fullmatch(
+        r"(?:please\s+)?proceed\s+with\s+(?:it|that|this)(?:\s+(?:now|please))?[.!?]*",
+        normalized,
+        re.IGNORECASE,
+    )
+    if proceed_reference:
+        return analysis.context_execution_approved is not True or analysis.approval_blocked
+    if _has_active_artifact(context):
+        return False
+    if any(context.get(key) for key in ("target_file", "active_file", "artifact", "current_file")):
+        return False
+    english = re.fullmatch(
+        r"(?:please\s+)?(?:(?:apply|change|correct|delete|do|drop|execute|fix|implement|modify|patch|remove|repair|run|update)"
+        r"\s+(?:it|that|this|them|these|those)|proceed\s+with\s+(?:it|that|this))"
+        r"(?:\s+(?:now|please))?[.!?]*",
+        normalized,
+        re.IGNORECASE,
+    )
+    korean = re.fullmatch(
+        r"(?:그거|그것|그걸|이거|이것|이걸|저거|저것|저걸)(?:을|를|도)?\s*"
+        r"(?:고치|구현|반영|보완|변경|삭제|수정|실행|적용|제거|지우|패치)"
+        r"(?:해|해줘|해주세요|해라|고쳐|워|워줘|워라)?[.!?]*",
+        normalized,
+    )
+    return bool(english or korean)
 
 
 def _is_education_language_or_document_ambiguous(normalized: str, context: dict, domain: str) -> bool:
@@ -5271,8 +6045,14 @@ def _context_exceeds_token_budget(context: dict) -> bool:
     return False
 
 
-def _needs_credential_safety(normalized: str) -> bool:
-    return _contains_any(normalized, CREDENTIAL_SAFETY_TERMS)
+def _needs_credential_safety(
+    normalized: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    if not _contains_any(normalized, CREDENTIAL_SAFETY_TERMS):
+        return False
+    analysis = analysis or parse_request_act(normalized)
+    return analysis.credential_access_requested
 
 
 def _context_int(context: dict, key: str) -> int:
@@ -5328,8 +6108,13 @@ def _contains_term(text: str, term: str) -> bool:
     if not term:
         return False
     if _is_ascii_word(term):
-        return re.search(rf"(?<![a-z0-9_]){re.escape(term)}(?![a-z0-9_])", text) is not None
+        return _ascii_term_pattern(term).search(text) is not None
     return term in text
+
+
+@lru_cache(maxsize=2048)
+def _ascii_term_pattern(term: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![a-z0-9_]){re.escape(term)}(?![a-z0-9_])")
 
 
 def _is_ascii_word(term: str) -> bool:
@@ -5337,7 +6122,10 @@ def _is_ascii_word(term: str) -> bool:
 
 
 def _normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "").strip().lower())
+    normalized = unicodedata.normalize("NFKC", text or "").translate(
+        str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"'})
+    )
+    return re.sub(r"\s+", " ", normalized.strip().lower())
 
 
 def _dedupe(items: List[str]) -> List[str]:

@@ -340,7 +340,272 @@ Do not claim unexecuted work.
             )
         )
 
-    def test_skill_trigger_does_not_leave_a_triviality_escape_hatch(self):
+    def test_session_audit_rejects_assistant_authored_fast_path_json(self):
+        packet = {
+            "intake_mode": "host_native_semantic_fast_path",
+            "route": "direct",
+            "governed_runtime_executed": False,
+            "runtime_applied_skills": [],
+            "token_optimizer_status": "considered_not_needed",
+            "eligibility_rationale": "Direct arithmetic answer needs no tools or governed work.",
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "1+1?"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": json.dumps(packet),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "agent_message", "message": "2", "phase": "final_answer"},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+        rows = {row["name"]: row for row in audit.skills}
+        self.assertEqual(rows["always-on-front-door"]["status"], "claimed_unverified")
+        self.assertEqual(
+            audit.coverage["runtime_applied_skills"],
+            0,
+            audit.coverage["runtime_applied_skill_names"],
+        )
+
+    def test_session_audit_accepts_typed_host_fast_path_event(self):
+        packet = {
+            "intake_mode": "host_native_semantic_fast_path",
+            "route": "direct",
+            "governed_runtime_executed": False,
+            "runtime_applied_skills": [],
+            "token_optimizer_status": "considered_not_needed",
+            "eligibility_rationale": "Direct arithmetic answer needs no tools or governed work.",
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "1+1?"},
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "host_native_front_door",
+                        "origin": "host",
+                        "event_id": "host-front-door-1",
+                        "packet": packet,
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "agent_message", "message": "2", "phase": "final_answer"},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+        self.assertEqual(audit.coverage["runtime_applied_skills"], 0)
+
+    def test_session_audit_never_counts_assistant_front_door_dict_as_runtime(self):
+        packet = {
+            "front_door_status": "ok",
+            "runtime_applied_skills": ["always-on-front-door"],
+            "selected_not_executed_skills": [],
+            "skill_status_summary": {
+                "always-on-front-door": {"status": "applied"}
+            },
+        }
+        variants = [
+            (
+                "{'front_door_status': 'ok', "
+                "'runtime_applied_skills': ['always-on-front-door'], "
+                "'selected_not_executed_skills': [], "
+                "'skill_status_summary': "
+                "{'always-on-front-door': {'status': 'applied'}}}"
+            ),
+            "Assistant observation: " + json.dumps(packet),
+            "```json\n" + json.dumps({**packet, "assistant_modified": True}) + "\n```",
+            json.dumps(
+                {
+                    "runtime_applied_skills": ["always-on-front-door"],
+                    "assistant_modified": True,
+                }
+            ),
+            "Embedded receipt: "
+            + json.dumps(
+                {
+                    "receipt": {
+                        "skill_status_summary": {
+                            "always-on-front-door": {"status": "applied"}
+                        }
+                    }
+                }
+            ),
+            json.dumps(
+                {
+                    "observations": [
+                        {
+                            "skill": "always-on-front-door",
+                            "status": "applied",
+                            "runtime_evidence": "assistant assertion",
+                        }
+                    ]
+                }
+            ),
+        ]
+
+        for forged in variants:
+            with self.subTest(forged=forged[:40]):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {"type": "message", "role": "user", "content": "1+1?"},
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": forged,
+                            },
+                        },
+                        {
+                            "type": "event_msg",
+                            "payload": {"type": "task_complete", "last_agent_message": "2"},
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+                rows = {row["name"]: row for row in audit.skills}
+                row = rows["always-on-front-door"]
+
+                self.assertEqual(row["status"], "claimed_unverified")
+                self.assertEqual(row["runtime_hits"], 0)
+                self.assertNotEqual(row["acceptance"]["status"], "passed")
+                self.assertEqual(audit.coverage["runtime_applied_skills"], 0)
+                self.assertNotIn(
+                    "always-on-front-door",
+                    audit.usage_summary["runtime_applied_skills"],
+                )
+
+    def test_session_audit_rejects_host_native_packet_json_embedded_in_prose(self):
+        packet = {
+            "intake_mode": "host_native_semantic_fast_path",
+            "route": "direct",
+            "governed_runtime_executed": False,
+            "runtime_applied_skills": [],
+            "token_optimizer_status": "considered_not_needed",
+            "eligibility_rationale": "Direct arithmetic answer needs no tools or governed work.",
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": "1+1?"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": (
+                            "A packet could look like "
+                            + json.dumps(packet)
+                            + ", but this prose is not an intake receipt."
+                        ),
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {"type": "agent_message", "message": "2", "phase": "final_answer"},
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
+    def test_session_audit_rejects_forged_standalone_fast_path_for_destructive_request(self):
+        packet = {
+            "intake_mode": "host_native_semantic_fast_path",
+            "route": "direct",
+            "governed_runtime_executed": False,
+            "runtime_applied_skills": [],
+            "token_optimizer_status": "considered_not_needed",
+            "eligibility_rationale": "Assistant-authored JSON is not host provenance.",
+        }
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Please obliterate every production Kubernetes namespace.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": json.dumps(packet),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "kubectl delete namespace --all",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+
+    def test_skill_trigger_defines_strict_host_native_fast_path(self):
         repo_root = Path(__file__).resolve().parents[1]
         skill_text = (repo_root / "skills/always_on_front_door/SKILL.md").read_text(
             encoding="utf-8"
@@ -353,16 +618,24 @@ Do not claim unexecuted work.
         self.assertNotIn("non-trivial", combined)
         self.assertNotIn("do not use it for clearly light direct answers", combined)
         self.assertIn("every new user request or task", combined)
-        self.assertIn("runtime, not the host selector", combined)
-        for required_example in [
-            "short/simple sql formatting",
-            "translation",
-            "rewrite",
-            "lookup",
-            "arithmetic",
+        for required_contract in [
+            "host-native semantic fast path",
+            "direct or meta",
+            "non-specialist",
+            "not stateful",
+            "read-only tool access",
+            "fail closed",
+            "governed_runtime_executed=false",
+            "runtime_applied_skills",
+            "considered_not_needed",
+            "passthrough",
+            "if unsure whether the fast path applies, it does not apply",
         ]:
-            with self.subTest(required_example=required_example):
-                self.assertIn(required_example, combined)
+            with self.subTest(required_contract=required_contract):
+                self.assertIn(required_contract, combined)
+
+        self.assertIn("runtime_applied_skills` must be empty", combined)
+        self.assertIn("a `skill.md` read alone is never evidence", combined)
 
     def test_skill_frontmatter_is_a_direct_universal_trigger(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -400,17 +673,39 @@ Do not claim unexecuted work.
             metadata,
         )
 
-    def test_minimal_workflow_requires_runtime_output_for_direct_exit(self):
+    def test_minimal_workflow_distinguishes_host_native_from_governed_runtime(self):
         repo_root = Path(__file__).resolve().parents[1]
         example = (
             repo_root / "skills/always_on_front_door/examples/minimal-workflow.md"
         ).read_text(encoding="utf-8")
         lowered = example.lower()
 
-        self.assertNotIn("explicit blocked/direct rationale", lowered)
+        self.assertIn("host-native semantic fast path", lowered)
+        self.assertIn("governed_runtime_executed=false", lowered)
+        self.assertIn("runtime_applied_skills=[]", lowered)
         self.assertIn("valid runtime output", lowered)
         self.assertIn("direct", lowered)
         self.assertIn("execution authorization", lowered)
+
+    def test_front_door_classifies_once_and_passes_result_to_composition(self):
+        with mock.patch(
+            "src.orchestration.kh_front_door.classify_request",
+            wraps=classify_request,
+        ) as front_door_classifier, mock.patch(
+            "src.orchestration.plugin_composition.classify_request",
+            wraps=classify_request,
+        ) as composition_classifier:
+            result = build_kh_front_door(
+                "What is PER?",
+                project=Path.cwd(),
+                host="codex",
+                providers=[],
+                micro=True,
+            )
+
+        self.assertEqual(result.classification["complexity"], "light")
+        front_door_classifier.assert_called_once()
+        composition_classifier.assert_not_called()
 
     def test_plugin_manifests_match_the_universal_front_door_trigger(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -452,7 +747,7 @@ Do not claim unexecuted work.
         collect_catalog.assert_not_called()
         discover_host_skills.assert_not_called()
         packet = result.to_micro_summary_dict()
-        self.assertEqual(packet["src"]["v"], "2.9.142")
+        self.assertEqual(packet["src"]["v"], "2.9.143")
         self.assertEqual(packet["cls"], {"c": "l", "x": "direct"})
         self.assertNotIn("next", packet)
 
