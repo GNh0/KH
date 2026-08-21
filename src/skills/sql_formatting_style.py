@@ -46,15 +46,25 @@ _NUMBERED_MAIN_ALIAS_PATTERN = re.compile(r"^A[0-9]+$")
 _DERIVED_INTERNAL_ALIAS_PATTERN = re.compile(r"^(?:T\d*|T[A-Z]\d+)$")
 _ALIAS_BASIS_SOURCE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://[^\s]+$")
 _ALIAS_BASIS_SOURCE_SCHEMES = frozenset({"design", "review", "spec", "ticket"})
+_ALIAS_RATIONALE_SOURCE_SCHEMES = frozenset({"query", "sql"})
+_ALIAS_REVIEW_BASIS_KIND = "reviewer_approved_business_role"
+_ALIAS_RATIONALE_BASIS_KIND = "source_bound_role_rationale"
 _ALIAS_BASIS_EVIDENCE_CONTRACT = {
-    "kind": "reviewer_approved_business_role",
-    "required_fields": ["kind", "source", "reviewer_approved", "role_names"],
-    "source_format": "controlled_artifact_uri",
-    "allowed_source_schemes": sorted(_ALIAS_BASIS_SOURCE_SCHEMES),
-    "reviewer_approved": True,
+    "preferred_kind": _ALIAS_RATIONALE_BASIS_KIND,
+    "preferred_required_fields": ["kind", "source", "role_names", "rationale"],
+    "preferred_source_schemes": sorted(_ALIAS_RATIONALE_SOURCE_SCHEMES),
     "role_coverage": "exact_declared_role_names",
+    "external_authentication": "not_authenticated",
+    "compatibility_kind": _ALIAS_REVIEW_BASIS_KIND,
+    "compatibility_required_fields": [
+        "kind",
+        "source",
+        "reviewer_approved",
+        "role_names",
+    ],
+    "compatibility_source_schemes": sorted(_ALIAS_BASIS_SOURCE_SCHEMES),
     "legacy_compact_source_format": "review://<review-id>/<declared-role-names>-roles",
-    "semantic_authentication": "caller_declared_not_authenticated",
+    "source_binding": "plan_sql_hash_and_scope_fingerprint",
 }
 _SUPPORT_ALIAS_SYMBOLS = "BCDEFGHIJKLMNOPQRSUVWXYZ"
 _INSERT_SELECT_LAYOUT_CONTRACT = {
@@ -789,7 +799,27 @@ def bind_sql_alias_role_plan(
             raise ValueError(
                 f"alias-role plan contains scope {scope_id!r} that is not present in SQL"
             )
-        raw_scope["scope_declaration_fingerprint"] = fingerprints[scope_id]
+        scope_fingerprint = fingerprints[scope_id]
+        raw_scope["scope_declaration_fingerprint"] = scope_fingerprint
+        basis_references = raw_scope.get("basis_references", [])
+        if isinstance(basis_references, Sequence) and not isinstance(
+            basis_references, (str, bytes)
+        ):
+            for reference in basis_references:
+                if not isinstance(reference, dict) or str(
+                    reference.get("kind", "")
+                ).strip() != _ALIAS_RATIONALE_BASIS_KIND:
+                    continue
+                expected_bindings = {
+                    "source_sql_sha256": binding["source_sql_sha256"],
+                    "scope_id": scope_id,
+                    "scope_declaration_fingerprint": scope_fingerprint,
+                }
+                for key, expected in expected_bindings.items():
+                    supplied = reference.get(key)
+                    if supplied is not None and supplied != expected:
+                        raise ValueError(f"{key} conflicts with exact SQL scope binding")
+                    reference[key] = expected
     result["source_sql_sha256"] = binding["source_sql_sha256"]
     return result
 
@@ -2008,6 +2038,8 @@ def _validate_alias_role_plan(
         for scope_id, values in all_expected_ordered.items()
     }
 
+    basis_modes: set[str] = set()
+    basis_authentication: Dict[str, str] = {}
     for raw_scope in raw_scopes:
         if not isinstance(raw_scope, Mapping):
             conflicts.append("scope entry must be an object")
@@ -2041,10 +2073,22 @@ def _validate_alias_role_plan(
         ):
             conflicts.append(f"scope {scope_id!r} roles require unique non-empty names")
             issue_codes.add("alias_plan_incomplete")
-        basis_conflicts = _business_role_basis_conflicts(
+        basis_conflicts, scope_basis_metadata = _business_role_basis_conflicts(
             raw_scope.get("basis_references", []),
             normalized_role_names,
             scope_id,
+            source_sql_sha256=(
+                str(plan.get("source_sql_sha256", "")).strip().lower()
+                if isinstance(plan, Mapping)
+                else ""
+            ),
+            scope_declaration_fingerprint=str(
+                raw_scope.get("scope_declaration_fingerprint", "")
+            ).strip().lower(),
+        )
+        basis_modes.update(scope_basis_metadata["basis_modes"])
+        basis_authentication.update(
+            scope_basis_metadata["external_authentication_by_mode"]
         )
         if basis_conflicts:
             conflicts.extend(basis_conflicts)
@@ -2194,6 +2238,11 @@ def _validate_alias_role_plan(
                 else "plan_conflicts_with_sql"
             ),
             "semantic_authentication": "caller_declared_not_authenticated",
+            "basis_modes": sorted(basis_modes),
+            "external_authentication": {
+                "status": "not_authenticated",
+                "by_mode": dict(sorted(basis_authentication.items())),
+            },
             "plan_provided": True,
             "verified_scopes": verified_scopes,
             "conflicts": conflicts,
@@ -2292,8 +2341,10 @@ def _canonical_token_stream(
         if scope is None:
             continue
         for index in range(scope.start, min(scope.end, len(tokens))):
+            # A derived declaration spans its child query; it is not an object-name range.
             if any(
-                item.source_start <= index <= item.source_name_end
+                item.source != "(DERIVED)"
+                and item.source_start <= index <= item.source_name_end
                 for item in declarations
             ):
                 continue
@@ -3832,19 +3883,33 @@ def _business_role_basis_conflicts(
     value: Any,
     required_role_names: Sequence[str],
     scope_id: str,
-) -> List[str]:
+    *,
+    source_sql_sha256: str = "",
+    scope_declaration_fingerprint: str = "",
+) -> Tuple[List[str], Dict[str, Any]]:
+    metadata: Dict[str, Any] = {
+        "basis_modes": [],
+        "external_authentication_by_mode": {},
+    }
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or not value:
-        return [
-            f"scope {scope_id!r} needs structured reviewer-approved business-role basis evidence"
-        ]
+        return (
+            [f"scope {scope_id!r} needs structured source-bound business-role basis evidence"],
+            metadata,
+        )
 
     conflicts: List[str] = []
     covered_roles: set[str] = set()
+    basis_modes: set[str] = set()
+    authentication_by_mode: Dict[str, str] = {}
     for index, reference in enumerate(value, start=1):
         label = f"scope {scope_id!r} basis_references[{index}]"
         if isinstance(reference, str):
             if _is_legacy_business_role_basis(reference, required_role_names):
                 covered_roles.update(required_role_names)
+                basis_modes.add("legacy_reviewer")
+                authentication_by_mode["legacy_reviewer"] = (
+                    "caller_declared_not_externally_authenticated"
+                )
             else:
                 conflicts.append(
                     f"{label} legacy form must be review://<review-id>/<declared-role-names>-roles"
@@ -3853,22 +3918,51 @@ def _business_role_basis_conflicts(
         if not isinstance(reference, Mapping):
             conflicts.append(f"{label} must be an object")
             continue
-        if str(reference.get("kind", "")).strip() != _ALIAS_BASIS_EVIDENCE_CONTRACT["kind"]:
-            conflicts.append(
-                f"{label}.kind must be {_ALIAS_BASIS_EVIDENCE_CONTRACT['kind']!r}"
+        kind = str(reference.get("kind", "")).strip()
+        if kind == _ALIAS_RATIONALE_BASIS_KIND:
+            basis_modes.add(kind)
+            authentication_by_mode[kind] = (
+                "host_or_caller_declared_not_externally_authenticated"
             )
-        source = str(reference.get("source", "")).strip()
-        source_scheme = source.split("://", 1)[0].lower() if "://" in source else ""
-        if (
-            not _ALIAS_BASIS_SOURCE_PATTERN.fullmatch(source)
-            or source_scheme not in _ALIAS_BASIS_SOURCE_SCHEMES
-        ):
-            conflicts.append(
-                f"{label}.source must use a controlled reviewer artifact URI scheme "
-                f"from {sorted(_ALIAS_BASIS_SOURCE_SCHEMES)!r}"
+            source = str(reference.get("source", "")).strip()
+            source_scheme = source.split("://", 1)[0].lower() if "://" in source else ""
+            if (
+                not _ALIAS_BASIS_SOURCE_PATTERN.fullmatch(source)
+                or source_scheme not in _ALIAS_RATIONALE_SOURCE_SCHEMES
+            ):
+                conflicts.append(f"{label}.source must use query:// or sql://")
+            if not str(reference.get("rationale", "")).strip():
+                conflicts.append(f"{label}.rationale must be non-empty")
+            expected_bindings = {
+                "source_sql_sha256": source_sql_sha256,
+                "scope_id": scope_id,
+                "scope_declaration_fingerprint": scope_declaration_fingerprint,
+            }
+            for key, expected in expected_bindings.items():
+                if not expected or str(reference.get(key, "")).strip().lower() != expected.lower():
+                    conflicts.append(f"{label}.{key} must match the exact bound SQL scope")
+        elif kind == _ALIAS_REVIEW_BASIS_KIND:
+            basis_modes.add("legacy_reviewer")
+            authentication_by_mode["legacy_reviewer"] = (
+                "caller_declared_reviewer_approval_not_externally_authenticated"
             )
-        if reference.get("reviewer_approved") is not True:
-            conflicts.append(f"{label}.reviewer_approved must be true")
+            source = str(reference.get("source", "")).strip()
+            source_scheme = source.split("://", 1)[0].lower() if "://" in source else ""
+            if (
+                not _ALIAS_BASIS_SOURCE_PATTERN.fullmatch(source)
+                or source_scheme not in _ALIAS_BASIS_SOURCE_SCHEMES
+            ):
+                conflicts.append(
+                    f"{label}.source must use a controlled reviewer artifact URI scheme "
+                    f"from {sorted(_ALIAS_BASIS_SOURCE_SCHEMES)!r}"
+                )
+            if reference.get("reviewer_approved") is not True:
+                conflicts.append(f"{label}.reviewer_approved must be true")
+        else:
+            conflicts.append(
+                f"{label}.kind must be {_ALIAS_RATIONALE_BASIS_KIND!r} or "
+                f"{_ALIAS_REVIEW_BASIS_KIND!r}"
+            )
         role_names = reference.get("role_names", [])
         if (
             not isinstance(role_names, Sequence)
@@ -3884,12 +3978,21 @@ def _business_role_basis_conflicts(
         covered_roles.update(normalized)
 
     required = set(required_role_names)
+    if len(basis_modes) > 1:
+        conflicts.append(
+            f"scope {scope_id!r} basis references must use exactly one mode: "
+            "source_bound_role_rationale or legacy_reviewer"
+        )
     if covered_roles != required:
         conflicts.append(
             f"scope {scope_id!r} basis role coverage must exactly match declared roles: "
             f"missing={sorted(required - covered_roles)!r}, extra={sorted(covered_roles - required)!r}"
         )
-    return conflicts
+    metadata["basis_modes"] = sorted(basis_modes)
+    metadata["external_authentication_by_mode"] = dict(
+        sorted(authentication_by_mode.items())
+    )
+    return conflicts, metadata
 
 
 def _is_legacy_business_role_basis(

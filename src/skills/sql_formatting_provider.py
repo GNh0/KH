@@ -272,6 +272,116 @@ class SqlFormattingCliArtifactError(ValueError):
         super().__init__(f"{code}: {message}: {path}")
 
 
+@dataclass(frozen=True)
+class SqlFormattingRepairDecision:
+    status: str
+    attempts_used: int
+    max_attempts: int
+    repair_allowed: bool
+    sql_delivery_allowed: bool
+    blocked_reason: str
+    issue_codes: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def evaluate_sql_formatting_repair_gate(
+    verifier_results: Sequence[Mapping[str, Any]],
+    *,
+    repair_issue_codes: Sequence[str] = (),
+) -> SqlFormattingRepairDecision:
+    """Allow one initial verification plus one evidence-directed repair."""
+    attempts = list(verifier_results)
+    max_attempts = 2
+    issue_codes = {
+        str(code).strip()
+        for code in repair_issue_codes
+        if str(code).strip()
+    }
+    def collect_issue_codes(value: Any) -> None:
+        if isinstance(value, Mapping):
+            code = value.get("code")
+            if isinstance(code, str) and code.strip():
+                issue_codes.add(code.strip())
+            for nested in value.values():
+                collect_issue_codes(nested)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            for nested in value:
+                collect_issue_codes(nested)
+
+    for result in attempts:
+        if not isinstance(result, Mapping):
+            continue
+        collect_issue_codes(result.get("issues", []))
+        collect_issue_codes(result.get("metadata", {}))
+
+    def is_ready(result: Any) -> bool:
+        if not isinstance(result, Mapping):
+            return False
+        metadata = result.get("metadata", {})
+        readiness = (
+            metadata.get("release_readiness", {})
+            if isinstance(metadata, Mapping)
+            else {}
+        )
+        return (
+            result.get("success") is True
+            and type(result.get("exit_code")) is int
+            and result.get("exit_code") == 0
+            and isinstance(readiness, Mapping)
+            and readiness.get("status") == "ready"
+        )
+
+    def decision(
+        status: str,
+        *,
+        repair_allowed: bool = False,
+        sql_delivery_allowed: bool = False,
+        blocked_reason: str = "",
+    ) -> SqlFormattingRepairDecision:
+        return SqlFormattingRepairDecision(
+            status=status,
+            attempts_used=len(attempts),
+            max_attempts=max_attempts,
+            repair_allowed=repair_allowed,
+            sql_delivery_allowed=sql_delivery_allowed,
+            blocked_reason=blocked_reason,
+            issue_codes=sorted(issue_codes),
+        )
+
+    if not attempts:
+        return decision(
+            "initial_verification_required",
+            blocked_reason="sql_formatting_initial_verification_required",
+        )
+    if len(attempts) > max_attempts:
+        return decision(
+            "blocked",
+            blocked_reason="sql_formatting_repair_limit_exhausted",
+        )
+    if len(attempts) == 1 and is_ready(attempts[0]):
+        return decision("ready", sql_delivery_allowed=True)
+    if len(attempts) == 1:
+        if issue_codes:
+            return decision("repair_allowed", repair_allowed=True)
+        return decision(
+            "blocked",
+            blocked_reason="sql_formatting_repair_evidence_required",
+        )
+    if not issue_codes:
+        return decision(
+            "blocked",
+            blocked_reason="sql_formatting_repair_evidence_required",
+        )
+    if is_ready(attempts[1]):
+        return decision("ready", sql_delivery_allowed=True)
+    return decision(
+        "blocked",
+        blocked_reason="sql_formatting_repair_limit_exhausted",
+    )
+
+
 class DuplicateJsonKeyError(ValueError):
     pass
 
@@ -936,6 +1046,7 @@ def guard_and_bind_verified_sql_final_response(
     style_contract_path: str | Path | None = None,
     cte_temp_table_reason: str | None = None,
     alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
+    verifier_history: Sequence[Mapping[str, Any]] | None = None,
 ) -> SqlFinalResponseRelease:
     provider_guard = guard_authoritative_sql_formatting_provider_path(
         provider_path,
@@ -951,11 +1062,55 @@ def guard_and_bind_verified_sql_final_response(
         alias_role_plan=alias_role_plan,
         operation="formatting",
     )
+    _require_ready_sql_formatting_repair_history(verifier_history, binding)
     return SqlFinalResponseRelease(
         status="passed",
         provider_path_guard=provider_guard,
         binding=binding,
     )
+
+
+def _require_ready_sql_formatting_repair_history(
+    verifier_history: Sequence[Mapping[str, Any]] | None,
+    binding: SqlFinalResponseBinding,
+) -> SqlFormattingRepairDecision:
+    if (
+        not isinstance(verifier_history, Sequence)
+        or isinstance(verifier_history, (str, bytes))
+        or not verifier_history
+    ):
+        raise SqlFinalResponseBindingError(
+            "sql_formatting_repair_history_required",
+            "Public SQL release requires the complete verifier history.",
+        )
+    if any(not isinstance(item, Mapping) for item in verifier_history):
+        raise SqlFinalResponseBindingError(
+            "sql_formatting_repair_history_invalid",
+            "Every verifier-history item must be a structured verifier result.",
+        )
+    decision = evaluate_sql_formatting_repair_gate(verifier_history)
+    if decision.status != "ready" or not decision.sql_delivery_allowed:
+        raise SqlFinalResponseBindingError(
+            decision.blocked_reason or "sql_formatting_repair_decision_not_ready",
+            "The complete verifier history is not eligible for final SQL release.",
+        )
+    latest = verifier_history[-1]
+    latest_metadata = latest.get("metadata", {})
+    if not isinstance(latest_metadata, Mapping):
+        raise SqlFinalResponseBindingError(
+            "sql_formatting_repair_history_invalid",
+            "The final verifier-history item must contain mapping metadata.",
+        )
+    expected = {
+        "original_sha256": binding.original_sha256,
+        "formatted_sha256": binding.formatted_sha256,
+    }
+    if any(latest_metadata.get(key) != value for key, value in expected.items()):
+        raise SqlFinalResponseBindingError(
+            "sql_formatting_repair_history_candidate_mismatch",
+            "The ready verifier history is not bound to the exact final SQL candidate.",
+        )
+    return decision
 
 
 def guard_authoritative_sql_formatting_provider_path(
@@ -2174,6 +2329,15 @@ def _load_json_mapping(path: str | None) -> Mapping[str, Any] | None:
     return data
 
 
+def _load_json_sequence(path: str | None) -> Sequence[Mapping[str, Any]] | None:
+    if not path:
+        return None
+    data = load_json_without_duplicate_keys(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, Sequence) or isinstance(data, (str, bytes)):
+        raise ValueError("Verifier-history evidence must be an array.")
+    return data
+
+
 def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Guard the selected SQL formatter and bind a freshly verified final SQL response."
@@ -2188,6 +2352,7 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--invocation-nonce", required=True)
     parser.add_argument("--style-contract")
     parser.add_argument("--alias-role-plan-file")
+    parser.add_argument("--verifier-history-file")
     parser.add_argument("--cte-temp-table-reason")
     return parser
 
@@ -2211,6 +2376,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             style_contract_path=args.style_contract,
             cte_temp_table_reason=args.cte_temp_table_reason,
             alias_role_plan=_load_json_mapping(args.alias_role_plan_file),
+            verifier_history=_load_json_sequence(args.verifier_history_file),
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         code = getattr(exc, "code", "sql_final_binding_failed")

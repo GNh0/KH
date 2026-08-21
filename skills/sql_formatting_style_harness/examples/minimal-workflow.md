@@ -52,7 +52,7 @@ Expected:
 - `alias_role_plan_required` blocks output;
 - no role is inferred from repeated source names.
 
-After a reviewer supplies concrete basis references and a complete scope plan, rerun. Python verifies membership, coverage, scope, numbering, and reference substitution only.
+After the host supplies a `query://` or `sql://` source-bound rationale and a complete scope plan, bind and rerun. Python verifies membership, coverage, scope, numbering, source binding, and reference substitution only. Real legacy reviewer evidence remains compatible, but the host must not fabricate it.
 
 ### Case 4: Refactor Evidence Complete but Not Proven
 

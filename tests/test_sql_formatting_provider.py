@@ -23,6 +23,8 @@ from src.skills.sql_formatting_provider import (
     attach_sql_formatting_cli_runtime_receipt,
     attach_sql_provider_selection_runtime_receipt,
     bind_verified_sql_final_response,
+    evaluate_sql_formatting_repair_gate,
+    guard_and_bind_verified_sql_final_response,
     guard_authoritative_sql_formatting_provider_path,
     inspect_host_sql_formatting_provider,
     inspect_packaged_sql_formatting_provider,
@@ -69,6 +71,123 @@ Unknown scalar functions must stay scalar functions unless their contract proves
 When SQL contains this function, replace it with a `LEFT OUTER JOIN BA011T` lookup.
 Join `BA011T` with `MAINCD`, `SUBCD`, and `USEYN`, then select `SUBNM`.
 """
+
+    @staticmethod
+    def verifier_result(success):
+        return {
+            "success": success,
+            "exit_code": 0 if success else 1,
+            "metadata": {
+                "release_readiness": {"status": "ready" if success else "blocked"},
+                "issues": [] if success else [{"code": "join_layout_invalid"}],
+            },
+        }
+
+    def test_repair_gate_allows_one_evidence_directed_repair(self):
+        first = evaluate_sql_formatting_repair_gate([self.verifier_result(False)])
+        repaired = evaluate_sql_formatting_repair_gate(
+            [self.verifier_result(False), self.verifier_result(True)],
+            repair_issue_codes=["join_layout_invalid"],
+        )
+
+        self.assertEqual(first.status, "repair_allowed")
+        self.assertTrue(first.repair_allowed)
+        self.assertFalse(first.sql_delivery_allowed)
+        self.assertEqual(repaired.status, "ready")
+        self.assertFalse(repaired.repair_allowed)
+        self.assertTrue(repaired.sql_delivery_allowed)
+
+    def test_repair_gate_blocks_after_failed_repair_and_never_releases_later_sql(self):
+        failed_repair = evaluate_sql_formatting_repair_gate(
+            [self.verifier_result(False), self.verifier_result(False)],
+            repair_issue_codes=["join_layout_invalid"],
+        )
+        late_success = evaluate_sql_formatting_repair_gate(
+            [
+                self.verifier_result(False),
+                self.verifier_result(False),
+                self.verifier_result(True),
+            ],
+            repair_issue_codes=["join_layout_invalid"],
+        )
+
+        for decision in (failed_repair, late_success):
+            self.assertEqual(decision.status, "blocked")
+            self.assertEqual(
+                decision.blocked_reason,
+                "sql_formatting_repair_limit_exhausted",
+            )
+            self.assertFalse(decision.repair_allowed)
+            self.assertFalse(decision.sql_delivery_allowed)
+
+    def test_repair_gate_blocks_second_attempt_without_issue_evidence(self):
+        first = self.verifier_result(False)
+        second = self.verifier_result(True)
+        first["metadata"]["issues"] = []
+        second["metadata"]["issues"] = []
+        decision = evaluate_sql_formatting_repair_gate(
+            [first, second]
+        )
+
+        self.assertEqual(decision.status, "blocked")
+        self.assertEqual(
+            decision.blocked_reason,
+            "sql_formatting_repair_evidence_required",
+        )
+        self.assertFalse(decision.sql_delivery_allowed)
+
+    def test_public_release_rejects_missing_nonready_and_late_repair_history(self):
+        original = "SELECT ORDER_ID FROM ORDER_HEADER;"
+        candidate = "SELECT ORDER_ID\nFROM ORDER_HEADER;"
+        response = f"```sql\n{candidate}\n```"
+        ready = verify_sql_formatting_style(original, candidate).to_dict()
+        blocked = verify_sql_formatting_style(
+            original,
+            candidate.replace("ORDER_ID", "CUSTOMER_ID"),
+        ).to_dict()
+        with tempfile.TemporaryDirectory() as tmp:
+            provider_path = self.write_host_skill(tmp, self.COMPATIBLE_HOST_SKILL)
+            selection = self.provider_selection(provider_path)
+            common = {
+                "provider_path": provider_path,
+                "selected_active_provider_path": provider_path,
+                "provider_selection": selection,
+            }
+            cases = {
+                "missing": (None, "sql_formatting_repair_history_required"),
+                "nonready": (
+                    [blocked],
+                    "sql_formatting_repair_decision_not_ready",
+                ),
+                "second_failed": (
+                    [blocked, blocked],
+                    "sql_formatting_repair_limit_exhausted",
+                ),
+                "late_success": (
+                    [blocked, blocked, ready],
+                    "sql_formatting_repair_limit_exhausted",
+                ),
+            }
+            for label, (history, expected) in cases.items():
+                with self.subTest(label=label):
+                    with self.assertRaises(SqlFinalResponseBindingError) as raised:
+                        guard_and_bind_verified_sql_final_response(
+                            original,
+                            candidate,
+                            response,
+                            verifier_history=history,
+                            **common,
+                        )
+                    self.assertEqual(raised.exception.code, expected)
+
+            release = guard_and_bind_verified_sql_final_response(
+                original,
+                candidate,
+                response,
+                verifier_history=[ready],
+                **common,
+            )
+            self.assertEqual(release.status, "passed")
 
     def write_host_skill(self, root, content):
         skill_path = Path(root) / "skills" / "sql-formatting" / "SKILL.md"
@@ -1165,10 +1284,22 @@ Join `BA011T` with `MAINCD`, `SUBCD`, and `USEYN`, then select `SUBNM`.
             candidate_path = root / "candidate.sql"
             response_path = root / "response.md"
             selection_path = root / "provider-selection.json"
+            history_path = root / "verifier-history.json"
             original_path.write_text("SELECT ORDER_ID FROM ORDER_HEADER;", encoding="utf-8")
             candidate = "SELECT ORDER_ID\nFROM ORDER_HEADER;"
             candidate_path.write_text(candidate, encoding="utf-8")
             response_path.write_text(f"```sql\n{candidate}\n```", encoding="utf-8")
+            history_path.write_text(
+                json.dumps(
+                    [
+                        verify_sql_formatting_style(
+                            original_path.read_text(encoding="utf-8"),
+                            candidate,
+                        ).to_dict()
+                    ]
+                ),
+                encoding="utf-8",
+            )
             front_door = subprocess.run(
                 [
                     sys.executable,
@@ -1212,11 +1343,30 @@ Join `BA011T` with `MAINCD`, `SUBCD`, and `USEYN`, then select `SUBNM`.
                 str(provider_path),
                 "--provider-selection-file",
                 str(selection_path),
+                "--verifier-history-file",
+                str(history_path),
                 "--session-id",
                 "provider-cli-test",
                 "--invocation-nonce",
                 "provider-cli-test-0001",
             ]
+            missing_history_command = list(command)
+            history_index = missing_history_command.index("--verifier-history-file")
+            del missing_history_command[history_index : history_index + 2]
+            missing_history = subprocess.run(
+                missing_history_command,
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+                env=env,
+            )
+            self.assertEqual(missing_history.returncode, 1)
+            self.assertEqual(
+                json.loads(missing_history.stdout)["error_code"],
+                "sql_formatting_repair_history_required",
+            )
             accepted = subprocess.run(
                 command,
                 cwd=repo_root,
@@ -1869,6 +2019,27 @@ Join `BA011T` with `MAINCD`, `SUBCD`, and `USEYN`, then select `SUBNM`.
                 )
 
             self.assertEqual(raised.exception.code, "final_sql_candidate_mismatch")
+
+    def test_final_response_binding_fails_closed_for_a_different_complete_sql_fence(self):
+        candidate = (
+            "SELECT A.EVENT_ID\n"
+            "FROM USAGE_LOG A\n"
+            "WHERE A.ACTIVE = 'Y';"
+        )
+        unverified_alternative = (
+            "SELECT L.EVENT_ID\n"
+            "FROM USAGE_LOG L\n"
+            "WHERE L.ACTIVE = 'Y';"
+        )
+
+        with self.assertRaises(SqlFinalResponseBindingError) as raised:
+            bind_verified_sql_final_response(
+                candidate,
+                candidate,
+                f"```sql\n{unverified_alternative}\n```",
+            )
+
+        self.assertEqual(raised.exception.code, "final_sql_candidate_mismatch")
 
     def test_final_response_binding_accepts_up_to_three_leading_fence_spaces(self):
         candidate = "SELECT 1;"

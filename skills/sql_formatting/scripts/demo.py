@@ -166,12 +166,26 @@ def _sql_formatting_provider_scenario(output_dir: Path) -> tuple[dict[str, Any],
         "binding": output_dir / "final_response_binding.json",
         "path_authority": output_dir / "provider_path_authority.json",
         "provider_selection": output_dir / "provider_selection.json",
+        "verifier_history": output_dir / "verifier_history.json",
     }
     paths["source"].write_text(source, encoding="utf-8")
     paths["candidate"].write_text(candidate, encoding="utf-8")
     paths["final_response"].write_text(final_response, encoding="utf-8")
     paths["provider_selection"].write_text(
         json.dumps(provider_selection, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    paths["verifier_history"].write_text(
+        json.dumps(
+            [
+                verify_sql_formatting_style(
+                    paths["source"].read_bytes(),
+                    paths["candidate"].read_text(encoding="utf-8"),
+                ).to_dict()
+            ],
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     cli_stdout = io.StringIO()
@@ -190,6 +204,8 @@ def _sql_formatting_provider_scenario(output_dir: Path) -> tuple[dict[str, Any],
                 str(provider_path),
                 "--provider-selection-file",
                 str(paths["provider_selection"]),
+                "--verifier-history-file",
+                str(paths["verifier_history"]),
                 "--session-id",
                 session_id,
                 "--invocation-nonce",

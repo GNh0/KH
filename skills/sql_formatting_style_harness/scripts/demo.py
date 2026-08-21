@@ -35,6 +35,17 @@ def _formatting_sql() -> tuple[str, str]:
     )
 
 
+def _role_rationale(source: str, rationale: str, *role_names: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": "source_bound_role_rationale",
+            "source": source,
+            "role_names": list(role_names),
+            "rationale": rationale,
+        }
+    ]
+
+
 def _alias_sql() -> tuple[str, str, dict[str, Any]]:
     original = (
         "SELECT ORDER_HEADER.ORDER_NO, CUSTOMER.CUSTOMER_NAME\n"
@@ -54,7 +65,12 @@ def _alias_sql() -> tuple[str, str, dict[str, Any]]:
         "scopes": [
             {
                 "scope_id": "scope_1",
-                "basis_references": ["review://demo/order-and-customer-roles"],
+                "basis_references": _role_rationale(
+                    "query://demo/alias-scope-1",
+                    "ORDER_HEADER is the structural main source and CUSTOMER supplies customer attributes.",
+                    "order",
+                    "customer",
+                ),
                 "roles": [
                     {
                         "name": "order",
@@ -117,7 +133,12 @@ def _derived_layout_sql() -> tuple[str, str, dict[str, Any]]:
         "scopes": [
             {
                 "scope_id": "scope_1",
-                "basis_references": ["review://demo/order-and-summary-roles"],
+                "basis_references": _role_rationale(
+                    "query://demo/derived-scope-1",
+                    "ORDER_HEADER is the structural main source and the derived query supplies its summary.",
+                    "order",
+                    "summary",
+                ),
                 "roles": [
                     {
                         "name": "order",
@@ -161,7 +182,12 @@ def _refactor_sql() -> tuple[str, str, dict[str, Any]]:
         "scopes": [
             {
                 "scope_id": "scope_1",
-                "basis_references": ["review://demo/main-and-lookup-roles"],
+                "basis_references": _role_rationale(
+                    "sql://demo/refactor-scope-1",
+                    "T_MAIN is the structural main source and CODE_LOOKUP supplies lookup attributes.",
+                    "main",
+                    "lookup",
+                ),
                 "roles": [
                     {
                         "name": "main",
@@ -297,7 +323,10 @@ def _case_context() -> dict[str, str]:
 
 
 def _run_cases(output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    from src.skills.sql_formatting_style import verify_sql_formatting_style
+    from src.skills.sql_formatting_style import (
+        bind_sql_alias_role_plan,
+        verify_sql_formatting_style,
+    )
 
     formatting_original, formatting_output = _formatting_sql()
     alias_original, alias_output, alias_plan = _alias_sql()
@@ -305,6 +334,17 @@ def _run_cases(output_dir: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     derived_original, derived_output, derived_plan = _derived_layout_sql()
     predicate_context, predicate_context_plan = _predicate_context_sql()
     refactor_original, refactor_output, refactor_alias_plan = _refactor_sql()
+    alias_plan = bind_sql_alias_role_plan(alias_original, alias_plan)
+    comma_source_plan = bind_sql_alias_role_plan(comma_source, comma_source_plan)
+    derived_plan = bind_sql_alias_role_plan(derived_original, derived_plan)
+    predicate_context_plan = bind_sql_alias_role_plan(
+        predicate_context,
+        predicate_context_plan,
+    )
+    refactor_alias_plan = bind_sql_alias_role_plan(
+        refactor_original,
+        refactor_alias_plan,
+    )
     cases = {
         "formatting_success": verify_sql_formatting_style(formatting_original, formatting_output),
         "semantic_mutation_blocked": verify_sql_formatting_style(

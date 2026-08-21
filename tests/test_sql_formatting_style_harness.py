@@ -2491,6 +2491,153 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
         self.assertEqual(result.metadata["formatting_preservation"]["status"], "verified")
 
+    def test_nested_derived_alias_plan_canonicalizes_child_scope_references(self):
+        original = (
+            "SELECT X.EVENT_ID\n"
+            "     , Y.PROGRAM_NAME\n"
+            "FROM (\n"
+            "    SELECT L.EVENT_ID\n"
+            "         , L.PROGRAM_ID\n"
+            "         , U.USER_NAME\n"
+            "         , P.CATEGORY\n"
+            "    FROM USAGE_LOG L\n"
+            "            LEFT OUTER JOIN USER_DIRECTORY U\n"
+            "                         ON L.USER_ID = U.USER_ID\n"
+            "            LEFT OUTER JOIN (\n"
+            "                SELECT PROGRAM_ID\n"
+            "                     , MAX(CATEGORY) AS CATEGORY\n"
+            "                FROM PROGRAM_CATALOG\n"
+            "                GROUP BY PROGRAM_ID\n"
+            "            ) P\n"
+            "                         ON L.PROGRAM_ID = P.PROGRAM_ID\n"
+            ") X\n"
+            "        LEFT OUTER JOIN (\n"
+            "            SELECT PROGRAM_ID\n"
+            "                 , MAX(PROGRAM_NAME) AS PROGRAM_NAME\n"
+            "            FROM PROGRAM_CATALOG\n"
+            "            GROUP BY PROGRAM_ID\n"
+            "        ) Y\n"
+            "                     ON X.PROGRAM_ID = Y.PROGRAM_ID;\n"
+        )
+        formatted = (
+            "SELECT A.EVENT_ID\n"
+            "     , B.PROGRAM_NAME\n"
+            "FROM (\n"
+            "    SELECT A.EVENT_ID\n"
+            "         , A.PROGRAM_ID\n"
+            "         , B.USER_NAME\n"
+            "         , C.CATEGORY\n"
+            "    FROM USAGE_LOG A\n"
+            "            LEFT OUTER JOIN USER_DIRECTORY B\n"
+            "                         ON A.USER_ID = B.USER_ID\n"
+            "            LEFT OUTER JOIN (\n"
+            "                SELECT PROGRAM_ID\n"
+            "                     , MAX(CATEGORY) AS CATEGORY\n"
+            "                FROM PROGRAM_CATALOG\n"
+            "                GROUP BY PROGRAM_ID\n"
+            "            ) C\n"
+            "                         ON A.PROGRAM_ID = C.PROGRAM_ID\n"
+            ") A\n"
+            "        LEFT OUTER JOIN (\n"
+            "            SELECT PROGRAM_ID\n"
+            "                 , MAX(PROGRAM_NAME) AS PROGRAM_NAME\n"
+            "            FROM PROGRAM_CATALOG\n"
+            "            GROUP BY PROGRAM_ID\n"
+            "        ) B\n"
+            "                     ON A.PROGRAM_ID = B.PROGRAM_ID;\n"
+        )
+        plan = {
+            "scopes": [
+                {
+                    "scope_id": "scope_1",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-NESTED/usage-program-roles",
+                        "usage",
+                        "program",
+                    ),
+                    "roles": [
+                        {
+                            "name": "usage",
+                            "kind": "main",
+                            "members": [
+                                {
+                                    "source": "(DERIVED)",
+                                    "original_alias": "X",
+                                    "alias": "A",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "program",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "(DERIVED)",
+                                    "original_alias": "Y",
+                                    "alias": "B",
+                                }
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "scope_id": "scope_2",
+                    "basis_references": _approved_role_basis(
+                        "review://SQL-NESTED/usage-user-program-roles",
+                        "usage",
+                        "user",
+                        "program",
+                    ),
+                    "roles": [
+                        {
+                            "name": "usage",
+                            "kind": "main",
+                            "members": [
+                                {
+                                    "source": "USAGE_LOG",
+                                    "original_alias": "L",
+                                    "alias": "A",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "user",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "USER_DIRECTORY",
+                                    "original_alias": "U",
+                                    "alias": "B",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "program",
+                            "kind": "support",
+                            "members": [
+                                {
+                                    "source": "(DERIVED)",
+                                    "original_alias": "P",
+                                    "alias": "C",
+                                }
+                            ],
+                        },
+                    ],
+                },
+            ]
+        }
+
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
+        self.assertEqual(result.metadata["style_lint"]["status"], "passed")
+        self.assertEqual(result.metadata["formatting_preservation"]["status"], "verified")
+
     def test_outer_alias_rename_cannot_capture_shadowed_correlated_references(self):
         original = (
             "SELECT X.ID\n"
@@ -3178,6 +3325,151 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
 
                 self.assertFalse(result.success, result.to_dict())
                 self.assertIn("alias_basis_required", _issue_codes(result))
+
+    def test_host_declared_role_rationale_is_bound_to_exact_source_scope_and_roles(self):
+        plan = self._complete_alias_plan()
+        plan["scopes"][0]["basis_references"] = [
+            {
+                "kind": "source_bound_role_rationale",
+                "source": "query://current-request/scope-1",
+                "rationale": (
+                    "ORDER_HEADER is the structural main source and CUSTOMER "
+                    "supplies customer attributes."
+                ),
+                "role_names": ["order", "customer"],
+            }
+        ]
+
+        bound_plan = bind_sql_alias_role_plan(self.ALIAS_ORIGINAL, plan)
+        rationale = bound_plan["scopes"][0]["basis_references"][0]
+        result = verify_sql_formatting_style(
+            self.ALIAS_ORIGINAL,
+            self.ALIAS_FORMATTED,
+            alias_role_plan=bound_plan,
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(rationale["source_sql_sha256"], bound_plan["source_sql_sha256"])
+        self.assertEqual(rationale["scope_id"], "scope_1")
+        self.assertEqual(
+            rationale["scope_declaration_fingerprint"],
+            bound_plan["scopes"][0]["scope_declaration_fingerprint"],
+        )
+        contract = result.metadata["alias_role_plan_validation"]["basis_evidence_contract"]
+        self.assertEqual(contract["preferred_kind"], "source_bound_role_rationale")
+        self.assertEqual(contract["external_authentication"], "not_authenticated")
+        validation = result.metadata["alias_role_plan_validation"]
+        self.assertEqual(validation["basis_modes"], ["source_bound_role_rationale"])
+        self.assertEqual(
+            validation["external_authentication"]["by_mode"][
+                "source_bound_role_rationale"
+            ],
+            "host_or_caller_declared_not_externally_authenticated",
+        )
+
+    def test_host_declared_role_rationale_blocks_malformed_or_incomplete_evidence(self):
+        invalid_values = {
+            "missing_source": {
+                "rationale": "Roles are visible in the query.",
+                "role_names": ["order", "customer"],
+            },
+            "wrong_source_scheme": {
+                "source": "review://self-authored/order-and-customer-roles",
+                "rationale": "Roles are visible in the query.",
+                "role_names": ["order", "customer"],
+            },
+            "empty_rationale": {
+                "source": "sql://current-request/scope-1",
+                "rationale": "  ",
+                "role_names": ["order", "customer"],
+            },
+            "incomplete_roles": {
+                "source": "query://current-request/scope-1",
+                "rationale": "ORDER_HEADER is the main source.",
+                "role_names": ["order"],
+            },
+        }
+        for label, values in invalid_values.items():
+            with self.subTest(label=label):
+                plan = self._complete_alias_plan()
+                plan["scopes"][0]["basis_references"] = [
+                    {"kind": "source_bound_role_rationale", **values}
+                ]
+                bound_plan = bind_sql_alias_role_plan(self.ALIAS_ORIGINAL, plan)
+
+                result = verify_sql_formatting_style(
+                    self.ALIAS_ORIGINAL,
+                    self.ALIAS_FORMATTED,
+                    alias_role_plan=bound_plan,
+                )
+
+                self.assertFalse(result.success, result.to_dict())
+                self.assertIn("alias_basis_required", _issue_codes(result))
+
+    def test_legacy_reviewer_basis_remains_compatible_and_is_not_authenticated(self):
+        plan = bind_sql_alias_role_plan(
+            self.ALIAS_ORIGINAL,
+            self._complete_alias_plan(),
+        )
+
+        result = verify_sql_formatting_style(
+            self.ALIAS_ORIGINAL,
+            self.ALIAS_FORMATTED,
+            alias_role_plan=plan,
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        validation = result.metadata["alias_role_plan_validation"]
+        self.assertEqual(
+            validation["basis_modes"],
+            ["legacy_reviewer"],
+        )
+        self.assertEqual(
+            validation["external_authentication"]["by_mode"][
+                "legacy_reviewer"
+            ],
+            "caller_declared_reviewer_approval_not_externally_authenticated",
+        )
+
+    def test_scope_rejects_mixed_source_rationale_and_legacy_reviewer_modes(self):
+        plan = self._complete_alias_plan()
+        plan["scopes"][0]["basis_references"].append(
+            {
+                "kind": "source_bound_role_rationale",
+                "source": "query://current-request/scope-1",
+                "role_names": ["order", "customer"],
+                "rationale": "The current SQL establishes the order and customer roles.",
+            }
+        )
+        bound = bind_sql_alias_role_plan(self.ALIAS_ORIGINAL, plan)
+
+        result = verify_sql_formatting_style(
+            self.ALIAS_ORIGINAL,
+            self.ALIAS_FORMATTED,
+            alias_role_plan=bound,
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("alias_basis_required", _issue_codes(result))
+        self.assertEqual(
+            result.metadata["alias_role_plan_validation"]["basis_modes"],
+            ["legacy_reviewer", "source_bound_role_rationale"],
+        )
+
+    def test_role_rationale_binding_rejects_conflicting_source_binding(self):
+        plan = self._complete_alias_plan()
+        plan["scopes"][0]["basis_references"] = [
+            {
+                "kind": "source_bound_role_rationale",
+                "source": "query://current-request/scope-1",
+                "rationale": "Roles are visible in the query.",
+                "role_names": ["order", "customer"],
+                "source_sql_sha256": "0" * 64,
+            }
+        ]
+
+        with self.assertRaisesRegex(ValueError, "source_sql_sha256 conflicts"):
+            bind_sql_alias_role_plan(self.ALIAS_ORIGINAL, plan)
 
     def test_alias_plan_rejects_cross_scope_membership(self):
         original = (
