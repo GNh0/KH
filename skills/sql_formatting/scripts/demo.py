@@ -275,6 +275,7 @@ def _sql_formatting_provider_scenario(output_dir: Path) -> tuple[dict[str, Any],
         _artifact(paths["binding"], "sql-final-response-binding", "success"),
         _artifact(paths["path_authority"], "sql-provider-path-authority", "success"),
         _artifact(paths["provider_selection"], "sql-provider-selection", "success"),
+        _artifact(paths["verifier_history"], "sql-verifier-history", "success"),
     ]
     pipeline = {
         "source": {"path": str(paths["source"].resolve()), "sha256": _sha256(paths["source"])},
@@ -338,10 +339,10 @@ def _sql_formatting_provider_scenario(output_dir: Path) -> tuple[dict[str, Any],
 
 
 def _build_report(output_dir: Path, host: str) -> dict[str, Any]:
+    from src.skills.demo_scenarios import DEMO_SKILL_PROFILES
     from src.skills.uaf_skill_catalog import register_packaged_demo_profiles
 
     register_packaged_demo_profiles()
-    from src.skills.demo_scenarios import DEMO_SKILL_PROFILES
 
     if DEMO_SKILL_PROFILES[SKILL_NAME] != (CAPABILITY, FAILURE_MODE, SEMANTIC_PROBE):
         raise RuntimeError("registered provider demo profile mismatch")

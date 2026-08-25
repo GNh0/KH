@@ -7,13 +7,38 @@
     "external_discovery_allowed": false,
     "source_text_policy": "passthrough",
     "profile_update_workflow": "profile-update-workflow.md",
-    "profile_update_runs_during_normal_generation": false
+    "profile_update_runs_during_normal_generation": false,
+    "style_authority": "this packaged contract only",
+    "behavior_evidence_only": ["explicitly supplied PB artifacts", "explicitly supplied target artifacts", "user behavior description", "screenshots"],
+    "forbidden_style_discovery": ["unapproved external style discovery", "private identity lookup", "source-control metadata lookup", "arbitrary root walk", "sibling-project scan"]
+  },
+  "profile_maintenance": {
+    "separate_from_normal_generation": true,
+    "explicit_user_authorization_required": true,
+    "root_discovery_forbidden": true,
+    "exact_artifact_allowlist": ["one absolute code-behind .cs path", "one absolute .Designer.cs path"],
+    "pre_read_requirements": ["profile_id", "profile_version", "unique absolute artifact allowlist", "expected SHA-256 for every allowlisted artifact", "independent provenance for every artifact", "independent custody for every artifact", "exact-set uniqueness decision"],
+    "content_read_after_preflight_only": true,
+    "post_read_requirements": ["actual SHA-256 equals expected SHA-256", "UTF-8 or UTF-8 BOM decoding", "exactly one AUTHOR header per artifact", "exactly one unique ARTIFACT-ID header per artifact"],
+    "output": "unsanitized candidate only",
+    "runtime_generation_eligible": false
   },
   "source_authority": {
     "behavior_sources": ["PB", "SRU", "SRD", "DataWindow", "supplied target project"],
     "governs": ["behavior", "captions", "control roles", "bindings", "events", "database mapping"],
-    "packaged_contract_role": "style only",
+    "packaged_contract_role": "sole style authority",
+    "behavior_sources_may_override_style": false,
+    "target_source_may_select_noncanonical_names": false,
     "missing_evidence": "record a gap; do not invent UX business fields controls or helpers"
+  },
+  "pbl_parity_evidence": {
+    "required_only_for_pbl_source_parity_claim": true,
+    "pbl_receipt": ["absolute pbl_path", "pbl_sha256", "pb_runtime", "pb_runtime_version"],
+    "object_list_receipt": ["absolute receipt path", "receipt sha256", "same pbl_path and pbl_sha256", "same runtime and runtime_version"],
+    "exported_artifacts": ["unique absolute .sru or .srw path with sha256", "unique absolute .srd path with sha256"],
+    "linked_datawindow_graph": ["status complete", "node path and sha256 match every exported artifact", "edges bind exported source objects to every exported .srd"],
+    "without_complete_receipts": ["proposal-only", "bounded-source-draft"],
+    "parity_claim_allowed_without_receipts": false
   },
   "rules": {
     "csharp": {
@@ -28,7 +53,7 @@
         },
         {
           "id": "migration_call_path",
-          "pattern": "\\b(?:CallSelectProcedure|CallViewQuery|CallSaveProcedure|CallProc)\\s*\\("
+          "pattern": "\\b(?:CallSelectProcedure|CallSaveProcedure)\\s*\\("
         },
         {
           "id": "ui_binding_or_result_mapping",
@@ -159,35 +184,27 @@
   "naming_grammar": {
     "form": "<Feature><Mode>Form",
     "load_handler": "<FormClass>_Load",
-    "query_method": [
-      "CallSelectProcedure",
-      "CallViewQuery"
-    ],
-    "save_method": [
-      "CallSaveProcedure",
-      "CallProc"
-    ],
+    "query_method": "CallSelectProcedure",
+    "save_method": "CallSaveProcedure",
     "focus_handler": "gvw<Role>_FocusedRowChanged",
     "controls": {
       "text": "txt<Field>",
       "button_lookup": "btn<Field>",
       "combo_lookup": "cbo<Field>",
-      "numeric": "spn<Field>",
-      "date": "dt<Field>",
-      "boolean": "chk<Field>",
+      "numeric": "Spin<Field>",
+      "date": "ymd<Field>",
+      "boolean": "Chk<Field>",
       "memo": "memo<Field>",
       "label": "lbl<Field>",
-      "panel": "pnl<Role>",
+      "panel": "pn<Role>",
       "group": "grp<Role>",
       "grid": "grd<Role>",
       "view": "gvw<Role>"
     },
     "grid_column": "col<Role>_<FIELD>",
     "repositories": {
-      "button": "repButton<Field>",
-      "lookup": "repLookup<Field>",
-      "numeric": "repSpin<Field>",
-      "boolean": "repCheck<Field>"
+      "numeric": "rpsSpin<Field>",
+      "other_roles": "use the exact expected_control_contract instance name"
     },
     "procedure": "[dbo].[usp_<Feature>_<Operation>]",
     "procedure_parameter": "@<CALLER_VALUE>",
@@ -641,8 +658,42 @@
     "non_execution_evidence": ["skill read", "reference read", "smoke check only"]
   },
   "analysis_to_implementation_handoff": {
+    "schema_version": "kh.pb-migration-handoff.v1",
     "must_avoid_rediscovery": true,
-    "required": ["PB behavior", "event flow", "control-role map", "field and BindingField map", "SP and caller contract", "proven versus inferred labels", "unresolved gaps", "manual tests"]
+    "accepted_formats": ["schema v1 JSON", "schema-equivalent Markdown tables"],
+    "required": ["artifacts", "event_mappings", "field_mappings", "sp_mappings", "evidence_status.confirmed", "evidence_status.inferred", "evidence_status.blocked", "unresolved", "manual_tests"],
+    "artifact_row": ["path", "sha256"],
+    "event_row": ["pb_event", "csharp_method"],
+    "field_row": ["dw_field", "control", "binding_field", "grid_column", "result_field"],
+    "sp_row": ["procedure", "caller", "branch", "result"],
+    "manual_test_row": ["workflow", "expected"],
+    "empty_required_inventory_allowed": false,
+    "keyword_prose_alone_allowed": false
+  },
+  "no_save_no_dml": {
+    "authority": "complete pb_event_inventory evidence",
+    "absence_proof": ["complete_event_inventory true", "save_event_present false"],
+    "blocked_candidate_shapes": ["procedure ending in _SAVE", "procedure ending in _SELECT_SAVE", "INSERT", "UPDATE", "DELETE", "MERGE"],
+    "proposal_only_is_not_completion": true
+  },
+  "sql_final_response_verification": {
+    "history_verifier_runs_before_binding": true,
+    "verifier_history_must_be_nonempty": true,
+    "binding_and_history_verification_id_must_match": true,
+    "binding_and_history_original_candidate_hashes_must_match": true,
+    "release_binding_must_equal_exposed_binding": true,
+    "provider_path_selected_active_path_and_provider_selection_required": true
+  },
+  "completion_gates": {
+    "core_stage_order": ["load-profile", "validate-csharp", "validate-sp", "final-sql-binding"],
+    "always_required_for_completion": ["project-inclusion", "project-build", "manual-workflow"],
+    "required_when_designer_source_exists": ["designer-layout-load"],
+    "required_when_claimed": ["database-equivalence", "deployment"],
+    "accepted_receipt_status": ["passed", "verified", "succeeded"],
+    "receipt_must_include_one_of": ["receipt_id", "artifact_path", "path", "command", "sha256", "verified true", "scenarios"],
+    "nonzero_exit_code_blocks": true,
+    "core_validation_without_completion_claim": "draft_validated",
+    "unsupported_completion_claim": "blocked"
   },
   "evidence_requirements": [
     "contract id and version",
@@ -654,9 +705,13 @@
     "caller-parameter and local-variable matrices",
     "Designer and repository plan",
     "Designer ownership inventory and code-behind static UI scan",
-    "analysis-to-implementation handoff complete without rediscovery",
+    "schema kh.pb-migration-handoff.v1 handoff complete without rediscovery",
+    "PBL object-list export and linked-DataWindow receipts when PBL source parity is claimed",
+    "no-SAVE no-DML decision from a complete PB event inventory",
     "procedure result write transaction and error contract",
     "forbidden-pattern scan",
+    "SQL verifier-history binding correlation",
+    "independent project inclusion build Designer database deployment and manual completion receipts as applicable",
     "verification results and residual blockers",
     "required C# structural pattern match or missing-pattern evidence",
     "token_optimizer_status passthrough"

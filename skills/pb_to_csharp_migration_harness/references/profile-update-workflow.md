@@ -1,64 +1,89 @@
 # Packaged Profile Update Workflow
 
-This is an explicitly named maintenance workflow. It never runs during normal generation.
+This is an explicit maintenance workflow. It never runs during normal generation.
 
-Normal PB-to-C# generation uses only `packaged-style-contract.md` and `packaged-style-contract.json` for style. It does not connect to a database, open or export a PBL, invoke ORCA or PblScripter, or scan local C#, Designer, SQL, PB, backup, or sibling source trees.
+Normal PB-to-C# generation uses the packaged fixed profile as its sole style authority. A migration request never authorizes unapproved external style discovery, private identity lookup, source-control metadata lookup, arbitrary-root traversal, or style extraction from the target/PB source.
 
-## Trigger
+## Trigger Boundary
 
-Run this workflow only when the user explicitly asks to refresh, rebuild, or audit the packaged style profile. A migration request, missing identifier, low-confidence generation result, or unavailable local artifact is not an implicit update request.
+Run this workflow only after the user explicitly requests an update to the packaged style profile and authorizes the exact candidate artifacts. A normal migration request, a missing identifier, a failed verifier, or low confidence is not authorization.
 
-Record:
+The runtime maintenance entry point is `src.skills.pb_to_csharp_profile_maintenance.build_profile_update_candidate`. Compatibility wrappers in the migration module delegate to this entry point; they do not restore discovery.
 
-- explicit profile-update authorization;
-- approved evidence roots and systems;
-- read/write boundaries;
-- credential-presence checks without printing secret values;
-- output location outside source trees;
-- sanitization and review owners.
+## Accepted Candidate Set
 
-## Maintenance Sequence
+The runtime accepts exactly two artifacts:
 
-1. Create an isolated maintenance workspace and keep source systems read-only.
-2. Inventory approved evidence with bounded counts before reading content.
-3. For database evidence, query only approved metadata and definitions needed to derive style. Never package connection details, database names, object names, authors, values, or query-result snapshots.
-4. For PBL evidence, select a matching runtime and use PblScripter or direct ORCA only after the library lineage is confirmed.
-5. List objects before export, export only approved object types, and write exports to the maintenance output directory, never beside the source PBL.
-6. For pre-exported PB text, trace event, retrieve, update, popup, and DataWindow relationships only within the approved export set.
-7. For C# and Designer evidence, scan only approved primary files. Exclude backups, generated outputs, build folders, and current repair targets.
-8. For SQL evidence, analyze procedure shape, caller parameters, branch conventions, result shape, transaction/error patterns, and formatting families without retaining concrete schema identifiers.
-9. Derive generalized frequencies and conflicts, then choose conservative style families. Counts are maintenance evidence only and are not packaged.
-10. Convert observations into grammars, abstract event/method shapes, provider fallbacks, property rules, grid/repository conventions, caller/SP rules, forbidden patterns, and evidence requirements.
-11. Replace every concrete identifier with a placeholder or clearly synthetic identifier before editing the packaged contract.
-12. Run privacy, structure, smoke, demo, and packaging tests. Require independent review before release.
+1. one absolute code-behind `.cs` path;
+2. one absolute `.Designer.cs` path.
+
+The paths must be non-empty, unique, absolute, and listed explicitly in `artifact_allowlist`. A directory, source root, wildcard, recursive scan result, sibling project, backup tree, or source-control metadata result is not an accepted candidate set. Supplying `csharp_root` blocks the operation.
+
+## Mandatory Pre-Read Contract
+
+All checks below run before either file is read:
+
+- `explicit_user_authorization` is exactly `true` for this candidate set;
+- `profile_id` and `profile_version` are non-empty;
+- `artifact_allowlist` contains exactly the two absolute artifacts described above;
+- `expected_sha256` contains exactly one valid SHA-256 value for each allowlisted path and no extra path;
+- `independent_provenance` contains one record per path with non-empty `source_system`, `capture_id`, `captured_by`, and `independent_reviewer`;
+- for each provenance record, `captured_by` and `independent_reviewer` are different;
+- `custody_records` contains one record per path with non-empty `custodian`, `receipt_id`, and `acquired_at`;
+- every custodian is different from every provenance capturer and reviewer;
+- `uniqueness_decision.status` is `unique`, `copied_header` is `false`, and `ambiguous` is `false`;
+- the uniqueness decision names the exact allowlisted paths and a non-empty `reviewed_by` who is independent of all capturers, reviewers, and custodians.
+
+Any missing, extra, duplicate, relative, ambiguous, or cross-role value blocks before content access.
+
+## Post-Read Validation
+
+Only after the pre-read contract passes may the runtime read the two files. It then:
+
+1. reads raw bytes from each exact allowlisted path;
+2. recomputes SHA-256 and requires an exact match with `expected_sha256`;
+3. decodes each artifact as UTF-8 with optional BOM;
+4. requires exactly one `// AUTHOR: ...` header and exactly one `// ARTIFACT-ID: ...` header in each file;
+5. rejects missing or repeated headers;
+6. rejects reused `ARTIFACT-ID` values across the pair;
+7. extracts a candidate summary of method names, grid/view/column names, binding fields, and `rpsSpin` repositories.
+
+The AUTHOR header is inspected only inside the exact authorized artifacts after provenance, custody, uniqueness, and hash checks. It is never a search key and never authorizes discovery.
+
+## Output Boundary
+
+The function returns an unsanitized `candidate_ready` record with artifact receipts when every check passes. It does not update the packaged contract, does not write a profile, and sets `runtime_generation_eligible=false` and `write_status=candidate_only`.
+
+An independently reviewed sanitization and contract-update step is still required before changing the packaged profile. Concrete paths, identity data, identifiers, hashes, source excerpts, and fingerprints must never be copied into packaged runtime references.
+
+## Explicitly Unsupported Inputs
+
+Database queries, PBL exports, PblScripter, ORCA, SQL definitions, arbitrary scans, and source-control metadata are not inputs to `build_profile_update_candidate`. They may be used in a separately authorized behavior-analysis workflow, but they cannot teach or override the packaged style profile through this maintenance API.
+
+No database credential, server name, connection string, private source root, or version-control metadata is read by this workflow.
 
 ## Sanitization Gate
 
-The packaged output must contain none of the following:
+Before a candidate can become a future packaged contract, an independent maintainer must remove:
 
 - absolute or user-specific paths;
-- database or server names;
-- people, author tags, or account names;
-- concrete program, procedure, table, column, or control instance names;
-- source hashes, line counts, snapshot dates, source roots, or file fingerprints;
-- raw SQL/PB/C#/Designer excerpts from the evidence set;
-- credentials, connection strings, machine configuration, or license data;
-- evidence-set counts that can identify a private source snapshot.
+- private identity and account values;
+- database, server, project, program, procedure, table, column, and concrete control identifiers;
+- source hashes, timestamps, counts, snapshots, and artifact fingerprints;
+- raw C#, Designer, SQL, PB, or PBL-derived excerpts;
+- credentials, machine configuration, and license information.
 
-Keep only generalized behavior. Use placeholders such as `<Feature>`, `<Role>`, `<Field>`, and `<Operation>`, or neutral synthetic examples that cannot be mapped back to the evidence set.
+Only generalized rules may be proposed. Normal generation continues to use the currently packaged immutable profile until a separately reviewed release replaces it.
 
-## Provider Handling
+## Required Maintenance Evidence
 
-For PblScripter and direct ORCA, use the same bounded operations: list, export selected object, export linked DataWindows, close session, and verify encoding. Match the ORCA/runtime generation to the PBL lineage. Unknown lineage permits identification/probe work only; it does not authorize conversion or parity claims.
-
-Treat binary strings, object names, screenshots, and stale notes as weak maintenance evidence. They may identify what to inspect next but must not teach concrete identifiers to the packaged contract.
-
-## Update Outputs
-
-- updated `packaged-style-contract.md`;
-- updated `packaged-style-contract.json` with the same contract identifier or an intentional version change;
-- a private, non-packaged maintenance report recording evidence and review decisions;
-- smoke/demo/packaging test results;
-- a history-risk note stating whether removed private material remains in repository history.
-
-Raw exports, database results, scan inventories, and fingerprints remain outside the package and outside normal generation inputs. Delete or retain them only under the user's approved maintenance retention policy.
+- explicit authorization receipt;
+- exact two-path allowlist;
+- expected and recomputed SHA-256 receipts;
+- independent provenance records;
+- independent custody records;
+- exact-set uniqueness decision;
+- one AUTHOR and one unique ARTIFACT-ID header per artifact;
+- `candidate_ready` or fail-closed issue list;
+- sanitization review performed outside normal generation;
+- smoke, quality, and privacy results for any later packaged-contract edit.

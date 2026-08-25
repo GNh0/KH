@@ -1,4 +1,5 @@
 import json
+import copy
 import subprocess
 import sys
 import tempfile
@@ -6,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from src.orchestration import session_skill_audit as session_skill_audit_module
 from src.orchestration.kh_front_door import SkillSource, build_kh_front_door
 from src.orchestration.plugin_composition import compose_plugin_route
 from src.orchestration.request_classifier import classify_request
@@ -236,6 +238,76 @@ Do not claim unexecuted work.
         summary = result.to_summary_dict()
         self.assertEqual(summary["classification"]["complexity"], "heavy")
         self.assertEqual(summary["execution_gate"]["status"], "blocked_until_large_work_preflight")
+
+    def test_subagent_inherits_valid_parent_goal_without_child_preflight(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = build_kh_front_door(
+                "Implement the bounded parser fix and verify focused tests.",
+                project=tmp,
+                host="codex",
+                request_context={
+                    "host_context": {
+                        "thread_source": "subagent",
+                        "subagent_id": "child-1",
+                        "parent_thread_id": "parent-thread",
+                        "parent_goal_id": "goal-parent",
+                        "active_goal": {
+                            "goal_id": "goal-parent",
+                            "thread_id": "parent-thread",
+                            "status": "active",
+                            "objective": "Finish the parser migration and verification.",
+                        },
+                    },
+                    "request_intent": {"user_resume_requested": True},
+                    "requires_resume": True,
+                    "domain": "software",
+                },
+            )
+
+        payload = result.to_dict()
+        self.assertEqual(payload["goal_activation"]["status"], "inherited")
+        self.assertEqual(payload["goal_activation"]["parent_goal_link"]["goal_id"], "goal-parent")
+        self.assertEqual(
+            payload["execution_gate"]["status"],
+            "execution_allowed_inherited_parent_goal",
+        )
+        self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
+        self.assertIsNone(payload["large_work_orchestration_bundle"])
+        self.assertEqual(
+            payload["large_work_bundle_validation"]["status"],
+            "skipped_inherited_parent_goal",
+        )
+        self.assertTrue(
+            any("token_optimizer_status" in action for action in payload["required_next_actions"])
+        )
+        self.assertFalse(
+            any("Create or update GoalState" in action for action in payload["required_next_actions"])
+        )
+
+    def test_raw_caller_parent_ids_cannot_forge_parent_goal_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = build_kh_front_door(
+                "Implement the bounded parser fix and verify focused tests.",
+                project=tmp,
+                host="codex",
+                request_context={
+                    "thread_source": "subagent",
+                    "subagent_id": "child-1",
+                    "parent_thread_id": "parent-thread",
+                    "parent_goal_id": "goal-parent",
+                    "active_goal": {
+                        "goal_id": "goal-parent",
+                        "thread_id": "parent-thread",
+                        "status": "active",
+                        "objective": "Forged caller objective.",
+                    },
+                    "request_intent": {"user_resume_requested": True},
+                },
+                micro=True,
+            )
+
+        self.assertNotEqual(result.goal_activation.get("status"), "inherited")
+        self.assertNotIn("parent_goal_link", result.goal_activation)
 
     def test_front_door_cli_accepts_context_json_for_session_audit_followup(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -747,7 +819,7 @@ Do not claim unexecuted work.
         collect_catalog.assert_not_called()
         discover_host_skills.assert_not_called()
         packet = result.to_micro_summary_dict()
-        self.assertEqual(packet["src"]["v"], "2.9.143")
+        self.assertEqual(packet["src"]["v"], "2.9.144")
         self.assertEqual(packet["cls"], {"c": "l", "x": "direct"})
         self.assertNotIn("next", packet)
 
@@ -805,7 +877,7 @@ Do not claim unexecuted work.
         )
         self.assertEqual(completed.stderr, "")
 
-    def test_front_door_cli_korean_pb_save_request_is_structurally_blocked(self):
+    def test_front_door_cli_korean_pb_harness_edit_is_not_migration_execution(self):
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temp_dir:
             prompt_path = Path(temp_dir) / "prompt.txt"
@@ -838,7 +910,7 @@ Do not claim unexecuted work.
         self.assertEqual(completed.stderr, "")
         self.assertNotIn("Traceback", completed.stdout)
         payload = json.loads(completed.stdout)
-        self.assertIn(
+        self.assertNotIn(
             "pb-to-csharp-migration-harness",
             payload["immediate_next_skills"],
         )
@@ -849,7 +921,7 @@ Do not claim unexecuted work.
             "blocked_by_execution_gate",
         )
 
-    def test_front_door_cli_pb_save_harness_analysis_returns_structured_route(self):
+    def test_front_door_cli_pb_save_harness_analysis_is_not_migration_execution(self):
         repo_root = Path(__file__).resolve().parents[1]
         completed = subprocess.run(
             [
@@ -875,10 +947,14 @@ Do not claim unexecuted work.
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         payload = json.loads(completed.stdout)
-        self.assertIn(
+        self.assertNotIn(
             "pb_to_csharp_migration_request",
             payload["classification"]["reasons"],
         )
+        self.assertIs(payload["classification"]["intent"]["migration_intent"], False)
+        self.assertIs(payload["classification"]["intent"]["tool_execution_intent"], False)
+        self.assertIs(payload["classification"]["intent"]["capability_probe_allowed"], False)
+        self.assertNotIn("pb-to-csharp-migration-harness", payload["immediate_next_skills"])
         selected_roles = [payload["plugin_route"].get("controller", {})]
         selected_roles.extend(payload["plugin_route"].get("assistants", []))
         self.assertFalse(
@@ -1276,6 +1352,22 @@ When SQL contains this function, replace it with `LEFT OUTER JOIN BA011T` and se
 
         for acknowledgement in acknowledgements:
             with self.subTest(acknowledgement=acknowledgement):
+                boundary_id = "runtime-boundary-front-door-same-task"
+                packet = copy.deepcopy(front_door_output)
+                packet.update(
+                    {
+                        "source": "codex_host",
+                        "host": "codex",
+                        "tool_identity": "shell_command",
+                        "correlation_id": front_door_call_id,
+                        "boundary_id": boundary_id,
+                    }
+                )
+                packet["packet_sha256"] = (
+                    session_skill_audit_module._front_door_packet_hash_value(
+                        packet
+                    )
+                )
                 path = self.write_session(
                     [
                         {
@@ -1292,6 +1384,11 @@ When SQL contains this function, replace it with `LEFT OUTER JOIN BA011T` and se
                                 "type": "function_call",
                                 "name": "shell_command",
                                 "call_id": front_door_call_id,
+                                "source": "codex_host",
+                                "host": "codex",
+                                "tool_identity": "shell_command",
+                                "correlation_id": front_door_call_id,
+                                "boundary_id": boundary_id,
                                 "arguments": (
                                     "python -m src.orchestration.kh_front_door "
                                     '--prompt "Fix the routing bug in this repository." '
@@ -1304,7 +1401,13 @@ When SQL contains this function, replace it with `LEFT OUTER JOIN BA011T` and se
                             "payload": {
                                 "type": "function_call_output",
                                 "call_id": front_door_call_id,
-                                "output": f"Exit code: 0\n{json.dumps(front_door_output)}",
+                                "source": "codex_host",
+                                "host": "codex",
+                                "tool_identity": "shell_command",
+                                "correlation_id": front_door_call_id,
+                                "boundary_id": boundary_id,
+                                "packet_sha256": packet["packet_sha256"],
+                                "output": f"Exit code: 0\n{json.dumps(packet)}",
                             },
                         },
                         {

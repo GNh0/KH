@@ -7,6 +7,12 @@ from src.orchestration.goal_runtime import (
 )
 from src.orchestration.goal_evidence import RuntimeProducerBoundary
 from src.orchestration.quality_harnesses import audit_role_execution
+from src.orchestration.artifact_style_gate import (
+    CSHARP_STYLE_SKILL,
+    SQL_FORMATTING_SKILL,
+    SQL_STYLE_SKILL,
+    validate_artifact_style_gate_snapshot,
+)
 
 
 BUNDLE_STATUS_VALUES = {
@@ -62,6 +68,9 @@ BUNDLE_MEMBER_SKILLS = [
     "branch-finishing-harness",
     "compound-engineering-harness",
     "workflow-skill-distiller",
+    CSHARP_STYLE_SKILL,
+    SQL_FORMATTING_SKILL,
+    SQL_STYLE_SKILL,
 ]
 
 
@@ -173,6 +182,7 @@ def validate_large_work_orchestration_bundle(
     bundle: LargeWorkOrchestrationBundle,
     *,
     goal_runtime_producer_boundary: RuntimeProducerBoundary | None = None,
+    artifact_style_producer_boundary: RuntimeProducerBoundary | None = None,
 ) -> Dict[str, Any]:
     missing: List[str] = []
     runtime_boundary = (
@@ -259,6 +269,12 @@ def validate_large_work_orchestration_bundle(
                 missing.append("role-execution-audit-harness.validated_role_artifacts")
     for skill_name in set(bundle.skill_statuses) - set(BUNDLE_MEMBER_SKILLS):
         missing.append(f"{skill_name}.known_bundle_member")
+    missing.extend(
+        _validate_artifact_style_bundle(
+            bundle,
+            producer_boundary=artifact_style_producer_boundary,
+        )
+    )
     evidence = []
     if not missing:
         evidence = [
@@ -319,6 +335,61 @@ def _validate_role_execution_artifacts(
         "valid_parallel_wave": valid_parallel_wave,
         "valid_role_artifacts": audit.get("status") == "passed",
     }
+
+
+def _validate_artifact_style_bundle(
+    bundle: LargeWorkOrchestrationBundle,
+    *,
+    producer_boundary: RuntimeProducerBoundary | None = None,
+) -> List[str]:
+    gate = bundle.metadata.get("artifact_style_gate")
+    if not isinstance(gate, dict):
+        return []
+    if not (
+        gate.get("required_skills")
+        or gate.get("changed_artifacts")
+        or gate.get("completion_claimed")
+        or gate.get("deployment_claimed")
+    ):
+        return []
+    validation = validate_artifact_style_gate_snapshot(
+        gate,
+        producer_boundary=producer_boundary,
+    )
+    if not validation["valid"]:
+        return [
+            "artifact_style_gate.authenticated_runtime_snapshot",
+            *[
+                f"artifact_style_gate.{error}"
+                for error in validation["errors"]
+            ],
+        ]
+    gate = validation["gate"]
+    required = [
+        str(item)
+        for item in gate.get("required_skills", []) or []
+    ]
+    if not required:
+        return []
+    missing: List[str] = []
+    for skill in required:
+        status = bundle.skill_statuses.get(skill)
+        if status is None or status.status != "applied":
+            missing.append(f"{skill}.artifact_style_gate_application")
+    if gate.get("completion_claimed") or gate.get("deployment_claimed"):
+        if not gate.get("exact_receipts"):
+            missing.append("artifact_style_gate.exact_artifact_receipts")
+        if gate.get("missing_receipts") or gate.get("stale_receipts"):
+            missing.append("artifact_style_gate.current_hash_receipts")
+        if not gate.get("style_passed"):
+            missing.append("artifact_style_gate.passed_verifier_evidence")
+    if gate.get("visual_required"):
+        visual = bundle.skill_statuses.get("artifact-render-qa-harness")
+        if visual is None or visual.status != "applied":
+            missing.append("artifact-render-qa-harness.visual_completion_receipt")
+        if not gate.get("visual_passed"):
+            missing.append("artifact-render-qa-harness.authenticated_visual_receipt")
+    return missing
 
 
 def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
@@ -466,6 +537,24 @@ def _default_skill_statuses() -> Dict[str, SkillApplicationStatus]:
             application_mode="considered",
             evidence_note="No repeated workflow has been selected for skill distillation yet.",
             evidence_keys=["compound_handoff"],
+        ),
+        CSHARP_STYLE_SKILL: SkillApplicationStatus(
+            status="considered_not_needed",
+            application_mode="considered",
+            evidence_note="No generated or modified C# or Designer artifact has been identified yet.",
+            evidence_keys=["changed_artifacts", "exact_artifact_receipts", "style_verification_receipts"],
+        ),
+        SQL_FORMATTING_SKILL: SkillApplicationStatus(
+            status="considered_not_needed",
+            application_mode="considered",
+            evidence_note="No generated or modified SQL candidate or DB deployment candidate has been identified yet.",
+            evidence_keys=["changed_artifacts", "exact_artifact_receipts", "style_verification_receipts"],
+        ),
+        SQL_STYLE_SKILL: SkillApplicationStatus(
+            status="considered_not_needed",
+            application_mode="considered",
+            evidence_note="No SQL style verification gate is applicable yet.",
+            evidence_keys=["changed_artifacts", "exact_artifact_receipts", "style_verification_receipts"],
         ),
     }
 

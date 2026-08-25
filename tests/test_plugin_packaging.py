@@ -3,11 +3,15 @@ import re
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from skills.pb_to_csharp_migration_harness.scripts import smoke_check as pb_smoke_check
 from skills.pb_to_csharp_migration_harness.scripts.smoke_check import (
     REQUIRED_SUPPORT_FILES,
+    REQUIRED_VERIFIER_TARGETS,
     SHIPPED_RUNTIME_SOURCE_FILES,
     collect_privacy_scan_paths,
+    resolve_target,
     scan_private_runtime_fingerprints,
 )
 from src.skills.uaf_skill_catalog import collect_packaged_skills
@@ -75,7 +79,7 @@ class PluginPackagingTests(unittest.TestCase):
         )
 
         self.assertTrue(catalog["validation"]["success"], catalog["validation"]["issues"])
-        self.assertEqual(catalog["total_skills_found"], 44)
+        self.assertEqual(catalog["total_skills_found"], 45)
         self.assertNotIn("BA011T", sql_docs)
         self.assertNotIn("F_BA011T", sql_docs)
 
@@ -134,8 +138,6 @@ class PluginPackagingTests(unittest.TestCase):
             path.read_text(encoding="utf-8") for path in ordinary_runtime_paths
         )
         for discovery_term in (
-            "PblScripter",
-            "ORCA",
             "SYS.OBJECTS",
             "SYS.SQL_MODULES",
             "source_sha256",
@@ -145,6 +147,16 @@ class PluginPackagingTests(unittest.TestCase):
         ):
             with self.subTest(discovery_term=discovery_term):
                 self.assertNotIn(discovery_term, ordinary_runtime_docs)
+
+        for path in ordinary_runtime_paths:
+            with self.subTest(discovery_policy_path=path.as_posix()):
+                self.assertEqual(
+                    [],
+                    pb_smoke_check.scan_normal_generation_discovery_policy(
+                        path.read_text(encoding="utf-8"),
+                        path.as_posix(),
+                    ),
+                )
 
         update_docs = update_path.read_text(encoding="utf-8")
         self.assertIn("never runs during normal generation", update_docs)
@@ -210,6 +222,46 @@ class PluginPackagingTests(unittest.TestCase):
             with self.subTest(removed_metric=removed_metric):
                 self.assertNotIn(removed_metric, runtime_text)
 
+    def test_pb_normal_generation_policy_allows_bounded_pb_acquisition_terms(self):
+        allowed_examples = (
+            "Selected ORCA runtime exports current PBL.",
+            "Explicitly configured PblScripter exports the current PBL.",
+            "Use the PblScripter/ORCA/current-export acquisition ladder.",
+        )
+
+        for text in allowed_examples:
+            with self.subTest(text=text):
+                self.assertEqual(
+                    [],
+                    pb_smoke_check.scan_normal_generation_discovery_policy(text),
+                )
+
+    def test_pb_normal_generation_policy_rejects_style_discovery_authority(self):
+        forbidden_examples = {
+            "ORCA": "Search ORCA projects for style.",
+            "PblScripter": "Scan PblScripter exports to infer style.",
+            "author": "Discover style from authors.",
+            "root": "Search source roots for style conventions.",
+            "database": "Scan databases to derive the style profile.",
+            "SVN": "Mine SVN for style patterns.",
+            "history": "Inspect history to select coding style.",
+            "local project": "Search arbitrary local projects for style.",
+        }
+
+        for expected_term, text in forbidden_examples.items():
+            with self.subTest(expected_term=expected_term):
+                self.assertIn(
+                    {
+                        "code": "discovery_term_in_normal_runtime_doc",
+                        "path": "sample.md",
+                        "term": expected_term,
+                    },
+                    pb_smoke_check.scan_normal_generation_discovery_policy(
+                        text,
+                        "sample.md",
+                    ),
+                )
+
     def test_pb_privacy_scan_covers_manifest_all_declared_support_files_and_runtime(self):
         skill_dir = Path("skills") / "pb_to_csharp_migration_harness"
         scan_paths = collect_privacy_scan_paths(skill_dir, Path("."))
@@ -220,7 +272,7 @@ class PluginPackagingTests(unittest.TestCase):
         }
 
         self.assertEqual(expected_labels, {label for label, _ in scan_paths})
-        self.assertEqual(12, len(scan_paths))
+        self.assertEqual(13, len(scan_paths))
         self.assertTrue(all(path.is_file() for _, path in scan_paths))
         for label, path in scan_paths:
             with self.subTest(privacy_path=label):
@@ -231,6 +283,50 @@ class PluginPackagingTests(unittest.TestCase):
                         label,
                     ),
                 )
+
+    def test_pb_smoke_resolves_all_hardened_verifier_targets(self):
+        results = [resolve_target(Path("."), target) for target in REQUIRED_VERIFIER_TARGETS]
+        self.assertTrue(all(item["status"] == "resolved" for item in results), results)
+
+    def test_pb_smoke_includes_claim_gated_contract_targets(self):
+        self.assertIn(
+            "src.skills.pb_event_state_contract.validate_pb_event_state_contract",
+            REQUIRED_VERIFIER_TARGETS,
+        )
+        self.assertIn(
+            "src.skills.pb_performance_equivalence_contract.validate_pb_performance_equivalence_contract",
+            REQUIRED_VERIFIER_TARGETS,
+        )
+
+    def test_pb_smoke_fails_when_orca_runtime_contract_is_missing(self):
+        missing_path = (
+            Path("skills")
+            / "pb_to_csharp_migration_harness"
+            / "references"
+            / "orca-runtime-contract.md"
+        ).resolve()
+        original_exists = Path.exists
+
+        def exists_without_orca(path: Path) -> bool:
+            if str(path).casefold() == str(missing_path).casefold():
+                return False
+            return original_exists(path)
+
+        with (
+            mock.patch.object(Path, "exists", autospec=True, side_effect=exists_without_orca),
+            mock.patch("builtins.print") as print_mock,
+        ):
+            exit_code = pb_smoke_check.main()
+
+        result = json.loads(print_mock.call_args.args[0])
+        self.assertEqual(1, exit_code)
+        self.assertIn(
+            {
+                "code": "missing_support_file",
+                "path": "references/orca-runtime-contract.md",
+            },
+            result["issues"],
+        )
 
     def test_pb_runtime_privacy_scanner_detects_all_nine_leak_categories_by_default(self):
         leak_samples = {
@@ -329,9 +425,9 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
 
         self.assertIn("sql-formatting", catalog_names)
         self.assertIn("sql-formatting", root_skill_names)
-        self.assertEqual(root_manifest["version"], "2.9.143")
-        self.assertEqual(codex_manifest["version"], "2.9.143")
-        self.assertEqual(agent_manifest["version"], "2.9.143")
+        self.assertEqual(root_manifest["version"], "2.9.144")
+        self.assertEqual(codex_manifest["version"], "2.9.144")
+        self.assertEqual(agent_manifest["version"], "2.9.144")
         for manifest in [root_manifest, codex_manifest]:
             with self.subTest(manifest=manifest["description"]):
                 layout = manifest["artifact_layout"]
@@ -571,7 +667,7 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
         for fragment in mojibake_fragments:
             self.assertNotIn(fragment, content)
 
-    def test_packaged_skill_frontmatter_matches_catalog_and_static_root_runtime_manifest(self):
+    def test_packaged_skill_frontmatter_matches_catalog_and_dynamic_plugin_manifest(self):
         packaged = _packaged_skill_frontmatter()
         catalog_names = {
             skill["name"] for skill in collect_packaged_skills()["skills"]
@@ -579,16 +675,60 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
 
         self.assertGreaterEqual(len(packaged), 40)
         self.assertEqual(set(packaged), catalog_names)
-        self.assertFalse(
-            _static_runtime_exposure_gaps(),
-            "Root plugin.json uses a static explicit skill schema; add every packaged "
-            "frontmatter name before release.",
-        )
+        self.assertEqual(_static_runtime_exposure_gaps(), set())
         for name, path in packaged.items():
             with self.subTest(path=str(path)):
                 frontmatter = _skill_frontmatter(path)
                 self.assertEqual(frontmatter.get("name"), name)
                 self.assertTrue(frontmatter.get("description"))
+
+    def test_csharp_designer_style_skill_is_packaged(self):
+        skill_path = Path("skills") / "csharp_designer_style_harness"
+        frontmatter = _skill_frontmatter(skill_path / "SKILL.md")
+        catalog_entry = next(
+            skill
+            for skill in collect_packaged_skills()["skills"]
+            if skill["name"] == "csharp-designer-style-harness"
+        )
+
+        self.assertEqual(frontmatter["name"], "csharp-designer-style-harness")
+        self.assertTrue(frontmatter["description"].startswith("Use when "))
+        self.assertEqual(catalog_entry["execution_level"], "python-module")
+        self.assertEqual(catalog_entry["relative_path"], "csharp_designer_style_harness/SKILL.md")
+        root_entries = [
+            skill
+            for skill in _manifest(Path("plugin.json"))["skills"]
+            if skill["name"] == "csharp-designer-style-harness"
+        ]
+        self.assertEqual(len(root_entries), 1)
+        self.assertIn("C# WinForms/DevExpress/KoneLib", root_entries[0]["description"])
+        for relative_path in (
+            "SKILL.md",
+            "references/usage.md",
+            "references/style-contract.json",
+            "examples/minimal-workflow.md",
+            "scripts/smoke_check.py",
+            "scripts/demo.py",
+        ):
+            self.assertTrue((skill_path / relative_path).is_file(), relative_path)
+        self.assertIn(
+            "src.skills.csharp_designer_style_contract.verify_csharp_designer_style",
+            (skill_path / "SKILL.md").read_text(encoding="utf-8"),
+        )
+        package_text = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in skill_path.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".md", ".py", ".json"}
+        )
+        self.assertNotIn("import src.skills.demo_scenarios", package_text)
+        self.assertNotIn("user://", package_text)
+        self.assertNotIn("artifact://", package_text)
+        self.assertIn("fail closed", package_text.lower())
+        self.assertNotIn("_HOST_CONTEXT_SEAL", package_text)
+        self.assertNotIn("_create_authenticated_host_context", package_text)
+        self.assertNotIn("_verify_csharp_designer_style_authenticated", package_text)
+        self.assertNotIn("trusted_runtime_roots", package_text)
+        self.assertNotIn("provenance_authenticator", package_text)
 
     def test_new_skill_is_path_discovered_but_fails_static_runtime_release_exposure(self):
         with tempfile.TemporaryDirectory() as tmp:

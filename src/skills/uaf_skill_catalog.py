@@ -34,6 +34,7 @@ SKILL_EXECUTION_LEVELS = {
     "always-on-front-door": "python-module",
     "automatic-intake-harness": "python-module",
     "artifact-render-qa-harness": "python-module",
+    "csharp-designer-style-harness": "python-module",
     "architect-pipeline": "hybrid-harness",
     "brainstorming-harness": "hybrid-harness",
     "branch-finishing-harness": "hybrid-harness",
@@ -77,6 +78,11 @@ SKILL_EXECUTION_LEVELS = {
 }
 
 PACKAGED_DEMO_SKILL_PROFILES = {
+    "csharp-designer-style-harness": (
+        "C# Designer style contract verification",
+        "source or Designer contract evidence mismatch",
+        "csharp-designer-verifier-probe",
+    ),
     "sql-formatting": (
         "host LLM SQL formatting provider",
         "logic-changing formatted candidate",
@@ -195,12 +201,16 @@ def collect_packaged_skills(skills_dir: str = PACKAGED_SKILLS_DIR) -> Dict[str, 
     }
 
 
-def register_packaged_demo_profiles() -> None:
-    """Register owned standalone demos without changing the shared scenario router."""
-    from src.skills.demo_scenarios import DEMO_SKILL_PROFILES
+def register_packaged_demo_profiles() -> bool:
+    """Register profiles only when the optional shared demo runtime is already loaded."""
 
+    demo_module = sys.modules.get("src.skills.demo_scenarios")
+    profiles = getattr(demo_module, "DEMO_SKILL_PROFILES", None) if demo_module is not None else None
+    if not isinstance(profiles, dict):
+        return False
     for skill_name, profile in PACKAGED_DEMO_SKILL_PROFILES.items():
-        DEMO_SKILL_PROFILES.setdefault(skill_name, profile)
+        profiles.setdefault(skill_name, profile)
+    return True
 
 
 def _execution_note(execution_level: str) -> str:
@@ -267,9 +277,35 @@ def _catalog_check_summary(report: Any) -> Dict[str, Any]:
 
 def check_skills(skills_dir: str = PACKAGED_SKILLS_DIR, *, summary: bool = False) -> int:
     report = validate_skill_folders(skills_dir)
+    collectability: Dict[str, Any]
+    try:
+        catalog = collect_packaged_skills(skills_dir)
+        collected_names = [str(skill.get("name", "")) for skill in catalog.get("skills", [])]
+        collection_success = bool(
+            catalog.get("validation", {}).get("success")
+            and len(collected_names) == report.total_skills
+            and len(collected_names) == len(set(collected_names))
+        )
+        collectability = {
+            "success": collection_success,
+            "importable": True,
+            "collected_skills": len(collected_names),
+            "unique_skill_names": len(set(collected_names)),
+            "error": "" if collection_success else "catalog collection did not match validated skill folders",
+        }
+    except Exception as exc:
+        collectability = {
+            "success": False,
+            "importable": False,
+            "collected_skills": 0,
+            "unique_skill_names": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     payload = _catalog_check_summary(report) if summary else report.to_dict()
+    payload["collectability"] = collectability
+    payload["success"] = bool(report.success and collectability["success"])
     print(json.dumps(payload, indent=2, ensure_ascii=False))
-    return 0 if report.success else 1
+    return 0 if payload["success"] else 1
 
 
 if __name__ == "__main__":

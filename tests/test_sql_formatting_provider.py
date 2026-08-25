@@ -1777,10 +1777,20 @@ Join `BA011T` with `MAINCD`, `SUBCD`, and `USEYN`, then select `SUBNM`.
 
         selected_roles = [payload["plugin_route"]["controller"], *payload["plugin_route"]["assistants"]]
         self.assertFalse(any(role.get("capability") == "sql_formatting" for role in selected_roles))
-        self.assertEqual(payload["plugin_route"]["route"], "blocked")
+        self.assertEqual(payload["plugin_route"]["route"], "single")
+        self.assertEqual(payload["plugin_route"]["controller"]["provider_id"], "kh")
+        self.assertEqual(payload["plugin_route"]["controller"]["capability"], "workflow_control")
         self.assertEqual(payload["execution_gate"]["status"], "blocked_until_sql_formatting_provider")
         self.assertFalse(payload["execution_gate"]["can_execute"])
+        self.assertTrue(payload["execution_authorization"]["must_stop_before_execution"])
         self.assertIn("sql_formatting", payload["plugin_route"]["unavailable_capabilities"])
+        sql_provider_evidence = next(
+            item
+            for item in payload["plugin_route"]["provider_evidence"]
+            if item["provider_id"] == "sql-formatting"
+        )
+        self.assertFalse(sql_provider_evidence["selected"])
+        self.assertFalse(sql_provider_evidence["available"])
         self.assertFalse(
             any("Apply selected provider `sql-formatting`" in action for action in payload["required_next_actions"])
         )

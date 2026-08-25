@@ -2,19 +2,33 @@ from __future__ import annotations
 
 import argparse
 import ast
+from array import array
+from collections import deque
+from collections.abc import Iterator, Mapping as MappingABC, Sequence as SequenceABC
+from contextvars import ContextVar
 from datetime import datetime
 import hashlib
+from itertools import islice
 import json
+import os
 import re
 import shlex
+import sqlite3
+import sys
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Set
 
 from src.orchestration.goal_ledger import GoalLedger
 from src.orchestration.plugin_composition import looks_like_sql_output_request
 from src.orchestration.request_classifier import classify_request
-from src.orchestration.session_postmortem import analyze_codex_session_jsonl
+from src.orchestration.session_postmortem import (
+    PostmortemEventFeatures,
+    analyze_codex_session_jsonl,
+    extract_postmortem_event_features,
+)
 from src.skills.sql_formatting_provider import (
     DuplicateJsonKeyError,
     SqlFormattingCliArtifactError,
@@ -236,6 +250,105 @@ RUNTIME_MARKERS = {
     ],
 }
 
+_KNOWN_HOST_FRONT_DOOR_SOURCES = {
+    "codex",
+    "codex-host",
+    "codex_host",
+    "codex-runtime",
+    "codex_runtime",
+    "host",
+    "host-runtime",
+    "host_runtime",
+}
+_FRONT_DOOR_PACKET_HASH_KEYS = frozenset({"packet_sha256", "packet_hash"})
+_FRONT_DOOR_PROVENANCE_KEYS = frozenset(
+    {
+        "boundary_id",
+        "correlation_id",
+        "external_authenticity",
+        "packet_hash",
+        "packet_sha256",
+        "source",
+        "tool_identity",
+    }
+)
+
+_GENERAL_TOOL_PACKET_HASH_KEYS = frozenset({"packet_sha256", "packet_hash"})
+_GENERAL_TOOL_PACKET_FIELDS = frozenset(
+    {
+        "arguments",
+        "boundary_id",
+        "call_id",
+        "call_packet_sha256",
+        "correlation_id",
+        "exit_code",
+        "host",
+        "input",
+        "name",
+        "origin",
+        "output",
+        "return_code",
+        "returncode",
+        "source",
+        "status",
+        "success",
+        "tool_call_id",
+        "tool_identity",
+        "type",
+    }
+)
+_GENERAL_TOOL_EXACT_IDENTITIES = frozenset(
+    {
+        "apply_patch",
+        "approve_memory_import",
+        "browser_manual_qa",
+        "computer_use",
+        "create_agent",
+        "exec",
+        "exec_command",
+        "functions.exec",
+        "functions.shell_command",
+        "inspect_runtime_capabilities",
+        "mssql_run_sql_query",
+        "memory_import_approval",
+        "multi_agent_v1.spawn_agent",
+        "multi_agent_v1.wait_agent",
+        "multi_tool_use.parallel",
+        "orchestrate_pb_migration_validation",
+        "request_user_input",
+        "run_command",
+        "shell_command",
+        "text",
+        "validate_large_work_orchestration_bundle",
+        "verify_migration_generated_csharp_style",
+        "verify_sql_formatting_style",
+        "view_image",
+    }
+)
+_SESSION_INTEGRITY_SAMPLE_LIMIT = 8
+_PB_FRONT_DOOR_HISTORY_SAMPLE_LIMIT = 32
+_COMPATIBILITY_EVENT_LIMIT = 4096
+_AUDIT_VALUE_SAMPLE_LIMIT = 64
+_AUTHENTICATED_MEMORY_APPROVAL_TOOLS = frozenset(
+    {
+        "approve_memory_import",
+        "memory_import_approval",
+        "src.orchestration.runtime_memory.approve_memory_import",
+        "src.orchestration.runtime_memory.record_memory_import_approval",
+    }
+)
+_MEMORY_IMPORT_DIRECTIVE_KEYS = frozenset(
+    {
+        "claim_kind",
+        "action",
+        "memory_import_approved",
+        "approval_state",
+        "scope",
+        "project",
+        "conversation_id",
+    }
+)
+
 ACCEPTANCE_OUTPUT_MARKERS = {
     "always-on-front-door": {
         "intake_evidence": ["kh_front_door", "front_door_status", "classification", "plugin_route"],
@@ -365,11 +478,22 @@ ACCEPTANCE_OUTPUT_MARKERS = {
         "sql_passthrough": ["token_optimizer_status", "passthrough", "contract-sensitive"],
     },
     "pb-to-csharp-migration-harness": {
-        "post_write_verifier": [
+        "packaged_profile": [
+            "packaged_sanitized_profile",
+            "profile_id",
+            "profile_version",
+            "profile_hash",
+        ],
+        "csharp_verification": [
             "verify_migration_generated_csharp_style",
             "orchestrate_pb_migration_validation",
         ],
-        "verified_targets": ["verified_target_paths", "verified_targets", "target_paths"],
+        "designer_verification": ["target_designer_path", "designer", "validate-csharp"],
+        "sp_verification": ["validate-sp", "sp_contract_status"],
+        "sql_binding_release": ["final-sql-binding", "sql_release_correlated"],
+        "build_verification": ["dotnet build", "msbuild", "build_status"],
+        "database_verification": ["sqlcmd", "invoke-sqlcmd", "database_verification"],
+        "manual_qa": ["manual_qa", "manual qa", "browser qa"],
     },
     "snapshot-state-harness": {
         "snapshot": ["snapshot", "rollback", "checkpoint", "snapshotmanager"],
@@ -437,6 +561,49 @@ class SessionTextRecord:
     trusted_host_native_fast_path: bool = False
     trusted_front_door_runtime: bool = False
     trusted_correlated_tool_runtime: bool = False
+    sql_requirement: bool | None = None
+
+
+@dataclass(frozen=True)
+class EventEnvelope:
+    """One physical JSONL record plus immutable source provenance."""
+
+    source_line: int
+    raw_text: str
+    source_bytes: int
+    event: Any
+    duplicate_keys: tuple[str, ...] = ()
+    parse_error: str = ""
+    features: "EventFeatures | None" = None
+
+
+@dataclass(frozen=True)
+class EventFeatures:
+    """Bounded audit fields paired with the compact persisted event."""
+
+    event_type: str
+    payload_type: str
+    role: str
+    call_id: str
+    boundary_id: str
+    correlation_id: str
+    tool_identity: str
+    packet_hash: str
+    text: str
+    lowered: str
+    is_non_kh_work_start: bool
+    is_sql_output_request: bool
+    reducer_matches: tuple[tuple[str, str], ...]
+    postmortem: PostmortemEventFeatures
+
+
+@dataclass(frozen=True)
+class EventSemanticFeatures:
+    """Bounded facts extracted from the original event before compaction."""
+
+    is_non_kh_work_start: bool
+    is_sql_output_request: bool
+    reducer_matches: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -453,6 +620,8 @@ class CorrelatedToolReceipt:
     call: Dict[str, Any]
     output: Dict[str, Any]
     data: Dict[str, Any]
+    duplicate_boundary: bool = False
+    duplicate_packet_hash: bool = False
 
 
 @dataclass(frozen=True)
@@ -467,13 +636,3486 @@ class SessionSkillAudit:
     postmortem: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        values = asdict(self)
+        return {key: values[key] for key in sorted(values)}
+
+
+@dataclass(frozen=True)
+class SessionEventIndex:
+    path_key: str
+    payload_events: "DiskBackedSessionEvents"
+    metadata: Dict[str, Any]
+    integrity_issues: List[Dict[str, Any]]
+    raw_characters_seen: int
+    max_source_line_characters: int
+    indexed_disk_bytes: int
+    retained_memory_bytes: int
+    catalog: Dict[str, Any] = field(default_factory=dict)
+    postmortem: Any = None
+    stage_telemetry: Dict[str, Any] = field(default_factory=dict)
+
+    def diagnostics(self, *, include_stage_telemetry: bool = False) -> Dict[str, Any]:
+        diagnostics = self.payload_events.diagnostics()
+        if include_stage_telemetry and self.stage_telemetry:
+            diagnostics["stage_telemetry"] = dict(self.stage_telemetry)
+        return diagnostics
+
+    def close(self) -> None:
+        self.payload_events.close()
+
+
+_SESSION_EVENT_PAYLOAD_KEYS = frozenset(
+    {
+        "arguments",
+        "call_id",
+        "call_packet_sha256",
+        "boundary_id",
+        "correlation_id",
+        "content",
+        "event_id",
+        "exit_code",
+        "goal",
+        "info",
+        "input",
+        "last_agent_message",
+        "memory_citation",
+        "memory_import_directive",
+        "message",
+        "name",
+        "origin",
+        "output",
+        "packet",
+        "packet_hash",
+        "packet_sha256",
+        "phase",
+        "return_code",
+        "returncode",
+        "role",
+        "source",
+        "status",
+        "success",
+        "thread_source",
+        "tool_call_id",
+        "tool_identity",
+        "host",
+        "type",
+    }
+)
+_SESSION_METADATA_KEYS = frozenset(
+    {"cwd", "id", "source", "thread_id", "thread_source"}
+)
+_SESSION_INDEX_TEXT_CAPTURE_LIMIT = 64 * 1024
+_SESSION_INDEX_TEXT_CAPTURE_EDGE = 4 * 1024
+_SESSION_INDEX_REQUIRED_EVIDENCE_MARKERS = (
+    "pb_migration_verifier_receipt",
+    "sql_final_response_binding",
+    "sql_verifier_history",
+    "sql_formatting_verifier",
+    "token_optimizer_decision",
+    "runtime_token_optimization",
+    "front_door_status",
+    '"m":"kh_fd_micro"',
+    '"m": "kh_fd_micro"',
+)
+_SESSION_TEXT_AGGREGATE_LIMIT = 64 * 1024
+_SESSION_TEXT_AGGREGATE_ITEM_LIMIT = 4 * 1024
+_SESSION_TEXT_AGGREGATE_SIGNALS = (
+    "always-on-front-door",
+    "brainstorm",
+    "compound",
+    "front_door_status",
+    "function_call",
+    "goal-state-harness",
+    "memory-state-harness",
+    "memory_candidates",
+    "orchestration",
+    "pb-to-csharp",
+    "runtime_token_optimization",
+    "spawn_agent",
+    "sql-formatting",
+    "task_complete",
+    "token_optimizer",
+    "verification",
+    "worktree",
+)
+
+
+@dataclass
+class _BoundedTextAccumulator:
+    """Incrementally reproduce ``_bounded_text_aggregate`` with fixed memory."""
+
+    max_characters: int = _SESSION_TEXT_AGGREGATE_LIMIT
+    item_limit: int = _SESSION_TEXT_AGGREGATE_ITEM_LIMIT
+    first: List[tuple[int, str]] = field(default_factory=list)
+    last: deque[tuple[int, str]] = field(default_factory=lambda: deque(maxlen=3))
+    signals: List[tuple[int, str]] = field(default_factory=list)
+    signal_count: int = 0
+    item_count: int = 0
+
+    def add(self, raw_text: str, *, lowered: str | None = None) -> None:
+        text = str(raw_text or "")
+        if not text or self.max_characters <= 0 or self.item_limit <= 0:
+            return
+        if len(text) > self.item_limit:
+            edge = max(1, self.item_limit // 2)
+            marker = "\n[KH_TEXT_AGGREGATE_TRUNCATED]\n"
+            text = text[:edge] + marker + text[-edge:]
+            if lowered is not None:
+                lowered = None
+        indexed = (self.item_count, text)
+        if len(self.first) < 3:
+            self.first.append(indexed)
+        self.last.append(indexed)
+        lowered = text.lower() if lowered is None else lowered
+        if any(signal in lowered for signal in _SESSION_TEXT_AGGREGATE_SIGNALS):
+            self.signal_count += 1
+            if len(self.signals) < 8:
+                self.signals.append(indexed)
+            else:
+                slot = (self.signal_count * 2654435761) % self.signal_count
+                if slot < 8:
+                    self.signals[slot] = indexed
+        self.item_count += 1
+
+    def render(self) -> str:
+        if self.item_count == 0:
+            return ""
+        parts: List[str] = []
+        retained = 0
+        selected = {
+            index: text for index, text in (*self.first, *self.last, *self.signals)
+        }
+        for index in sorted(selected):
+            text = selected[index]
+            remaining = self.max_characters - retained
+            if remaining <= 0:
+                break
+            if len(text) > remaining:
+                text = text[:remaining]
+            parts.append(text)
+            retained += len(text) + 1
+        return "\n".join(parts)
+
+
+def _canonical_json(value: Any) -> str:
+    """Return deterministic, non-executable JSON for temporary audit storage."""
+
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _json_mapping(value: Any) -> Dict[str, Any]:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        value = bytes(value).decode("utf-8")
+    if not isinstance(value, str) or not value:
+        return {}
+    decoded = json.loads(value)
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _json_scalar_sequence(value: Any) -> tuple[Any, ...]:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        value = bytes(value).decode("utf-8")
+    if not isinstance(value, str) or not value:
+        return ()
+    decoded = json.loads(value)
+    if not isinstance(decoded, list):
+        return ()
+    return tuple(
+        item if item is None or isinstance(item, (bool, int, float, str)) else str(item)
+        for item in decoded
+    )
+
+
+def _canonical_scalar_field(payload: Mapping[str, Any], key: str) -> str:
+    if key not in payload:
+        return ""
+    return _canonical_json(payload[key])
+
+
+def _retained_payload_fragment(
+    payload_type: str,
+    payload: Mapping[str, Any],
+) -> tuple[str, Dict[str, Any]]:
+    fragment: Dict[str, Any] = {}
+    kinds: List[str] = []
+    if payload_type == "thread_goal_updated":
+        kinds.append("goal")
+        for key in ("goal", "info"):
+            if key in payload:
+                fragment[key] = payload[key]
+    if payload.get("memory_citation") is not None:
+        kinds.append("memory")
+        fragment["memory_citation"] = payload["memory_citation"]
+    if payload.get("memory_import_directive") is not None:
+        if "memory" not in kinds:
+            kinds.append("memory")
+        fragment["memory_import_directive"] = payload["memory_import_directive"]
+    return "+".join(kinds), fragment
+
+
+_RETAINED_JSON_KEYS_BY_FACT_KIND = {
+    "goal": frozenset({"goal", "info"}),
+    "memory": frozenset({"memory_citation", "memory_import_directive"}),
+    "goal+memory": frozenset(
+        {"goal", "info", "memory_citation", "memory_import_directive"}
+    ),
+}
+
+
+def _validated_retained_payload_fragment(
+    payload_type: str,
+    fact_kind: Any,
+    value: Any,
+) -> Dict[str, Any]:
+    normalized_kind = str(fact_kind or "")
+    allowed_keys = _RETAINED_JSON_KEYS_BY_FACT_KIND.get(normalized_kind)
+    if allowed_keys is None:
+        raise ValueError(f"unsupported retained JSON fact kind: {normalized_kind!r}")
+    if "goal" in normalized_kind.split("+") and payload_type != "thread_goal_updated":
+        raise ValueError(
+            "goal retained JSON is only valid for thread_goal_updated payloads"
+        )
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        value = bytes(value).decode("utf-8")
+    if not isinstance(value, str) or not value:
+        raise ValueError("retained JSON must be a non-empty JSON object")
+    decoded = load_json_without_duplicate_keys(value)
+    if not isinstance(decoded, dict):
+        raise ValueError("retained JSON must decode to an object")
+    unexpected_keys = sorted(set(decoded) - allowed_keys)
+    if unexpected_keys:
+        raise ValueError(
+            "unexpected retained JSON keys for "
+            f"{normalized_kind}: {', '.join(unexpected_keys)}"
+        )
+    if "goal" in normalized_kind.split("+") and not set(decoded).intersection(
+        _RETAINED_JSON_KEYS_BY_FACT_KIND["goal"]
+    ):
+        raise ValueError("goal retained JSON has no goal facts")
+    if "memory" in normalized_kind.split("+") and not set(decoded).intersection(
+        _RETAINED_JSON_KEYS_BY_FACT_KIND["memory"]
+    ):
+        raise ValueError("memory retained JSON has no memory facts")
+    return decoded
+
+
+def _stored_packet_hash_valid(payload: Mapping[str, Any]) -> bool:
+    supplied = _general_tool_supplied_packet_hash(payload)
+    if not supplied:
+        return False
+    try:
+        return supplied == _general_tool_packet_sha256(payload)
+    except (TypeError, ValueError, UnicodeError):
+        return False
+
+
+def _valid_stored_general_tool_pair(
+    call: Mapping[str, Any],
+    output: Mapping[str, Any],
+    *,
+    call_packet_hash_valid: bool,
+    output_packet_hash_valid: bool,
+) -> bool:
+    call_id = _payload_call_id(dict(call))
+    if not call_id or call_id != _payload_call_id(dict(output)):
+        return False
+    if (str(call.get("type", "")), str(output.get("type", ""))) not in {
+        ("function_call", "function_call_output"),
+        ("custom_tool_call", "custom_tool_call_output"),
+    }:
+        return False
+    if _is_front_door_runtime_command(dict(call), _payload_text(dict(call)).lower()):
+        return _valid_host_front_door_provenance(
+            call,
+            output,
+            _json_object_from_text(_payload_text(dict(output))),
+            duplicate_boundaries=frozenset(),
+            duplicate_packet_hashes=frozenset(),
+        )
+    source = _front_door_provenance_value(call, "source", "host", "origin")
+    output_source = _front_door_provenance_value(output, "source", "host", "origin")
+    tool_identity = str(call.get("tool_identity", "") or "").strip().lower()
+    output_identity = str(output.get("tool_identity", "") or "").strip().lower()
+    boundary_id = str(call.get("boundary_id", "") or "").strip()
+    call_packet_hash = _general_tool_supplied_packet_hash(call)
+    return bool(
+        source in _KNOWN_HOST_FRONT_DOOR_SOURCES
+        and output_source == source
+        and tool_identity
+        and output_identity == tool_identity
+        and _is_allowed_general_tool_identity(tool_identity)
+        and str(call.get("name", "") or "").strip().lower() == tool_identity
+        and str(call.get("correlation_id", "") or "").strip() == call_id
+        and str(output.get("correlation_id", "") or "").strip() == call_id
+        and boundary_id
+        and boundary_id == str(output.get("boundary_id", "") or "").strip()
+        and call_packet_hash
+        and str(output.get("call_packet_sha256", "") or "").strip().lower()
+        == call_packet_hash
+        and _general_tool_supplied_packet_hash(output)
+        and call_packet_hash_valid
+        and output_packet_hash_valid
+    )
+
+
+_EVENT_PAYLOAD_VIEW_COLUMN_COUNT = 25
+
+
+def _optional_json_scalar(value: Any) -> tuple[bool, Any]:
+    if value is None or value == "":
+        return False, None
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        value = bytes(value).decode("utf-8")
+    return True, json.loads(str(value))
+
+
+def _payload_from_event_view_row(
+    row: Sequence[Any],
+    offset: int = 0,
+) -> Dict[str, Any]:
+    payload_type = str(row[offset + 2])
+    payload: Dict[str, Any] = {"type": payload_type}
+    for key, column_offset in (
+        ("role", 3),
+        ("call_id", 4),
+        ("boundary_id", 5),
+        ("correlation_id", 6),
+        ("tool_identity", 7),
+        ("name", 8),
+    ):
+        value = str(row[offset + column_offset] or "")
+        if value:
+            payload[key] = value
+    packet_hash = str(row[offset + 9] or "")
+    if packet_hash:
+        payload["packet_sha256"] = packet_hash
+    phase = str(row[offset + 11] or "")
+    if phase:
+        payload["phase"] = phase
+    source = str(row[offset + 12] or "")
+    if source:
+        payload["source"] = source
+    call_packet_sha256 = str(row[offset + 13] or "")
+    if call_packet_sha256:
+        payload["call_packet_sha256"] = call_packet_sha256
+    status = str(row[offset + 14] or "")
+    if status:
+        payload["status"] = status
+    for key, column_offset in (
+        ("success", 15),
+        ("exit_code", 16),
+        ("return_code", 17),
+        ("returncode", 18),
+    ):
+        present, value = _optional_json_scalar(row[offset + column_offset])
+        if present:
+            payload[key] = value
+
+    text = str(row[offset + 20] or "")
+    arguments = str(row[offset + 21] or "")
+    if payload_type == "message":
+        payload["content"] = text
+    elif payload_type == "agent_message":
+        payload["message"] = text
+    elif payload_type in {"function_call", "custom_tool_call"}:
+        payload["arguments"] = arguments
+    elif payload_type in {"function_call_output", "custom_tool_call_output"}:
+        payload["output"] = text
+    elif payload_type in {"host_front_door", "host_native_front_door"}:
+        payload["output"] = text
+    elif payload_type == "task_complete":
+        payload["last_agent_message"] = text
+
+    retained_kind = row[offset + 23]
+    retained = row[offset + 24]
+    if retained not in (None, "", b""):
+        payload.update(
+            _validated_retained_payload_fragment(
+                payload_type,
+                retained_kind,
+                retained,
+            )
+        )
+    return payload
+
+
+def _event_from_event_view_row(
+    row: Sequence[Any],
+    offset: int = 0,
+) -> Dict[str, Any]:
+    event = {
+        "type": str(row[offset + 1]),
+        "payload": _payload_from_event_view_row(row, offset),
+    }
+    timestamp_json = row[offset + 10]
+    if isinstance(timestamp_json, (bytes, bytearray, memoryview)):
+        timestamp_json = bytes(timestamp_json).decode("utf-8")
+    timestamp = json.loads(str(timestamp_json))
+    if timestamp is not None:
+        event["timestamp"] = timestamp
+    return event
+
+
+def _text_record_from_joined_row(
+    row: Sequence[Any],
+    offset: int = 0,
+) -> SessionTextRecord:
+    stored_text = str(row[offset] or "")
+    payload_type = str(row[offset + 1] or "")
+    role = str(row[offset + 2] or "")
+    call_id = str(row[offset + 3] or "")
+    name = str(row[offset + 4] or "")
+    arguments = str(row[offset + 5] or "")
+    if payload_type in {"function_call", "custom_tool_call"}:
+        stored_text = f"{name} {arguments}"
+    if bool(row[offset + 9]):
+        stored_text = PASSIVE_REFERENCE_PREFIX + stored_text
+    exit_codes: List[Any] = []
+    for column_offset in (6, 7, 8):
+        present, value = _optional_json_scalar(row[offset + column_offset])
+        if present:
+            exit_codes.append(value)
+    return SessionTextRecord(
+        text=stored_text,
+        payload_type=payload_type,
+        role=role,
+        call_id=call_id,
+        name=name,
+        arguments=arguments,
+        exit_codes=tuple(exit_codes),
+        trusted_host_native_fast_path=bool(row[offset + 10]),
+        trusted_front_door_runtime=bool(row[offset + 11]),
+        trusted_correlated_tool_runtime=bool(row[offset + 12]),
+        sql_requirement=bool(row[offset + 13]),
+    )
+
+
+def _delete_sqlite_files(path: Path | None) -> None:
+    if path is None:
+        return
+    for candidate in (
+        path,
+        Path(f"{path}-journal"),
+        Path(f"{path}-wal"),
+        Path(f"{path}-shm"),
+    ):
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            # The primary connection is closed before this helper runs. A
+            # cleanup failure must not hide the analysis result on Windows.
+            continue
+
+
+class DiskBackedSessionEvents(SequenceABC[Dict[str, Any]]):
+    """SQLite-backed compatibility view over compact audit events.
+
+    The object intentionally retains no event dictionaries, source-line arrays,
+    or source hashes in Python memory. Random access and repeated legacy views
+    are served from the temporary fact database while reducers migrate to
+    direct indexed queries.
+    """
+
+    def __init__(self, catalog_skills: Sequence[Mapping[str, Any]] = ()) -> None:
+        self._path: Path | None = None
+        self._connection: sqlite3.Connection | None = None
+        self._sealed = False
+        self._closed = False
+        handle = None
+        try:
+            handle = tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix="kh-session-audit-",
+                suffix=".sqlite3",
+                delete=False,
+            )
+            self._path = Path(handle.name)
+            handle.close()
+            handle = None
+            self._connection = sqlite3.connect(str(self._path))
+            connection = self._connection
+            connection.execute("PRAGMA page_size=8192")
+            connection.execute("PRAGMA journal_mode=OFF")
+            connection.execute("PRAGMA synchronous=OFF")
+            connection.execute("PRAGMA locking_mode=EXCLUSIVE")
+            connection.execute("PRAGMA temp_store=FILE")
+            connection.execute("PRAGMA cache_size=-8192")
+            connection.executescript(
+                """
+            CREATE TABLE events (
+                seq INTEGER PRIMARY KEY,
+                source_line INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_type TEXT NOT NULL,
+                role TEXT NOT NULL,
+                call_id TEXT NOT NULL,
+                boundary_id TEXT NOT NULL,
+                correlation_id TEXT NOT NULL,
+                tool_identity TEXT NOT NULL,
+                name TEXT NOT NULL,
+                packet_hash TEXT NOT NULL,
+                timestamp_json TEXT NOT NULL,
+                source TEXT NOT NULL,
+                call_packet_sha256 TEXT NOT NULL,
+                status TEXT NOT NULL,
+                success_json TEXT NOT NULL,
+                exit_code_json TEXT NOT NULL,
+                return_code_json TEXT NOT NULL,
+                returncode_json TEXT NOT NULL,
+                packet_hash_valid INTEGER NOT NULL,
+                is_request_boundary INTEGER NOT NULL,
+                phase TEXT NOT NULL,
+                goal_status TEXT NOT NULL,
+                is_non_kh_work_start INTEGER NOT NULL,
+                is_sql_output_request INTEGER NOT NULL,
+                trusted_host_native_fast_path INTEGER NOT NULL
+            );
+            CREATE INDEX events_payload_type_idx ON events(payload_type, seq);
+            CREATE INDEX events_role_idx ON events(role, payload_type, seq);
+            CREATE INDEX events_call_id_idx ON events(call_id, payload_type, seq);
+            CREATE INDEX events_request_boundary_idx ON events(is_request_boundary, seq);
+            CREATE TABLE retained_json (
+                event_seq INTEGER PRIMARY KEY,
+                fact_kind TEXT NOT NULL
+                    CHECK(fact_kind IN ('goal', 'memory', 'goal+memory')),
+                data_json TEXT NOT NULL
+            );
+            CREATE TABLE facts (
+                seq INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                fact_key TEXT NOT NULL,
+                fact_value TEXT NOT NULL,
+                PRIMARY KEY (seq, kind, fact_key)
+            ) WITHOUT ROWID;
+            CREATE INDEX facts_kind_key_idx ON facts(kind, fact_key, seq);
+            CREATE TABLE correlated_receipts (
+                call_seq INTEGER PRIMARY KEY,
+                output_seq INTEGER NOT NULL UNIQUE,
+                succeeded INTEGER NOT NULL,
+                is_implementation INTEGER NOT NULL,
+                is_verification INTEGER NOT NULL
+            );
+            CREATE TABLE front_door_receipts (
+                call_seq INTEGER PRIMARY KEY,
+                output_seq INTEGER NOT NULL UNIQUE,
+                data_json TEXT NOT NULL
+            );
+            CREATE TABLE front_door_claims (
+                event_seq INTEGER PRIMARY KEY,
+                data_json TEXT NOT NULL
+            );
+            CREATE TABLE pb_front_door_acceptance (
+                output_seq INTEGER PRIMARY KEY,
+                accepted INTEGER NOT NULL CHECK(accepted IN (0, 1))
+            );
+            CREATE TABLE pb_verified_corrections (
+                correction_seq INTEGER PRIMARY KEY
+            );
+            CREATE TABLE pb_correction_candidates (
+                correction_seq INTEGER PRIMARY KEY
+            );
+            CREATE TABLE pb_active_implementations (
+                output_seq INTEGER PRIMARY KEY,
+                targets_json TEXT NOT NULL
+            );
+            CREATE TABLE sql_provider_selections (
+                output_record_seq INTEGER PRIMARY KEY,
+                call_record_seq INTEGER NOT NULL,
+                provider_id TEXT NOT NULL,
+                provider_path TEXT NOT NULL,
+                provider_source TEXT NOT NULL,
+                selection_sha256 TEXT NOT NULL,
+                receipt_id TEXT NOT NULL,
+                provenance_valid INTEGER NOT NULL,
+                provenance_errors_json TEXT NOT NULL
+            );
+            CREATE INDEX sql_provider_selection_receipt_idx
+                ON sql_provider_selections(receipt_id, output_record_seq);
+            CREATE TABLE sql_runtime_receipt_facts (
+                record_seq INTEGER NOT NULL,
+                receipt_kind TEXT NOT NULL,
+                receipt_id TEXT NOT NULL,
+                PRIMARY KEY(record_seq, receipt_kind, receipt_id)
+            ) WITHOUT ROWID;
+            CREATE INDEX sql_runtime_receipt_lookup_idx
+                ON sql_runtime_receipt_facts(receipt_kind, receipt_id, record_seq);
+            CREATE TABLE memory_decisions (
+                event_seq INTEGER PRIMARY KEY,
+                decision TEXT NOT NULL CHECK(decision IN ('approve', 'revoke'))
+            );
+            CREATE TABLE active_forbidden_claims (
+                claim TEXT PRIMARY KEY,
+                request_seq INTEGER NOT NULL,
+                scanned INTEGER NOT NULL DEFAULT 0,
+                matched INTEGER NOT NULL DEFAULT 0,
+                scan_sample TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE correction_facts (
+                event_seq INTEGER PRIMARY KEY,
+                active_goal INTEGER NOT NULL,
+                invalidated_json TEXT NOT NULL,
+                replacements_json TEXT NOT NULL,
+                related_to_previous INTEGER NOT NULL,
+                prior_completion_seq INTEGER,
+                sample TEXT NOT NULL
+            );
+            CREATE TABLE text_records (
+                record_seq INTEGER PRIMARY KEY,
+                event_seq INTEGER NOT NULL UNIQUE,
+                text TEXT NOT NULL,
+                arguments TEXT NOT NULL,
+                passive INTEGER NOT NULL CHECK(passive IN (0, 1)),
+                trusted_front_door_runtime INTEGER NOT NULL,
+                trusted_correlated_tool_runtime INTEGER NOT NULL,
+                sql_requirement INTEGER NOT NULL
+            );
+            CREATE TABLE catalog_candidate_records (
+                record_seq INTEGER PRIMARY KEY
+            );
+            CREATE TABLE orchestration_protocol_calls (
+                record_seq INTEGER PRIMARY KEY,
+                validates_bundle INTEGER NOT NULL CHECK(validates_bundle IN (0, 1)),
+                audits_roles INTEGER NOT NULL CHECK(audits_roles IN (0, 1))
+            );
+            CREATE VIEW event_payloads AS
+            SELECT events.seq,
+                   events.event_type,
+                   events.payload_type,
+                   events.role,
+                   events.call_id,
+                   events.boundary_id,
+                   events.correlation_id,
+                   events.tool_identity,
+                   events.name,
+                   events.packet_hash,
+                   events.timestamp_json,
+                   events.phase,
+                   events.source,
+                   events.call_packet_sha256,
+                   events.status,
+                   events.success_json,
+                   events.exit_code_json,
+                   events.return_code_json,
+                   events.returncode_json,
+                   events.packet_hash_valid,
+                   COALESCE(text_records.text, ''),
+                   COALESCE(text_records.arguments, ''),
+                   COALESCE(text_records.passive, 0),
+                   COALESCE(retained_json.fact_kind, ''),
+                   COALESCE(retained_json.data_json, '')
+            FROM events
+            LEFT JOIN text_records ON text_records.event_seq = events.seq
+            LEFT JOIN retained_json ON retained_json.event_seq = events.seq;
+            CREATE TABLE reducer_summaries (
+                reducer_name TEXT PRIMARY KEY,
+                fact_kind TEXT NOT NULL,
+                matched_count INTEGER NOT NULL,
+                first_event_seq INTEGER,
+                last_event_seq INTEGER,
+                finalized INTEGER NOT NULL CHECK(finalized = 1)
+            );
+            CREATE TABLE reducer_samples (
+                reducer_name TEXT NOT NULL,
+                sample_seq INTEGER NOT NULL,
+                event_seq INTEGER NOT NULL,
+                fact_key TEXT NOT NULL,
+                fact_value TEXT NOT NULL,
+                PRIMARY KEY(reducer_name, sample_seq)
+            ) WITHOUT ROWID;
+            CREATE TABLE analysis_summaries (
+                summary_name TEXT PRIMARY KEY,
+                data_json TEXT NOT NULL
+            ) WITHOUT ROWID;
+            """
+            )
+        except Exception:
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+            if self._connection is not None:
+                try:
+                    self._connection.close()
+                except Exception:
+                    pass
+                self._connection = None
+            self._closed = True
+            _delete_sqlite_files(self._path)
+            raise
+        self._disk_bytes = 0
+        self._retained_record_count = 0
+        self._original_passes = 0
+        self._check_count = 0
+        self._source_open_count = 0
+        self._source_passes = 0
+        self._source_bytes_read = 0
+        self._reducer_count = 0
+        self._reducer_finalize_count = 0
+        self._reducer_evidence: List[Dict[str, Any]] = []
+        self._receipts_ready = False
+        self._ordered_correlation_replay_count = 0
+        self._ordered_correlation_claim_count = 0
+        self._protocol_correlation_replay_count = 0
+        self._pb_correlation_replay_count = 0
+        self._memory_decisions_ready = False
+        self._text_records_ready = False
+        self._text_record_count = 0
+        self._analysis_summary_ready = False
+        self._analysis_accumulators = {
+            "combined_text": _BoundedTextAccumulator(),
+            "decision_text": _BoundedTextAccumulator(),
+            "sql_scope_text": _BoundedTextAccumulator(),
+            "non_front_door_tool_text": _BoundedTextAccumulator(),
+        }
+        self._analysis_browser_or_local_app_qa = False
+        self._catalog_skills = [
+            {
+                "name": str(skill.get("name", "")),
+                "relative_path": str(skill.get("relative_path", "")),
+            }
+            for skill in catalog_skills
+        ]
+        self._catalog_observations_summary: Dict[str, Dict[str, Any]] = {
+            str(skill.get("name", "")): _empty_observations()
+            for skill in self._catalog_skills
+        }
+        self._catalog_observation_index = _build_catalog_observation_index(
+            self._catalog_skills
+        )
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        connection = self._connection
+        if self._closed or connection is None:
+            raise RuntimeError("session event index is closed")
+        return connection
+
+    def append(
+        self,
+        event: Mapping[str, Any],
+        *,
+        source_line: int,
+        features: EventFeatures | None = None,
+    ) -> int:
+        if self._sealed or self._closed:
+            raise RuntimeError("session event index is not writable")
+        record = dict(event)
+        payload = record.get("payload", {})
+        payload = payload if isinstance(payload, Mapping) else {}
+        payload_type = features.payload_type if features is not None else str(payload.get("type", "") or "")
+        call_id = features.call_id if features is not None else _payload_call_id(dict(payload))
+        packet_hash = (
+            features.packet_hash
+            if features is not None
+            else str(
+                payload.get("packet_sha256", "") or payload.get("packet_hash", "") or ""
+            ).strip().lower()
+        )
+        seq = self._retained_record_count
+        text = features.text if features is not None else _payload_text(dict(payload))
+        is_request_boundary = (
+            payload_type == "task_complete"
+            or (
+                payload_type == "message"
+                and str(payload.get("role", "") or "").strip().lower() == "user"
+                and not _is_synthetic_context_message(text)
+                and not _is_bounded_same_task_continuation(text)
+            )
+        )
+        event_type = features.event_type if features is not None else str(record.get("type", "") or "")
+        role = features.role if features is not None else str(payload.get("role", "") or "").strip().lower()
+        boundary_id = features.boundary_id if features is not None else str(payload.get("boundary_id", "") or "").strip()
+        correlation_id = features.correlation_id if features is not None else str(payload.get("correlation_id", "") or "").strip()
+        tool_identity = features.tool_identity if features is not None else str(payload.get("tool_identity", "") or "").strip().lower()
+        lowered = features.lowered if features is not None else text.lower()
+        phase = str(payload.get("phase", "") or "").strip().lower()
+        goal = payload.get("goal", {}) or {}
+        goal_status = (
+            str(goal.get("status", "") or "").strip().lower()
+            if isinstance(goal, Mapping)
+            else ""
+        )
+        is_non_kh_work_start = (
+            features.is_non_kh_work_start
+            if features is not None
+            else _is_non_kh_work_start(dict(payload), lowered)
+        )
+        is_sql_output_request = (
+            features.is_sql_output_request
+            if features is not None
+            else bool(
+                payload_type == "message"
+                and role == "user"
+                and looks_like_sql_output_request(lowered)
+            )
+        )
+        trusted_host_native_fast_path = bool(
+            payload_type in {"host_front_door", "host_native_front_door"}
+            and _is_trusted_host_native_fast_path_receipt(payload, text, "", False)
+        )
+        timestamp_json = _canonical_json(record.get("timestamp")) if "timestamp" in record else "null"
+        source = _front_door_provenance_value(payload, "source", "host", "origin")
+        retained_kind, retained_fragment = _retained_payload_fragment(payload_type, payload)
+        self._db.execute(
+            """
+            INSERT INTO events (
+                seq, source_line, event_type, payload_type,
+                role, call_id, boundary_id, correlation_id, tool_identity,
+                name, packet_hash, timestamp_json, source,
+                call_packet_sha256, status, success_json,
+                exit_code_json, return_code_json, returncode_json,
+                packet_hash_valid,
+                is_request_boundary, phase, goal_status, is_non_kh_work_start,
+                is_sql_output_request, trusted_host_native_fast_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                seq,
+                int(source_line),
+                event_type,
+                payload_type,
+                role,
+                call_id,
+                boundary_id,
+                correlation_id,
+                tool_identity,
+                str(payload.get("name", "") or "").strip(),
+                packet_hash,
+                timestamp_json,
+                source,
+                str(payload.get("call_packet_sha256", "") or "").strip().lower(),
+                str(payload.get("status", "") or "").strip(),
+                _canonical_scalar_field(payload, "success"),
+                _canonical_scalar_field(payload, "exit_code"),
+                _canonical_scalar_field(payload, "return_code"),
+                _canonical_scalar_field(payload, "returncode"),
+                int(_stored_packet_hash_valid(payload)),
+                int(is_request_boundary),
+                phase,
+                goal_status,
+                int(is_non_kh_work_start),
+                int(is_sql_output_request),
+                int(trusted_host_native_fast_path),
+            ),
+        )
+        if retained_fragment:
+            self._db.execute(
+                "INSERT INTO retained_json(event_seq, fact_kind, data_json) VALUES (?, ?, ?)",
+                (seq, retained_kind, _canonical_json(retained_fragment)),
+            )
+        if (
+            payload_type in {
+                "function_call",
+                "custom_tool_call",
+                "function_call_output",
+                "custom_tool_call_output",
+            }
+            or boundary_id
+            or packet_hash
+            or payload.get("memory_citation") is not None
+            or (
+                payload_type == "message"
+                and role == "user"
+                and payload.get("memory_import_directive") is not None
+            )
+        ):
+            self._record_facts(seq, payload_type, payload, features=features)
+        self._retained_record_count += 1
+        if self._retained_record_count % 16384 == 0:
+            self._db.commit()
+        return seq
+
+    def append_unindexed(self, event: Mapping[str, Any]) -> None:
+        # Session metadata is retained separately on SessionEventIndex. It is
+        # not part of the audit payload sequence and no spool copy is needed.
+        if self._sealed or self._closed:
+            raise RuntimeError("session event index is not writable")
+
+    def seal(self) -> None:
+        if self._sealed or self._closed:
+            return
+        self._db.commit()
+        self._sealed = True
+        try:
+            self._disk_bytes = self._path.stat().st_size if self._path is not None else 0
+        except OSError:
+            self._disk_bytes = 0
+
+    @property
+    def disk_bytes(self) -> int:
+        return self._disk_bytes
+
+    @property
+    def retained_memory_bytes(self) -> int:
+        self.seal()
+        accumulator_state = {
+            name: {
+                "first": accumulator.first,
+                "last": tuple(accumulator.last),
+                "signals": accumulator.signals,
+                "signal_count": accumulator.signal_count,
+                "item_count": accumulator.item_count,
+            }
+            for name, accumulator in self._analysis_accumulators.items()
+        }
+        catalog_index = self._catalog_observation_index
+        return _retained_python_bytes(
+            {
+                "analysis_accumulators": accumulator_state,
+                "catalog_skills": self._catalog_skills,
+                "catalog_observations": self._catalog_observations_summary,
+                "catalog_specifications": (
+                    catalog_index.specifications_by_name if catalog_index else {}
+                ),
+                "catalog_alias_owners": (
+                    catalog_index.alias_owners if catalog_index else {}
+                ),
+                "catalog_runtime_owners": (
+                    catalog_index.runtime_owners if catalog_index else {}
+                ),
+                "catalog_candidate_buckets": (
+                    catalog_index.candidate_buckets if catalog_index else ()
+                ),
+                "reducer_evidence": self._reducer_evidence,
+            }
+        )
+
+    @property
+    def temp_path(self) -> Path:
+        if self._path is None:
+            raise RuntimeError("session event index has no temporary path")
+        return self._path
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def __len__(self) -> int:
+        return self._retained_record_count
+
+    def __iter__(self) -> Iterator[Dict[str, Any]]:
+        self._ensure_readable()
+        cursor = self._db.execute("SELECT * FROM event_payloads ORDER BY seq")
+        return (_event_from_event_view_row(row) for row in cursor)
+
+    def __getitem__(self, index: int | slice) -> Dict[str, Any] | List[Dict[str, Any]]:
+        self._ensure_readable()
+        if isinstance(index, slice):
+            start, stop, step = index.indices(len(self))
+            if step != 1:
+                return [self[item] for item in range(start, stop, step)]
+            rows = self._db.execute(
+                "SELECT * FROM event_payloads WHERE seq >= ? AND seq < ? ORDER BY seq",
+                (start, stop),
+            )
+            return [_event_from_event_view_row(row) for row in rows]
+        normalized = index if index >= 0 else len(self) + index
+        if normalized < 0 or normalized >= len(self):
+            raise IndexError("session event index out of range")
+        row = self._db.execute(
+            "SELECT * FROM event_payloads WHERE seq = ?", (normalized,)
+        ).fetchone()
+        if row is None:
+            raise IndexError("session event index out of range")
+        return _event_from_event_view_row(row)
+
+    def iter_events(
+        self,
+        *,
+        payload_types: Iterable[str] | None = None,
+        roles: Iterable[str] | None = None,
+        event_types: Iterable[str] | None = None,
+        start: int = 0,
+        stop: int | None = None,
+    ) -> Iterator[tuple[int, Dict[str, Any]]]:
+        """Yield only indexed event classes needed by a reducer/check."""
+
+        self._ensure_readable()
+        clauses = ["seq >= ?"]
+        parameters: List[Any] = [max(0, int(start))]
+        if stop is not None:
+            clauses.append("seq < ?")
+            parameters.append(max(0, int(stop)))
+        for column, values in (
+            ("payload_type", payload_types),
+            ("role", roles),
+            ("event_type", event_types),
+        ):
+            normalized = tuple(dict.fromkeys(str(value) for value in (values or ())))
+            if normalized:
+                placeholders = ",".join("?" for _ in normalized)
+                clauses.append(f"{column} IN ({placeholders})")
+                parameters.extend(normalized)
+        rows = self._db.execute(
+            f"SELECT * FROM event_payloads WHERE {' AND '.join(clauses)} ORDER BY seq",
+            parameters,
+        )
+        for row in rows:
+            yield int(row[0]), _event_from_event_view_row(row)
+
+    def iter_payloads(
+        self,
+        *,
+        payload_types: Iterable[str] | None = None,
+        roles: Iterable[str] | None = None,
+        start: int = 0,
+        stop: int | None = None,
+    ) -> Iterator[tuple[int, Dict[str, Any]]]:
+        self._ensure_readable()
+        clauses = ["seq >= ?"]
+        parameters: List[Any] = [max(0, int(start))]
+        if stop is not None:
+            clauses.append("seq < ?")
+            parameters.append(max(0, int(stop)))
+        for column, values in (("payload_type", payload_types), ("role", roles)):
+            normalized = tuple(dict.fromkeys(str(value) for value in (values or ())))
+            if normalized:
+                placeholders = ",".join("?" for _ in normalized)
+                clauses.append(f"{column} IN ({placeholders})")
+                parameters.extend(normalized)
+        rows = self._db.execute(
+            f"SELECT * FROM event_payloads WHERE {' AND '.join(clauses)} ORDER BY seq",
+            parameters,
+        )
+        for row in rows:
+            yield int(row[0]), _payload_from_event_view_row(row)
+
+    def iter_payloads_with_front_door_flag(
+        self,
+        *,
+        payload_types: Iterable[str],
+    ) -> Iterator[tuple[int, Dict[str, Any], bool]]:
+        self._ensure_correlated_receipts()
+        normalized = tuple(dict.fromkeys(str(value) for value in payload_types))
+        if not normalized:
+            return
+        placeholders = ",".join("?" for _ in normalized)
+        rows = self._db.execute(
+            f"""
+            SELECT payloads.*,
+                   CASE WHEN receipts.output_seq IS NULL THEN 0 ELSE 1 END
+            FROM event_payloads AS payloads
+            LEFT JOIN front_door_receipts AS receipts
+              ON receipts.output_seq = payloads.seq
+            WHERE payloads.payload_type IN ({placeholders})
+            ORDER BY payloads.seq
+            """,
+            normalized,
+        )
+        for row in rows:
+            yield int(row[0]), _payload_from_event_view_row(row), bool(row[-1])
+
+    def iter_front_door_audit_facts(
+        self,
+        *,
+        payload_types: Iterable[str],
+    ) -> Iterator[tuple[int, str, str, str, str, bool, bool, bool, bool]]:
+        """Replay narrow front-door facts without decoding stored payload JSON."""
+
+        self._ensure_correlated_receipts()
+        normalized = tuple(dict.fromkeys(str(value) for value in payload_types))
+        if not normalized:
+            return
+        placeholders = ",".join("?" for _ in normalized)
+        rows = self._db.execute(
+            f"""
+            SELECT events.seq, events.payload_type, events.role,
+                   CASE
+                       WHEN events.payload_type IN (
+                            'function_call', 'custom_tool_call'
+                       ) THEN events.name || ' ' || COALESCE(text_records.arguments, '')
+                       ELSE COALESCE(text_records.text, '')
+                   END,
+                   events.goal_status,
+                   events.is_non_kh_work_start, events.is_sql_output_request,
+                   events.trusted_host_native_fast_path,
+                   CASE WHEN receipts.output_seq IS NULL THEN 0 ELSE 1 END
+            FROM events
+            LEFT JOIN text_records ON text_records.event_seq = events.seq
+            LEFT JOIN front_door_receipts AS receipts
+              ON receipts.output_seq = events.seq
+            WHERE events.payload_type IN ({placeholders})
+            ORDER BY events.seq
+            """,
+            normalized,
+        )
+        for row in rows:
+            yield (
+                int(row[0]),
+                str(row[1]),
+                str(row[2]),
+                _strip_passive_prefix(str(row[3])),
+                str(row[4]),
+                bool(row[5]),
+                bool(row[6]),
+                bool(row[7]),
+                bool(row[8]),
+            )
+
+    def iter_front_door_output_payloads(
+        self,
+    ) -> Iterator[tuple[int, Dict[str, Any], Dict[str, Any]]]:
+        self._ensure_correlated_receipts()
+        rows = self._db.execute(
+            """
+            SELECT outputs.*, receipts.data_json
+            FROM front_door_receipts AS receipts
+            JOIN event_payloads AS outputs ON outputs.seq = receipts.output_seq
+            ORDER BY receipts.output_seq
+            """
+        )
+        for row in rows:
+            yield (
+                int(row[0]),
+                _payload_from_event_view_row(row),
+                _json_mapping(row[-1]),
+            )
+
+    def append_front_door_claim(
+        self,
+        event_seq: int,
+        data: Mapping[str, Any],
+    ) -> None:
+        self._db.execute(
+            "INSERT OR REPLACE INTO front_door_claims(event_seq, data_json) VALUES (?, ?)",
+            (int(event_seq), _canonical_json(dict(data))),
+        )
+
+    def iter_front_door_claim_payloads(
+        self,
+    ) -> Iterator[tuple[int, Dict[str, Any], Dict[str, Any]]]:
+        rows = self._db.execute(
+            """
+            SELECT payloads.*, claims.data_json
+            FROM front_door_claims AS claims
+            JOIN event_payloads AS payloads ON payloads.seq = claims.event_seq
+            ORDER BY claims.event_seq
+            """
+        )
+        for row in rows:
+            yield (
+                int(row[0]),
+                _payload_from_event_view_row(row),
+                _json_mapping(row[-1]),
+            )
+
+    def iter_ordered_correlation_facts(
+        self,
+    ) -> Iterator[tuple[int, Dict[str, Any], Dict[str, Any], Dict[str, Any]]]:
+        """Replay claims, events, and authenticated calls in one ordered query."""
+
+        self._ensure_correlated_receipts()
+        if self._db.execute("SELECT 1 FROM front_door_claims LIMIT 1").fetchone() is None:
+            return
+        self._ordered_correlation_replay_count += 1
+        rows = self._db.execute(
+            """
+            SELECT payloads.*, claims.data_json, call_payloads.*
+            FROM event_payloads AS payloads
+            LEFT JOIN front_door_claims AS claims
+              ON claims.event_seq = payloads.seq
+            LEFT JOIN correlated_receipts AS receipts
+              ON receipts.output_seq = payloads.seq
+             AND receipts.succeeded = 1
+            LEFT JOIN event_payloads AS call_payloads
+              ON call_payloads.seq = receipts.call_seq
+            ORDER BY payloads.seq
+            """
+        )
+        call_offset = _EVENT_PAYLOAD_VIEW_COLUMN_COUNT + 1
+        for row in rows:
+            claim_data = (
+                _json_mapping(row[_EVENT_PAYLOAD_VIEW_COLUMN_COUNT])
+                if row[_EVENT_PAYLOAD_VIEW_COLUMN_COUNT] not in (None, "", b"")
+                else {}
+            )
+            if claim_data:
+                self._ordered_correlation_claim_count += 1
+            correlated_call = (
+                _payload_from_event_view_row(row, call_offset)
+                if row[call_offset] is not None
+                else {}
+            )
+            yield (
+                int(row[0]),
+                _payload_from_event_view_row(row),
+                claim_data,
+                correlated_call,
+            )
+
+    def iter_timed_payloads(
+        self,
+        *,
+        payload_types: Iterable[str],
+    ) -> Iterator[tuple[int, Dict[str, Any], Any]]:
+        normalized = tuple(dict.fromkeys(str(value) for value in payload_types))
+        if not normalized:
+            return
+        placeholders = ",".join("?" for _ in normalized)
+        rows = self._db.execute(
+            f"""
+            SELECT *
+            FROM event_payloads
+            WHERE payload_type IN ({placeholders})
+            ORDER BY seq
+            """,
+            normalized,
+        )
+        for row in rows:
+            yield int(row[0]), _payload_from_event_view_row(row), json.loads(str(row[10]))
+
+    def iter_payloads_with_memory_decision(
+        self,
+        *,
+        payload_types: Iterable[str],
+    ) -> Iterator[tuple[int, Dict[str, Any], str]]:
+        normalized = tuple(dict.fromkeys(str(value) for value in payload_types))
+        if not normalized:
+            return
+        placeholders = ",".join("?" for _ in normalized)
+        rows = self._db.execute(
+            f"""
+            SELECT payloads.*,
+                   COALESCE(decisions.decision, '')
+            FROM event_payloads AS payloads
+            LEFT JOIN memory_decisions AS decisions
+              ON decisions.event_seq = payloads.seq
+            WHERE payloads.payload_type IN ({placeholders})
+            ORDER BY payloads.seq
+            """,
+            normalized,
+        )
+        for row in rows:
+            yield int(row[0]), _payload_from_event_view_row(row), str(row[-1])
+
+    def source_locator(self, index: int) -> Dict[str, Any]:
+        self._ensure_readable()
+        normalized = index if index >= 0 else len(self) + index
+        if normalized < 0 or normalized >= len(self):
+            raise IndexError("session event index out of range")
+        row = self._db.execute(
+            "SELECT source_line FROM events WHERE seq = ?",
+            (normalized,),
+        ).fetchone()
+        if row is None:
+            raise IndexError("session event index out of range")
+        return {"source_line": int(row[0])}
+
+    def set_pipeline_diagnostics(
+        self,
+        *,
+        source_open_count: int,
+        source_passes: int,
+        source_bytes_read: int,
+        reducer_count: int,
+        reducer_finalize_count: int,
+        reducer_evidence: Sequence[Mapping[str, Any]],
+    ) -> None:
+        self._source_open_count = int(source_open_count)
+        self._source_passes = int(source_passes)
+        self._source_bytes_read = int(source_bytes_read)
+        self._reducer_count = int(reducer_count)
+        self._reducer_finalize_count = int(reducer_finalize_count)
+        self._reducer_evidence = [dict(item) for item in reducer_evidence]
+
+    def note_original_pass(self) -> None:
+        self._original_passes += 1
+
+    def note_check(self) -> None:
+        self._check_count += 1
+
+    def diagnostics(self) -> Dict[str, Any]:
+        self.seal()
+        diagnostics: Dict[str, Any] = {
+            "original_passes": self._original_passes,
+            "retained_record_count": self._retained_record_count,
+            "check_count": self._check_count,
+            "source_open_count": self._source_open_count,
+            "source_passes": self._source_passes,
+            "source_bytes_read": self._source_bytes_read,
+            "reducer_count": self._reducer_count,
+            "registered_reducer_count": self._reducer_count,
+            "reducer_finalize_count": self._reducer_finalize_count,
+            "finalized_reducer_count": self._reducer_finalize_count,
+        }
+        if self._retained_record_count:
+            diagnostics["reducer_evidence"] = [
+                dict(item) for item in self._reducer_evidence
+            ]
+        return diagnostics
+
+    def reducer_matched_count(self, reducer_name: str) -> int:
+        row = self._db.execute(
+            "SELECT matched_count FROM reducer_summaries WHERE reducer_name = ?",
+            (str(reducer_name),),
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def has_fact_kinds(self, kinds: Iterable[str]) -> bool:
+        normalized = tuple(dict.fromkeys(str(kind) for kind in kinds))
+        if not normalized:
+            return False
+        placeholders = ",".join("?" for _ in normalized)
+        return self._db.execute(
+            f"SELECT 1 FROM facts WHERE kind IN ({placeholders}) LIMIT 1",
+            normalized,
+        ).fetchone() is not None
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        connection = self._connection
+        path = self._path
+        was_sealed = self._sealed
+        self._sealed = True
+        self._closed = True
+        try:
+            if connection is not None:
+                if not was_sealed:
+                    connection.rollback()
+        finally:
+            self._connection = None
+            if connection is not None:
+                try:
+                    connection.close()
+                finally:
+                    _delete_sqlite_files(path)
+            else:
+                _delete_sqlite_files(path)
+
+    def _ensure_readable(self) -> None:
+        if self._closed:
+            raise RuntimeError("session event index is closed")
+        self.seal()
+
+    def _record_facts(
+        self,
+        seq: int,
+        payload_type: str,
+        payload: Mapping[str, Any],
+        *,
+        features: EventFeatures | None = None,
+    ) -> None:
+        facts: List[tuple[int, str, str, str]] = []
+        call_id = features.call_id if features is not None else _payload_call_id(dict(payload))
+        if call_id and payload_type in {
+            "function_call",
+            "custom_tool_call",
+            "function_call_output",
+            "custom_tool_call_output",
+        }:
+            kind = "tool_call" if payload_type in {"function_call", "custom_tool_call"} else "tool_output"
+            facts.append((seq, kind, call_id, payload_type))
+        boundary_id = features.boundary_id if features is not None else str(payload.get("boundary_id", "") or "").strip()
+        if boundary_id and payload_type in {"function_call", "custom_tool_call"}:
+            facts.append((seq, "boundary", boundary_id, payload_type))
+        packet_hash = (
+            features.packet_hash
+            if features is not None
+            else str(
+                payload.get("packet_sha256", "") or payload.get("packet_hash", "") or ""
+            ).strip().lower()
+        )
+        if packet_hash:
+            facts.append((seq, "packet_hash", packet_hash, payload_type))
+        if payload.get("memory_citation") is not None:
+            facts.append((seq, "memory_reference", "citation", "candidate"))
+        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+            if payload.get("memory_import_directive") is not None:
+                facts.append((seq, "memory_approval", "embedded", "candidate"))
+        if facts:
+            self._db.executemany(
+                "INSERT OR REPLACE INTO facts(seq, kind, fact_key, fact_value) VALUES (?, ?, ?, ?)",
+                facts,
+            )
+
+    def duplicate_fact_keys(self, kind: str) -> List[str]:
+        self._ensure_readable()
+        rows = self._db.execute(
+            """
+            SELECT fact_key
+            FROM facts
+            WHERE kind = ?
+            GROUP BY fact_key
+            HAVING COUNT(*) > 1
+            ORDER BY fact_key
+            """,
+            (kind,),
+        )
+        return [str(row[0]) for row in rows]
+
+    def duplicate_tool_call_ids(self) -> List[str]:
+        self._ensure_readable()
+        rows = self._db.execute(
+            """
+            SELECT fact_key
+            FROM facts
+            WHERE kind IN ('tool_call', 'tool_output')
+            GROUP BY fact_key
+            HAVING SUM(CASE WHEN kind = 'tool_call' THEN 1 ELSE 0 END) > 1
+                OR SUM(CASE WHEN kind = 'tool_output' THEN 1 ELSE 0 END) > 1
+            ORDER BY fact_key
+            """
+        )
+        return [str(row[0]) for row in rows]
+
+    def correlated_tool_receipts(
+        self,
+        *,
+        include_failed: bool,
+    ) -> "DiskBackedToolReceipts":
+        self._ensure_correlated_receipts()
+        return DiskBackedToolReceipts(self, include_failed=include_failed)
+
+    def successful_correlated_call_payload(self, output_seq: int) -> Dict[str, Any]:
+        self._ensure_correlated_receipts()
+        row = self._db.execute(
+            """
+            SELECT calls.*
+            FROM correlated_receipts AS receipts
+            JOIN event_payloads AS calls ON calls.seq = receipts.call_seq
+            WHERE receipts.output_seq = ? AND receipts.succeeded = 1
+            """,
+            (int(output_seq),),
+        ).fetchone()
+        return _payload_from_event_view_row(row) if row is not None else {}
+
+    @property
+    def text_records_ready(self) -> bool:
+        return self._text_records_ready
+
+    def begin_text_records(self) -> None:
+        self._ensure_readable()
+        self._db.execute("DELETE FROM text_records")
+        self._db.execute("DELETE FROM catalog_candidate_records")
+        self._db.execute("DELETE FROM orchestration_protocol_calls")
+        self._text_record_count = 0
+        self._text_records_ready = False
+
+    def append_text_record(
+        self,
+        event_seq: int,
+        record: SessionTextRecord,
+        *,
+        lowered: str | None = None,
+    ) -> None:
+        passive = _is_passive_text(record.text)
+        stored_text = _strip_passive_prefix(record.text)
+        record_lowered = record.text.lower() if lowered is None else str(lowered)
+        clean_lowered = stored_text.lower() if lowered is None else record_lowered
+        analysis_text = stored_text
+        if record.payload_type in {"function_call", "custom_tool_call"}:
+            stored_text = ""
+            analysis_text = f"{record.name} {record.arguments}"
+            clean_lowered = analysis_text.lower()
+        analysis_record = SessionTextRecord(
+            text=(PASSIVE_REFERENCE_PREFIX + analysis_text if passive else analysis_text),
+            payload_type=record.payload_type,
+            role=record.role,
+            call_id=record.call_id,
+            name=record.name,
+            arguments=record.arguments,
+            exit_codes=record.exit_codes,
+            trusted_host_native_fast_path=record.trusted_host_native_fast_path,
+            trusted_front_door_runtime=record.trusted_front_door_runtime,
+            trusted_correlated_tool_runtime=record.trusted_correlated_tool_runtime,
+            sql_requirement=record.sql_requirement,
+        )
+        sql_requirement = _is_sql_requirement_record(
+            analysis_record,
+            lowered=clean_lowered,
+        )
+        self._db.execute(
+            """
+            INSERT INTO text_records (
+                record_seq, event_seq, text, arguments, passive,
+                trusted_front_door_runtime, trusted_correlated_tool_runtime,
+                sql_requirement
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                self._text_record_count,
+                int(event_seq),
+                stored_text,
+                record.arguments,
+                int(passive),
+                int(record.trusted_front_door_runtime),
+                int(record.trusted_correlated_tool_runtime),
+                int(sql_requirement),
+            ),
+        )
+        if not passive:
+            self._analysis_accumulators["combined_text"].add(
+                analysis_text,
+                lowered=clean_lowered,
+            )
+            if not _looks_like_front_door_runtime_output(clean_lowered):
+                self._analysis_accumulators["decision_text"].add(
+                    analysis_text,
+                    lowered=clean_lowered,
+                )
+                if _mentions_browser_or_local_app_qa(clean_lowered):
+                    self._analysis_browser_or_local_app_qa = True
+        if sql_requirement:
+            self._analysis_accumulators["sql_scope_text"].add(
+                analysis_text,
+                lowered=clean_lowered,
+            )
+            if (
+                "function_call" in clean_lowered
+                and not _looks_like_front_door_prompt_bootstrap(clean_lowered)
+                and "kh_front_door" not in clean_lowered
+                and "always_on_front_door" not in clean_lowered
+            ):
+                self._analysis_accumulators["non_front_door_tool_text"].add(
+                    clean_lowered,
+                    lowered=clean_lowered,
+                )
+        if _has_catalog_candidate(record_lowered, self._catalog_observation_index):
+            self._db.execute(
+                "INSERT INTO catalog_candidate_records(record_seq) VALUES (?)",
+                (self._text_record_count,),
+            )
+        if (
+            not passive
+            and record.payload_type in {"function_call", "custom_tool_call"}
+        ):
+            validates_bundle = (
+                "validate_large_work_orchestration_bundle" in record_lowered
+            )
+            audits_roles = any(
+                marker in record_lowered
+                for marker in (
+                    "audit_role_execution",
+                    "dispatch_project_workflow",
+                    "async_project_workflow",
+                )
+            )
+            if validates_bundle or audits_roles:
+                self._db.execute(
+                    """
+                    INSERT INTO orchestration_protocol_calls(
+                        record_seq, validates_bundle, audits_roles
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (
+                        self._text_record_count,
+                        int(validates_bundle),
+                        int(audits_roles),
+                    ),
+                )
+        if record.payload_type in {"function_call_output", "custom_tool_call_output"}:
+            receipt_rows: List[tuple[int, str, str]] = []
+            if "provider_selection_receipt" in record_lowered:
+                selection_data = _front_door_json(_strip_passive_prefix(record.text))
+                selection_receipt = selection_data.get("provider_selection_receipt")
+                if isinstance(selection_receipt, Mapping):
+                    receipt_id = selection_receipt.get("provider_selection_receipt_id")
+                    if type(receipt_id) is str and receipt_id:
+                        receipt_rows.append(
+                            (self._text_record_count, "selection", receipt_id)
+                        )
+            if "runtime_receipt" in record_lowered and "cli_inputs" in record_lowered:
+                binding_data = _sql_final_binding_receipt(
+                    _strip_passive_prefix(record.text)
+                )
+                runtime_receipt = binding_data.get("runtime_receipt")
+                if isinstance(runtime_receipt, Mapping):
+                    receipt_id = runtime_receipt.get("receipt_id")
+                    if type(receipt_id) is str and receipt_id:
+                        receipt_rows.append(
+                            (self._text_record_count, "binding", receipt_id)
+                        )
+            if receipt_rows:
+                self._db.executemany(
+                    """
+                    INSERT OR IGNORE INTO sql_runtime_receipt_facts(
+                        record_seq, receipt_kind, receipt_id
+                    ) VALUES (?, ?, ?)
+                    """,
+                    receipt_rows,
+                )
+        self._text_record_count += 1
+
+    def finalize_analysis_summary(self) -> None:
+        if self._analysis_summary_ready:
+            return
+        self._finalize_analysis_scalar_facts()
+        data = {
+            name: accumulator.render()
+            for name, accumulator in self._analysis_accumulators.items()
+        }
+        data["browser_or_local_app_qa"] = self._analysis_browser_or_local_app_qa
+        data["catalog_observations"] = self._catalog_observations_summary
+        self._db.execute(
+            "INSERT OR REPLACE INTO analysis_summaries(summary_name, data_json) VALUES (?, ?)",
+            ("text_analysis", _canonical_json(data)),
+        )
+        self._analysis_accumulators.clear()
+        self._catalog_observations_summary.clear()
+        self._catalog_skills.clear()
+        self._catalog_observation_index = None
+        self._analysis_summary_ready = True
+
+    def _finalize_analysis_scalar_facts(self) -> None:
+        if not self._catalog_skills:
+            return
+        rows = self._db.execute(
+            """
+            SELECT text_records.text, events.payload_type,
+                   events.role, events.name, text_records.arguments,
+                   text_records.passive, events.call_id,
+                   events.trusted_host_native_fast_path,
+                   text_records.trusted_front_door_runtime,
+                   text_records.trusted_correlated_tool_runtime,
+                   text_records.sql_requirement
+            FROM catalog_candidate_records AS candidates
+            JOIN text_records
+              ON text_records.record_seq = candidates.record_seq
+            JOIN events ON events.seq = text_records.event_seq
+            ORDER BY candidates.record_seq
+            """
+        )
+
+        def catalog_records() -> Iterator[SessionTextRecord]:
+            for (
+                stored_text,
+                payload_type,
+                role,
+                name,
+                arguments,
+                passive,
+                call_id,
+                trusted_host_native_fast_path,
+                trusted_front_door_runtime,
+                trusted_correlated_tool_runtime,
+                sql_requirement,
+            ) in rows:
+                record_text = str(stored_text)
+                if str(payload_type) in {"function_call", "custom_tool_call"}:
+                    record_text = f"{name} {arguments}"
+                if bool(passive):
+                    record_text = PASSIVE_REFERENCE_PREFIX + record_text
+                record = SessionTextRecord(
+                    text=record_text,
+                    payload_type=str(payload_type),
+                    role=str(role),
+                    call_id=str(call_id),
+                    name=str(name),
+                    arguments=str(arguments),
+                    trusted_host_native_fast_path=bool(
+                        trusted_host_native_fast_path
+                    ),
+                    trusted_front_door_runtime=bool(trusted_front_door_runtime),
+                    trusted_correlated_tool_runtime=bool(
+                        trusted_correlated_tool_runtime
+                    ),
+                    sql_requirement=bool(sql_requirement),
+                )
+                yield record
+
+        self._catalog_observations_summary = _catalog_observations(
+            catalog_records(),
+            self._catalog_skills,
+            catalog_index=self._catalog_observation_index,
+        )
+
+    def analysis_summary(self) -> Dict[str, Any]:
+        if not self._analysis_summary_ready:
+            raise RuntimeError("session analysis summary was not finalized")
+        row = self._db.execute(
+            "SELECT data_json FROM analysis_summaries WHERE summary_name = ?",
+            ("text_analysis",),
+        ).fetchone()
+        return _json_mapping(row[0]) if row is not None else {}
+
+    def seal_text_records(self) -> "DiskBackedSessionTextRecords":
+        self._db.commit()
+        self._text_records_ready = True
+        return DiskBackedSessionTextRecords(self)
+
+    def text_records(self) -> "DiskBackedSessionTextRecords":
+        if not self._text_records_ready:
+            raise RuntimeError("session text records are not finalized")
+        return DiskBackedSessionTextRecords(self)
+
+    def _ensure_correlated_receipts(self) -> None:
+        self._ensure_readable()
+        if self._receipts_ready:
+            return
+        self._db.execute("DELETE FROM correlated_receipts")
+        self._db.execute("DELETE FROM front_door_receipts")
+        rows = self._db.execute(
+            """
+            SELECT calls.*, outputs.*
+            FROM event_payloads AS calls
+            JOIN event_payloads AS outputs ON outputs.call_id = calls.call_id
+            WHERE calls.event_type = 'response_item'
+              AND outputs.event_type = 'response_item'
+              AND calls.payload_type IN ('function_call', 'custom_tool_call')
+              AND outputs.payload_type IN ('function_call_output', 'custom_tool_call_output')
+              AND calls.seq < outputs.seq
+              AND calls.call_id IN (
+                  SELECT fact_key
+                  FROM facts
+                  WHERE kind IN ('tool_call', 'tool_output')
+                  GROUP BY fact_key
+                  HAVING SUM(CASE WHEN kind = 'tool_call' THEN 1 ELSE 0 END) = 1
+                     AND SUM(CASE WHEN kind = 'tool_output' THEN 1 ELSE 0 END) = 1
+              )
+              AND (
+                    calls.boundary_id = '' OR
+                    calls.boundary_id IN (
+                        SELECT fact_key
+                        FROM facts
+                        WHERE kind = 'boundary'
+                        GROUP BY fact_key
+                        HAVING COUNT(*) = 1
+                    )
+              )
+              AND (
+                    calls.packet_hash = '' OR
+                    calls.packet_hash IN (
+                        SELECT fact_key
+                        FROM facts
+                        WHERE kind = 'packet_hash'
+                        GROUP BY fact_key
+                        HAVING COUNT(*) = 1
+                    )
+              )
+              AND (
+                    outputs.packet_hash = '' OR
+                    outputs.packet_hash IN (
+                        SELECT fact_key
+                        FROM facts
+                        WHERE kind = 'packet_hash'
+                        GROUP BY fact_key
+                        HAVING COUNT(*) = 1
+                    )
+              )
+            ORDER BY calls.seq
+            """
+        )
+        receipt_rows: List[tuple[int, int, int, int, int]] = []
+        for row in rows:
+            call_seq = int(row[0])
+            output_offset = _EVENT_PAYLOAD_VIEW_COLUMN_COUNT
+            output_seq = int(row[output_offset])
+            call = _payload_from_event_view_row(row)
+            output = _payload_from_event_view_row(row, output_offset)
+            if not _valid_stored_general_tool_pair(
+                call,
+                output,
+                call_packet_hash_valid=bool(row[19]),
+                output_packet_hash_valid=bool(row[output_offset + 19]),
+            ):
+                continue
+            succeeded = _runtime_tool_output_succeeded(output)
+            receipt_rows.append(
+                (
+                    int(call_seq),
+                    int(output_seq),
+                    int(succeeded),
+                    int(_is_implementation_call(call)),
+                    int(_is_verification_call(call)),
+                )
+            )
+            if len(receipt_rows) >= 1024:
+                self._db.executemany(
+                    """
+                    INSERT INTO correlated_receipts(
+                        call_seq, output_seq, succeeded,
+                        is_implementation, is_verification
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    receipt_rows,
+                )
+                receipt_rows.clear()
+            if not succeeded or not _is_front_door_runtime_command(
+                call,
+                _payload_text(call).lower(),
+            ):
+                continue
+            if not _front_door_output_succeeded(output, call):
+                continue
+            if self._db.execute(
+                """
+                SELECT 1 FROM events
+                WHERE is_request_boundary = 1 AND seq >= ? AND seq < ?
+                LIMIT 1
+                """,
+                (int(call_seq), int(output_seq)),
+            ).fetchone():
+                continue
+            raw_data = _json_object_from_text(_payload_text(output))
+            data = _front_door_json(_payload_text(output))
+            if not _has_normalized_front_door_receipt(data):
+                continue
+            if not _valid_host_front_door_provenance(
+                call,
+                output,
+                raw_data,
+                duplicate_boundaries=frozenset(),
+                duplicate_packet_hashes=frozenset(),
+            ):
+                continue
+            self._db.execute(
+                "INSERT INTO front_door_receipts(call_seq, output_seq, data_json) VALUES (?, ?, ?)",
+                (int(call_seq), int(output_seq), _canonical_json(data)),
+            )
+        if receipt_rows:
+            self._db.executemany(
+                """
+                INSERT INTO correlated_receipts(
+                    call_seq, output_seq, succeeded,
+                    is_implementation, is_verification
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                receipt_rows,
+            )
+        self._db.execute(
+            """
+            UPDATE text_records
+            SET trusted_front_door_runtime = CASE
+                    WHEN event_seq IN (
+                        SELECT call_seq FROM front_door_receipts
+                        UNION ALL
+                        SELECT output_seq FROM front_door_receipts
+                    ) THEN 1 ELSE 0 END,
+                trusted_correlated_tool_runtime = CASE
+                    WHEN event_seq IN (
+                        SELECT output_seq FROM correlated_receipts
+                        WHERE succeeded = 1
+                          AND output_seq NOT IN (SELECT output_seq FROM front_door_receipts)
+                    ) THEN 1 ELSE 0 END
+            """
+        )
+        self._db.commit()
+        self._receipts_ready = True
+
+    def correlated_front_door_receipts(self) -> "DiskBackedFrontDoorReceipts":
+        self._ensure_correlated_receipts()
+        return DiskBackedFrontDoorReceipts(self)
+
+    def memory_import_decisions(
+        self,
+        metadata: Mapping[str, Any],
+    ) -> "DiskBackedMemoryDecisions":
+        self._ensure_correlated_receipts()
+        if not self._memory_decisions_ready:
+            self._db.execute("DELETE FROM memory_decisions")
+            user_rows = self._db.execute(
+                """
+                SELECT *
+                FROM event_payloads
+                WHERE payload_type = 'message' AND role = 'user'
+                ORDER BY seq
+                """
+            )
+            for row in user_rows:
+                decision = _structured_user_memory_import_decision(
+                    _payload_from_event_view_row(row),
+                    metadata,
+                )
+                if decision:
+                    self._db.execute(
+                        "INSERT INTO memory_decisions(event_seq, decision) VALUES (?, ?)",
+                        (int(row[0]), decision),
+                    )
+            for receipt in DiskBackedToolReceipts(self, include_failed=False):
+                decision = _authenticated_memory_import_decision(receipt, metadata)
+                if decision:
+                    self._db.execute(
+                        "INSERT OR REPLACE INTO memory_decisions(event_seq, decision) VALUES (?, ?)",
+                        (receipt.output_index, decision),
+                    )
+            self._db.commit()
+            self._memory_decisions_ready = True
+        return DiskBackedMemoryDecisions(self)
+
+    def record_reducer_summary(
+        self,
+        *,
+        reducer_name: str,
+        fact_kind: str,
+        matched_count: int,
+        first_event_seq: int | None,
+        last_event_seq: int | None,
+        samples: Sequence[tuple[int, str, str]],
+    ) -> None:
+        self._db.execute(
+            """
+            INSERT INTO reducer_summaries (
+                reducer_name, fact_kind, matched_count, first_event_seq,
+                last_event_seq, finalized
+            ) VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (
+                reducer_name,
+                fact_kind,
+                int(matched_count),
+                first_event_seq,
+                last_event_seq,
+            ),
+        )
+        if samples:
+            self._db.executemany(
+                """
+                INSERT INTO reducer_samples (
+                    reducer_name, sample_seq, event_seq, fact_key, fact_value
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (reducer_name, sample_seq, event_seq, fact_key, fact_value)
+                    for sample_seq, (event_seq, fact_key, fact_value) in enumerate(samples)
+                ],
+            )
+
+
+class DiskBackedToolReceipts(SequenceABC[CorrelatedToolReceipt]):
+    """Replayable narrow receipt view without a Python receipt corpus."""
+
+    def __init__(
+        self,
+        events: DiskBackedSessionEvents,
+        *,
+        include_failed: bool,
+    ) -> None:
+        self._events = events
+        self._include_failed = include_failed
+
+    def __len__(self) -> int:
+        where = "" if self._include_failed else "WHERE succeeded = 1"
+        row = self._events._db.execute(
+            f"SELECT COUNT(*) FROM correlated_receipts {where}"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def __iter__(self) -> Iterator[CorrelatedToolReceipt]:
+        return self.iter_range()
+
+    def iter_range(
+        self,
+        *,
+        after_index: int = -1,
+        before_index: int | None = None,
+        require_succeeded: bool | None = None,
+        implementation_only: bool = False,
+        verification_only: bool = False,
+    ) -> Iterator[CorrelatedToolReceipt]:
+        clauses = ["receipts.call_seq > ?"]
+        parameters: List[Any] = [int(after_index)]
+        if before_index is not None:
+            clauses.append("receipts.output_seq < ?")
+            parameters.append(int(before_index))
+        if require_succeeded is True or not self._include_failed:
+            clauses.append("receipts.succeeded = 1")
+        elif require_succeeded is False:
+            clauses.append("receipts.succeeded = 0")
+        if implementation_only:
+            clauses.append("receipts.is_implementation = 1")
+        if verification_only:
+            clauses.append("receipts.is_verification = 1")
+        rows = self._events._db.execute(
+            f"""
+            SELECT calls.*, outputs.*
+            FROM correlated_receipts AS receipts
+            JOIN event_payloads AS calls ON calls.seq = receipts.call_seq
+            JOIN event_payloads AS outputs ON outputs.seq = receipts.output_seq
+            WHERE {' AND '.join(clauses)}
+            ORDER BY receipts.call_seq
+            """,
+            parameters,
+        )
+        for row in rows:
+            output_offset = _EVENT_PAYLOAD_VIEW_COLUMN_COUNT
+            call = _payload_from_event_view_row(row)
+            output = _payload_from_event_view_row(row, output_offset)
+            yield CorrelatedToolReceipt(
+                call_index=int(row[0]),
+                output_index=int(row[output_offset]),
+                call=call,
+                output=output,
+                data=_json_object_from_text(_payload_text(output)),
+            )
+
+    def iter_ordered_by_output(self) -> Iterator[CorrelatedToolReceipt]:
+        where = "" if self._include_failed else "WHERE receipts.succeeded = 1"
+        rows = self._events._db.execute(
+            f"""
+            SELECT calls.*, outputs.*
+            FROM correlated_receipts AS receipts
+            JOIN event_payloads AS calls ON calls.seq = receipts.call_seq
+            JOIN event_payloads AS outputs ON outputs.seq = receipts.output_seq
+            {where}
+            ORDER BY receipts.output_seq
+            """
+        )
+        for row in rows:
+            output_offset = _EVENT_PAYLOAD_VIEW_COLUMN_COUNT
+            call = _payload_from_event_view_row(row)
+            output = _payload_from_event_view_row(row, output_offset)
+            yield CorrelatedToolReceipt(
+                call_index=int(row[0]),
+                output_index=int(row[output_offset]),
+                call=call,
+                output=output,
+                data=_json_object_from_text(_payload_text(output)),
+            )
+
+    def __getitem__(self, index: int | slice):
+        if isinstance(index, slice):
+            start, stop, step = index.indices(len(self))
+            return list(islice(self, start, stop, step))
+        normalized = index if index >= 0 else len(self) + index
+        if normalized < 0 or normalized >= len(self):
+            raise IndexError("tool receipt index out of range")
+        return next(islice(self, normalized, normalized + 1))
+
+
+class DiskBackedFrontDoorReceipts(MappingABC[int, CorrelatedFrontDoorReceipt]):
+    """Indexed receipt mapping without retaining output-index keys in Python."""
+
+    def __init__(self, events: DiskBackedSessionEvents) -> None:
+        self._events = events
+
+    def __len__(self) -> int:
+        row = self._events._db.execute(
+            "SELECT COUNT(*) FROM front_door_receipts"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def __iter__(self) -> Iterator[int]:
+        rows = self._events._db.execute(
+            "SELECT output_seq FROM front_door_receipts ORDER BY output_seq"
+        )
+        return (int(row[0]) for row in rows)
+
+    def __getitem__(self, output_index: int) -> CorrelatedFrontDoorReceipt:
+        row = self._events._db.execute(
+            """
+            SELECT call_seq, output_seq, data_json
+            FROM front_door_receipts
+            WHERE output_seq = ?
+            """,
+            (int(output_index),),
+        ).fetchone()
+        if row is None:
+            raise KeyError(output_index)
+        return CorrelatedFrontDoorReceipt(
+            call_index=int(row[0]),
+            output_index=int(row[1]),
+            data=_json_mapping(row[2]),
+        )
+
+    def items(self):
+        rows = self._events._db.execute(
+            """
+            SELECT call_seq, output_seq, data_json
+            FROM front_door_receipts
+            ORDER BY output_seq
+            """
+        )
+        for call_seq, output_seq, data_json in rows:
+            output_index = int(output_seq)
+            yield output_index, CorrelatedFrontDoorReceipt(
+                call_index=int(call_seq),
+                output_index=output_index,
+                data=_json_mapping(data_json),
+            )
+
+    def values(self):
+        for _output_index, receipt in self.items():
+            yield receipt
+
+
+class DiskBackedDuplicateFactKeys:
+    """Membership-only duplicate lookup backed by the indexed fact table."""
+
+    def __init__(self, events: DiskBackedSessionEvents, kind: str) -> None:
+        self._events = events
+        self._kind = kind
+
+    def __contains__(self, value: object) -> bool:
+        if not isinstance(value, str) or not value:
+            return False
+        row = self._events._db.execute(
+            """
+            SELECT 1
+            FROM facts
+            WHERE kind = ? AND fact_key = ?
+            GROUP BY fact_key
+            HAVING COUNT(*) > 1
+            """,
+            (self._kind, value),
+        ).fetchone()
+        return row is not None
+
+
+class DiskBackedMemoryDecisions(MappingABC[int, str]):
+    """Ordered scoped approval/revocation decisions stored in SQLite."""
+
+    def __init__(self, events: DiskBackedSessionEvents) -> None:
+        self._events = events
+
+    def __len__(self) -> int:
+        row = self._events._db.execute(
+            "SELECT COUNT(*) FROM memory_decisions"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def __iter__(self) -> Iterator[int]:
+        rows = self._events._db.execute(
+            "SELECT event_seq FROM memory_decisions ORDER BY event_seq"
+        )
+        return (int(row[0]) for row in rows)
+
+    def __getitem__(self, event_seq: int) -> str:
+        row = self._events._db.execute(
+            "SELECT decision FROM memory_decisions WHERE event_seq = ?",
+            (int(event_seq),),
+        ).fetchone()
+        if row is None:
+            raise KeyError(event_seq)
+        return str(row[0])
+
+    def items(self):
+        rows = self._events._db.execute(
+            "SELECT event_seq, decision FROM memory_decisions ORDER BY event_seq"
+        )
+        for event_seq, decision in rows:
+            yield int(event_seq), str(decision)
+
+    def values(self):
+        rows = self._events._db.execute(
+            "SELECT decision FROM memory_decisions ORDER BY event_seq"
+        )
+        return (str(row[0]) for row in rows)
+
+
+class DiskBackedVerifiedCorrectionIndexes:
+    """Indexed PB correction-verification facts with bounded projection."""
+
+    def __init__(self, events: DiskBackedSessionEvents) -> None:
+        self._events = events
+
+    def __len__(self) -> int:
+        row = self._events._db.execute(
+            "SELECT COUNT(*) FROM pb_verified_corrections"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def __iter__(self) -> Iterator[int]:
+        rows = self._events._db.execute(
+            "SELECT correction_seq FROM pb_verified_corrections ORDER BY correction_seq"
+        )
+        return (int(row[0]) for row in rows)
+
+    def has_after(self, event_seq: int) -> bool:
+        return self._events._db.execute(
+            """
+            SELECT 1 FROM pb_verified_corrections
+            WHERE correction_seq > ?
+            LIMIT 1
+            """,
+            (int(event_seq),),
+        ).fetchone() is not None
+
+    def bounded_samples(self, limit: int = _PB_FRONT_DOOR_HISTORY_SAMPLE_LIMIT) -> List[int]:
+        rows = self._events._db.execute(
+            """
+            SELECT correction_seq FROM pb_verified_corrections
+            ORDER BY correction_seq
+            LIMIT ?
+            """,
+            (max(0, int(limit)),),
+        )
+        return [int(row[0]) for row in rows]
+
+
+class DiskBackedSessionTextRecords(SequenceABC[SessionTextRecord]):
+    """Replayable text-feature sequence with only bounded synthetic tail rows."""
+
+    def __init__(self, events: DiskBackedSessionEvents) -> None:
+        self._events = events
+        self._extras: List[SessionTextRecord] = []
+
+    def append(self, record: SessionTextRecord) -> None:
+        self._extras.append(record)
+
+    def __len__(self) -> int:
+        return self._events._text_record_count + len(self._extras)
+
+    def __iter__(self) -> Iterator[SessionTextRecord]:
+        for _record_seq, record in self.iter_indexed_records():
+            yield record
+        yield from self._extras
+
+    def iter_indexed_records(
+        self,
+        *,
+        start: int = 0,
+        stop: int | None = None,
+    ) -> Iterator[tuple[int, SessionTextRecord]]:
+        clauses = ["text_records.record_seq >= ?"]
+        parameters: List[Any] = [max(0, int(start))]
+        if stop is not None:
+            clauses.append("text_records.record_seq < ?")
+            parameters.append(max(0, int(stop)))
+        rows = self._events._db.execute(
+            f"""
+            SELECT text_records.text, events.payload_type, events.role,
+                   events.call_id, events.name, text_records.arguments,
+                   events.exit_code_json, events.return_code_json,
+                   events.returncode_json, text_records.passive,
+                   events.trusted_host_native_fast_path,
+                   text_records.trusted_front_door_runtime,
+                   text_records.trusted_correlated_tool_runtime,
+                   text_records.sql_requirement
+            FROM text_records
+            JOIN events ON events.seq = text_records.event_seq
+            WHERE {' AND '.join(clauses)}
+            ORDER BY text_records.record_seq
+            """,
+            parameters,
+        )
+        for record_seq, row in enumerate(rows, start=max(0, int(start))):
+            yield record_seq, _text_record_from_joined_row(row)
+
+    def iter_text_values(self) -> Iterator[str]:
+        rows = self._events._db.execute(
+            """
+            SELECT text_records.text, events.payload_type, events.name,
+                   text_records.arguments, text_records.passive
+            FROM text_records
+            JOIN events ON events.seq = text_records.event_seq
+            ORDER BY text_records.record_seq
+            """
+        )
+        for row in rows:
+            text = str(row[0])
+            if str(row[1]) in {"function_call", "custom_tool_call"}:
+                text = f"{row[2]} {row[3]}"
+            if bool(row[4]):
+                text = PASSIVE_REFERENCE_PREFIX + text
+            yield text
+        for record in self._extras:
+            yield record.text
+
+    def iter_observation_records(self) -> Iterator[SessionTextRecord]:
+        rows = self._events._db.execute(
+            """
+            SELECT text_records.text, events.payload_type, events.role,
+                   events.call_id, events.name, text_records.arguments,
+                   events.exit_code_json, events.return_code_json,
+                   events.returncode_json, text_records.passive,
+                   events.trusted_host_native_fast_path,
+                   text_records.trusted_front_door_runtime,
+                   text_records.trusted_correlated_tool_runtime,
+                   text_records.sql_requirement
+            FROM text_records
+            JOIN events ON events.seq = text_records.event_seq
+            ORDER BY text_records.record_seq
+            """
+        )
+        for row in rows:
+            yield _text_record_from_joined_row(row)
+        yield from self._extras
+
+    def iter_sql_requirement_records(self) -> Iterator[SessionTextRecord]:
+        rows = self._events._db.execute(
+            """
+            SELECT text_records.text, events.payload_type, events.role,
+                   events.call_id, events.name, text_records.arguments,
+                   events.exit_code_json, events.return_code_json,
+                   events.returncode_json, text_records.passive,
+                   events.trusted_host_native_fast_path,
+                   text_records.trusted_front_door_runtime,
+                   text_records.trusted_correlated_tool_runtime,
+                   text_records.sql_requirement
+            FROM text_records
+            JOIN events ON events.seq = text_records.event_seq
+            WHERE text_records.sql_requirement = 1
+            ORDER BY text_records.record_seq
+            """
+        )
+        for row in rows:
+            yield _text_record_from_joined_row(row)
+        yield from self._extras
+
+    def iter_orchestration_protocol_calls(
+        self,
+    ) -> Iterator[tuple[int, SessionTextRecord, bool, bool]]:
+        self._events._protocol_correlation_replay_count += 1
+        rows = self._events._db.execute(
+            """
+            SELECT protocol.record_seq,
+                   text_records.text, events.payload_type, events.role,
+                   events.call_id, events.name, text_records.arguments,
+                   events.exit_code_json, events.return_code_json,
+                   events.returncode_json, text_records.passive,
+                   events.trusted_host_native_fast_path,
+                   text_records.trusted_front_door_runtime,
+                   text_records.trusted_correlated_tool_runtime,
+                   text_records.sql_requirement,
+                   protocol.validates_bundle, protocol.audits_roles
+            FROM orchestration_protocol_calls AS protocol
+            JOIN text_records ON text_records.record_seq = protocol.record_seq
+            JOIN events ON events.seq = text_records.event_seq
+            ORDER BY protocol.record_seq
+            """
+        )
+        for row in rows:
+            yield (
+                int(row[0]),
+                _text_record_from_joined_row(row, 1),
+                bool(row[15]),
+                bool(row[16]),
+            )
+
+    def immediate_structured_output(self, call_record_index: int) -> Dict[str, Any]:
+        row = self._events._db.execute(
+            """
+            SELECT outputs.text
+            FROM text_records AS calls
+            JOIN events AS call_events ON call_events.seq = calls.event_seq
+            JOIN text_records AS outputs ON outputs.record_seq > calls.record_seq
+            JOIN events AS output_events ON output_events.seq = outputs.event_seq
+            WHERE calls.record_seq = ?
+              AND output_events.payload_type IN (
+                    'function_call_output', 'custom_tool_call_output'
+              )
+              AND (
+                    call_events.call_id = '' OR
+                    output_events.call_id = call_events.call_id
+              )
+              AND outputs.record_seq < COALESCE(
+                    (
+                        SELECT MIN(next_calls.record_seq)
+                        FROM text_records AS next_calls
+                        JOIN events AS next_events
+                          ON next_events.seq = next_calls.event_seq
+                        WHERE next_calls.record_seq > calls.record_seq
+                          AND next_events.payload_type IN (
+                                'function_call', 'custom_tool_call'
+                          )
+                    ),
+                    ?
+              )
+            ORDER BY outputs.record_seq
+            LIMIT 1
+            """,
+            (int(call_record_index), self._events._text_record_count + 1),
+        ).fetchone()
+        return _json_object_from_text(str(row[0])) if row is not None else {}
+
+    def __getitem__(self, index: int | slice):
+        if isinstance(index, slice):
+            start, stop, step = index.indices(len(self))
+            return list(islice(self, start, stop, step))
+        normalized = index if index >= 0 else len(self) + index
+        if normalized < 0 or normalized >= len(self):
+            raise IndexError("session text record index out of range")
+        if normalized >= self._events._text_record_count:
+            return self._extras[normalized - self._events._text_record_count]
+        row = self._events._db.execute(
+            """
+            SELECT text_records.text, events.payload_type, events.role,
+                   events.call_id, events.name, text_records.arguments,
+                   events.exit_code_json, events.return_code_json,
+                   events.returncode_json, text_records.passive,
+                   events.trusted_host_native_fast_path,
+                   text_records.trusted_front_door_runtime,
+                   text_records.trusted_correlated_tool_runtime,
+                   text_records.sql_requirement
+            FROM text_records
+            JOIN events ON events.seq = text_records.event_seq
+            WHERE text_records.record_seq = ?
+            """,
+            (normalized,),
+        ).fetchone()
+        if row is None:
+            raise IndexError("session text record index out of range")
+        return _text_record_from_joined_row(row)
+
+    @staticmethod
+    def _record_from_row(row: Sequence[Any], offset: int) -> SessionTextRecord:
+        return _text_record_from_joined_row(row, offset)
+
+    def correlated_output_record_index(
+        self,
+        call_record_index: int,
+        *,
+        before_index: int,
+    ) -> int:
+        row = self._events._db.execute(
+            """
+            SELECT outputs.record_seq
+            FROM text_records AS calls
+            JOIN events AS call_events ON call_events.seq = calls.event_seq
+            JOIN events AS output_events
+              ON output_events.call_id = call_events.call_id
+             AND output_events.payload_type = CASE call_events.payload_type
+                   WHEN 'function_call' THEN 'function_call_output'
+                   WHEN 'custom_tool_call' THEN 'custom_tool_call_output'
+                   ELSE ''
+                 END
+            JOIN text_records AS outputs ON outputs.event_seq = output_events.seq
+            WHERE calls.record_seq = ?
+              AND call_events.call_id <> ''
+              AND outputs.record_seq > calls.record_seq
+              AND outputs.record_seq < ?
+            ORDER BY outputs.record_seq
+            LIMIT 1
+            """,
+            (int(call_record_index), int(before_index)),
+        ).fetchone()
+        return int(row[0]) if row is not None else -1
+
+    def correlated_call_record_index(self, output_record_index: int) -> int:
+        row = self._events._db.execute(
+            """
+            SELECT calls.record_seq
+            FROM text_records AS outputs
+            JOIN events AS output_events ON output_events.seq = outputs.event_seq
+            JOIN events AS call_events
+              ON call_events.call_id = output_events.call_id
+             AND call_events.payload_type = CASE output_events.payload_type
+                   WHEN 'function_call_output' THEN 'function_call'
+                   WHEN 'custom_tool_call_output' THEN 'custom_tool_call'
+                   ELSE ''
+                 END
+            JOIN text_records AS calls ON calls.event_seq = call_events.seq
+            WHERE outputs.record_seq = ?
+              AND output_events.call_id <> ''
+              AND calls.record_seq < outputs.record_seq
+            ORDER BY calls.record_seq DESC
+            LIMIT 1
+            """,
+            (int(output_record_index),),
+        ).fetchone()
+        return int(row[0]) if row is not None else -1
+
+    def iter_front_door_pairs(
+        self,
+        *,
+        lower_bound: int,
+        upper_bound: int,
+    ) -> Iterator[
+        tuple[
+            int,
+            SessionTextRecord,
+            int,
+            SessionTextRecord,
+            Dict[str, Any],
+            Dict[str, Any],
+        ]
+    ]:
+        rows = self._events._db.execute(
+            """
+            SELECT calls.record_seq,
+                   calls.text, call_events.payload_type, call_events.role,
+                   call_events.call_id, call_events.name, calls.arguments,
+                   call_events.exit_code_json, call_events.return_code_json,
+                   call_events.returncode_json, calls.passive,
+                   call_events.trusted_host_native_fast_path,
+                   calls.trusted_front_door_runtime,
+                   calls.trusted_correlated_tool_runtime,
+                   calls.sql_requirement,
+                   outputs.record_seq,
+                   outputs.text, output_events.payload_type, output_events.role,
+                   output_events.call_id, output_events.name, outputs.arguments,
+                   output_events.exit_code_json, output_events.return_code_json,
+                   output_events.returncode_json, outputs.passive,
+                   output_events.trusted_host_native_fast_path,
+                   outputs.trusted_front_door_runtime,
+                   outputs.trusted_correlated_tool_runtime,
+                   outputs.sql_requirement,
+                   call_payloads.*, output_payloads.*
+            FROM events AS call_events
+            JOIN events AS output_events
+              ON output_events.call_id = call_events.call_id
+            JOIN text_records AS calls ON calls.event_seq = call_events.seq
+            JOIN text_records AS outputs ON outputs.event_seq = output_events.seq
+            JOIN event_payloads AS call_payloads ON call_payloads.seq = call_events.seq
+            JOIN event_payloads AS output_payloads ON output_payloads.seq = output_events.seq
+            WHERE calls.record_seq > ? AND outputs.record_seq < ?
+              AND call_events.event_type = 'response_item'
+              AND output_events.event_type = 'response_item'
+              AND call_events.payload_type IN ('function_call', 'custom_tool_call')
+              AND output_events.payload_type = CASE call_events.payload_type
+                    WHEN 'function_call' THEN 'function_call_output'
+                    ELSE 'custom_tool_call_output'
+                  END
+              AND call_events.seq < output_events.seq
+              AND call_events.call_id <> ''
+              AND call_events.call_id IN (
+                  SELECT fact_key
+                  FROM facts
+                  WHERE kind IN ('tool_call', 'tool_output')
+                  GROUP BY fact_key
+                  HAVING SUM(CASE WHEN kind = 'tool_call' THEN 1 ELSE 0 END) = 1
+                     AND SUM(CASE WHEN kind = 'tool_output' THEN 1 ELSE 0 END) = 1
+              )
+            ORDER BY outputs.record_seq
+            """,
+            (int(lower_bound), int(upper_bound)),
+        )
+        for row in rows:
+            call_payload_offset = 30
+            output_payload_offset = call_payload_offset + _EVENT_PAYLOAD_VIEW_COLUMN_COUNT
+            yield (
+                int(row[0]),
+                self._record_from_row(row, 1),
+                int(row[15]),
+                self._record_from_row(row, 16),
+                _payload_from_event_view_row(row, call_payload_offset),
+                _payload_from_event_view_row(row, output_payload_offset),
+            )
+
+
+class DiskBackedSqlProviderSelections(SequenceABC[Dict[str, Any]]):
+    """Narrow finalized SQL-provider selection facts."""
+
+    def __init__(self, events: DiskBackedSessionEvents) -> None:
+        self._events = events
+
+    @staticmethod
+    def _item(row: Sequence[Any]) -> Dict[str, Any]:
+        return {
+            "provider_id": str(row[0]),
+            "provider_path": str(row[1]),
+            "provider_source": str(row[2]),
+            "call_index": int(row[3]),
+            "output_index": int(row[4]),
+            "selection_sha256": str(row[5]),
+            "provenance_valid": bool(row[6]),
+            "provenance_errors": list(_json_scalar_sequence(row[7])),
+        }
+
+    def __len__(self) -> int:
+        row = self._events._db.execute(
+            "SELECT COUNT(*) FROM sql_provider_selections"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def __iter__(self) -> Iterator[Dict[str, Any]]:
+        rows = self._events._db.execute(
+            """
+            SELECT provider_id, provider_path, provider_source,
+                   call_record_seq, output_record_seq, selection_sha256,
+                   provenance_valid, provenance_errors_json
+            FROM sql_provider_selections
+            ORDER BY output_record_seq
+            """
+        )
+        return (self._item(row) for row in rows)
+
+    def __getitem__(self, index: int | slice):
+        if isinstance(index, slice):
+            start, stop, step = index.indices(len(self))
+            return list(islice(self, start, stop, step))
+        normalized = index if index >= 0 else len(self) + index
+        if normalized < 0 or normalized >= len(self):
+            raise IndexError("SQL provider selection index out of range")
+        row = self._events._db.execute(
+            """
+            SELECT provider_id, provider_path, provider_source,
+                   call_record_seq, output_record_seq, selection_sha256,
+                   provenance_valid, provenance_errors_json
+            FROM sql_provider_selections
+            ORDER BY output_record_seq
+            LIMIT 1 OFFSET ?
+            """,
+            (normalized,),
+        ).fetchone()
+        if row is None:
+            raise IndexError("SQL provider selection index out of range")
+        return self._item(row)
+
+    def has_valid_selection(self) -> bool:
+        return self._events._db.execute(
+            """
+            SELECT 1 FROM sql_provider_selections
+            WHERE provenance_valid = 1
+            LIMIT 1
+            """
+        ).fetchone() is not None
+
+    def latest_before(self, record_seq: int) -> Dict[str, Any]:
+        row = self._events._db.execute(
+            """
+            SELECT provider_id, provider_path, provider_source,
+                   call_record_seq, output_record_seq, selection_sha256,
+                   provenance_valid, provenance_errors_json
+            FROM sql_provider_selections
+            WHERE output_record_seq < ?
+            ORDER BY output_record_seq DESC
+            LIMIT 1
+            """,
+            (int(record_seq),),
+        ).fetchone()
+        return self._item(row) if row is not None else {}
+
+
+class SessionTextView(Iterable[str]):
+    def __init__(
+        self,
+        records: Sequence[SessionTextRecord],
+        *,
+        sql_only: bool = False,
+    ) -> None:
+        self._records = records
+        self._sql_only = sql_only
+
+    def __iter__(self) -> Iterator[str]:
+        if isinstance(self._records, DiskBackedSessionTextRecords):
+            if not self._sql_only:
+                for text in self._records.iter_text_values():
+                    if not _is_passive_text(text):
+                        yield _strip_passive_prefix(text)
+                return
+            records: Iterable[SessionTextRecord] = (
+                self._records.iter_sql_requirement_records()
+            )
+        else:
+            records = self._records
+        for record in records:
+            if _is_passive_text(record.text):
+                continue
+            if self._sql_only and not _is_sql_requirement_record(record):
+                continue
+            yield _strip_passive_prefix(record.text)
+
+
+_SESSION_EVENT_INDEX: ContextVar[SessionEventIndex | None] = ContextVar(
+    "session_skill_audit_event_index",
+    default=None,
+)
+
+
+_AUDIT_REDUCER_NAMES = (
+    "session_postmortem",
+    "session_text_records",
+    "merged_thread_goal_state",
+    "kh_front_door",
+    "immediate_next_skill",
+    "front_door_execution_gate",
+    "front_door_latency",
+    "large_output_latency",
+    "stale_skill_cache",
+    "cross_scope_context",
+    "target_substitution",
+    "global_memory_scope",
+    "project_discovery",
+    "pb_migration",
+    "brainstorm_target_inspection",
+    "brainstorm_option_choice",
+    "first_visible_brainstorm_response",
+    "instruction_supersession",
+    "aggregate_skill_runtime",
+    "authoritative_reference_order",
+    "forbidden_residual_completion",
+    "required_delegation",
+    "function_call_count",
+    "implementation_tool_samples",
+    "global_memory_import_request",
+    "scoped_memory_import",
+    "front_door_token_evidence",
+    "duplicate_tool_identity",
+    "auditable_user_request",
+    "session_integrity",
+    "skill_observations",
+)
+
+
+_REDUCER_SAMPLE_LIMIT = 3
+
+
+def _derive_audit_reducer_matches(
+    *,
+    payload_type: str,
+    role: str,
+    literal_hits: frozenset[str],
+    has_text: bool,
+    call_id: str,
+    boundary_id: str,
+    packet_hash: str,
+) -> Iterator[tuple[str, str]]:
+    """Classify one original event into a fixed-size reducer fact tuple."""
+
+    def hit(fragment: str) -> bool:
+        return any(fragment in value for value in literal_hits)
+
+    is_call = payload_type in {"function_call", "custom_tool_call"}
+    is_output = payload_type in {"function_call_output", "custom_tool_call_output"}
+    is_message = payload_type in {"message", "agent_message", "task_complete"}
+    if payload_type in {
+        "message",
+        "agent_message",
+        "task_complete",
+        "thread_goal_updated",
+        "function_call",
+        "custom_tool_call",
+        "function_call_output",
+        "custom_tool_call_output",
+    }:
+        yield "session_postmortem", "postmortem_event"
+    if has_text:
+        yield "session_text_records", "text_record"
+    if payload_type == "thread_goal_updated":
+        yield "merged_thread_goal_state", "goal_update"
+    if hit("front_door") or hit("always-on-front-door"):
+        yield "kh_front_door", "front_door_signal"
+    if hit("immediate_next_skill"):
+        yield "immediate_next_skill", "immediate_skill_signal"
+    if hit("execution_gate"):
+        yield "front_door_execution_gate", "execution_gate_signal"
+    if role == "user" or hit("front_door"):
+        yield "front_door_latency", "latency_boundary"
+    if is_output and has_text:
+        yield "large_output_latency", "tool_output"
+    if hit("kh-uaf-marketplace") and hit("skill"):
+        yield "stale_skill_cache", "skill_cache_signal"
+    if is_call and (hit("read_thread") or hit("rollout")):
+        yield "cross_scope_context", "cross_scope_read"
+    if role == "user" or is_call:
+        yield "target_substitution", "target_path_signal"
+    if hit("memory"):
+        yield "global_memory_scope", "memory_scope_signal"
+    if role == "user" and has_text:
+        yield "project_discovery", "user_project_signal"
+    if hit("powerbuilder") or hit("pb-to-csharp"):
+        yield "pb_migration", "pb_signal"
+    if hit("brainstorm") or (is_call and hit("get-childitem")):
+        yield "brainstorm_target_inspection", "brainstorm_inspection_signal"
+    if hit("option") or hit("choose") or hit("선택"):
+        yield "brainstorm_option_choice", "option_choice_signal"
+    if role == "assistant" and has_text:
+        yield "first_visible_brainstorm_response", "assistant_response"
+    if role in {"user", "assistant"}:
+        yield "instruction_supersession", "instruction_signal"
+    if hit("skill") or hit("harness") or hit("runtime"):
+        yield "aggregate_skill_runtime", "skill_runtime_signal"
+    if role == "user" or is_call:
+        yield "authoritative_reference_order", "reference_order_signal"
+    if role == "user" or is_call or payload_type == "task_complete":
+        yield "forbidden_residual_completion", "residual_signal"
+    if hit("subagent") or hit("parallel") or hit("delegate"):
+        yield "required_delegation", "delegation_signal"
+    if is_call:
+        yield "function_call_count", "function_call"
+        yield "implementation_tool_samples", "tool_call"
+    if role == "user" and hit("memory"):
+        yield "global_memory_import_request", "memory_request_signal"
+    if hit("memory_import"):
+        yield "scoped_memory_import", "memory_import_signal"
+    if hit("token_optimizer") or hit("token_optimization"):
+        yield "front_door_token_evidence", "token_signal"
+    if (is_call or is_output) and call_id:
+        yield "duplicate_tool_identity", "tool_identity"
+    if role == "user" and is_message:
+        yield "auditable_user_request", "user_request"
+    if boundary_id or packet_hash:
+        yield "session_integrity", "provenance"
+    if has_text:
+        yield "skill_observations", "observation_text"
+
+
+def _audit_reducer_matches(
+    features: EventFeatures,
+) -> Iterator[tuple[str, str]]:
+    """Replay reducer ownership already extracted from the original event."""
+
+    yield from features.reducer_matches
+
+
+@dataclass
+class _AuditReducer:
+    """A bounded reducer that owns domain facts and a deterministic final row."""
+
+    name: str
+    consume_count: int = 0
+    matched_count: int = 0
+    first_event_seq: int | None = None
+    last_event_seq: int | None = None
+    samples: List[tuple[int, str, str]] = field(default_factory=list)
+    finalized: bool = False
+    finalize_count: int = 0
+    output_fact_kind: str = ""
+    output: Dict[str, Any] | None = None
+    previous_call_was_passive: bool = False
+    untrusted_assessment_active: bool = False
+    latest_user_trigger: str = ""
+    work_activity_since_trigger: bool = False
+    active_goal: bool = False
+    latest_assistant_text: str = ""
+    latest_completion_seq: int | None = None
+
+    def consume(
+        self,
+        event_seq: int,
+        event: Mapping[str, Any],
+        features: EventFeatures,
+        store: DiskBackedSessionEvents,
+    ) -> None:
+        if self.finalized:
+            raise RuntimeError(f"audit reducer already finalized: {self.name}")
+        self.consume_count += 1
+        if self.name == "session_text_records":
+            self._consume_text_record(event_seq, event, store, features=features)
+        elif self.name == "instruction_supersession":
+            self._consume_correction(event_seq, event, store)
+        for reducer_name, fact_kind in _audit_reducer_matches(features):
+            if reducer_name != self.name:
+                continue
+            fact_key = features.call_id or features.payload_type or features.event_type or "event"
+            fact_value = _short(features.text, 180) if features.text else fact_key
+            self.observe(event_seq, fact_kind, fact_key, fact_value)
+            return
+
+    def observe(
+        self,
+        event_seq: int,
+        fact_kind: str,
+        fact_key: str,
+        fact_value: str,
+    ) -> None:
+        if self.finalized:
+            raise RuntimeError(f"audit reducer already finalized: {self.name}")
+        if not self.output_fact_kind:
+            self.output_fact_kind = fact_kind
+        self.matched_count += 1
+        if self.first_event_seq is None:
+            self.first_event_seq = event_seq
+        self.last_event_seq = event_seq
+        if len(self.samples) < _REDUCER_SAMPLE_LIMIT:
+            self.samples.append((event_seq, fact_key, fact_value))
+
+    def finalize(self, store: DiskBackedSessionEvents) -> None:
+        if self.finalized:
+            raise RuntimeError(f"audit reducer finalized more than once: {self.name}")
+        fact_kind = self.output_fact_kind or f"{self.name}_fact"
+        store.record_reducer_summary(
+            reducer_name=self.name,
+            fact_kind=fact_kind,
+            matched_count=self.matched_count,
+            first_event_seq=self.first_event_seq,
+            last_event_seq=self.last_event_seq,
+            samples=self.samples,
+        )
+        self.finalize_count += 1
+        self.finalized = True
+        self.output = {
+            "fact_kind": fact_kind,
+            "matched_count": self.matched_count,
+            "first_event_seq": self.first_event_seq,
+            "last_event_seq": self.last_event_seq,
+            "sample_count": len(self.samples),
+        }
+
+    def evidence(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "consume_count": self.consume_count,
+            "finalize_count": self.finalize_count,
+            "finalized": self.finalized,
+            "output": dict(self.output or {}),
+        }
+
+    def _consume_text_record(
+        self,
+        event_seq: int,
+        event: Mapping[str, Any],
+        store: DiskBackedSessionEvents,
+        *,
+        features: EventFeatures | None = None,
+    ) -> None:
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            self.previous_call_was_passive = False
+            return
+        payload_type = features.payload_type if features is not None else str(payload.get("type", ""))
+        role = features.role if features is not None else str(payload.get("role", "")).lower()
+        if payload_type == "message" and role in {"developer", "system"}:
+            self.previous_call_was_passive = False
+            return
+        text = features.text if features is not None else _payload_text(payload)
+        if not text:
+            self.previous_call_was_passive = False
+            return
+        lowered = features.lowered if features is not None else text.lower()
+        is_untrusted_assessment = _is_untrusted_assessment_transcript(lowered)
+        if payload_type == "message" and role == "user":
+            if is_untrusted_assessment:
+                self.untrusted_assessment_active = True
+            elif not _is_synthetic_context_message(text):
+                self.untrusted_assessment_active = False
+                self.latest_user_trigger = text
+                self.work_activity_since_trigger = False
+        trusted_fast_path = _is_trusted_host_native_fast_path_receipt(
+            payload,
+            text,
+            self.latest_user_trigger,
+            self.work_activity_since_trigger,
+        )
+        passive = (
+            self.untrusted_assessment_active
+            or _is_synthetic_context_message(text)
+            or _passive_reference(lowered)
+            or (
+                payload_type in {"function_call_output", "custom_tool_call_output"}
+                and self.previous_call_was_passive
+            )
+        )
+        stored_text = PASSIVE_REFERENCE_PREFIX + text if passive else text
+        store.append_text_record(
+            event_seq,
+            SessionTextRecord(
+                text=stored_text,
+                payload_type=payload_type,
+                role=role,
+                call_id=features.call_id if features is not None else _payload_call_id(payload),
+                name=str(payload.get("name", "")),
+                arguments=_payload_arguments_text(payload),
+                exit_codes=_payload_exit_codes(payload),
+                trusted_host_native_fast_path=trusted_fast_path,
+                sql_requirement=(
+                    features.is_sql_output_request
+                    if features is not None
+                    and payload_type == "message"
+                    and role == "user"
+                    else None
+                ),
+            ),
+            lowered=lowered,
+        )
+        if (
+            not trusted_fast_path
+            and not (payload_type == "message" and role == "user")
+            and _is_non_kh_work_start(payload, lowered)
+        ):
+            self.work_activity_since_trigger = True
+        self.previous_call_was_passive = (
+            payload_type in {"function_call", "custom_tool_call"} and passive
+        )
+
+    def _consume_correction(
+        self,
+        event_seq: int,
+        event: Mapping[str, Any],
+        store: DiskBackedSessionEvents,
+    ) -> None:
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            return
+        payload_type = str(payload.get("type", ""))
+        role = str(payload.get("role", "")).lower()
+        if payload_type == "thread_goal_updated":
+            goal = payload.get("goal", {}) or {}
+            status = (
+                str(goal.get("status", "") or "").strip().lower()
+                if isinstance(goal, dict)
+                else ""
+            )
+            if status == "active":
+                self.active_goal = True
+            elif status in {"complete", "blocked"}:
+                self.active_goal = False
+        if payload_type == "agent_message" or (
+            payload_type == "message" and role == "assistant"
+        ):
+            self.latest_assistant_text = _payload_text(payload)
+        if payload_type == "message" and role == "user":
+            user_text = _payload_text(payload)
+            if not _is_synthetic_context_message(user_text):
+                if _is_bounded_pb_correction_text(user_text):
+                    store._db.execute(
+                        "INSERT OR IGNORE INTO pb_correction_candidates(correction_seq) VALUES (?)",
+                        (event_seq,),
+                    )
+                correction = _correction_signal(user_text, self.latest_assistant_text)
+                if correction["is_correction"]:
+                    store._db.execute(
+                        """
+                        INSERT INTO correction_facts (
+                            event_seq, active_goal, invalidated_json,
+                            replacements_json, related_to_previous,
+                            prior_completion_seq, sample
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            event_seq,
+                            int(self.active_goal),
+                            _canonical_json(correction["invalidated"]),
+                            _canonical_json(correction["replacements"]),
+                            int(correction["related_to_previous"]),
+                            self.latest_completion_seq
+                            if correction["related_to_previous"]
+                            else None,
+                            _short(user_text),
+                        ),
+                    )
+                if self.latest_completion_seq is not None and not _is_same_task_followup(
+                    user_text,
+                    self.latest_assistant_text,
+                    allow_acknowledgement=False,
+                ):
+                    self.latest_completion_seq = None
+        if payload_type == "task_complete":
+            self.latest_completion_seq = event_seq
+
+
+class AuditStreamPipeline:
+    """Decode the source once and fan ephemeral features into audit storage."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        catalog: Mapping[str, Any] | None = None,
+        collect_stage_telemetry: bool = False,
+    ) -> None:
+        self.path = Path(path)
+        self.catalog = dict(catalog or {"skills": []})
+        self.collect_stage_telemetry = bool(collect_stage_telemetry)
+        self.stage_telemetry: Dict[str, Any] = (
+            {
+                "source_read_seconds": 0.0,
+                "decode_json_seconds": 0.0,
+                "event_consume_seconds": 0.0,
+                "feature_extract_seconds": 0.0,
+                "event_store_seconds": 0.0,
+                "reducer_consume_seconds": 0.0,
+                "downstream_seconds": 0.0,
+                "stream_seconds": 0.0,
+                "reducer_finalize_seconds": 0.0,
+                "correlation_finalize_seconds": 0.0,
+                "analysis_finalize_seconds": 0.0,
+                "seal_seconds": 0.0,
+                "finalize_seconds": 0.0,
+                "source_line_count": 0,
+                "event_count": 0,
+            }
+            if self.collect_stage_telemetry
+            else {}
+        )
+        self.payload_events = DiskBackedSessionEvents(
+            self.catalog.get("skills", []) or []
+        )
+        try:
+            self.metadata: Dict[str, Any] = {}
+            self.integrity_issue_groups: Dict[str, Dict[str, Any]] = {}
+            self.raw_characters_seen = 0
+            self.max_source_line_characters = 0
+            self.source_open_count = 0
+            self.source_passes = 0
+            self.source_bytes_read = 0
+            self.reducers = [_AuditReducer(name) for name in _AUDIT_REDUCER_NAMES]
+            self._reducers_by_name = {reducer.name: reducer for reducer in self.reducers}
+            self._event_count = 0
+            self._started = False
+            self._finished = False
+            self._closed = False
+        except Exception:
+            self.payload_events.close()
+            raise
+
+    def stream(self) -> Iterator[EventEnvelope]:
+        if self._started:
+            raise RuntimeError("audit source stream can only be consumed once")
+        self._started = True
+        self.source_open_count += 1
+        stream_started = perf_counter() if self.collect_stage_telemetry else 0.0
+        try:
+            with self.path.open("rb") as stream:
+                if self.collect_stage_telemetry:
+                    yield from self._stream_with_stage_telemetry(stream)
+                else:
+                    for line_number, raw_line in enumerate(stream, start=1):
+                        self.source_bytes_read += len(raw_line)
+                        envelope = self._decode_envelope(line_number, raw_line)
+                        yield self._consume(envelope)
+            self.source_passes += 1
+            self.payload_events.note_original_pass()
+            self._finished = True
+            if self.collect_stage_telemetry:
+                self.stage_telemetry["stream_seconds"] += (
+                    perf_counter() - stream_started
+                )
+        except Exception:
+            self.close()
+            raise
+
+    def _stream_with_stage_telemetry(
+        self,
+        stream: Iterable[bytes],
+    ) -> Iterator[EventEnvelope]:
+        iterator = iter(stream)
+        line_number = 0
+        while True:
+            started = perf_counter()
+            try:
+                raw_line = next(iterator)
+            except StopIteration:
+                self.stage_telemetry["source_read_seconds"] += (
+                    perf_counter() - started
+                )
+                break
+            self.stage_telemetry["source_read_seconds"] += perf_counter() - started
+            line_number += 1
+            self.source_bytes_read += len(raw_line)
+            started = perf_counter()
+            envelope = self._decode_envelope(line_number, raw_line)
+            self.stage_telemetry["decode_json_seconds"] += perf_counter() - started
+            started = perf_counter()
+            consumed = self._consume(envelope)
+            self.stage_telemetry["event_consume_seconds"] += perf_counter() - started
+            started = perf_counter()
+            yield consumed
+            self.stage_telemetry["downstream_seconds"] += perf_counter() - started
+        self.stage_telemetry["source_line_count"] = line_number
+        self.stage_telemetry["event_count"] = self._event_count
+
+    def finalize(self, *, postmortem: Any = None) -> SessionEventIndex:
+        if not self._finished:
+            raise RuntimeError("audit source stream was not fully consumed")
+        finalize_started = perf_counter() if self.collect_stage_telemetry else 0.0
+        stage_started = perf_counter() if self.collect_stage_telemetry else 0.0
+        for reducer in self.reducers:
+            reducer.consume_count = self._event_count
+            reducer.finalize(self.payload_events)
+        if self.collect_stage_telemetry:
+            self.stage_telemetry["reducer_finalize_seconds"] += (
+                perf_counter() - stage_started
+            )
+        finalized_reducers = sum(1 for reducer in self.reducers if reducer.finalized)
+        stage_started = perf_counter() if self.collect_stage_telemetry else 0.0
+        self.payload_events._ensure_correlated_receipts()
+        if self.collect_stage_telemetry:
+            self.stage_telemetry["correlation_finalize_seconds"] += (
+                perf_counter() - stage_started
+            )
+        stage_started = perf_counter() if self.collect_stage_telemetry else 0.0
+        self.payload_events.finalize_analysis_summary()
+        if self.collect_stage_telemetry:
+            self.stage_telemetry["analysis_finalize_seconds"] += (
+                perf_counter() - stage_started
+            )
+        stage_started = perf_counter() if self.collect_stage_telemetry else 0.0
+        self.payload_events.seal_text_records()
+        self.payload_events.seal()
+        if self.collect_stage_telemetry:
+            self.stage_telemetry["seal_seconds"] += perf_counter() - stage_started
+            self.stage_telemetry["finalize_seconds"] += (
+                perf_counter() - finalize_started
+            )
+        self.payload_events.set_pipeline_diagnostics(
+            source_open_count=self.source_open_count,
+            source_passes=self.source_passes,
+            source_bytes_read=self.source_bytes_read,
+            reducer_count=len(self.reducers),
+            reducer_finalize_count=finalized_reducers,
+            reducer_evidence=[reducer.evidence() for reducer in self.reducers],
+        )
+        integrity_issues = list(self.integrity_issue_groups.values())
+        retained_memory_bytes = (
+            self.payload_events.retained_memory_bytes
+            + _retained_python_bytes(self.metadata)
+            + _retained_python_bytes(integrity_issues)
+        )
+        return SessionEventIndex(
+            path_key=_session_path_key(self.path),
+            payload_events=self.payload_events,
+            metadata=self.metadata,
+            integrity_issues=integrity_issues,
+            raw_characters_seen=self.raw_characters_seen,
+            max_source_line_characters=self.max_source_line_characters,
+            indexed_disk_bytes=self.payload_events.disk_bytes,
+            retained_memory_bytes=retained_memory_bytes,
+            catalog=self.catalog,
+            postmortem=postmortem,
+            stage_telemetry=dict(self.stage_telemetry),
+        )
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self.payload_events.close()
+
+    def _decode_envelope(self, line_number: int, raw_line: bytes) -> EventEnvelope:
+        encoding_error = ""
+        try:
+            line = raw_line.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            encoding_error = f"invalid UTF-8: {exc}"
+            line = raw_line.decode("utf-8", errors="replace")
+        duplicate_keys: List[str] = []
+        event: Any = None
+        parse_error = encoding_error
+        if line and not line.isspace():
+            try:
+                event = json.loads(
+                    line,
+                    object_pairs_hook=self._duplicate_tracking_hook(duplicate_keys),
+                )
+            except (json.JSONDecodeError, UnicodeError) as exc:
+                parse_error = "; ".join(
+                    part for part in (encoding_error, str(exc)) if part
+                )
+        return EventEnvelope(
+            source_line=line_number,
+            raw_text=line,
+            source_bytes=len(raw_line),
+            event=event,
+            duplicate_keys=tuple(duplicate_keys),
+            parse_error=parse_error,
+        )
+
+    def _consume(self, envelope: EventEnvelope) -> EventEnvelope:
+        line = envelope.raw_text
+        self.raw_characters_seen += len(line)
+        self.max_source_line_characters = max(
+            self.max_source_line_characters,
+            len(line),
+        )
+        if not line or line.isspace():
+            return envelope
+        if envelope.duplicate_keys:
+            _record_bounded_integrity_issue(
+                self.integrity_issue_groups,
+                _duplicate_json_key_integrity_issue(
+                    line_number=envelope.source_line,
+                    line=line,
+                    duplicate_keys=envelope.duplicate_keys,
+                ),
+            )
+        if envelope.parse_error:
+            _, _, structure = _partial_session_json_string_fields(line)
+            integrity_issue = _session_line_integrity_issue(
+                line_number=envelope.source_line,
+                line=line,
+                duplicate_boundary_field=bool(structure.get("duplicate_boundary_field")),
+                parse_error=envelope.parse_error,
+            )
+            if integrity_issue:
+                _record_bounded_integrity_issue(
+                    self.integrity_issue_groups,
+                    integrity_issue,
+                )
+        event = envelope.event
+        if envelope.duplicate_keys or not isinstance(event, Mapping):
+            return envelope
+        payload = event.get("payload")
+        projected_event: Any = event
+        if event.get("type") == "session_meta" and isinstance(payload, Mapping) and not self.metadata:
+            self.metadata = _compact_session_metadata(payload)
+            projected_event = {"type": "session_meta", "payload": self.metadata}
+        if event.get("type") not in {"response_item", "event_msg"} or not isinstance(payload, Mapping):
+            return EventEnvelope(
+                source_line=envelope.source_line,
+                raw_text=envelope.raw_text,
+                source_bytes=envelope.source_bytes,
+                event=projected_event,
+                duplicate_keys=envelope.duplicate_keys,
+                parse_error=envelope.parse_error,
+            )
+        stage_started = perf_counter() if self.collect_stage_telemetry else 0.0
+        postmortem_features = extract_postmortem_event_features(
+            dict(event),
+            envelope.source_line,
+            audit_extractor=self._semantic_features,
+        )
+        semantic_features = postmortem_features.audit_features
+        if not isinstance(semantic_features, EventSemanticFeatures):
+            raise RuntimeError("audit semantic feature extraction did not complete")
+        compact_event = _compact_session_event(event)
+        features = self._features(
+            compact_event,
+            semantic_features,
+            postmortem_features,
+        )
+        if self.collect_stage_telemetry:
+            self.stage_telemetry["feature_extract_seconds"] += (
+                perf_counter() - stage_started
+            )
+        stage_started = perf_counter() if self.collect_stage_telemetry else 0.0
+        event_seq = self.payload_events.append(
+            compact_event,
+            source_line=envelope.source_line,
+            features=features,
+        )
+        self._event_count += 1
+        if features.text and (
+            "front_door_status" in features.lowered
+            or "kh_fd_micro" in features.lowered
+        ):
+            front_door_claim = _front_door_json(features.text)
+            if front_door_claim:
+                self.payload_events.append_front_door_claim(
+                    event_seq,
+                    front_door_claim,
+                )
+        if self.collect_stage_telemetry:
+            self.stage_telemetry["event_store_seconds"] += (
+                perf_counter() - stage_started
+            )
+        stage_started = perf_counter() if self.collect_stage_telemetry else 0.0
+        self._reducers_by_name["session_text_records"]._consume_text_record(
+            event_seq,
+            compact_event,
+            self.payload_events,
+            features=features,
+        )
+        if features.payload_type in {
+            "message",
+            "agent_message",
+            "thread_goal_updated",
+            "task_complete",
+        }:
+            self._reducers_by_name["instruction_supersession"]._consume_correction(
+                event_seq,
+                compact_event,
+                self.payload_events,
+            )
+        fact_key = features.call_id or features.payload_type or features.event_type or "event"
+        fact_value = _short(features.text, 180) if features.text else fact_key
+        for reducer_name, fact_kind in _audit_reducer_matches(features):
+            self._reducers_by_name[reducer_name].observe(
+                event_seq,
+                fact_kind,
+                fact_key,
+                fact_value,
+            )
+        if self.collect_stage_telemetry:
+            self.stage_telemetry["reducer_consume_seconds"] += (
+                perf_counter() - stage_started
+            )
+        return EventEnvelope(
+            source_line=envelope.source_line,
+            raw_text=envelope.raw_text,
+            source_bytes=envelope.source_bytes,
+            event=compact_event,
+            duplicate_keys=envelope.duplicate_keys,
+            parse_error=envelope.parse_error,
+            features=features,
+        )
+
+    @staticmethod
+    def _semantic_features(
+        event: Mapping[str, Any],
+        payload: Mapping[str, Any],
+        text: str,
+        lowered: str,
+        literal_hits: frozenset[str],
+        sql_hint: bool,
+    ) -> EventSemanticFeatures:
+        payload_type = str(payload.get("type", "") or "")
+        role = str(payload.get("role", "") or "").strip().lower()
+        call_id = _payload_call_id(payload)
+        boundary_id = str(payload.get("boundary_id", "") or "").strip()
+        packet_hash = str(
+            payload.get("packet_sha256", "") or payload.get("packet_hash", "") or ""
+        ).strip().lower()
+        return EventSemanticFeatures(
+            is_non_kh_work_start=_is_non_kh_work_start(dict(payload), lowered),
+            is_sql_output_request=bool(
+                payload_type == "message"
+                and role == "user"
+                and sql_hint
+                and looks_like_sql_output_request(lowered)
+            ),
+            reducer_matches=tuple(
+                _derive_audit_reducer_matches(
+                    payload_type=payload_type,
+                    role=role,
+                    literal_hits=literal_hits,
+                    has_text=bool(text),
+                    call_id=call_id,
+                    boundary_id=boundary_id,
+                    packet_hash=packet_hash,
+                )
+            ),
+        )
+
+    @staticmethod
+    def _features(
+        event: Mapping[str, Any],
+        semantic_features: EventSemanticFeatures,
+        postmortem_features: PostmortemEventFeatures,
+    ) -> EventFeatures:
+        payload = event.get("payload", {})
+        payload = payload if isinstance(payload, Mapping) else {}
+        text = _payload_text(payload)
+        payload_type = str(payload.get("type", "") or "")
+        role = str(payload.get("role", "") or "").strip().lower()
+        lowered = text.lower()
+        return EventFeatures(
+            event_type=str(event.get("type", "") or ""),
+            payload_type=payload_type,
+            role=role,
+            call_id=_payload_call_id(payload),
+            boundary_id=str(payload.get("boundary_id", "") or "").strip(),
+            correlation_id=str(payload.get("correlation_id", "") or "").strip(),
+            tool_identity=str(payload.get("tool_identity", "") or "").strip().lower(),
+            packet_hash=str(
+                payload.get("packet_sha256", "") or payload.get("packet_hash", "") or ""
+            ).strip().lower(),
+            text=text,
+            lowered=lowered,
+            is_non_kh_work_start=semantic_features.is_non_kh_work_start,
+            is_sql_output_request=semantic_features.is_sql_output_request,
+            reducer_matches=semantic_features.reducer_matches,
+            postmortem=postmortem_features,
+        )
+
+    @staticmethod
+    def _duplicate_tracking_hook(duplicate_keys: List[str]):
+        def build_object(pairs):
+            result = {}
+            seen = set()
+            for key, value in pairs:
+                normalized = str(key)
+                if normalized in seen:
+                    duplicate_keys.append(normalized)
+                seen.add(normalized)
+                result[key] = value
+            return result
+
+        return build_object
 
 
 def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     path = Path(session_path)
-    postmortem = analyze_codex_session_jsonl(path)
+    index = _build_session_event_index(path)
+    token = _SESSION_EVENT_INDEX.set(index)
+    try:
+        return _analyze_session_skills_impl(path)
+    finally:
+        _SESSION_EVENT_INDEX.reset(token)
+        index.close()
+
+
+def _analyze_session_skills_impl(session_path: str | Path) -> SessionSkillAudit:
+    path = Path(session_path)
+    event_index = _current_session_event_index(path)
+    postmortem = (
+        event_index.postmortem
+        if event_index is not None and event_index.postmortem is not None
+        else analyze_codex_session_jsonl(path)
+    )
     postmortem_data = postmortem.to_dict()
+    postmortem_data["path"] = str(path)
     front_door_token_receipts = _apply_front_door_token_optimizer_evidence(path, postmortem_data)
     supersession_issues = _user_instruction_supersession_issues(path)
     _apply_correction_completion_guard(postmortem_data, supersession_issues)
@@ -489,21 +4131,45 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     ) != "active":
         text_records.append(_goal_ledger_evidence_record(scoped_goal_evidence))
     sql_formatting_audit = _host_local_sql_formatting_audit(path)
-    texts = [record.text for record in text_records]
-    active_texts = [_strip_passive_prefix(text) for text in texts if not _is_passive_text(text)]
-    sql_scope_texts = [
-        _strip_passive_prefix(record.text)
-        for record in text_records
-        if _is_sql_requirement_record(record)
-    ]
-    combined_text = "\n".join(active_texts)
-    catalog = collect_packaged_skills()
+    active_texts = SessionTextView(text_records)
+    sql_scope_texts = SessionTextView(text_records, sql_only=True)
+    analysis_summary = (
+        text_records._events.analysis_summary()
+        if isinstance(text_records, DiskBackedSessionTextRecords) and not text_records._extras
+        else {}
+    )
+    combined_text = (
+        str(analysis_summary.get("combined_text", ""))
+        if "combined_text" in analysis_summary
+        else _bounded_text_aggregate(active_texts)
+    )
+    decision_text = (
+        str(analysis_summary.get("decision_text", ""))
+        if "decision_text" in analysis_summary
+        else _bounded_text_aggregate(_active_non_front_door_texts(path))
+    )
+    catalog = (
+        dict(event_index.catalog)
+        if event_index is not None and event_index.catalog
+        else collect_packaged_skills()
+    )
     skills = catalog.get("skills", [])
+    observation_records = (
+        text_records.iter_observation_records()
+        if isinstance(text_records, DiskBackedSessionTextRecords)
+        else text_records
+    )
+    observations_by_skill = (
+        dict(analysis_summary.get("catalog_observations", {}) or {})
+        if analysis_summary and "catalog_observations" in analysis_summary
+        else _catalog_observations(observation_records, skills)
+    )
     required = _required_skills(
         postmortem_data,
         combined_text,
         active_texts,
         sql_scope_texts=sql_scope_texts,
+        analysis_summary=analysis_summary,
     )
     pb_migration_audit = _pb_migration_execution_audit(path)
     if pb_migration_audit["required"]:
@@ -526,8 +4192,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
 
     for skill in skills:
         name = str(skill.get("name", ""))
-        aliases = _skill_aliases(skill)
-        observations = _observations(text_records, aliases, name)
+        observations = dict(observations_by_skill.get(name, _empty_observations()))
         status = observations["status"]
         is_required = name in required
         if name == "sql-formatting-style-harness" and sql_formatting_audit["required"]:
@@ -619,6 +4284,7 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
             )
 
     issues.extend(_session_integrity_issues(path))
+    issues.extend(_duplicate_tool_call_identity_issues(path))
     issues.extend(_pb_migration_execution_issues(pb_migration_audit))
     issues.extend(_aggregate_skill_runtime_evidence_issues(path))
     issues.extend(supersession_issues)
@@ -636,9 +4302,9 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(sql_formatting_audit["issues"])
     issues.extend(_brainstorming_target_inspection_issues(path))
     issues.extend(_brainstorm_option_choice_execution_issues(path))
-    issues.extend(_brainstorming_depth_issues(path))
-    issues.extend(_subagent_strategy_issues(path, postmortem_data))
-    issues.extend(_orchestration_decision_issues(path, postmortem_data))
+    issues.extend(_brainstorming_depth_issues(path, active_text=decision_text))
+    issues.extend(_subagent_strategy_issues(path, postmortem_data, active_text=decision_text))
+    issues.extend(_orchestration_decision_issues(path, postmortem_data, active_text=decision_text))
     issues.extend(_required_delegation_issues(path))
     issues.extend(_postmortem_guard_issues(postmortem_data))
     issues.extend(
@@ -657,6 +4323,8 @@ def analyze_session_skills(session_path: str | Path) -> SessionSkillAudit:
         if key != "issues"
     }
     usage_summary["pb_migration_evidence"] = dict(pb_migration_audit)
+    if event_index is not None:
+        usage_summary["session_event_index_diagnostics"] = event_index.diagnostics()
     return SessionSkillAudit(
         session_id=postmortem.session_id,
         path=str(path),
@@ -918,12 +4586,12 @@ def _terminal_goal_state_evidence(
 
 def _merged_thread_goal_state(path: Path) -> Dict[str, Any]:
     state: Dict[str, Any] = {}
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        if str(payload.get("type", "")) != "thread_goal_updated":
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("goal state merge requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=("thread_goal_updated",)
+    ):
         goal = payload.get("goal", {}) or {}
         if not isinstance(goal, dict):
             continue
@@ -1078,16 +4746,14 @@ def _normalized_goal_evidence(value: Any) -> str:
 
 
 def _session_metadata(path: Path) -> Dict[str, Any]:
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
+    index = _current_session_event_index(path)
+    if index is None:
+        index = _build_session_event_index(path)
         try:
-            event = load_json_without_duplicate_keys(line)
-        except (json.JSONDecodeError, DuplicateJsonKeyError):
-            continue
-        if event.get("type") == "session_meta" and isinstance(event.get("payload"), dict):
-            return dict(event["payload"])
-    return {}
+            return dict(index.metadata)
+        finally:
+            index.close()
+    return dict(index.metadata)
 
 
 def _goal_ledger_evidence_record(evidence: Dict[str, Any]) -> SessionTextRecord:
@@ -1153,7 +4819,6 @@ def _dedupe_text(values: Iterable[str]) -> List[str]:
 def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
     events = _session_payload_events(path)
-    correlated_receipts = _correlated_front_door_receipts(events)
     waiting_for_front_door = False
     front_door_seen = False
     trigger_sample = ""
@@ -1166,31 +4831,44 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     latest_assistant_text = ""
     trigger_text = ""
     work_activity_since_trigger = False
-
-    for event_index, event in enumerate(events):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        payload_type = str(payload.get("type", ""))
-        text = _payload_text(payload)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("front-door audit requires indexed event facts")
+    relevant_types = (
+        "message",
+        "agent_message",
+        "thread_goal_updated",
+        "task_complete",
+        "function_call",
+        "custom_tool_call",
+        "function_call_output",
+        "custom_tool_call_output",
+    )
+    for (
+        event_index,
+        payload_type,
+        role,
+        text,
+        goal_status,
+        is_non_kh_work_start,
+        is_sql_output_request,
+        trusted_host_native_fast_path,
+        is_front_door_receipt,
+    ) in events.iter_front_door_audit_facts(payload_types=relevant_types):
         lowered = text.lower()
 
         if payload_type == "thread_goal_updated":
-            goal = payload.get("goal", {}) or {}
-            if isinstance(goal, dict):
-                status = str(goal.get("status", "") or "").strip().lower()
-                if status == "active":
-                    active_goal = True
-                elif status in {"complete", "blocked"}:
-                    active_goal = False
+            if goal_status == "active":
+                active_goal = True
+            elif goal_status in {"complete", "blocked"}:
+                active_goal = False
 
         if (
             payload_type == "agent_message"
-            or (payload_type == "message" and str(payload.get("role", "")).lower() == "assistant")
+            or (payload_type == "message" and role == "assistant")
         ):
             latest_assistant_text = text
 
-        if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
+        if payload_type == "message" and role == "user":
             if _is_synthetic_context_message(text):
                 continue
             if task_route_checked and _is_same_task_followup(
@@ -1214,24 +4892,19 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
             work_activity_since_trigger = False
             if _is_kh_front_door_request(lowered):
                 trigger_kind = "explicit_kh"
-            elif looks_like_sql_output_request(lowered):
+            elif is_sql_output_request:
                 trigger_kind = "sql_formatting_request"
             elif direct_code_question:
                 trigger_kind = "direct_code_question"
-            elif active_directive or (kh_active_directive_seen and _is_kh_active_followup_request(text)):
+            elif active_directive:
                 trigger_kind = "kh_active_directive"
-            elif _is_automatic_intake_request(text):
-                trigger_kind = "automatic_intake"
+            elif kh_active_directive_seen:
+                trigger_kind = "deferred_kh_active"
             else:
-                trigger_kind = "universal_request"
+                trigger_kind = "deferred_automatic_intake"
             continue
 
-        if waiting_for_front_door and _is_trusted_host_native_fast_path_receipt(
-            payload,
-            text,
-            trigger_text,
-            work_activity_since_trigger,
-        ):
+        if waiting_for_front_door and trusted_host_native_fast_path:
             front_door_seen = True
             task_route_checked = True
             waiting_for_front_door = False
@@ -1243,13 +4916,26 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                 active_goal = False
             continue
 
-        if event_index in correlated_receipts:
+        if is_front_door_receipt:
             front_door_seen = True
             task_route_checked = True
             continue
 
-        if _is_non_kh_work_start(payload, lowered) and not front_door_seen:
+        if is_non_kh_work_start and not front_door_seen:
             work_activity_since_trigger = True
+            if trigger_kind == "deferred_kh_active":
+                if _is_kh_active_followup_request(trigger_text):
+                    trigger_kind = "kh_active_directive"
+                elif _is_automatic_intake_request(trigger_text):
+                    trigger_kind = "automatic_intake"
+                else:
+                    trigger_kind = "universal_request"
+            elif trigger_kind == "deferred_automatic_intake":
+                trigger_kind = (
+                    "automatic_intake"
+                    if _is_automatic_intake_request(trigger_text)
+                    else "universal_request"
+                )
             issues.append(
                 {
                     "skill": "always-on-front-door",
@@ -1282,30 +4968,190 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     return issues
 
 
+@dataclass
+class _ImmediateSkillSequenceState:
+    immediate: List[str]
+    front_door_sample: str
+    resolved: Set[str] = field(default_factory=set)
+    order_violations: Dict[str, str] = field(default_factory=dict)
+    late_after_work: Dict[str, str] = field(default_factory=dict)
+    samples: Dict[str, str] = field(default_factory=dict)
+    pending_index: int = 0
+    order_break_sample: str = ""
+    previous_call_was_passive: bool = False
+    task_completed: bool = False
+
+    def consume(
+        self,
+        payload: Dict[str, Any],
+        correlated_call: Mapping[str, Any] | None = None,
+    ) -> bool:
+        if payload.get("type") == "message" and str(payload.get("role", "")).lower() == "user":
+            return bool(
+                not self.order_break_sample
+                or _is_immediate_sequence_stop_user_message(_payload_text(payload))
+            )
+        if payload.get("type") == "task_complete":
+            self.task_completed = True
+            return True
+        text = _payload_text(payload)
+        if not text:
+            self.previous_call_was_passive = False
+            return False
+        clean_text = _strip_passive_prefix(text)
+        lowered = clean_text.lower()
+        payload_type = str(payload.get("type", ""))
+        correlated_runtime_skills = {
+            skill_name
+            for skill_name in self.immediate
+            if correlated_call
+            and _is_immediate_skill_runtime_call(correlated_call, skill_name)
+        }
+        passive = _passive_reference(lowered) or (
+            payload_type in {"function_call_output", "custom_tool_call_output"}
+            and self.previous_call_was_passive
+        )
+        self.previous_call_was_passive = (
+            payload_type in {"function_call", "custom_tool_call"} and passive
+        )
+        if _looks_like_front_door_runtime_output(lowered):
+            return False
+        if (
+            self.pending_index < len(self.immediate)
+            and not self.order_break_sample
+            and _immediate_order_break(
+                payload,
+                lowered,
+                self.immediate[self.pending_index],
+            )
+        ):
+            self.order_break_sample = _short(clean_text)
+
+        matches = []
+        for position, skill_name in enumerate(self.immediate):
+            if skill_name in self.resolved:
+                continue
+            status = _immediate_skill_event_status(
+                payload,
+                lowered,
+                skill_name,
+                passive,
+                correlated_runtime_call=skill_name in correlated_runtime_skills,
+            )
+            if not status:
+                continue
+            sample = _short(clean_text)
+            self.samples.setdefault(skill_name, sample)
+            matches.append((position, skill_name, status, sample))
+        if not matches:
+            return False
+
+        by_position = {
+            position: (skill_name, status, sample)
+            for position, skill_name, status, sample in matches
+        }
+        if self.pending_index not in by_position:
+            for position, skill_name, _status, sample in matches:
+                if position > self.pending_index:
+                    self.order_violations.setdefault(skill_name, sample)
+            return False
+
+        while self.pending_index < len(self.immediate) and self.pending_index in by_position:
+            skill_name, _status, _sample = by_position[self.pending_index]
+            if self.order_break_sample:
+                self.late_after_work.setdefault(
+                    skill_name,
+                    self.samples.get(skill_name, ""),
+                )
+            else:
+                self.resolved.add(skill_name)
+            self.pending_index += 1
+
+        for position, skill_name, _status, sample in matches:
+            if skill_name not in self.resolved and position > self.pending_index:
+                self.order_violations.setdefault(skill_name, sample)
+        return False
+
+    def issues(self) -> List[Dict[str, Any]]:
+        issues: List[Dict[str, Any]] = []
+        for position, skill_name in enumerate(self.immediate):
+            if skill_name in self.resolved and skill_name not in self.order_violations:
+                continue
+            order_violation = self.order_violations.get(skill_name, "")
+            late_sample = self.late_after_work.get(skill_name, "")
+            status = (
+                "immediate_next_skill_order_violation"
+                if order_violation
+                else "immediate_next_skill_not_applied"
+            )
+            reason = (
+                f"Front-door emitted `{skill_name}` in immediate_next_skills, but the same turn "
+                "did not record concrete applied/skipped/blocked evidence before continuing."
+            )
+            if order_violation:
+                expected = self.immediate[position - 1] if position > 0 else skill_name
+                reason = (
+                    f"Front-door required immediate_next_skills in order, but `{skill_name}` produced evidence "
+                    "before preceding skill evidence was complete."
+                )
+                if position > 0:
+                    reason += f" Expected prior skill: `{expected}`."
+            if self.order_break_sample:
+                reason += " Work continued before the immediate skill sequence completed."
+            issues.append(
+                {
+                    "skill": skill_name,
+                    "status": status,
+                    "severity": "P0" if self.task_completed else "P1",
+                    "reason": reason,
+                    "action": (
+                        "After front-door returns, execute immediate_next_skills first and in order. "
+                        "A SKILL.md/support-file read or catalog lookup is only inspection evidence; "
+                        "record runtime evidence, an explicit blocked reason, or an explicit "
+                        "skipped_with_rationale before source exploration, implementation, verification, "
+                        "or final claims."
+                    ),
+                    "front_door": self.front_door_sample,
+                    "followup_sample": self.samples.get(skill_name, "") or late_sample,
+                    "order_break_sample": self.order_break_sample,
+                    "order_violation_sample": order_violation,
+                    "expected_order": self.immediate,
+                }
+            )
+        return issues
+
+
 def _immediate_next_skill_issues(path: Path, skill_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
     events = _session_payload_events(path)
     known_skills = {str(row.get("name", "")) for row in skill_rows}
-
-    for index, event in enumerate(events):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("immediate skill audit requires indexed event facts")
+    active: List[_ImmediateSkillSequenceState] = []
+    for _event_index, payload, claim_data, correlated_call in events.iter_ordered_correlation_facts():
+        remaining: List[_ImmediateSkillSequenceState] = []
+        for state in active:
+            if state.consume(payload, correlated_call):
+                issues.extend(state.issues())
+            else:
+                remaining.append(state)
+        active = remaining
+        if not claim_data:
             continue
-        data = _front_door_json(_strip_passive_prefix(_payload_text(payload)))
-        if not data:
-            continue
-        immediate = _ordered_unique(str(item) for item in data.get("immediate_next_skills", []) or [])
-        immediate = [skill for skill in immediate if skill in known_skills]
-        if not immediate:
-            continue
-        issues.extend(
-            _immediate_skill_sequence_issues(
-                events=events,
-                start_index=index + 1,
-                immediate=immediate,
-                front_door_sample=_short(_payload_text(payload)),
-            )
+        immediate = _ordered_unique(
+            str(item)
+            for item in claim_data.get("immediate_next_skills", []) or []
         )
+        immediate = [skill for skill in immediate if skill in known_skills]
+        if immediate:
+            active.append(
+                _ImmediateSkillSequenceState(
+                    immediate=immediate,
+                    front_door_sample=_short(_payload_text(payload)),
+                )
+            )
+    for state in active:
+        issues.extend(state.issues())
     return issues
 
 
@@ -1323,7 +5169,7 @@ def _ordered_unique(values: Iterable[str]) -> List[str]:
 
 def _immediate_skill_sequence_issues(
     *,
-    events: List[Dict[str, Any]],
+    events: Sequence[Dict[str, Any]],
     start_index: int,
     immediate: List[str],
     front_door_sample: str,
@@ -1336,12 +5182,10 @@ def _immediate_skill_sequence_issues(
     order_break_sample = ""
     previous_call_was_passive = False
     task_completed = False
-    pending_runtime_calls: Dict[str, Set[str]] = {}
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("immediate skill sequencing requires the streaming fact store")
 
-    for event in events[start_index:]:
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    for event_index, payload in events.iter_payloads(start=start_index):
         if payload.get("type") == "message" and str(payload.get("role", "")).lower() == "user":
             if not order_break_sample or _is_immediate_sequence_stop_user_message(_payload_text(payload)):
                 break
@@ -1356,18 +5200,15 @@ def _immediate_skill_sequence_issues(
         clean_text = _strip_passive_prefix(text)
         lowered = clean_text.lower()
         payload_type = str(payload.get("type", ""))
-        call_id = _payload_call_id(payload)
         correlated_runtime_skills: Set[str] = set()
-        if payload_type in {"function_call", "custom_tool_call"} and call_id:
-            pending_runtime_calls[call_id] = {
+        if payload_type in {"function_call_output", "custom_tool_call_output"}:
+            correlated_call = events.successful_correlated_call_payload(event_index)
+            correlated_runtime_skills = {
                 skill_name
                 for skill_name in immediate
-                if _is_immediate_skill_runtime_call(payload, skill_name)
+                if correlated_call
+                and _is_immediate_skill_runtime_call(correlated_call, skill_name)
             }
-        elif payload_type in {"function_call_output", "custom_tool_call_output"} and call_id:
-            correlated_runtime_skills = pending_runtime_calls.pop(call_id, set())
-            if not _runtime_tool_output_succeeded(payload):
-                correlated_runtime_skills = set()
         passive = _passive_reference(lowered) or (
             payload_type in {"function_call_output", "custom_tool_call_output"}
             and previous_call_was_passive
@@ -1473,10 +5314,20 @@ def _front_door_execution_gate_bypass_issues(path: Path) -> List[Dict[str, Any]]
     blocked_actions: List[str] = []
     immediate: List[str] = []
 
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("execution-gate audit requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=(
+            "message",
+            "agent_message",
+            "task_complete",
+            "function_call",
+            "custom_tool_call",
+            "function_call_output",
+            "custom_tool_call_output",
+        )
+    ):
         text = _payload_text(payload)
         clean_text = _strip_passive_prefix(text)
         lowered = clean_text.lower()
@@ -2131,19 +5982,20 @@ def _is_current_skill_support_read(lowered: str, skill_name: str) -> bool:
 
 
 def _front_door_latency_issues(path: Path, threshold_seconds: float = 60.0) -> List[Dict[str, Any]]:
-    skill_read_event: Dict[str, Any] | None = None
+    skill_read_sample = ""
     skill_read_at: datetime | None = None
-    front_door_event: Dict[str, Any] | None = None
+    front_door_sample = ""
     front_door_at: datetime | None = None
-
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("front-door latency requires indexed event facts")
+    for _event_seq, payload, timestamp in events.iter_timed_payloads(
+        payload_types=("function_call", "custom_tool_call")
+    ):
         payload_type = str(payload.get("type", ""))
         text = _payload_text(payload)
         lowered = text.lower()
-        ts = _event_timestamp(event)
+        ts = _event_timestamp({"timestamp": timestamp})
         if ts is None:
             continue
 
@@ -2154,12 +6006,12 @@ def _front_door_latency_issues(path: Path, threshold_seconds: float = 60.0) -> L
             and "skill.md" in lowered
         ):
             skill_read_at = ts
-            skill_read_event = event
+            skill_read_sample = _short(text)
             continue
 
         if _is_front_door_runtime_command(payload, lowered):
             front_door_at = ts
-            front_door_event = event
+            front_door_sample = _short(text)
             break
 
     if skill_read_at is None or front_door_at is None:
@@ -2182,8 +6034,8 @@ def _front_door_latency_issues(path: Path, threshold_seconds: float = 60.0) -> L
             ),
             "threshold_seconds": threshold_seconds,
             "elapsed_seconds": round(elapsed, 1),
-            "skill_read": _short(_payload_text(skill_read_event.get("payload", {})) if skill_read_event else ""),
-            "front_door_call": _short(_payload_text(front_door_event.get("payload", {})) if front_door_event else ""),
+            "skill_read": skill_read_sample,
+            "front_door_call": front_door_sample,
         }
     ]
 
@@ -2203,16 +6055,26 @@ def _large_output_latency_issues(
     output_line_threshold: int = 300,
     delay_threshold_seconds: float = 60.0,
 ) -> List[Dict[str, Any]]:
-    pending_output: Dict[str, Any] | None = None
+    pending_output_sample = ""
     pending_at: datetime | None = None
     pending_lines = 0
 
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("large-output latency requires indexed event facts")
+    for _event_seq, payload, timestamp in events.iter_timed_payloads(
+        payload_types=(
+            "function_call_output",
+            "custom_tool_call_output",
+            "message",
+            "agent_message",
+            "function_call",
+            "custom_tool_call",
+            "task_complete",
+        )
+    ):
         payload_type = str(payload.get("type", ""))
-        ts = _event_timestamp(event)
+        ts = _event_timestamp({"timestamp": timestamp})
         if ts is None:
             continue
         text = _payload_text(payload)
@@ -2220,18 +6082,18 @@ def _large_output_latency_issues(
         if payload_type in {"function_call_output", "custom_tool_call_output"}:
             line_count = _reported_output_line_count(text)
             if line_count >= output_line_threshold:
-                pending_output = event
+                pending_output_sample = _short(text, 260)
                 pending_at = ts
                 pending_lines = line_count
             continue
 
-        if pending_output is None or pending_at is None:
+        if not pending_output_sample or pending_at is None:
             continue
         if payload_type not in {"message", "agent_message", "function_call", "custom_tool_call", "task_complete"}:
             continue
         elapsed = (ts - pending_at).total_seconds()
         if elapsed <= delay_threshold_seconds:
-            pending_output = None
+            pending_output_sample = ""
             pending_at = None
             pending_lines = 0
             continue
@@ -2252,7 +6114,7 @@ def _large_output_latency_issues(
                 "output_line_threshold": output_line_threshold,
                 "delay_threshold_seconds": delay_threshold_seconds,
                 "elapsed_seconds": round(elapsed, 1),
-                "sample": _short(_payload_text(pending_output.get("payload", {})), 260),
+                "sample": pending_output_sample,
             }
         ]
     return []
@@ -2267,10 +6129,20 @@ def _reported_output_line_count(text: str) -> int:
 
 def _stale_skill_cache_issues(path: Path) -> List[Dict[str, Any]]:
     samples: List[str] = []
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("skill-cache audit requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=(
+            "message",
+            "agent_message",
+            "task_complete",
+            "function_call",
+            "custom_tool_call",
+            "function_call_output",
+            "custom_tool_call_output",
+        )
+    ):
         text = _payload_text(payload)
         lowered = text.lower()
         if _is_synthetic_context_message(text):
@@ -2306,16 +6178,18 @@ def _cross_scope_context_issues(path: Path) -> List[Dict[str, Any]]:
     trigger_sample = ""
     samples: List[str] = []
 
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("cross-scope audit requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=("message", "function_call", "custom_tool_call")
+    ):
         payload_type = str(payload.get("type", ""))
         text = _payload_text(payload)
 
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
             targets = _extract_windows_paths(text)
-            active_target = Path(targets[0]) if targets else None
+            active_target = _normalize_path(Path(targets[0])) if targets else None
             trigger_sample = _short(text) if targets else ""
             samples = []
             continue
@@ -2355,17 +6229,27 @@ def _target_substitution_issues(path: Path) -> List[Dict[str, Any]]:
     trigger_sample = ""
     samples: List[str] = []
 
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("target-substitution audit requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=(
+            "message",
+            "agent_message",
+            "task_complete",
+            "function_call",
+            "custom_tool_call",
+            "function_call_output",
+            "custom_tool_call_output",
+        )
+    ):
         payload_type = str(payload.get("type", ""))
         text = _payload_text(payload)
 
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
             targets = _extract_windows_paths(text)
             if targets:
-                active_target = Path(targets[0])
+                active_target = _normalize_path(Path(targets[0]))
                 trigger_sample = _short(text)
                 samples = []
             continue
@@ -2410,22 +6294,43 @@ def _target_substitution_issues(path: Path) -> List[Dict[str, Any]]:
 
 
 def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("memory scope audit requires indexed event facts")
+    if (
+        events.reducer_matched_count("global_memory_scope") == 0
+        and not events.has_fact_kinds(("memory_approval", "memory_reference"))
+    ):
+        return []
     front_door_brainstorm_gate = _front_door_selected_skill(path, "brainstorming-harness") or _front_door_blocks_execution(path)
     new_project_context = _session_has_new_project_discovery_request(path)
+    _memory_import_approval_decisions(
+        events,
+        _session_metadata(path),
+    )
     explicit_import_active = False
     read_samples: List[str] = []
     citation_samples: List[str] = []
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    for _event_index, payload, decision in events.iter_payloads_with_memory_decision(
+        payload_types=(
+            "message",
+            "agent_message",
+            "task_complete",
+            "function_call",
+            "custom_tool_call",
+            "function_call_output",
+            "custom_tool_call_output",
+        )
+    ):
         payload_type = str(payload.get("type", ""))
         if payload_type == "message" and str(payload.get("role", "")).lower() in {"developer", "system"}:
             continue
         if _is_synthetic_context_message(_payload_text(payload)):
             continue
-        if _payload_is_explicit_global_memory_import_request(payload) or _payload_has_scoped_memory_import_approval(payload):
+        if decision == "approve":
             explicit_import_active = True
+        elif decision == "revoke":
+            explicit_import_active = False
         if payload_type in {"function_call", "custom_tool_call"}:
             text = _payload_text(payload)
             sample = _global_codex_memory_sample(text)
@@ -2524,14 +6429,13 @@ def _global_memory_scope_issues(path: Path) -> List[Dict[str, Any]]:
 
 
 def _session_has_new_project_discovery_request(path: Path) -> bool:
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        if str(payload.get("type", "")) != "message":
-            continue
-        if str(payload.get("role", "")).lower() != "user":
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("project discovery requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=("message",),
+        roles=("user",),
+    ):
         text = _payload_text(payload)
         if _requires_fresh_brainstorming_direction(text):
             return True
@@ -2573,16 +6477,23 @@ def _requires_fresh_brainstorming_direction(text: str) -> bool:
     return bool(has_domain and has_discovery)
 
 
-def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
-    evidence_texts: List[str] = []
+def _active_non_front_door_texts(path: Path) -> Iterator[str]:
     for text in _session_texts(path):
         if _is_passive_text(text):
             continue
         clean_text = _strip_passive_prefix(text)
         if _looks_like_front_door_runtime_output(clean_text.lower()):
             continue
-        evidence_texts.append(clean_text)
-    active_text = "\n".join(evidence_texts)
+        yield clean_text
+
+
+def _brainstorming_depth_issues(
+    path: Path,
+    *,
+    active_text: str | None = None,
+) -> List[Dict[str, Any]]:
+    if active_text is None:
+        active_text = _bounded_text_aggregate(_active_non_front_door_texts(path))
     lowered = active_text.lower()
     if looks_like_sql_output_request(lowered):
         return []
@@ -2664,7 +6575,7 @@ def _brainstorming_depth_issues(path: Path) -> List[Dict[str, Any]]:
             {
                 "skill": "brainstorming-harness",
                 "status": status,
-                "severity": "P1",
+                "severity": "P0" if status == "brainstorming_execution_gate_bypassed" else "P1",
                 "reason": (
                     "Front-door selected brainstorming, but the session moved into execution without "
                     "BrainstormSession validation, explicit later user approval, and brainstorm_handoff evidence."
@@ -2713,38 +6624,104 @@ def _pb_migration_execution_audit(
 ) -> Dict[str, Any]:
     events = _session_payload_events(path)
     session_cwd = str(_session_metadata(path).get("cwd", "") or "").strip()
+    duplicate_call_ids = _duplicate_tool_call_ids(events)
+    duplicate_boundaries = _duplicate_front_door_boundaries(events)
+    duplicate_packet_hashes = _duplicate_general_tool_packet_hashes(events)
     receipts = _correlated_tool_receipts(events, include_failed=True)
-    front_door_receipts = []
-    for receipt in receipts:
+    front_door_candidates = _paired_front_door_candidates(events)
+    front_door_history: List[Dict[str, Any]] = []
+    front_door_history_total = 0
+    front_door_accepted_total = 0
+    latest_front_door_output = -1
+    latest_accepted_front_door_output = -1
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("PB migration audit requires the streaming fact store")
+    events._db.execute("DELETE FROM pb_front_door_acceptance")
+    verified_correction_indexes = _verified_bounded_pb_correction_indexes(
+        events,
+        receipts,
+        session_cwd=session_cwd,
+    )
+    for receipt in front_door_candidates:
         call_text = _payload_text(receipt.call)
         if not _is_front_door_runtime_command(receipt.call, call_text.lower()):
             continue
         data = _front_door_json(_payload_text(receipt.output))
-        if not data or not _structured_pb_migration_selection(data):
-            continue
-        if not (
-            _runtime_tool_output_succeeded(receipt.output)
-            or _is_strict_blocked_front_door_packet(data)
-        ):
-            continue
-        front_door_receipts.append(receipt)
+        raw_data = _json_object_from_text(_payload_text(receipt.output))
+        provenance_valid = _valid_host_front_door_provenance(
+            receipt.call,
+            receipt.output,
+            raw_data,
+            duplicate_boundaries=duplicate_boundaries,
+            duplicate_packet_hashes=duplicate_packet_hashes,
+        )
+        selection_valid = bool(data and _structured_pb_migration_selection(data))
+        execution_valid = bool(
+            selection_valid
+            and (
+                _runtime_tool_output_succeeded(receipt.output)
+                or _is_strict_blocked_front_door_packet(data)
+            )
+        )
+        accepted = provenance_valid and execution_valid
+        history_item = {
+            "call_id": _payload_call_id(receipt.call),
+            "call_index": receipt.call_index,
+            "output_index": receipt.output_index,
+            "status": "accepted" if accepted else "claimed_unverified",
+            "provenance_valid": provenance_valid,
+            "selection_valid": selection_valid,
+            "execution_valid": execution_valid,
+            "authoritative_style": False,
+        }
+        front_door_history_total += 1
+        latest_front_door_output = receipt.output_index
+        if accepted:
+            front_door_accepted_total += 1
+            latest_accepted_front_door_output = receipt.output_index
+        events._db.execute(
+            "INSERT INTO pb_front_door_acceptance(output_seq, accepted) VALUES (?, ?)",
+            (receipt.output_index, int(accepted)),
+        )
+        if len(front_door_history) < _PB_FRONT_DOOR_HISTORY_SAMPLE_LIMIT:
+            front_door_history.append(history_item)
+        else:
+            front_door_history[-1] = history_item
+    for item in front_door_history:
+        item["superseded_by_later_correction"] = verified_correction_indexes.has_after(
+            item["output_index"]
+        )
+        item["current"] = bool(
+            item["output_index"] == latest_front_door_output
+            and not item["superseded_by_later_correction"]
+        )
+        item["current_accepted"] = (
+            item["output_index"] == latest_accepted_front_door_output
+            and not item["superseded_by_later_correction"]
+        )
 
     routed = False
     contextual = False
     write_receipts = []
-    for receipt in receipts:
-        if not _runtime_tool_output_succeeded(receipt.output):
-            continue
-        if not _is_implementation_call(receipt.call):
-            continue
+    for receipt in receipts.iter_range(
+        require_succeeded=True,
+        implementation_only=True,
+    ):
         targets = _extract_pb_csharp_write_targets(receipt.call)
         if not targets:
             continue
         task_boundary, task_text = _latest_user_task_scope(events, receipt.call_index)
         write_contextual = _is_pb_migration_task_scope(task_text)
-        write_routed = any(
-            task_boundary < front_door.output_index < receipt.call_index
-            for front_door in front_door_receipts
+        write_routed = bool(
+            events._db.execute(
+                """
+                SELECT 1
+                FROM pb_front_door_acceptance
+                WHERE accepted = 1 AND output_seq > ? AND output_seq < ?
+                LIMIT 1
+                """,
+                (task_boundary, receipt.call_index),
+            ).fetchone()
         )
         if not (write_contextual or write_routed):
             continue
@@ -2760,29 +6737,84 @@ def _pb_migration_execution_audit(
     targets_extractable = bool(write_receipts) and all(targets for _, targets in write_receipts)
     verifier_receipts = []
     verifier_attempts = []
-    for receipt in receipts:
-        if last_write_index < 0 or receipt.call_index <= last_write_index:
-            continue
+    invalid_invocations: List[Dict[str, Any]] = []
+    verifier_evaluations: List[Dict[str, Any]] = []
+    output_evidence: Dict[str, List[Dict[str, Any]]] = {
+        name: [] for name in _PB_MIGRATION_REQUIRED_OUTPUTS
+    }
+    verification_receipts = (
+        receipts.iter_range(after_index=last_write_index)
+        if last_write_index >= 0
+        else ()
+    )
+    for receipt in verification_receipts:
         invocation = _pb_migration_verifier_invocation(receipt.call)
+        if invocation.get("identified") and not invocation["valid"]:
+            invalid_invocations.append(
+                {
+                    "call_id": _payload_call_id(receipt.call),
+                    "verifier_name": invocation.get("verifier_name", ""),
+                    "reason": invocation.get("reason", "invalid_verifier_invocation"),
+                    "claim_status": "claimed_unverified",
+                }
+            )
+            continue
         if not invocation["valid"]:
+            independent = _pb_independent_stage_receipt(
+                receipt,
+                session_cwd=session_cwd,
+                written_targets=written_targets,
+            )
+            if independent:
+                output_evidence[independent["output"]].append(independent)
             continue
         verifier_attempts.append(receipt)
-        verifier_targets = set(invocation["targets"])
-        verifier_targets.update(_pb_verified_targets_from_output(receipt.data))
-        if not targets_extractable or not _pb_targets_cover(
-            written_targets,
-            verifier_targets,
-            session_cwd=session_cwd,
-        ):
-            continue
-        if not _pb_verifier_output_succeeded(
-            receipt.output,
+        evaluation = _pb_verifier_receipt_evidence(
+            receipt,
+            invocation=invocation,
             written_targets=written_targets,
             session_cwd=session_cwd,
-        ):
+        )
+        evaluation["call_id"] = _payload_call_id(receipt.call)
+        verifier_evaluations.append(evaluation)
+        if not evaluation["receipt_valid"]:
             continue
         verifier_receipts.append(receipt)
-    return {
+        for output_name in evaluation["satisfied_outputs"]:
+            output_evidence[output_name].append(
+                {
+                    "call_id": _payload_call_id(receipt.call),
+                    "verifier_name": invocation["verifier_name"],
+                    "status": "passed",
+                    "verified_targets": evaluation["verified_targets"],
+                }
+            )
+
+    valid_evaluations = [item for item in verifier_evaluations if item.get("receipt_valid")]
+    completion_requested = any(item.get("completion_requested") for item in valid_evaluations)
+    completion_claims: Dict[str, Any] = {}
+    for item in valid_evaluations:
+        claims = item.get("completion_claims")
+        if isinstance(claims, Mapping):
+            completion_claims.update(dict(claims))
+    designer_applicable = any(item.get("designer_applicable") for item in valid_evaluations)
+    required_outputs = list(_PB_MIGRATION_CORE_OUTPUTS)
+    if completion_requested:
+        required_outputs.extend(["project_inclusion_verification", "build_verification"])
+        if designer_applicable:
+            required_outputs.append("designer_layout_verification")
+        if completion_claims.get("database_equivalence") is True:
+            required_outputs.append("database_verification")
+        if completion_claims.get("deployment") is True:
+            required_outputs.append("deployment_verification")
+        required_outputs.append("manual_qa")
+    satisfied_outputs = [name for name in _PB_MIGRATION_REQUIRED_OUTPUTS if output_evidence[name]]
+    missing_outputs = [name for name in required_outputs if not output_evidence[name]]
+    unverified_claims = _pb_unverified_execution_claims(
+        events,
+        after_index=last_write_index,
+    )
+    result = {
         "required": bool(write_receipts),
         "routed": routed,
         "contextual": contextual,
@@ -2800,23 +6832,71 @@ def _pb_migration_execution_audit(
         "targets_extractable": targets_extractable,
         "verifier_attempted": bool(verifier_attempts),
         "verifier_executed": bool(verifier_receipts),
+        "draft_validated": any(
+            item.get("receipt_valid") and item.get("core_validation_passed")
+            for item in verifier_evaluations
+        ),
+        "completion_requested": completion_requested,
+        "completion_claims": completion_claims,
+        "verifier_completed": bool(
+            completion_requested
+            and not missing_outputs
+            and any(
+                item.get("receipt_valid") and item.get("completion_allowed")
+                for item in verifier_evaluations
+            )
+        ),
         "verifier_call_ids": [_payload_call_id(receipt.call) for receipt in verifier_receipts],
+        "verifier_receipts": verifier_evaluations,
+        "invalid_verifier_invocations": invalid_invocations,
+        "required_outputs": required_outputs,
+        "satisfied_outputs": satisfied_outputs,
+        "missing_outputs": missing_outputs,
+        "output_evidence": output_evidence,
+        "style_application_status": (
+            "applied"
+            if output_evidence["packaged_profile"]
+            else "blocked_missing_packaged_fixed_profile_receipt"
+        ),
+        "authoritative_style_source": (
+            "correlated_pb_verifier_receipt"
+            if output_evidence["packaged_profile"]
+            else "none"
+        ),
+        "front_door_history": front_door_history,
+        "verified_correction_indexes": verified_correction_indexes.bounded_samples(),
+        "claimed_unverified": unverified_claims,
+        "duplicate_call_ids": duplicate_call_ids,
     }
+    if front_door_history_total > len(front_door_history):
+        result["front_door_history_total"] = front_door_history_total
+        result["front_door_history_status_counts"] = {
+            "accepted": front_door_accepted_total,
+            "claimed_unverified": front_door_history_total - front_door_accepted_total,
+        }
+        result["front_door_history_truncated"] = True
+    verified_correction_count = len(verified_correction_indexes)
+    if verified_correction_count > len(result["verified_correction_indexes"]):
+        result["verified_correction_index_total"] = verified_correction_count
+        result["verified_correction_indexes_truncated"] = True
+    return result
 
 
 def _latest_user_task_scope(
     events: Sequence[Dict[str, Any]],
     before_index: int,
 ) -> tuple[int, str]:
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("PB task scope requires indexed event facts")
     task_boundary = -1
-    task_text: List[str] = []
-    for index, event in enumerate(events[:before_index]):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    task_text = ""
+    for index, payload in events.iter_payloads(
+        payload_types=("task_complete", "message"),
+        stop=before_index,
+    ):
         if str(payload.get("type", "")) == "task_complete":
             task_boundary = index
-            task_text = []
+            task_text = ""
             continue
         if (
             str(payload.get("type", "")) == "message"
@@ -2824,26 +6904,323 @@ def _latest_user_task_scope(
         ):
             text = _strip_passive_prefix(_payload_text(payload))
             if text and not _is_synthetic_context_message(text):
+                if (
+                    task_text
+                    and _is_pb_migration_task_scope(task_text)
+                    and not _is_pb_migration_task_scope(text)
+                    and not _is_pb_route_followup(text)
+                ):
+                    task_boundary = index
+                    task_text = text[:_SESSION_TEXT_AGGREGATE_LIMIT]
+                    continue
                 if not task_text:
                     task_boundary = index
-                task_text.append(text)
-    return task_boundary, "\n".join(task_text)
+                task_text = _bounded_text_aggregate((task_text, text))
+    return task_boundary, task_text
+
+
+def _is_pb_route_followup(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    if not normalized:
+        return False
+    if _is_explicit_new_objective_transition(normalized):
+        return False
+    return bool(
+        re.search(
+            r"^(?:continue|proceed|keep|also|same|again|계속|이어서|그대로|추가로|또한)\b",
+            normalized,
+        )
+        or re.search(r"\b(?:routed|current correction|existing event|nested)\b", normalized)
+        or "현재 라우팅된" in normalized
+        or "기존 이벤트" in normalized
+        or _is_bounded_pb_correction_text(normalized)
+    )
+
+
+def _is_bounded_pb_correction_text(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    has_correction = bool(
+        re.search(r"\b(?:correct(?:ed|ion|ive)?|fix(?:ed|es|ing)?|baseline)\b", normalized)
+        or "수정" in normalized
+    )
+    has_boundary = bool(
+        re.search(r"\b(?:later|current|bounded|baseline|existing)\b", normalized)
+        or re.search(r"\b[0-9a-f]{8,}\b", normalized)
+    )
+    return bool(has_correction and has_boundary and not _is_explicit_new_objective_transition(normalized))
+
+
+def _paired_front_door_candidates(
+    events: Sequence[Dict[str, Any]],
+) -> Iterable[CorrelatedToolReceipt]:
+    if isinstance(events, DiskBackedSessionEvents):
+        rows = events._db.execute(
+            """
+            SELECT calls.*, outputs.*
+            FROM event_payloads AS calls
+            JOIN event_payloads AS outputs ON outputs.call_id = calls.call_id
+            JOIN front_door_claims AS claims ON claims.event_seq = outputs.seq
+            WHERE calls.event_type = 'response_item'
+              AND outputs.event_type = 'response_item'
+              AND calls.payload_type IN ('function_call', 'custom_tool_call')
+              AND outputs.payload_type = CASE calls.payload_type
+                    WHEN 'function_call' THEN 'function_call_output'
+                    ELSE 'custom_tool_call_output'
+                  END
+              AND calls.seq < outputs.seq
+              AND calls.call_id <> ''
+              AND calls.call_id IN (
+                  SELECT fact_key
+                  FROM facts
+                  WHERE kind IN ('tool_call', 'tool_output')
+                  GROUP BY fact_key
+                  HAVING SUM(CASE WHEN kind = 'tool_call' THEN 1 ELSE 0 END) = 1
+                     AND SUM(CASE WHEN kind = 'tool_output' THEN 1 ELSE 0 END) = 1
+              )
+            ORDER BY calls.seq
+            """
+        )
+        for row in rows:
+            output_offset = _EVENT_PAYLOAD_VIEW_COLUMN_COUNT
+            call = _payload_from_event_view_row(row)
+            if not _is_front_door_runtime_command(call, _payload_text(call).lower()):
+                continue
+            output = _payload_from_event_view_row(row, output_offset)
+            yield CorrelatedToolReceipt(
+                call_index=int(row[0]),
+                output_index=int(row[output_offset]),
+                call=call,
+                output=output,
+                data=_json_object_from_text(_payload_text(output)),
+            )
+        return
+    raise RuntimeError("front-door pairing requires the streaming fact store")
+
+
+def _verified_bounded_pb_correction_indexes(
+    events: Sequence[Dict[str, Any]],
+    receipts: Sequence[CorrelatedToolReceipt],
+    *,
+    session_cwd: str,
+) -> DiskBackedVerifiedCorrectionIndexes:
+    if not isinstance(events, DiskBackedSessionEvents) or not isinstance(
+        receipts, DiskBackedToolReceipts
+    ):
+        raise RuntimeError("PB correction verification requires indexed receipt facts")
+    events._db.execute("DELETE FROM pb_verified_corrections")
+    events._db.execute("DELETE FROM pb_active_implementations")
+    events._pb_correlation_replay_count += 1
+    correction_rows = iter(events._db.execute(
+        """
+        SELECT correction_seq
+        FROM pb_correction_candidates
+        ORDER BY correction_seq
+        """
+    ))
+    boundary_rows = iter(events._db.execute(
+        """
+        SELECT seq
+        FROM events
+        WHERE payload_type = 'task_complete'
+           OR (payload_type = 'message' AND role = 'user')
+           OR (payload_type = 'thread_goal_updated'
+               AND goal_status IN ('complete', 'blocked'))
+        ORDER BY seq
+        """
+    ))
+    receipt_rows = iter(receipts.iter_ordered_by_output())
+    correction = next(correction_rows, None)
+    boundary = next(boundary_rows, None)
+    receipt = next(receipt_rows, None)
+    active_correction = -1
+    active_verified = False
+    while correction is not None or boundary is not None or receipt is not None:
+        choices: List[tuple[int, int, str]] = []
+        if boundary is not None:
+            choices.append((int(boundary[0]), 0, "boundary"))
+        if correction is not None:
+            choices.append((int(correction[0]), 1, "correction"))
+        if receipt is not None:
+            choices.append((int(receipt.output_index), 2, "receipt"))
+        _index, _priority, kind = min(choices)
+        if kind == "boundary":
+            active_correction = -1
+            events._db.execute("DELETE FROM pb_active_implementations")
+            active_verified = False
+            boundary = next(boundary_rows, None)
+            continue
+        if kind == "correction":
+            active_correction = int(correction[0])
+            events._db.execute("DELETE FROM pb_active_implementations")
+            active_verified = False
+            correction = next(correction_rows, None)
+            continue
+
+        current = receipt
+        receipt = next(receipt_rows, None)
+        if (
+            active_correction < 0
+            or active_verified
+            or current.call_index <= active_correction
+        ):
+            continue
+        if (
+            _runtime_tool_output_succeeded(current.output)
+            and _is_implementation_call(current.call)
+        ):
+            targets = _extract_pb_csharp_write_targets(current.call)
+            if targets:
+                events._db.execute(
+                    """
+                    INSERT OR REPLACE INTO pb_active_implementations(
+                        output_seq, targets_json
+                    ) VALUES (?, ?)
+                    """,
+                    (current.output_index, _canonical_json(sorted(targets))),
+                )
+            continue
+        if not _runtime_tool_output_succeeded(current.output):
+            continue
+        for implementation_output, targets_json in events._db.execute(
+            """
+            SELECT output_seq, targets_json
+            FROM pb_active_implementations
+            WHERE output_seq < ?
+            ORDER BY output_seq
+            """,
+            (current.call_index,),
+        ):
+            targets = {
+                str(item)
+                for item in _json_scalar_sequence(targets_json)
+                if str(item)
+            }
+            if current.call_index <= implementation_output:
+                continue
+            if _pb_correction_verification_proves_targets(
+                current,
+                targets=targets,
+                session_cwd=session_cwd,
+            ):
+                events._db.execute(
+                    """
+                    INSERT OR IGNORE INTO pb_verified_corrections(correction_seq)
+                    VALUES (?)
+                    """,
+                    (active_correction,),
+                )
+                active_verified = True
+                events._db.execute("DELETE FROM pb_active_implementations")
+                break
+    return DiskBackedVerifiedCorrectionIndexes(events)
+
+
+def _pb_correction_evidence_boundary(
+    events: Sequence[Dict[str, Any]],
+    correction_index: int,
+) -> int:
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("PB correction boundaries require indexed event facts")
+    for index, payload in events.iter_payloads(
+        payload_types=("task_complete", "message", "thread_goal_updated"),
+        start=correction_index + 1,
+    ):
+        payload_type = str(payload.get("type", ""))
+        if payload_type == "task_complete":
+            return index
+        if payload_type == "message" and str(payload.get("role", "")).strip().lower() == "user":
+            return index
+        if payload_type == "thread_goal_updated":
+            goal = payload.get("goal", {})
+            if isinstance(goal, Mapping) and str(goal.get("status", "")).strip().lower() in {
+                "complete",
+                "blocked",
+            }:
+                return index
+    return len(events)
+
+
+def _pb_correction_verification_proves_targets(
+    receipt: CorrelatedToolReceipt,
+    *,
+    targets: Set[str],
+    session_cwd: str,
+) -> bool:
+    invocation = _pb_migration_verifier_invocation(receipt.call)
+    if not invocation.get("valid"):
+        return False
+    evaluation = _pb_verifier_receipt_evidence(
+        receipt,
+        invocation=invocation,
+        written_targets=targets,
+        session_cwd=session_cwd,
+    )
+    verified_targets = {
+        _normalize_pb_target_path(str(value))
+        for value in evaluation.get("verified_targets", [])
+        if _normalize_pb_target_path(str(value))
+    }
+    normalized_targets = {
+        _normalize_pb_target_path(value)
+        for value in targets
+        if _normalize_pb_target_path(value)
+    }
+    return bool(
+        evaluation.get("receipt_valid") is True
+        and "csharp_verification" in evaluation.get("satisfied_outputs", [])
+        and normalized_targets
+        and _pb_targets_cover(
+            normalized_targets,
+            verified_targets,
+            session_cwd=session_cwd,
+        )
+    )
 
 
 def _is_pb_migration_task_scope(text: str) -> bool:
     value = str(text or "")
-    return bool(
+    has_pb_artifact = bool(
         re.search(
-            r"(?i)(?:\bpowerbuilder\b|\bpbl\b|\bpbd\b|\bsru\b|\bsrd\b|\bsrw\b|"
+            r"(?i)(?:\bpowerbuilder\b|\bpb\b|\bpbl\b|\bpbd\b|\bsru\b|\bsrd\b|\bsrw\b|"
             r"\bdata\s*window\b|\bdatawindow\b|\bgwerp\b)",
             value,
         )
-        and re.search(
+    )
+    has_csharp_target = bool(
+        re.search(
             r"(?i)(?:c#|\.designer\.cs\b|(?<![a-z0-9_])\.cs\b|\bdesigner\b|"
             r"\bwinforms?\b|\bdevexpress\b|\bkonelib\b)",
             value,
         )
     )
+    if not (has_pb_artifact and has_csharp_target):
+        return False
+
+    migration_intent = bool(
+        re.search(
+            r"(?i)\b(?:migrat(?:e|ed|ing|ion)|convert(?:ed|ing|ion)?|port(?:ed|ing)?|"
+            r"reimplement(?:ed|ing|ation)?|rewrite|transform|translate)\b",
+            value,
+        )
+        or re.search(
+            "(?:\ub9c8\uc774\uadf8\ub808\uc774\uc158|\ubcc0\ud658|\uc774\uad00|\ud3ec\ud305|"
+            "\uc7ac\uc791\uc131|\uc804\ud658|\uc62e\uaca8|\ubc14\uafd4|\uc0c8\ub85c\\s*\uac1c\ubc1c)",
+            value,
+        )
+    )
+    directional_transformation = bool(
+        re.search(
+            r"(?is)(?:\bpowerbuilder\b|\bpb\b|\bpbl\b|\bsru\b|\bsrd\b|\bsrw\b|\bdata\s*window\b)"
+            r".{0,160}(?:\bto\b|\binto\b|\bas\b|->|=>).{0,80}(?:c#|\.designer\.cs\b|\bwinforms?\b)",
+            value,
+        )
+        or re.search(
+            r"(?is)(?:c#|\.designer\.cs\b|\bwinforms?\b).{0,120}\bfrom\b.{0,80}"
+            r"(?:\bpowerbuilder\b|\bpb\b|\bpbl\b|\bsru\b|\bsrd\b|\bsrw\b|\bdata\s*window\b)",
+            value,
+        )
+    )
+    return migration_intent or directional_transformation
 
 
 def _structured_pb_migration_selection(data: Mapping[str, Any]) -> bool:
@@ -2878,18 +7255,67 @@ _PB_MIGRATION_VERIFIERS = {
     "verify_migration_generated_csharp_style",
     "orchestrate_pb_migration_validation",
 }
+_PB_ORCHESTRATE_REQUIRED_KEYWORDS = {
+    "csharp_source_text",
+    "designer_source_text",
+    "original_sql_text",
+    "formatted_sql_text",
+    "profile_id",
+    "profile_version",
+    "profile_hash",
+}
+_PB_MIGRATION_CORE_OUTPUTS = (
+    "packaged_profile",
+    "csharp_verification",
+    "designer_verification",
+    "sp_verification",
+    "sql_binding_release",
+)
+_PB_MIGRATION_COMPLETION_OUTPUTS = (
+    "project_inclusion_verification",
+    "build_verification",
+    "designer_layout_verification",
+    "database_verification",
+    "deployment_verification",
+    "manual_qa",
+)
+_PB_MIGRATION_REQUIRED_OUTPUTS = (
+    *_PB_MIGRATION_CORE_OUTPUTS,
+    *_PB_MIGRATION_COMPLETION_OUTPUTS,
+)
+_PB_PACKAGED_PROFILE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "skills"
+    / "pb_to_csharp_migration_harness"
+    / "references"
+    / "packaged-style-contract.json"
+)
 
 
 def _pb_migration_verifier_invocation(payload: Dict[str, Any]) -> Dict[str, Any]:
     if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
-        return {"valid": False, "targets": []}
+        return {"identified": False, "valid": False, "targets": []}
     name = str(payload.get("name", "") or "").strip().lower().replace("-", "_")
     tail = re.split(r"[.:]", name)[-1]
     arguments = _payload_arguments_text(payload)
     if tail in _PB_MIGRATION_VERIFIERS:
-        return {"valid": True, "targets": sorted(_extract_csharp_paths(arguments))}
+        argument_mapping = _pb_payload_argument_mapping(payload)
+        if argument_mapping is None:
+            return {
+                "identified": True,
+                "valid": False,
+                "verifier_name": tail,
+                "targets": [],
+                "reason": "verifier_arguments_must_be_a_json_object",
+            }
+        return _pb_validate_verifier_invocation_shape(
+            tail,
+            argument_names=set(argument_mapping),
+            positional_count=0,
+            literal_arguments=argument_mapping,
+        )
     if any(marker in name for marker in ["read", "search", "find", "grep", "view", "open", "list", "text", "print"]):
-        return {"valid": False, "targets": []}
+        return {"identified": False, "valid": False, "targets": []}
 
     record = SessionTextRecord(
         text=_payload_text(payload),
@@ -2899,8 +7325,23 @@ def _pb_migration_verifier_invocation(payload: Dict[str, Any]) -> Dict[str, Any]
     )
     command = _exact_shell_command_text(record)
     if not command:
-        return {"valid": False, "targets": []}
+        return {"identified": False, "valid": False, "targets": []}
     return _python_command_pb_verifier_invocation(command)
+
+
+def _pb_payload_argument_mapping(payload: Mapping[str, Any]) -> Dict[str, Any] | None:
+    raw = payload.get("arguments")
+    if raw is None:
+        raw = payload.get("input")
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = load_json_without_duplicate_keys(raw)
+    except (json.JSONDecodeError, DuplicateJsonKeyError):
+        return None
+    return dict(parsed) if isinstance(parsed, Mapping) else None
 
 
 def _python_command_invokes_pb_verifier(command: str) -> bool:
@@ -2909,11 +7350,11 @@ def _python_command_invokes_pb_verifier(command: str) -> bool:
 
 def _python_command_pb_verifier_invocation(command: str) -> Dict[str, Any]:
     if not command or _contains_unquoted_shell_control(command):
-        return {"valid": False, "targets": []}
+        return {"identified": False, "valid": False, "targets": []}
     try:
         tokens = [_strip_shell_token_quotes(item) for item in shlex.split(command, posix=False)]
     except ValueError:
-        return {"valid": False, "targets": []}
+        return {"identified": False, "valid": False, "targets": []}
     if not tokens or Path(tokens[0].replace("\\", "/")).name.lower() not in {
         "python",
         "python.exe",
@@ -2922,10 +7363,10 @@ def _python_command_pb_verifier_invocation(command: str) -> Dict[str, Any]:
         "py",
         "py.exe",
     }:
-        return {"valid": False, "targets": []}
+        return {"identified": False, "valid": False, "targets": []}
     if len(tokens) >= 3 and tokens[1] == "-c":
         return _python_source_pb_verifier_invocation(tokens[2])
-    return {"valid": False, "targets": []}
+    return {"identified": False, "valid": False, "targets": []}
 
 
 def _python_source_invokes_pb_verifier(source: str) -> bool:
@@ -2936,16 +7377,16 @@ def _python_source_pb_verifier_invocation(source: str) -> Dict[str, Any]:
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return {"valid": False, "targets": []}
+        return {"identified": False, "valid": False, "targets": []}
     module_name = "src.skills.pb_to_csharp_migration"
-    imported_names: Set[str] = set()
+    imported_names: Dict[str, str] = {}
     imported_modules: Set[str] = set()
     for statement in tree.body:
         if isinstance(statement, ast.ImportFrom):
             if statement.module == module_name and statement.level == 0:
                 for alias in statement.names:
                     if alias.name in _PB_MIGRATION_VERIFIERS:
-                        imported_names.add(alias.asname or alias.name)
+                        imported_names[alias.asname or alias.name] = alias.name
             continue
         if isinstance(statement, ast.Import):
             for alias in statement.names:
@@ -2954,20 +7395,23 @@ def _python_source_pb_verifier_invocation(source: str) -> Dict[str, Any]:
             continue
 
         call = _top_level_python_call(statement)
-        if call is not None and _is_imported_pb_verifier_call(
-            call,
-            imported_names=imported_names,
-            imported_modules=imported_modules,
-        ):
-            return {
-                "valid": True,
-                "targets": sorted(_csharp_paths_from_python_call(call)),
-            }
+        verifier_name = (
+            _imported_pb_verifier_name(
+                call,
+                imported_names=imported_names,
+                imported_modules=imported_modules,
+            )
+            if call is not None
+            else ""
+        )
+        if call is not None and verifier_name:
+            return _pb_python_call_invocation(call, verifier_name)
 
         rebound = _python_statement_bound_names(statement)
-        imported_names.difference_update(rebound)
+        for rebound_name in rebound:
+            imported_names.pop(rebound_name, None)
         imported_modules.difference_update(rebound)
-    return {"valid": False, "targets": []}
+    return {"identified": False, "valid": False, "targets": []}
 
 
 def _top_level_python_call(statement: ast.stmt) -> ast.Call | None:
@@ -2982,20 +7426,40 @@ def _top_level_python_call(statement: ast.stmt) -> ast.Call | None:
 def _is_imported_pb_verifier_call(
     call: ast.Call,
     *,
-    imported_names: Set[str],
+    imported_names: Mapping[str, str] | Set[str],
     imported_modules: Set[str],
 ) -> bool:
+    normalized_names = (
+        dict(imported_names)
+        if isinstance(imported_names, Mapping)
+        else {name: name for name in imported_names}
+    )
+    return bool(
+        _imported_pb_verifier_name(
+            call,
+            imported_names=normalized_names,
+            imported_modules=imported_modules,
+        )
+    )
+
+
+def _imported_pb_verifier_name(
+    call: ast.Call,
+    *,
+    imported_names: Mapping[str, str],
+    imported_modules: Set[str],
+) -> str:
     if isinstance(call.func, ast.Name):
-        return call.func.id in imported_names
+        return str(imported_names.get(call.func.id, ""))
     if not (
         isinstance(call.func, ast.Attribute)
         and call.func.attr in _PB_MIGRATION_VERIFIERS
     ):
-        return False
+        return ""
     root = call.func.value
     while isinstance(root, ast.Attribute):
         root = root.value
-    return isinstance(root, ast.Name) and root.id in imported_modules
+    return call.func.attr if isinstance(root, ast.Name) and root.id in imported_modules else ""
 
 
 def _python_statement_bound_names(statement: ast.stmt) -> Set[str]:
@@ -3010,16 +7474,1197 @@ def _python_statement_bound_names(statement: ast.stmt) -> Set[str]:
     }
 
 
-def _csharp_paths_from_python_call(call: ast.Call) -> Set[str]:
-    values: List[ast.AST] = list(call.args)
-    values.extend(keyword.value for keyword in call.keywords)
+def _pb_python_call_invocation(call: ast.Call, verifier_name: str) -> Dict[str, Any]:
+    if any(isinstance(argument, ast.Starred) for argument in call.args):
+        return {
+            "identified": True,
+            "valid": False,
+            "verifier_name": verifier_name,
+            "targets": [],
+            "reason": "starred_verifier_arguments_are_not_auditable",
+        }
+    if any(keyword.arg is None for keyword in call.keywords):
+        return {
+            "identified": True,
+            "valid": False,
+            "verifier_name": verifier_name,
+            "targets": [],
+            "reason": "expanded_verifier_keyword_arguments_are_not_auditable",
+        }
+    literal_arguments: Dict[str, Any] = {}
+    for keyword in call.keywords:
+        try:
+            literal_arguments[str(keyword.arg)] = ast.literal_eval(keyword.value)
+        except (ValueError, TypeError):
+            literal_arguments[str(keyword.arg)] = None
+    return _pb_validate_verifier_invocation_shape(
+        verifier_name,
+        argument_names={str(keyword.arg) for keyword in call.keywords},
+        positional_count=len(call.args),
+        literal_arguments=literal_arguments,
+    )
+
+
+def _pb_validate_verifier_invocation_shape(
+    verifier_name: str,
+    *,
+    argument_names: Set[str],
+    positional_count: int,
+    literal_arguments: Mapping[str, Any],
+) -> Dict[str, Any]:
+    reason = ""
+    if verifier_name == "orchestrate_pb_migration_validation":
+        missing = sorted(_PB_ORCHESTRATE_REQUIRED_KEYWORDS - argument_names)
+        if positional_count:
+            reason = "orchestrate_requires_keyword_only_arguments"
+        elif missing:
+            reason = "orchestrate_missing_required_keywords:" + ",".join(missing)
+    elif verifier_name == "verify_migration_generated_csharp_style":
+        source_count = positional_count + int("source_text" in argument_names)
+        if positional_count > 1 or source_count != 1:
+            reason = "csharp_verifier_requires_exactly_one_source_text_argument"
+
+    artifact_bindings: Dict[str, Dict[str, str]] = {}
+    for role in ("source", "designer"):
+        path_value = literal_arguments.get(f"target_{role}_path")
+        digest_value = literal_arguments.get(f"target_{role}_sha256")
+        normalized_path = _normalize_pb_target_path(str(path_value or ""))
+        normalized_digest = _pb_normalized_sha256(digest_value)
+        if normalized_path or normalized_digest:
+            artifact_bindings[role] = {
+                "path": normalized_path,
+                "sha256": normalized_digest,
+            }
+            if not normalized_path or not normalized_digest:
+                reason = reason or f"target_{role}_artifact_binding_incomplete"
+
+    required_roles = (
+        {"source", "designer"}
+        if verifier_name == "orchestrate_pb_migration_validation"
+        else set()
+    )
+    if verifier_name == "verify_migration_generated_csharp_style" and not artifact_bindings:
+        reason = reason or "csharp_verifier_target_artifact_binding_required"
+    missing_roles = sorted(required_roles - set(artifact_bindings))
+    if missing_roles:
+        reason = reason or "orchestrate_missing_target_artifacts:" + ",".join(missing_roles)
+
     return {
-        normalized
-        for value in values
-        for node in ast.walk(value)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        if (normalized := _normalize_pb_target_path(node.value))
+        "identified": True,
+        "valid": not reason,
+        "verifier_name": verifier_name,
+        "argument_names": sorted(argument_names),
+        "positional_count": positional_count,
+        "artifact_bindings": artifact_bindings,
+        "completion_claims": (
+            dict(literal_arguments.get("completion_claims") or {})
+            if isinstance(literal_arguments.get("completion_claims"), Mapping)
+            else {}
+        ),
+        "targets": sorted(
+            binding["path"] for binding in artifact_bindings.values() if binding["path"]
+        ),
+        "reason": reason,
     }
+
+
+def _pb_normalized_sha256(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized.startswith("sha256:"):
+        normalized = normalized[7:]
+    return normalized if re.fullmatch(r"[0-9a-f]{64}", normalized) else ""
+
+
+def _pb_verifier_receipt_evidence(
+    receipt: CorrelatedToolReceipt,
+    *,
+    invocation: Mapping[str, Any],
+    written_targets: Set[str],
+    session_cwd: str,
+) -> Dict[str, Any]:
+    reasons: List[str] = []
+    data = receipt.data if isinstance(receipt.data, Mapping) else {}
+    receipt_view = data.get("pb_migration_verifier_receipt", data)
+    if not isinstance(receipt_view, Mapping):
+        receipt_view = {}
+    result = receipt_view.get("result", receipt_view)
+    if not isinstance(result, Mapping):
+        result = {}
+    metadata = result.get("metadata", receipt_view.get("metadata", {}))
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+
+    verifier_names = {
+        str(value).strip()
+        for value in (
+            receipt_view.get("verifier_name"),
+            receipt_view.get("verifier"),
+            result.get("verifier_name"),
+            metadata.get("verifier_name"),
+        )
+        if str(value or "").strip()
+    }
+    verifier_name = next(iter(verifier_names), "") if len(verifier_names) == 1 else ""
+    expected_verifier = str(invocation.get("verifier_name") or "")
+    if len(verifier_names) > 1:
+        reasons.append("conflicting_verifier_names")
+    if verifier_name != expected_verifier:
+        reasons.append("verifier_name_mismatch")
+
+    success = result.get("success", receipt_view.get("success"))
+    exit_code = result.get("exit_code", receipt_view.get("exit_code"))
+    if type(success) is not bool:
+        reasons.append("boolean_success_required")
+    if type(exit_code) is not int:
+        reasons.append("integer_exit_code_required")
+
+    contract = metadata.get("validation_contract", receipt_view.get("validation_contract", {}))
+    if not isinstance(contract, Mapping):
+        contract = {}
+    completion_values: List[bool] = []
+    for control in (receipt_view, result, metadata, contract):
+        if "completion_allowed" in control:
+            value = control.get("completion_allowed")
+            if type(value) is bool:
+                completion_values.append(value)
+            else:
+                reasons.append("boolean_completion_allowed_required")
+    completion_allowed: Any = completion_values[0] if completion_values else None
+    if len(set(completion_values)) > 1:
+        reasons.append("conflicting_completion_allowed_values")
+    if expected_verifier == "orchestrate_pb_migration_validation":
+        if type(completion_allowed) is not bool:
+            if "boolean_completion_allowed_required" not in reasons:
+                reasons.append("boolean_completion_allowed_required")
+    elif completion_values and completion_allowed is not False:
+        reasons.append("csharp_verifier_cannot_claim_migration_completion")
+    else:
+        completion_allowed = False
+
+    output_text = _payload_text(receipt.output)
+    output_exit_codes = [
+        int(match.group(1))
+        for match in re.finditer(r"(?im)^\s*exit\s+code\s*:\s*(-?\d+)\s*$", output_text)
+    ]
+    if type(exit_code) is int and any(code != exit_code for code in output_exit_codes):
+        reasons.append("tool_output_exit_code_mismatch")
+    explicit_failure_text = "\n".join(
+        str(value or "")
+        for value in (
+            result.get("stderr"),
+            receipt_view.get("stderr"),
+            metadata.get("error"),
+        )
+        if str(value or "").strip()
+    )
+    if success is True and re.search(
+        r"(?i)\bvalidation\s+failed\b|\berror\b",
+        explicit_failure_text,
+    ):
+        reasons.append("successful_receipt_contains_failure_output")
+
+    status = str(
+        metadata.get("status")
+        or result.get("status")
+        or receipt_view.get("status")
+        or ""
+    ).strip().lower()
+    valid_statuses = {"passed", "success", "succeeded", "ok"}
+    if expected_verifier == "orchestrate_pb_migration_validation":
+        valid_statuses.add("draft_validated")
+    if success is False:
+        if status != "blocked":
+            reasons.append("failed_verifier_status_not_blocked")
+    elif status not in valid_statuses:
+        reasons.append("verifier_status_not_success_or_draft_validated")
+
+    stage_statuses = _pb_receipt_stage_statuses(receipt_view, result, metadata, contract)
+    if not stage_statuses:
+        reasons.append("stage_status_required")
+    if expected_verifier == "orchestrate_pb_migration_validation":
+        reasons.extend(
+            _pb_orchestrated_contract_errors(
+                contract,
+                stage_statuses=stage_statuses,
+                completion_allowed=completion_allowed,
+                metadata=metadata,
+                success=success,
+                exit_code=exit_code,
+                status=status,
+            )
+        )
+    elif "csharp" not in stage_statuses:
+        reasons.append("csharp_stage_status_required")
+
+    profile_records = _pb_profile_consumption_records(receipt_view, result, metadata)
+    profile_valid = any(_pb_packaged_profile_record_valid(item) for item in profile_records)
+    if not profile_valid:
+        reasons.append("packaged_fixed_profile_receipt_invalid")
+
+    artifact_results = _pb_validate_output_artifact_bindings(
+        receipt_view,
+        result,
+        metadata,
+        invocation=invocation,
+        written_targets=written_targets,
+        session_cwd=session_cwd,
+    )
+    reasons.extend(artifact_results["errors"])
+
+    core_validation_passed = bool(
+        contract.get("core_validation_passed") is True
+        if expected_verifier == "orchestrate_pb_migration_validation"
+        else success is True and exit_code == 0
+    )
+    completion_requested = bool(
+        contract.get("completion_requested") is True
+        if expected_verifier == "orchestrate_pb_migration_validation"
+        else False
+    )
+    completion_claims = (
+        dict(contract.get("completion_claims") or {})
+        if isinstance(contract.get("completion_claims"), Mapping)
+        else {}
+    )
+    invocation_completion_claims = invocation.get("completion_claims")
+    if expected_verifier == "orchestrate_pb_migration_validation" and (
+        not isinstance(invocation_completion_claims, Mapping)
+        or dict(invocation_completion_claims) != completion_claims
+    ):
+        reasons.append("completion_claims_invocation_receipt_mismatch")
+    receipt_valid = not reasons
+    satisfied_outputs: List[str] = []
+    if receipt_valid and profile_valid:
+        satisfied_outputs.append("packaged_profile")
+    if receipt_valid and stage_statuses.get("csharp") == "passed" and artifact_results["source_valid"]:
+        satisfied_outputs.append("csharp_verification")
+    if receipt_valid and (
+        stage_statuses.get("designer") == "passed"
+        or stage_statuses.get("csharp") == "passed"
+    ) and artifact_results["designer_valid"]:
+        satisfied_outputs.append("designer_verification")
+    if receipt_valid and stage_statuses.get("sp") == "passed" and _pb_domain_profile_consumed(
+        metadata,
+        "sp",
+    ):
+        satisfied_outputs.append("sp_verification")
+    if receipt_valid and stage_statuses.get("sql_binding_release") == "passed" and _pb_sql_release_receipt_valid(metadata):
+        satisfied_outputs.append("sql_binding_release")
+
+    return {
+        "verifier_name": expected_verifier,
+        "receipt_valid": receipt_valid,
+        "claim_status": "observed" if receipt_valid else "claimed_unverified",
+        "completion_allowed": completion_allowed is True,
+        "completion_requested": completion_requested,
+        "completion_claims": completion_claims,
+        "core_validation_passed": core_validation_passed,
+        "draft_validated": bool(receipt_valid and core_validation_passed and not completion_requested),
+        "designer_applicable": bool(
+            invocation.get("artifact_bindings", {}).get("designer")
+            if isinstance(invocation.get("artifact_bindings"), Mapping)
+            else False
+        ),
+        "stage_statuses": stage_statuses,
+        "profile_valid": profile_valid,
+        "verified_targets": artifact_results["verified_targets"],
+        "satisfied_outputs": satisfied_outputs,
+        "errors": reasons,
+    }
+
+
+def _pb_receipt_stage_statuses(
+    receipt_view: Mapping[str, Any],
+    result: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> Dict[str, str]:
+    statuses: Dict[str, str] = {}
+
+    def consume(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for raw_name, raw_status in value.items():
+                if isinstance(raw_status, Mapping):
+                    raw_status = raw_status.get("status")
+                name = _pb_normalized_stage_name(raw_name)
+                status = str(raw_status or "").strip().lower()
+                if name and status:
+                    statuses[name] = status
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            for item in value:
+                if not isinstance(item, Mapping):
+                    continue
+                name = _pb_normalized_stage_name(item.get("name") or item.get("stage"))
+                status = str(item.get("status") or "").strip().lower()
+                if name and status:
+                    statuses[name] = status
+
+    for control in (contract, metadata, result, receipt_view):
+        consume(control.get("stages"))
+        consume(control.get("stage_statuses"))
+        consume(control.get("stage_status"))
+        if control.get("stage"):
+            consume({control.get("stage"): control.get("status")})
+    return statuses
+
+
+def _pb_normalized_stage_name(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    aliases = {
+        "load-profile": "packaged_profile",
+        "profile": "packaged_profile",
+        "packaged-profile": "packaged_profile",
+        "validate-csharp": "csharp",
+        "csharp": "csharp",
+        "designer": "designer",
+        "validate-designer": "designer",
+        "validate-sp": "sp",
+        "sp": "sp",
+        "stored-procedure": "sp",
+        "final-sql-binding": "sql_binding_release",
+        "sql-binding-release": "sql_binding_release",
+        "sql-release-binding": "sql_binding_release",
+        "build": "build",
+        "database": "database",
+        "db": "database",
+        "manual-qa": "manual_qa",
+        "manual": "manual_qa",
+    }
+    return aliases.get(normalized, "")
+
+
+def _pb_orchestrated_contract_errors(
+    contract: Mapping[str, Any],
+    *,
+    stage_statuses: Mapping[str, str],
+    completion_allowed: Any,
+    metadata: Mapping[str, Any],
+    success: Any,
+    exit_code: Any,
+    status: str,
+) -> List[str]:
+    errors: List[str] = []
+    required_order = ["load-profile", "validate-csharp", "validate-sp", "final-sql-binding"]
+    if list(contract.get("required_stage_order") or []) != required_order:
+        errors.append("orchestrate_required_stage_order_mismatch")
+    stages = contract.get("stages")
+    contract_stages = (
+        [item for item in stages if isinstance(item, Mapping)]
+        if isinstance(stages, Sequence) and not isinstance(stages, (str, bytes))
+        else []
+    )
+    stage_names = [str(item.get("name") or "") for item in contract_stages]
+    for item in contract_stages:
+        normalized_name = _pb_normalized_stage_name(item.get("name"))
+        contract_status = str(item.get("status") or "").strip().lower()
+        if normalized_name and stage_statuses.get(normalized_name) != contract_status:
+            errors.append(f"conflicting_stage_status:{normalized_name}")
+    completed_order = list(contract.get("completed_stage_order") or [])
+    if not stage_names or completed_order != stage_names:
+        errors.append("orchestrate_completed_stage_order_mismatch")
+    if completed_order != required_order[: len(completed_order)]:
+        errors.append("orchestrate_stage_order_is_not_a_required_prefix")
+    all_offline_stages_passed = bool(
+        completed_order == required_order
+        and all(
+            stage_statuses.get(name) == "passed"
+            for name in ("packaged_profile", "csharp", "sp", "sql_binding_release")
+        )
+        and contract.get("profile_identity_match") is True
+        and contract.get("sql_release_correlated") is True
+    )
+    core_validation_passed = contract.get("core_validation_passed")
+    completion_requested = contract.get("completion_requested")
+    offline_draft_allowed = contract.get("offline_draft_allowed")
+    if type(core_validation_passed) is not bool:
+        errors.append("orchestrate_core_validation_passed_boolean_required")
+    elif core_validation_passed is not all_offline_stages_passed:
+        errors.append("orchestrate_core_validation_stage_mismatch")
+    if type(completion_requested) is not bool:
+        errors.append("orchestrate_completion_requested_boolean_required")
+    if type(offline_draft_allowed) is not bool:
+        errors.append("orchestrate_offline_draft_allowed_boolean_required")
+    elif type(core_validation_passed) is bool and type(completion_requested) is bool:
+        if offline_draft_allowed is not (core_validation_passed and not completion_requested):
+            errors.append("orchestrate_offline_draft_allowed_mismatch")
+
+    completion_claims = contract.get("completion_claims")
+    if not isinstance(completion_claims, Mapping):
+        errors.append("orchestrate_completion_claims_mapping_required")
+        completion_claims = {}
+    expected_completion_requested = bool(
+        completion_claims.get("completion") is True
+        or completion_claims.get("release") is True
+        or completion_claims.get("implementation_complete") is True
+    )
+    if type(completion_requested) is bool and completion_requested is not expected_completion_requested:
+        errors.append("orchestrate_completion_requested_claim_mismatch")
+
+    completion_stages = contract.get("completion_stages")
+    stage_rows = (
+        [item for item in completion_stages if isinstance(item, Mapping)]
+        if isinstance(completion_stages, Sequence) and not isinstance(completion_stages, (str, bytes))
+        else []
+    )
+    expected_completion_stage_names = [
+        "project-inclusion",
+        "project-build",
+        "designer-layout-load",
+        "database-equivalence",
+        "deployment",
+        "manual-workflow",
+    ]
+    if [str(item.get("name") or "") for item in stage_rows] != expected_completion_stage_names:
+        errors.append("orchestrate_completion_stage_contract_mismatch")
+    for item in stage_rows:
+        if type(item.get("required_for_claim")) is not bool:
+            errors.append(f"completion_stage_required_flag_invalid:{item.get('name', '')}")
+        if str(item.get("status") or "") not in {"passed", "blocked", "not_claimed"}:
+            errors.append(f"completion_stage_status_invalid:{item.get('name', '')}")
+        if not isinstance(item.get("evidence"), Mapping):
+            errors.append(f"completion_stage_evidence_mapping_required:{item.get('name', '')}")
+    required_completion_stages = [
+        item for item in stage_rows if item.get("required_for_claim") is True
+    ]
+    expected_completion_allowed = bool(
+        all_offline_stages_passed
+        and required_completion_stages
+        and all(item.get("status") == "passed" for item in required_completion_stages)
+    )
+    if type(completion_allowed) is bool and completion_allowed is not expected_completion_allowed:
+        errors.append("orchestrate_completion_allowed_stage_mismatch")
+
+    expected_success = bool(
+        expected_completion_allowed
+        if completion_requested is True
+        else all_offline_stages_passed
+    )
+    if type(success) is bool and success is not expected_success:
+        errors.append("orchestrate_success_contract_mismatch")
+    if type(exit_code) is int and (exit_code == 0) is not expected_success:
+        errors.append("orchestrate_exit_code_contract_mismatch")
+    expected_status = (
+        "passed"
+        if expected_completion_allowed
+        else "draft_validated"
+        if all_offline_stages_passed and completion_requested is False
+        else "blocked"
+    )
+    if status != expected_status:
+        errors.append("orchestrate_status_contract_mismatch")
+    if stage_statuses.get("sql_binding_release") == "passed" and not _pb_sql_release_receipt_valid(metadata):
+        errors.append("sql_release_binding_receipt_invalid")
+    return errors
+
+
+def _pb_profile_consumption_records(
+    receipt_view: Mapping[str, Any],
+    result: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> List[Mapping[str, Any]]:
+    records: List[Mapping[str, Any]] = []
+
+    def append(value: Any) -> None:
+        if not isinstance(value, Mapping):
+            return
+        nested = value.get("profile_consumption")
+        if isinstance(nested, Mapping):
+            records.append(nested)
+        if any(key in value for key in ("profile_id", "profile_version", "profile_hash")):
+            records.append(value)
+
+    for control in (receipt_view, result, metadata):
+        append(control.get("packaged_profile"))
+        append(control.get("profile_consumption"))
+    evidence = metadata.get("evidence")
+    if isinstance(evidence, Mapping):
+        append(evidence.get("profile"))
+        append(evidence.get("csharp"))
+        append(evidence.get("sp"))
+    return records
+
+
+def _pb_packaged_profile_identity() -> Dict[str, str]:
+    try:
+        raw_bytes = _PB_PACKAGED_PROFILE_PATH.read_bytes()
+        data = load_json_without_duplicate_keys(raw_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, DuplicateJsonKeyError):
+        return {}
+    if not isinstance(data, Mapping):
+        return {}
+    profile_id = str(data.get("contract_id") or "").strip()
+    profile_version = str(data.get("contract_version") or "").strip()
+    if not profile_id or not profile_version:
+        return {}
+    return {
+        "profile_id": profile_id,
+        "profile_version": profile_version,
+        "profile_hash": hashlib.sha256(raw_bytes).hexdigest(),
+    }
+
+
+def _pb_packaged_profile_record_valid(record: Mapping[str, Any]) -> bool:
+    identity = _pb_packaged_profile_identity()
+    if not identity:
+        return False
+    source = str(record.get("source") or record.get("profile_source") or "").strip().lower()
+    profile_hash = _pb_normalized_sha256(record.get("profile_hash"))
+    return bool(
+        source == "packaged_sanitized_profile"
+        and record.get("consumed") is True
+        and record.get("sanitized") is True
+        and record.get("profile_hash_verified") is True
+        and str(record.get("profile_id") or "").strip() == identity["profile_id"]
+        and str(record.get("profile_version") or record.get("version") or "").strip()
+        == identity["profile_version"]
+        and profile_hash == identity["profile_hash"]
+    )
+
+
+def _pb_domain_profile_consumed(metadata: Mapping[str, Any], domain: str) -> bool:
+    evidence = metadata.get("evidence")
+    if not isinstance(evidence, Mapping):
+        return False
+    domain_evidence = evidence.get(domain)
+    if not isinstance(domain_evidence, Mapping):
+        return False
+    record = domain_evidence.get("profile_consumption")
+    return isinstance(record, Mapping) and _pb_packaged_profile_record_valid(record)
+
+
+def _pb_sql_release_receipt_valid(metadata: Mapping[str, Any]) -> bool:
+    evidence = metadata.get("evidence")
+    if not isinstance(evidence, Mapping):
+        return False
+    binding = evidence.get("sql_final_response_binding")
+    release = evidence.get("sql_final_response_release")
+    history = evidence.get("sql_verifier_history")
+    correlation = evidence.get("sql_verifier_history_correlation")
+    if not (
+        isinstance(binding, Mapping)
+        and binding.get("status") == "bound"
+        and isinstance(release, Mapping)
+        and release.get("status") == "passed"
+        and release.get("binding") == binding
+        and isinstance(history, Sequence)
+        and not isinstance(history, (str, bytes))
+        and history
+        and all(isinstance(item, Mapping) for item in history)
+        and release.get("verifier_history") == list(history)
+        and isinstance(correlation, Mapping)
+        and release.get("verifier_history_correlation") == correlation
+    ):
+        return False
+
+    latest = history[-1]
+    latest_metadata = latest.get("metadata")
+    release_verification = release.get("verification")
+    release_verification_metadata = (
+        release_verification.get("metadata")
+        if isinstance(release_verification, Mapping)
+        else None
+    )
+    if not (
+        latest.get("success") is True
+        and type(latest.get("exit_code")) is int
+        and latest.get("exit_code") == 0
+        and isinstance(latest_metadata, Mapping)
+        and isinstance(release_verification, Mapping)
+        and release_verification.get("success") is True
+        and type(release_verification.get("exit_code")) is int
+        and release_verification.get("exit_code") == 0
+        and isinstance(release_verification_metadata, Mapping)
+    ):
+        return False
+
+    verification_id = str(latest_metadata.get("verification_id") or "").strip()
+    original_sha256 = _pb_normalized_sha256(latest_metadata.get("original_sha256"))
+    formatted_sha256 = _pb_normalized_sha256(latest_metadata.get("formatted_sha256"))
+    if not (verification_id and original_sha256 and formatted_sha256):
+        return False
+    if any(
+        str(release_verification_metadata.get(key) or "").strip().lower()
+        != str(value).strip().lower()
+        for key, value in {
+            "verification_id": verification_id,
+            "original_sha256": original_sha256,
+            "formatted_sha256": formatted_sha256,
+        }.items()
+    ):
+        return False
+    if not (
+        str(binding.get("verification_id") or "").strip() == verification_id
+        and _pb_normalized_sha256(binding.get("original_sha256")) == original_sha256
+        and _pb_normalized_sha256(binding.get("formatted_sha256")) == formatted_sha256
+        and _pb_normalized_sha256(binding.get("final_response_sha256"))
+        and binding.get("sql_fence_count") == 1
+        and correlation.get("status") == "correlated"
+        and correlation.get("attempt_count") == len(history)
+        and str(correlation.get("binding_verification_id") or "").strip() == verification_id
+        and str(correlation.get("history_verification_id") or "").strip() == verification_id
+        and _pb_normalized_sha256(correlation.get("original_sha256")) == original_sha256
+        and _pb_normalized_sha256(correlation.get("formatted_sha256")) == formatted_sha256
+    ):
+        return False
+    provider_guard = release.get("provider_path_guard")
+    return bool(
+        isinstance(provider_guard, Mapping)
+        and provider_guard.get("status") in {"accepted", "passed", "verified", "bound"}
+        and str(provider_guard.get("provider_path") or "").strip()
+        and provider_guard.get("provider_path")
+        == provider_guard.get("selected_active_provider_path")
+    )
+
+
+def _pb_validate_output_artifact_bindings(
+    receipt_view: Mapping[str, Any],
+    result: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    *,
+    invocation: Mapping[str, Any],
+    written_targets: Set[str],
+    session_cwd: str,
+) -> Dict[str, Any]:
+    errors: List[str] = []
+    output_bindings = _pb_output_artifact_bindings(receipt_view, result, metadata)
+    invocation_bindings = invocation.get("artifact_bindings")
+    invocation_bindings = invocation_bindings if isinstance(invocation_bindings, Mapping) else {}
+    verified_targets: Set[str] = set()
+    valid_roles: Set[str] = set()
+
+    for role, invocation_binding in invocation_bindings.items():
+        if not isinstance(invocation_binding, Mapping):
+            continue
+        expected_path = str(invocation_binding.get("path") or "")
+        expected_digest = _pb_normalized_sha256(invocation_binding.get("sha256"))
+        matching_outputs = [
+            item
+            for item in output_bindings
+            if item["role"] == role
+            and _pb_target_paths_match(
+                expected_path,
+                item["path"],
+                session_cwd=session_cwd,
+            )
+        ]
+        if not matching_outputs:
+            errors.append(f"{role}_artifact_receipt_missing")
+            continue
+        if len(matching_outputs) != 1:
+            errors.append(f"{role}_artifact_receipt_ambiguous")
+            continue
+        matching_output = matching_outputs[0]
+        actual_path = _pb_artifact_filesystem_path(matching_output["path"], session_cwd)
+        try:
+            raw_bytes = actual_path.read_bytes()
+        except OSError:
+            errors.append(f"{role}_artifact_unreadable")
+            continue
+        recalculated = hashlib.sha256(raw_bytes).hexdigest()
+        receipt_digest = _pb_normalized_sha256(matching_output.get("sha256"))
+        expected_receipt_digest = _pb_normalized_sha256(
+            matching_output.get("expected_sha256")
+        )
+        if (
+            matching_output.get("status") != "passed"
+            or not expected_digest
+            or expected_digest != recalculated
+            or receipt_digest != recalculated
+            or (expected_receipt_digest and expected_receipt_digest != recalculated)
+        ):
+            errors.append(f"{role}_artifact_sha256_mismatch")
+            continue
+        if matching_output.get("readback_matches_supplied_text") is not True:
+            errors.append(f"{role}_artifact_readback_not_verified")
+            continue
+        normalized = _normalize_pb_target_path(str(actual_path.resolve()))
+        verified_targets.add(normalized)
+        valid_roles.add(str(role))
+
+    if not invocation_bindings:
+        errors.append("target_artifact_invocation_binding_required")
+    if written_targets and not _pb_targets_cover(
+        written_targets,
+        verified_targets,
+        session_cwd=session_cwd,
+    ):
+        errors.append("verified_artifacts_do_not_cover_written_targets")
+    return {
+        "errors": errors,
+        "verified_targets": sorted(verified_targets),
+        "source_valid": "source" in valid_roles,
+        "designer_valid": "designer" in valid_roles,
+    }
+
+
+def _pb_output_artifact_bindings(
+    receipt_view: Mapping[str, Any],
+    result: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    bindings: List[Dict[str, Any]] = []
+
+    def append(role: str, value: Any) -> None:
+        if not isinstance(value, Mapping):
+            return
+        path = str(value.get("path") or value.get("target_path") or value.get("artifact_path") or "")
+        if not _normalize_pb_target_path(path):
+            return
+        bindings.append(
+            {
+                "role": str(value.get("role") or role or _pb_artifact_role(path)).strip().lower(),
+                "status": str(value.get("status") or "").strip().lower(),
+                "path": path,
+                "sha256": value.get("actual_sha256") or value.get("artifact_sha256") or value.get("sha256"),
+                "expected_sha256": value.get("expected_sha256"),
+                "readback_matches_supplied_text": value.get("readback_matches_supplied_text"),
+            }
+        )
+
+    def consume(value: Any) -> None:
+        if isinstance(value, Mapping):
+            for role in ("source", "designer"):
+                append(role, value.get(role))
+            append(str(value.get("role") or ""), value)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            for item in value:
+                append("", item)
+
+    for control in (receipt_view, result, metadata):
+        consume(control.get("target_artifact_binding"))
+        consume(control.get("target_artifacts"))
+    evidence = metadata.get("evidence")
+    if isinstance(evidence, Mapping):
+        csharp = evidence.get("csharp")
+        if isinstance(csharp, Mapping):
+            consume(csharp.get("target_artifact_binding"))
+    return bindings
+
+
+def _pb_artifact_filesystem_path(value: str, session_cwd: str) -> Path:
+    path = Path(str(value or ""))
+    if path.is_absolute():
+        return path
+    return Path(session_cwd) / path
+
+
+def _pb_artifact_role(path: str) -> str:
+    return "designer" if _normalize_pb_target_path(path).endswith(".designer.cs") else "source"
+
+
+def _pb_independent_stage_receipt(
+    receipt: CorrelatedToolReceipt,
+    *,
+    session_cwd: str,
+    written_targets: Set[str],
+) -> Dict[str, Any] | None:
+    call_name = str(receipt.call.get("name") or "").strip().lower().replace("-", "_")
+    record = SessionTextRecord(
+        text=_payload_text(receipt.call),
+        payload_type=str(receipt.call.get("type", "")),
+        name=str(receipt.call.get("name", "")),
+        arguments=_payload_arguments_text(receipt.call),
+    )
+    command = _exact_shell_command_text(record)
+    host_result = _pb_host_command_result(receipt)
+    if command and host_result is not None and _pb_trusted_shell_tool_name(call_name):
+        project_target = _pb_command_project_target(command, session_cwd)
+        if _pb_is_project_inclusion_command(command) and project_target is not None:
+            output_text = host_result["output"]
+            if _pb_project_inclusion_output_covers_targets(output_text, written_targets):
+                return _pb_command_stage_evidence(
+                    "project_inclusion_verification",
+                    receipt,
+                    command=command,
+                    target_path=project_target,
+                    output_text=output_text,
+                )
+        if _pb_is_build_command(command) and project_target is not None:
+            return {
+                "output": "build_verification",
+                "call_id": _payload_call_id(receipt.call),
+                "status": "passed",
+                **_pb_command_stage_evidence_fields(
+                    command=command,
+                    target_path=project_target,
+                    output_text=host_result["output"],
+                ),
+            }
+        deployment_object = _pb_deployment_target_object(command)
+        if deployment_object and _pb_is_database_verification_command(command):
+            return {
+                "output": "deployment_verification",
+                "call_id": _payload_call_id(receipt.call),
+                "status": "passed",
+                "target_database_object": deployment_object,
+                "command_sha256": hashlib.sha256(command.encode("utf-8")).hexdigest(),
+                "output_sha256": hashlib.sha256(host_result["output"].encode("utf-8")).hexdigest(),
+            }
+        database_object = _pb_database_target_object(command)
+        if database_object and _pb_is_database_verification_command(command):
+            return {
+                "output": "database_verification",
+                "call_id": _payload_call_id(receipt.call),
+                "status": "passed",
+                "target_database_object": database_object,
+                "command_sha256": hashlib.sha256(command.encode("utf-8")).hexdigest(),
+                "output_sha256": hashlib.sha256(host_result["output"].encode("utf-8")).hexdigest(),
+            }
+
+    return _pb_gui_stage_receipt(
+        receipt,
+        call_name=call_name,
+        session_cwd=session_cwd,
+        written_targets=written_targets,
+    )
+
+
+def _pb_trusted_shell_tool_name(call_name: str) -> bool:
+    return call_name in {"exec_command", "shell_command", "run_command"} or call_name.endswith(
+        ("__exec_command", "__shell_command", "__run_command")
+    )
+
+
+def _pb_host_command_result(receipt: CorrelatedToolReceipt) -> Dict[str, Any] | None:
+    data = receipt.data if isinstance(receipt.data, Mapping) else {}
+    exit_code = data.get("exit_code")
+    if type(exit_code) is not int or exit_code != 0:
+        return None
+    output = data.get("output", data.get("stdout"))
+    if not isinstance(output, str) or not output.strip():
+        return None
+    if not _runtime_tool_output_succeeded(receipt.output):
+        return None
+    return {"exit_code": exit_code, "output": output}
+
+
+def _pb_command_project_target(command: str, session_cwd: str) -> Path | None:
+    try:
+        tokens = [_strip_shell_token_quotes(item) for item in shlex.split(command, posix=False)]
+    except ValueError:
+        return None
+    for token in tokens[1:]:
+        if token.startswith("-") or token.startswith("/") and not re.match(r"^[a-zA-Z]:[/\\]", token):
+            continue
+        if not token.lower().endswith((".sln", ".slnx", ".csproj")):
+            continue
+        candidate = Path(token)
+        if not candidate.is_absolute():
+            candidate = Path(session_cwd) / candidate
+        try:
+            candidate = candidate.resolve()
+        except OSError:
+            return None
+        return candidate if candidate.is_file() else None
+    return None
+
+
+def _pb_is_project_inclusion_command(command: str) -> bool:
+    if not command or _contains_unquoted_shell_control(command):
+        return False
+    lowered = command.lower()
+    return bool(
+        re.search(r"(?i)(?:^|\s)dotnet(?:\.exe)?\s+msbuild\b", command)
+        and re.search(r"(?i)(?:-|/)getitem:compile\b", lowered)
+    )
+
+
+def _pb_project_inclusion_output_covers_targets(
+    output_text: str,
+    written_targets: Set[str],
+) -> bool:
+    lowered = output_text.replace("\\", "/").casefold()
+    required = [
+        Path(target).name.casefold()
+        for target in written_targets
+        if str(target).lower().endswith((".cs", ".designer.cs"))
+    ]
+    return bool(required) and all(name in lowered for name in required)
+
+
+def _pb_command_stage_evidence(
+    output: str,
+    receipt: CorrelatedToolReceipt,
+    *,
+    command: str,
+    target_path: Path,
+    output_text: str,
+) -> Dict[str, Any]:
+    return {
+        "output": output,
+        "call_id": _payload_call_id(receipt.call),
+        "status": "passed",
+        **_pb_command_stage_evidence_fields(
+            command=command,
+            target_path=target_path,
+            output_text=output_text,
+        ),
+    }
+
+
+def _pb_command_stage_evidence_fields(
+    *,
+    command: str,
+    target_path: Path,
+    output_text: str,
+) -> Dict[str, Any]:
+    raw_bytes = target_path.read_bytes()
+    return {
+        "command_sha256": hashlib.sha256(command.encode("utf-8")).hexdigest(),
+        "target_path": str(target_path),
+        "target_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+        "output_sha256": hashlib.sha256(output_text.encode("utf-8")).hexdigest(),
+    }
+
+
+def _pb_database_target_object(command: str) -> str:
+    patterns = [
+        r"(?i)object_id\s*\(\s*N?'([^']+)'",
+        r"(?i)\bexec(?:ute)?\s+(?:N?'[^']+'\s*,\s*)?\[?([a-z0-9_]+)\]?\.\[?([a-z0-9_]+)\]?",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, command)
+        if match:
+            return ".".join(group for group in match.groups() if group)
+    return ""
+
+
+def _pb_deployment_target_object(command: str) -> str:
+    match = re.search(
+        r"(?i)\b(?:create\s+(?:or\s+alter\s+)?|alter\s+)procedure\s+"
+        r"(?:\[?([a-z0-9_]+)\]?\.)?\[?([a-z0-9_]+)\]?",
+        command,
+    )
+    return ".".join(group for group in match.groups() if group) if match else ""
+
+
+def _pb_gui_stage_receipt(
+    receipt: CorrelatedToolReceipt,
+    *,
+    call_name: str,
+    session_cwd: str,
+    written_targets: Set[str],
+) -> Dict[str, Any] | None:
+    trusted = call_name in {
+        "view_image",
+        "computer_use",
+        "control_in_app_browser",
+        "control_chrome",
+        "screenshot",
+    } or call_name.endswith(
+        ("__view_image", "__computer_use", "__control_in_app_browser", "__control_chrome", "__screenshot")
+    )
+    if not trusted or not _runtime_tool_output_succeeded(receipt.output):
+        return None
+    arguments = _pb_payload_argument_mapping(receipt.call)
+    if not isinstance(arguments, Mapping):
+        return None
+    stage = _pb_normalized_completion_stage(arguments.get("stage") or arguments.get("evidence_type"))
+    if stage not in {"designer_layout_verification", "manual_qa"}:
+        return None
+    evidence_path = str(
+        arguments.get("evidence_path")
+        or arguments.get("screenshot_path")
+        or arguments.get("path")
+        or ""
+    ).strip()
+    expected_digest = _pb_normalized_sha256(arguments.get("evidence_sha256"))
+    candidate = Path(evidence_path)
+    if not candidate.is_absolute():
+        candidate = Path(session_cwd) / candidate
+    try:
+        candidate = candidate.resolve()
+        actual_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    except OSError:
+        return None
+    if not expected_digest or actual_digest != expected_digest:
+        return None
+    if not _pb_gui_target_bindings_cover(arguments, written_targets, session_cwd):
+        return None
+    scenarios = arguments.get("scenarios")
+    if stage == "manual_qa" and not (
+        isinstance(scenarios, Sequence)
+        and not isinstance(scenarios, (str, bytes))
+        and all(str(item).strip() for item in scenarios)
+    ):
+        return None
+    return {
+        "output": stage,
+        "call_id": _payload_call_id(receipt.call),
+        "status": "passed",
+        "tool_identity": call_name,
+        "evidence_path": str(candidate),
+        "evidence_sha256": actual_digest,
+        "scenarios": [str(item) for item in scenarios] if stage == "manual_qa" else [],
+    }
+
+
+def _pb_gui_target_bindings_cover(
+    arguments: Mapping[str, Any],
+    written_targets: Set[str],
+    session_cwd: str,
+) -> bool:
+    bindings = arguments.get("target_artifacts")
+    if not isinstance(bindings, Sequence) or isinstance(bindings, (str, bytes)):
+        return False
+    verified: Set[str] = set()
+    for item in bindings:
+        if not isinstance(item, Mapping):
+            return False
+        raw_path = str(item.get("path") or "").strip()
+        expected_digest = _pb_normalized_sha256(item.get("sha256"))
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = Path(session_cwd) / candidate
+        try:
+            candidate = candidate.resolve()
+            actual_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        except OSError:
+            return False
+        if not expected_digest or actual_digest != expected_digest:
+            return False
+        verified.add(_normalize_pb_target_path(str(candidate)))
+    return _pb_targets_cover(written_targets, verified, session_cwd=session_cwd)
+
+
+def _pb_normalized_completion_stage(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    return {
+        "designer-layout-load": "designer_layout_verification",
+        "designer-layout": "designer_layout_verification",
+        "manual-workflow": "manual_qa",
+        "manual-qa": "manual_qa",
+    }.get(normalized, "")
+
+
+def _pb_receipt_reports_success(payload: Mapping[str, Any]) -> bool:
+    if not _runtime_tool_output_succeeded(dict(payload)):
+        return False
+    text = _payload_text(dict(payload))
+    data = _json_object_from_text(text)
+    explicit_codes: List[int] = []
+    for control in (payload, data):
+        if not isinstance(control, Mapping):
+            continue
+        for key in ("exit_code", "return_code", "returncode"):
+            if type(control.get(key)) is int:
+                explicit_codes.append(int(control[key]))
+    explicit_codes.extend(
+        int(match.group(1))
+        for match in re.finditer(r"(?im)^\s*exit\s+code\s*:\s*(-?\d+)\s*$", text)
+    )
+    return bool(explicit_codes) and all(code == 0 for code in explicit_codes)
+
+
+def _pb_is_build_command(command: str) -> bool:
+    if not command or _contains_unquoted_shell_control(command):
+        return False
+    try:
+        tokens = [_strip_shell_token_quotes(item) for item in shlex.split(command, posix=False)]
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    executable = Path(tokens[0].replace("\\", "/")).name.lower()
+    if executable in {"msbuild", "msbuild.exe"}:
+        return True
+    if executable in {"dotnet", "dotnet.exe"}:
+        return len(tokens) > 1 and tokens[1].lower() in {"build", "test"}
+    return executable in {"devenv", "devenv.exe"} and any(
+        token.lower() in {"/build", "/rebuild"} for token in tokens[1:]
+    )
+
+
+def _pb_is_database_verification_command(command: str) -> bool:
+    if not command or _contains_unquoted_shell_control(command):
+        return False
+    lowered = command.lower()
+    if not re.search(r"(?i)\b(?:select|exec(?:ute)?|create\s+(?:or\s+alter\s+)?procedure|alter\s+procedure)\b", command):
+        return False
+    try:
+        tokens = [_strip_shell_token_quotes(item) for item in shlex.split(command, posix=False)]
+    except ValueError:
+        return False
+    executable = Path(tokens[0].replace("\\", "/")).name.lower() if tokens else ""
+    return bool(
+        executable in {"sqlcmd", "sqlcmd.exe"}
+        or re.search(r"(?i)(?<![a-z0-9_-])invoke-sqlcmd\b", lowered)
+    )
+
+
+def _pb_unverified_execution_claims(
+    events: Sequence[Dict[str, Any]],
+    *,
+    after_index: int,
+) -> List[Dict[str, Any]]:
+    claims: List[Dict[str, Any]] = []
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("PB claim audit requires indexed event facts")
+    for index, payload in events.iter_payloads(
+        payload_types=("message",),
+        roles=("assistant",),
+        start=after_index + 1,
+    ):
+        text = _payload_text(payload)
+        if not _pb_text_claims_execution_verified(text):
+            continue
+        claims.append(
+            {
+                "event_index": index,
+                "status": "claimed_unverified",
+                "sample": _short(text),
+            }
+        )
+    return claims
+
+
+def _pb_text_claims_execution_verified(text: str) -> bool:
+    value = re.sub(r"\s+", " ", str(text or "").strip())
+    lowered = value.lower()
+    if any(
+        marker in lowered
+        for marker in (
+            "verify_migration_generated_csharp_style",
+            "orchestrate_pb_migration_validation",
+            "completion_allowed",
+            "validation passed",
+            "manual qa passed",
+            "build passed",
+        )
+    ):
+        return True
+    english_subject = r"(?:pb|powerbuilder|migration|c#|designer|build|manual\s+qa|database|deployment|verification)"
+    english_result = r"(?:is\s+)?(?:complete(?:d)?|passed|verified|succeeded|ready)"
+    if re.search(rf"(?i)\b{english_subject}\b.{{0,100}}\b{english_result}\b", value):
+        return True
+    if re.search(rf"(?i)\b{english_result}\b.{{0,80}}\b{english_subject}\b", value):
+        return True
+
+    korean_subject = (
+        "(?:PB|PowerBuilder|C#|\ud30c\uc6cc\ube4c\ub354|\ub9c8\uc774\uadf8\ub808\uc774\uc158|"
+        "\ub514\uc790\uc774\ub108|\ube4c\ub4dc|\uc218\ub3d9\\s*QA|DB|\ub370\uc774\ud130\ubca0\uc774\uc2a4|"
+        "\ubc30\ud3ec|\uac80\uc99d)"
+    )
+    korean_result = (
+        "(?:\uc644\ub8cc(?:\ud588|\ub410|\ub418\uc5c8|\uc785\ub2c8\ub2e4)|"
+        "\ud1b5\uacfc(?:\ud588|\ub410|\uc785\ub2c8\ub2e4)|"
+        "\uc131\uacf5(?:\ud588|\ub410|\uc785\ub2c8\ub2e4)|"
+        "\uac80\uc99d(?:\ud588|\ub410|\ub418\uc5c8|\ub429\ub2c8\ub2e4)|"
+        "\ubb38\uc81c\\s*\uc5c6(?:\uc2b5\ub2c8\ub2e4|\uc74c))"
+    )
+    claim = bool(
+        re.search(rf"{korean_subject}.{{0,100}}{korean_result}", value, re.IGNORECASE)
+        or re.search(rf"{korean_result}.{{0,80}}{korean_subject}", value, re.IGNORECASE)
+    )
+    if not claim:
+        return False
+    discussion_only = re.search(
+        "(?:\uc644\ub8cc|\ud1b5\uacfc|\uc131\uacf5|\uac80\uc99d)"
+        "(?:\uc600\ub294\uc9c0|\\s*\uc5ec\ubd80|\\s*\uc870\uac74|\\s*\uae30\uc900|\\s*\ud45c\ud604|"
+        "\\s*\ubb38\uad6c|\ub77c\uace0\\s*(?:\ud558\uba74|\uc8fc\uc7a5)|\uc774\ub77c\ub294)",
+        value,
+    )
+    return discussion_only is None
 
 
 def _extract_pb_csharp_write_targets(payload: Dict[str, Any]) -> Set[str]:
@@ -3114,72 +8759,10 @@ def _extract_shell_write_csharp_paths(command: str) -> Set[str]:
     }
 
 
-def _extract_csharp_paths(text: str) -> Set[str]:
-    candidates: List[str] = []
-    candidates.extend(
-        match.group("path")
-        for match in re.finditer(
-            r"(?im)^\s*\*{3}\s+(?:add|update|delete)\s+file:\s*(?P<path>[^\r\n]+\.cs)\s*$",
-            str(text or ""),
-        )
-    )
-    candidates.extend(
-        match.group("path")
-        for match in re.finditer(
-            r"(?i)\*{3}\s+(?:add|update|delete)\s+file:\s*(?P<path>.*?\.cs)(?=\\n|\r?$)",
-            str(text or ""),
-            re.MULTILINE,
-        )
-    )
-    candidates.extend(
-        match.group("path")
-        for match in re.finditer(
-            r"(?i)[\"'](?P<path>[^\"'\r\n]+\.cs)[\"']",
-            str(text or ""),
-        )
-        if "\\n" not in match.group("path")
-    )
-    candidates.extend(
-        match.group("path")
-        for match in re.finditer(
-            r"(?i)(?<![A-Za-z0-9_])(?P<path>(?:[A-Za-z]:)?(?:[^\s\"'`;|]+[\\/])+[^\s\"'`;|]+\.cs)(?![A-Za-z0-9_])",
-            str(text or ""),
-        )
-    )
-    return {
-        normalized
-        for candidate in candidates
-        if (normalized := _normalize_pb_target_path(candidate))
-    }
-
-
 def _normalize_pb_target_path(value: str) -> str:
     normalized = str(value or "").strip().strip("\"'`<>()[]{}.,:;").replace("\\", "/")
     normalized = re.sub(r"/+", "/", normalized).lower()
     return normalized if normalized.endswith(".cs") else ""
-
-
-def _pb_verified_targets_from_output(data: Mapping[str, Any]) -> Set[str]:
-    targets: Set[str] = set()
-
-    def visit(value: Any) -> None:
-        if not isinstance(value, Mapping):
-            return
-        for key, item in value.items():
-            if str(key).lower() in {"verified_target_paths", "verified_targets", "target_paths"}:
-                values = item if isinstance(item, Sequence) and not isinstance(item, (str, bytes)) else [item]
-                for candidate in values:
-                    normalized = _normalize_pb_target_path(str(candidate))
-                    if normalized:
-                        targets.add(normalized)
-            elif isinstance(item, Mapping):
-                visit(item)
-            elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
-                for child in item:
-                    visit(child)
-
-    visit(data)
-    return targets
 
 
 def _pb_targets_cover(
@@ -3258,69 +8841,6 @@ def _is_absolute_pb_target_path(value: str) -> bool:
     return bool(value.startswith("/") or re.match(r"^[a-z]:/", value))
 
 
-def _pb_verifier_output_succeeded(
-    payload: Dict[str, Any],
-    *,
-    written_targets: Set[str],
-    session_cwd: str = "",
-) -> bool:
-    if not _runtime_tool_output_succeeded(payload):
-        return False
-    text = _payload_text(payload)
-    data = _json_object_from_text(text)
-    controls: List[Mapping[str, Any]] = []
-
-    def collect(value: Any) -> None:
-        if isinstance(value, Mapping):
-            controls.append(value)
-            for child in value.values():
-                collect(child)
-        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-            for child in value:
-                collect(child)
-
-    collect(payload)
-    if data:
-        collect(data)
-    if any(_pb_verifier_mapping_failed(control) for control in controls):
-        return False
-    if re.search(r"(?i)\bvalidation\s+failed\b|\berror\b|\bblocked\b", text):
-        return False
-    if any(control.get("success") is True for control in controls):
-        return True
-    if any(str(control.get("status", "")).strip().lower() in {"ok", "passed", "success", "succeeded"} for control in controls):
-        return True
-    for control in controls:
-        for key in ["exit_code", "return_code", "returncode"]:
-            if key in control and type(control[key]) is int and control[key] == 0:
-                return True
-    return bool(re.search(r"(?im)^\s*exit\s+code\s*:\s*0\s*$", text))
-
-
-def _pb_verifier_mapping_failed(control: Mapping[str, Any]) -> bool:
-    status = str(control.get("status", "") or "").strip().lower()
-    if status in {"blocked", "error", "failed", "failure"}:
-        return True
-    return _runtime_mapping_failed(dict(control))
-
-
-def _pb_direct_verified_targets(control: Mapping[str, Any]) -> Set[str]:
-    targets: Set[str] = set()
-    for key, item in control.items():
-        if str(key).lower() not in {
-            "verified_target_paths",
-            "verified_targets",
-            "target_paths",
-        }:
-            continue
-        values = item if isinstance(item, Sequence) and not isinstance(item, (str, bytes)) else [item]
-        for candidate in values:
-            normalized = _normalize_pb_target_path(str(candidate))
-            if normalized:
-                targets.add(normalized)
-    return targets
-
-
 def _pb_migration_harness_acceptance(
     audit: Mapping[str, Any],
     *,
@@ -3329,40 +8849,177 @@ def _pb_migration_harness_acceptance(
 ) -> Dict[str, Any]:
     if not required or not audit.get("required"):
         return default
-    required_outputs = list(ACCEPTANCE_OUTPUT_MARKERS["pb-to-csharp-migration-harness"].keys())
-    if audit.get("verifier_executed"):
-        return {
-            "status": "passed",
-            "required_outputs": required_outputs,
-            "satisfied_outputs": required_outputs,
-            "missing_outputs": [],
-        }
+    required_outputs = list(audit.get("required_outputs") or _PB_MIGRATION_REQUIRED_OUTPUTS)
+    satisfied_outputs = [
+        name
+        for name in required_outputs
+        if name in set(audit.get("satisfied_outputs", []) or [])
+    ]
+    missing_outputs = [name for name in required_outputs if name not in satisfied_outputs]
+    if missing_outputs:
+        status = "missing_outputs"
+    elif audit.get("completion_requested"):
+        status = "passed" if audit.get("verifier_completed") else "completion_evidence_blocked"
+    else:
+        status = "draft_validated" if audit.get("draft_validated") else "missing_outputs"
     return {
-        "status": "missing_outputs",
+        "status": status,
         "required_outputs": required_outputs,
-        "satisfied_outputs": [],
-        "missing_outputs": required_outputs,
+        "satisfied_outputs": satisfied_outputs,
+        "missing_outputs": missing_outputs,
     }
 
 
 def _pb_migration_execution_issues(audit: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    if not audit.get("required") or audit.get("verifier_executed"):
+    if not audit.get("required"):
         return []
     writes = list(audit.get("relevant_writes", []) or [])
-    return [
-        {
+    issues: List[Dict[str, Any]] = []
+    if not audit.get("verifier_executed"):
+        issues.append({
             "skill": "pb-to-csharp-migration-harness",
             "status": "missing_post_write_migration_verification",
-            "severity": "P1",
+            "severity": "P0",
             "reason": (
-                "PB migration C#/Designer writes were completed without a successful actual "
-                "verify_migration_generated_csharp_style or orchestrate_pb_migration_validation "
-                "tool call after the last relevant write."
+                "PB migration C#/Designer writes lack a correlated verifier receipt with an exact "
+                "call identity, target artifact readback SHA-256, packaged profile identity, stage "
+                "statuses, and completion_allowed contract."
             ),
-            "action": "Run the PB generated-C# verifier after the last relevant .cs write.",
+            "action": "Run the PB verifier after the last write and emit its complete structured receipt.",
             "samples": [str(item.get("sample", "")) for item in writes[-2:]],
-        }
-    ]
+        })
+    missing_outputs = list(audit.get("missing_outputs", []) or [])
+    if missing_outputs:
+        issues.append(
+            {
+                "skill": "pb-to-csharp-migration-harness",
+                "status": "missing_pb_migration_required_outputs",
+                "severity": "P0",
+                "reason": (
+                    "PB migration completion requires independent evidence for every output; "
+                    "one C# verifier result cannot satisfy SP, SQL release binding, build, DB, or manual QA."
+                ),
+                "missing_outputs": missing_outputs,
+                "action": "Collect one correlated command/tool receipt for each missing PB migration output.",
+                "samples": [],
+            }
+        )
+    if audit.get("style_application_status") != "applied":
+        issues.append(
+            {
+                "skill": "pb-to-csharp-migration-harness",
+                "status": "pb_migration_style_application_blocked",
+                "severity": "P0",
+                "reason": (
+                    "PB migration style application is blocked without a consumed packaged fixed-profile "
+                    "receipt whose id, version, and hash match the packaged artifact."
+                ),
+                "action": "Emit and validate packaged_sanitized_profile consumption evidence.",
+                "samples": [],
+            }
+        )
+    return issues
+
+
+def _scan_sql_audit_records(
+    records: Sequence[SessionTextRecord],
+) -> Dict[str, Any]:
+    if not isinstance(records, DiskBackedSessionTextRecords):
+        raise RuntimeError("SQL audit scanning requires indexed text facts")
+    scan: Dict[str, Any] = {
+        "request_index": -1,
+        "action_index": -1,
+        "action_kind": "",
+        "verification_boundary_index": -1,
+        "later_request_index": -1,
+        "provider_inspection_calls": [],
+        "verifier_calls": [],
+        "verifier_outputs": [],
+        "binder_candidates": [],
+    }
+    last_user_index = -1
+    first_followup: tuple[int, SessionTextRecord] | None = None
+    verifier_output_markers = (
+        "original_sha256",
+        "formatted_sha256",
+        "style_contract_sha256",
+        "verification_id",
+        "mechanical_checks",
+        "alias_role_plan_validation",
+        "verify_sql_formatting_style",
+        "src.skills.sql_formatting_style",
+    )
+    for index, record in records.iter_indexed_records():
+        passive = _is_passive_text(record.text)
+        lowered = record.text.lower()
+        if scan["request_index"] < 0:
+            if (
+                record.role == "user"
+                and not passive
+                and looks_like_sql_output_request(lowered)
+            ):
+                scan["request_index"] = index
+                last_user_index = index
+            continue
+
+        if record.role == "user" and not passive:
+            last_user_index = index
+            if scan["action_index"] >= 0:
+                if first_followup is None:
+                    first_followup = (index, record)
+                if (
+                    scan["later_request_index"] < 0
+                    and _is_sql_follow_up_request(record.text)
+                ):
+                    scan["later_request_index"] = index
+        elif (
+            scan["action_index"] >= 0
+            and first_followup is None
+            and record.role == "assistant"
+            and record.payload_type in {"message", "agent_message"}
+            and not passive
+        ):
+            first_followup = (index, record)
+
+        action_kind = ""
+        if (
+            record.role == "assistant"
+            or record.payload_type in {"agent_message", "task_complete"}
+        ) and _looks_like_sql_answer(lowered):
+            action_kind = "sql_output"
+        elif _looks_like_sql_db_write(record):
+            action_kind = "db_write"
+        if action_kind:
+            scan["action_index"] = index
+            scan["action_kind"] = action_kind
+            scan["verification_boundary_index"] = max(
+                scan["request_index"],
+                last_user_index,
+            )
+            scan["later_request_index"] = -1
+            first_followup = None
+
+        if _looks_like_sql_formatting_provider_inspection(record):
+            scan["provider_inspection_calls"].append(index)
+        if _invokes_sql_formatting_verifier(record):
+            scan["verifier_calls"].append(index)
+        if (
+            record.payload_type in {"function_call_output", "custom_tool_call_output"}
+            and any(marker in lowered for marker in verifier_output_markers)
+            and _is_sql_verifier_output_candidate(record)
+        ):
+            scan["verifier_outputs"].append(index)
+        if _looks_like_sql_final_response_binder_attempt(record):
+            scan["binder_candidates"].append(index)
+
+    if (
+        scan["action_kind"] == "sql_output"
+        and first_followup is not None
+        and first_followup[1].role == "user"
+        and _is_short_contextual_sql_correction(first_followup[1].text)
+    ):
+        scan["later_request_index"] = first_followup[0]
+    return scan
 
 
 def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
@@ -3390,54 +9047,17 @@ def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
         "issues": [],
     }
 
-    request_index = next(
-        (
-            index
-            for index, record in enumerate(records)
-            if record.role == "user"
-            and not _is_passive_text(record.text)
-            and looks_like_sql_output_request(record.text.lower())
-        ),
-        -1,
-    )
+    scan = _scan_sql_audit_records(records)
+    request_index = int(scan["request_index"])
     if request_index < 0:
         return result
 
-    action_index = -1
-    action_kind = ""
-    for index, record in enumerate(records[request_index + 1 :], request_index + 1):
-        lowered = record.text.lower()
-        if (
-            record.role == "assistant"
-            or record.payload_type in {"agent_message", "task_complete"}
-        ) and _looks_like_sql_answer(lowered):
-            action_index = index
-            action_kind = "sql_output"
-            continue
-        if _looks_like_sql_db_write(record):
-            action_index = index
-            action_kind = "db_write"
+    action_index = int(scan["action_index"])
+    action_kind = str(scan["action_kind"])
     if action_index < 0:
         return result
 
-    contextual_correction_index = (
-        _immediate_contextual_sql_correction_index(records, action_index)
-        if action_kind == "sql_output"
-        else -1
-    )
-    later_request_index = next(
-        (
-            index
-            for index in range(action_index + 1, len(records))
-            if records[index].role == "user"
-            and not _is_passive_text(records[index].text)
-            and (
-                _is_sql_follow_up_request(records[index].text)
-                or index == contextual_correction_index
-            )
-        ),
-        -1,
-    )
+    later_request_index = int(scan["later_request_index"])
     if later_request_index >= 0:
         result["required"] = True
         result["action_kind"] = action_kind
@@ -3462,56 +9082,44 @@ def _host_local_sql_formatting_audit(path: Path) -> Dict[str, Any]:
 
     result["required"] = True
     result["action_kind"] = action_kind
-    verification_boundary_index = max(
-        (
-            index
-            for index in range(request_index, action_index)
-            if records[index].role == "user"
-            and not _is_passive_text(records[index].text)
-        ),
-        default=request_index,
-    )
-    before_action = range(request_index + 1, action_index)
+    verification_boundary_index = int(scan["verification_boundary_index"])
     provider_selections = _correlated_sql_provider_selections(
         records,
         lower_bound=verification_boundary_index,
         upper_bound=action_index,
     )
-    selected_indices = [
-        int(item["output_index"])
-        for item in provider_selections
-        if item.get("provenance_valid") is True
-    ]
+    provider_selected = (
+        provider_selections.has_valid_selection()
+        if isinstance(provider_selections, DiskBackedSqlProviderSelections)
+        else any(item.get("provenance_valid") is True for item in provider_selections)
+    )
     inspected_indices = []
-    for index in before_action:
-        if not _looks_like_sql_formatting_provider_inspection(records[index]):
+    for index in scan["provider_inspection_calls"]:
+        if not (request_index < index < action_index):
             continue
         output_index = _correlated_successful_provider_read_output(records, index, action_index)
         if output_index >= 0:
             inspected_indices.append(output_index)
     verifier_calls = [
         index
-        for index in before_action
-        if index > verification_boundary_index
-        if _invokes_sql_formatting_verifier(records[index])
+        for index in scan["verifier_calls"]
+        if verification_boundary_index < index < action_index
     ]
     verifier_outputs = [
         index
-        for index in before_action
-        if index > verification_boundary_index
-        if _is_sql_verifier_output_candidate(records[index])
+        for index in scan["verifier_outputs"]
+        if verification_boundary_index < index < action_index
     ]
     binder_candidates = [
         index
-        for index in before_action
-        if index > verification_boundary_index
-        if _looks_like_sql_final_response_binder_attempt(records[index])
+        for index in scan["binder_candidates"]
+        if verification_boundary_index < index < action_index
     ]
     binding_calls = [
         index for index in binder_candidates if _invokes_sql_final_response_binder(records[index])
     ]
 
-    result["provider_selected"] = bool(selected_indices)
+    result["provider_selected"] = provider_selected
     result["provider_inspected"] = bool(inspected_indices)
     result["verifier_executed"] = bool(verifier_calls or binding_calls)
     states: List[str] = []
@@ -3761,6 +9369,14 @@ def _correlated_successful_provider_read_output(
 ) -> int:
     call = records[call_index]
     if call.call_id:
+        if isinstance(records, DiskBackedSessionTextRecords):
+            index = records.correlated_output_record_index(
+                call_index,
+                before_index=action_index,
+            )
+            if index >= 0:
+                return index if _successful_provider_read_output(records[index]) else -1
+            return -1
         for index in range(call_index + 1, action_index):
             record = records[index]
             if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
@@ -4266,6 +9882,13 @@ def _correlated_sql_final_binding_output(
     call = records[call_index]
     if not call.call_id:
         return -1, "final_response_binding_call_id_missing"
+    if isinstance(records, DiskBackedSessionTextRecords):
+        index = records.correlated_output_record_index(
+            call_index,
+            before_index=action_index,
+        )
+        if index >= 0:
+            return index, ""
     for index in range(call_index + 1, action_index):
         record = records[index]
         if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
@@ -4331,7 +9954,7 @@ def _evaluate_sql_final_response_binding(
     call_index: int,
     output_index: int,
     inspected_indices: List[int],
-    provider_selections: List[Dict[str, Any]],
+    provider_selections: Sequence[Dict[str, Any]],
     session_id: str,
     session_cwd: str,
 ) -> Dict[str, Any]:
@@ -4416,12 +10039,13 @@ def _evaluate_sql_final_response_binding(
     if provider_path and _normalized_sql_provider_path(receipt_provider_path) != _normalized_sql_provider_path(provider_path):
         errors.append("provider_path_receipt_mismatch")
 
-    eligible_selections = [
-        item
-        for item in provider_selections
-        if int(item.get("output_index", -1)) < call_index
-    ]
-    provider_selection = eligible_selections[-1] if eligible_selections else {}
+    if isinstance(provider_selections, DiskBackedSqlProviderSelections):
+        provider_selection = provider_selections.latest_before(call_index)
+    else:
+        provider_selection = {}
+        for item in provider_selections:
+            if int(item.get("output_index", -1)) < call_index:
+                provider_selection = item
     selection_path = str(provider_selection.get("provider_path", "") or "").strip()
     selection_sha256 = str(provider_selection.get("selection_sha256", "") or "").strip().lower()
     if not provider_selection:
@@ -4570,6 +10194,25 @@ def _provider_path_inspected_before_binding(
     inspected_indices: List[int],
 ) -> bool:
     target = _normalized_sql_provider_path(provider_path)
+    if isinstance(records, DiskBackedSessionTextRecords):
+        eligible = 0
+        resolved = 0
+        for output_index in inspected_indices:
+            if not (output_index < call_index):
+                continue
+            eligible += 1
+            inspection_index = records.correlated_call_record_index(output_index)
+            if inspection_index < 0:
+                continue
+            resolved += 1
+            inspection = records[inspection_index]
+            if (
+                _looks_like_sql_formatting_provider_inspection(inspection)
+                and target in _normalized_sql_provider_path(inspection.text)
+            ):
+                return True
+        if eligible and resolved == eligible:
+            return False
     for index in range(call_index):
         if not _looks_like_sql_formatting_provider_inspection(records[index]):
             continue
@@ -4614,6 +10257,13 @@ def _correlated_sql_verifier_output(
 ) -> tuple[int, str]:
     call = records[call_index]
     if call.call_id:
+        if isinstance(records, DiskBackedSessionTextRecords):
+            index = records.correlated_output_record_index(
+                call_index,
+                before_index=action_index,
+            )
+            if index >= 0:
+                return index, ""
         for index in range(call_index + 1, action_index):
             record = records[index]
             if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
@@ -5146,32 +10796,25 @@ def _correlated_sql_provider_selections(
     *,
     lower_bound: int,
     upper_bound: int,
-) -> List[Dict[str, Any]]:
-    pending: Dict[str, int] = {}
-    selections: List[Dict[str, Any]] = []
-    for index in range(max(0, lower_bound + 1), min(len(records), upper_bound)):
-        record = records[index]
-        if record.payload_type in {"function_call", "custom_tool_call"}:
-            if record.call_id and _record_invokes_front_door(record):
-                pending[record.call_id] = index
+) -> Sequence[Dict[str, Any]]:
+    if not isinstance(records, DiskBackedSessionTextRecords):
+        raise RuntimeError("SQL provider selection requires indexed text facts")
+    events = records._events
+    events._db.execute("DELETE FROM sql_provider_selections")
+    for (
+        call_index,
+        call,
+        output_index,
+        record,
+        call_payload,
+        output_payload,
+    ) in records.iter_front_door_pairs(
+        lower_bound=max(-1, lower_bound),
+        upper_bound=min(len(records), upper_bound),
+    ):
+        if not _record_invokes_front_door(call):
             continue
-        if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
-            continue
-        call_index = pending.pop(record.call_id, None) if record.call_id else None
-        if call_index is None:
-            continue
-        if not _front_door_output_succeeded(
-            {
-                "type": record.payload_type,
-                "name": record.name,
-                "output": record.text,
-            },
-            {
-                "type": records[call_index].payload_type,
-                "name": records[call_index].name,
-                "arguments": records[call_index].arguments,
-            },
-        ):
+        if not _front_door_output_succeeded(output_payload, call_payload):
             continue
         data = _front_door_json(record.text)
         if not _has_normalized_front_door_receipt(data):
@@ -5181,57 +10824,75 @@ def _correlated_sql_provider_selections(
         route = data.get("plugin_route")
         if not isinstance(route, dict):
             continue
-        roles: List[Any] = [route.get("controller")]
+        matched_role: Dict[str, str] = {}
+        matched_count = 0
+        role_values: Iterable[Any] = (route.get("controller"),)
         assistants = route.get("assistants")
         if isinstance(assistants, list):
-            roles.extend(assistants)
-        matched = [_sql_provider_role_evidence(role) for role in roles]
-        matched = [item for item in matched if item]
-        if len(matched) != 1:
+            role_values = (*role_values, *assistants)
+        for role in role_values:
+            role_evidence = _sql_provider_role_evidence(role)
+            if not role_evidence:
+                continue
+            matched_count += 1
+            if matched_count == 1:
+                matched_role = role_evidence
+            if matched_count > 1:
+                break
+        if matched_count != 1:
             continue
         provenance_details = validate_sql_provider_selection_runtime_receipt(data)
+        raw_data = _json_object_from_text(record.text)
+        if not _valid_host_front_door_provenance(
+            call_payload,
+            output_payload,
+            raw_data,
+            duplicate_boundaries=DiskBackedDuplicateFactKeys(events, "boundary"),
+            duplicate_packet_hashes=DiskBackedDuplicateFactKeys(events, "packet_hash"),
+        ):
+            provenance_details.append("front_door_runtime_provenance_invalid")
         runtime_receipt = data.get("provider_selection_receipt")
         receipt_id = (
             runtime_receipt.get("provider_selection_receipt_id")
             if isinstance(runtime_receipt, dict)
             else None
         )
-        if type(receipt_id) is str and _sql_runtime_receipt_seen_before(
-            records,
-            output_index=index,
-            receipt_id=receipt_id,
-            selection=True,
-        ):
+        normalized_receipt_id = receipt_id if type(receipt_id) is str else ""
+        if normalized_receipt_id and events._db.execute(
+            """
+            SELECT 1 FROM sql_provider_selections
+            WHERE receipt_id = ? AND output_record_seq < ?
+            LIMIT 1
+            """,
+            (normalized_receipt_id, output_index),
+        ).fetchone():
             provenance_details.append("provider_selection_runtime_receipt_replayed")
-        selections.append(
-            {
-                **matched[0],
-                "call_index": call_index,
-                "output_index": index,
-                "selection_sha256": sql_provider_selection_sha256(data),
-                "provenance_valid": not provenance_details,
-                "provenance_errors": (
-                    []
-                    if not provenance_details
-                    else list(
-                        dict.fromkeys(
-                            [
-                                "front_door_provider_selection_provenance_invalid",
-                                *(
-                                    ["provider_selection_runtime_receipt_replayed"]
-                                    if "provider_selection_runtime_receipt_replayed"
-                                    in provenance_details
-                                    else []
-                                ),
-                            ]
-                        )
-                    )
-                ),
-                "provenance_error_details": provenance_details,
-                "data": data,
-            }
+        provenance_errors = []
+        if provenance_details:
+            provenance_errors.append("front_door_provider_selection_provenance_invalid")
+            if "provider_selection_runtime_receipt_replayed" in provenance_details:
+                provenance_errors.append("provider_selection_runtime_receipt_replayed")
+        events._db.execute(
+            """
+            INSERT INTO sql_provider_selections (
+                output_record_seq, call_record_seq, provider_id,
+                provider_path, provider_source, selection_sha256,
+                receipt_id, provenance_valid, provenance_errors_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                output_index,
+                call_index,
+                matched_role["provider_id"],
+                matched_role["provider_path"],
+                matched_role["provider_source"],
+                sql_provider_selection_sha256(data),
+                normalized_receipt_id,
+                int(not provenance_details),
+                _canonical_json(provenance_errors),
+            ),
         )
-    return selections
+    return DiskBackedSqlProviderSelections(events)
 
 
 def _sql_runtime_receipt_seen_before(
@@ -5241,6 +10902,17 @@ def _sql_runtime_receipt_seen_before(
     receipt_id: str,
     selection: bool,
 ) -> bool:
+    if isinstance(records, DiskBackedSessionTextRecords):
+        receipt_kind = "selection" if selection else "binding"
+        return records._events._db.execute(
+            """
+            SELECT 1
+            FROM sql_runtime_receipt_facts
+            WHERE receipt_kind = ? AND receipt_id = ? AND record_seq < ?
+            LIMIT 1
+            """,
+            (receipt_kind, str(receipt_id), int(output_index)),
+        ).fetchone() is not None
     for index in range(0, min(output_index, len(records))):
         record = records[index]
         if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
@@ -5389,17 +11061,25 @@ def _looks_like_sql_db_write(record: SessionTextRecord) -> bool:
     return any(re.search(pattern, lowered) for pattern in write_patterns)
 
 
-def _is_sql_requirement_record(record: SessionTextRecord) -> bool:
+def _is_sql_requirement_record(
+    record: SessionTextRecord,
+    *,
+    lowered: str | None = None,
+) -> bool:
     if _is_passive_text(record.text):
         return False
-    lowered = record.text.lower()
     if _is_synthetic_context_message(record.text):
         return False
+    if record.sql_requirement is not None:
+        return bool(record.sql_requirement)
+    if record.payload_type not in {"message", "agent_message", "task_complete"}:
+        return False
+    if record.payload_type == "message" and record.role in {"developer", "system"}:
+        return False
+    lowered = record.text.lower() if lowered is None else lowered
     if _looks_like_front_door_runtime_output(lowered):
         return False
     if record.payload_type == "message":
-        if record.role in {"developer", "system"}:
-            return False
         if record.role == "user":
             return looks_like_sql_output_request(lowered)
         if record.role == "assistant":
@@ -5411,15 +11091,24 @@ def _is_sql_requirement_record(record: SessionTextRecord) -> bool:
 
 
 def _brainstorming_target_inspection_issues(path: Path) -> List[Dict[str, Any]]:
-    events = list(_session_payload_events(path))
+    events = _session_payload_events(path)
     active_target: Path | None = None
     gate_active = False
     samples: List[str] = []
 
-    for event in events:
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("brainstorm target audit requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=(
+            "message",
+            "agent_message",
+            "task_complete",
+            "function_call",
+            "custom_tool_call",
+            "function_call_output",
+            "custom_tool_call_output",
+        )
+    ):
         payload_type = str(payload.get("type", ""))
         text = _payload_text(payload)
         lowered = text.lower()
@@ -5528,17 +11217,15 @@ def _blocked_path_inspection_during_brainstorm_sample(text: str) -> str:
 
 
 def _brainstorm_option_choice_execution_issues(path: Path) -> List[Dict[str, Any]]:
-    events = list(_session_payload_events(path))
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("brainstorm option audit requires indexed event facts")
     choice_index = -1
     choice_text = ""
-    for index, event in enumerate(events):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        if str(payload.get("type", "")) != "message":
-            continue
-        if str(payload.get("role", "")).lower() != "user":
-            continue
+    for index, payload in events.iter_payloads(
+        payload_types=("message",),
+        roles=("user",),
+    ):
         text = _payload_text(payload)
         lowered = text.lower()
         if _is_direction_choice_without_execution_text(lowered):
@@ -5551,10 +11238,16 @@ def _brainstorm_option_choice_execution_issues(path: Path) -> List[Dict[str, Any
     issues: List[Dict[str, Any]] = []
     scope_lock_samples: List[str] = []
     samples: List[str] = []
-    for event in events[choice_index + 1 :]:
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=(
+            "message",
+            "agent_message",
+            "task_complete",
+            "function_call",
+            "custom_tool_call",
+        ),
+        start=choice_index + 1,
+    ):
         payload_type = str(payload.get("type", ""))
         if payload_type in {"message", "agent_message", "task_complete"}:
             text = _payload_text(payload)
@@ -5734,10 +11427,12 @@ def _is_direction_choice_without_execution_text(lowered: str) -> bool:
 
 def _first_visible_brainstorm_response(path: Path) -> str:
     user_messages = 0
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("brainstorm response audit requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=("message", "agent_message", "task_complete")
+    ):
         payload_type = str(payload.get("type", ""))
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
             if _is_synthetic_context_message(_payload_text(payload)):
@@ -6197,37 +11892,227 @@ def _correlated_tool_receipts(
     events: Sequence[Dict[str, Any]],
     *,
     include_failed: bool = False,
-) -> List[CorrelatedToolReceipt]:
-    pending: Dict[str, tuple[int, Dict[str, Any]]] = {}
-    receipts: List[CorrelatedToolReceipt] = []
-    for index, event in enumerate(events):
+) -> Sequence[CorrelatedToolReceipt]:
+    if isinstance(events, DiskBackedSessionEvents):
+        return events.correlated_tool_receipts(include_failed=include_failed)
+    if len(events) > _COMPATIBILITY_EVENT_LIMIT:
+        raise RuntimeError(
+            "compatibility receipt correlation is bounded; use DiskBackedSessionEvents"
+        )
+    store = DiskBackedSessionEvents()
+    try:
+        for index, event in enumerate(events):
+            if not isinstance(event, Mapping):
+                continue
+            compact_event = _compact_session_event(event)
+            store.append(
+                compact_event,
+                source_line=index + 1,
+            )
+        store.seal()
+        return list(
+            store.correlated_tool_receipts(include_failed=include_failed)
+        )
+    finally:
+        store.close()
+
+
+def _general_tool_packet_sha256(payload: Mapping[str, Any]) -> str:
+    unsigned = {
+        str(key): payload[key]
+        for key in sorted(_GENERAL_TOOL_PACKET_FIELDS)
+        if key in payload and key not in _GENERAL_TOOL_PACKET_HASH_KEYS
+    }
+    encoded = json.dumps(
+        unsigned,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _general_tool_supplied_packet_hash(payload: Mapping[str, Any]) -> str:
+    values = {
+        str(payload.get(key, "") or "").strip().lower()
+        for key in _GENERAL_TOOL_PACKET_HASH_KEYS
+        if str(payload.get(key, "") or "").strip()
+    }
+    if len(values) != 1:
+        return ""
+    value = next(iter(values))
+    return value if re.fullmatch(r"[0-9a-f]{64}", value) else ""
+
+
+def _is_allowed_general_tool_identity(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    if normalized in _GENERAL_TOOL_EXACT_IDENTITIES:
+        return True
+    if re.fullmatch(r"mcp__[a-z0-9_-]+__[a-z0-9_.-]+", normalized):
+        return True
+    if re.fullmatch(r"multi_agent_v1(?:__|\.)[a-z0-9_.-]+", normalized):
+        return True
+    if normalized.endswith(("__exec_command", "__shell_command", "__run_command")):
+        return True
+    if normalized.startswith(("src.skills.", "src.orchestration.")):
+        tail = normalized.rsplit(".", 1)[-1]
+        return bool(re.match(r"^(?:verify|validate|orchestrate|approve|record|build|run)_", tail))
+    return False
+
+
+def _duplicate_general_tool_boundaries(events: Sequence[Dict[str, Any]]) -> Any:
+    if isinstance(events, DiskBackedSessionEvents):
+        return DiskBackedDuplicateFactKeys(events, "boundary")
+    counts: Dict[str, int] = {}
+    for event in events:
+        if str(event.get("type", "")) != "response_item":
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, Mapping):
+            continue
+        if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
+            continue
+        boundary_id = str(payload.get("boundary_id", "") or "").strip()
+        if boundary_id:
+            counts[boundary_id] = counts.get(boundary_id, 0) + 1
+    return {boundary_id for boundary_id, count in counts.items() if count > 1}
+
+
+def _duplicate_general_tool_packet_hashes(events: Sequence[Dict[str, Any]]) -> Any:
+    if isinstance(events, DiskBackedSessionEvents):
+        return DiskBackedDuplicateFactKeys(events, "packet_hash")
+    counts: Dict[str, int] = {}
+    for event in events:
+        if str(event.get("type", "")) != "response_item":
+            continue
+        payload = event.get("payload", {})
+        if not isinstance(payload, Mapping):
+            continue
+        if str(payload.get("type", "")) not in {
+            "function_call",
+            "custom_tool_call",
+            "function_call_output",
+            "custom_tool_call_output",
+        }:
+            continue
+        packet_hash = _general_tool_supplied_packet_hash(payload)
+        if packet_hash:
+            counts[packet_hash] = counts.get(packet_hash, 0) + 1
+    return {packet_hash for packet_hash, count in counts.items() if count > 1}
+
+
+def _valid_general_tool_call_provenance(
+    call: Mapping[str, Any],
+    *,
+    duplicate_boundaries: Set[str],
+    duplicate_packet_hashes: Set[str],
+) -> bool:
+    call_id = _payload_call_id(dict(call))
+    source = _front_door_provenance_value(call, "source", "host", "origin")
+    call_name = str(call.get("name", "") or "").strip().lower()
+    tool_identity = str(call.get("tool_identity", "") or "").strip().lower()
+    correlation_id = str(call.get("correlation_id", "") or "").strip()
+    boundary_id = str(call.get("boundary_id", "") or "").strip()
+    packet_hash = _general_tool_supplied_packet_hash(call)
+    if _is_front_door_runtime_command(dict(call), _payload_text(dict(call)).lower()):
+        return bool(
+            call_id
+            and source in _KNOWN_HOST_FRONT_DOOR_SOURCES
+            and tool_identity == call_name
+            and _is_allowed_general_tool_identity(tool_identity)
+            and correlation_id == call_id
+            and boundary_id
+            and boundary_id not in duplicate_boundaries
+        )
+    return bool(
+        call_id
+        and source in _KNOWN_HOST_FRONT_DOOR_SOURCES
+        and tool_identity == call_name
+        and _is_allowed_general_tool_identity(tool_identity)
+        and correlation_id == call_id
+        and boundary_id
+        and boundary_id not in duplicate_boundaries
+        and packet_hash
+        and packet_hash not in duplicate_packet_hashes
+        and packet_hash == _general_tool_packet_sha256(call)
+    )
+
+
+def _valid_general_tool_output_provenance(
+    call: Mapping[str, Any],
+    output: Mapping[str, Any],
+    *,
+    duplicate_boundaries: Set[str],
+    duplicate_packet_hashes: Set[str],
+) -> bool:
+    call_id = _payload_call_id(dict(call))
+    if not call_id or call_id != _payload_call_id(dict(output)):
+        return False
+    call_type = str(call.get("type", ""))
+    output_type = str(output.get("type", ""))
+    if (call_type, output_type) not in {
+        ("function_call", "function_call_output"),
+        ("custom_tool_call", "custom_tool_call_output"),
+    }:
+        return False
+    source = _front_door_provenance_value(call, "source", "host", "origin")
+    output_source = _front_door_provenance_value(output, "source", "host", "origin")
+    tool_identity = str(call.get("tool_identity", "") or "").strip().lower()
+    output_identity = str(output.get("tool_identity", "") or "").strip().lower()
+    boundary_id = str(call.get("boundary_id", "") or "").strip()
+    output_boundary = str(output.get("boundary_id", "") or "").strip()
+    call_packet_hash = _general_tool_supplied_packet_hash(call)
+    output_packet_hash = _general_tool_supplied_packet_hash(output)
+    if _is_front_door_runtime_command(dict(call), _payload_text(dict(call)).lower()):
+        return _valid_host_front_door_provenance(
+            call,
+            output,
+            _json_object_from_text(_payload_text(dict(output))),
+            duplicate_boundaries=duplicate_boundaries,
+            duplicate_packet_hashes=duplicate_packet_hashes,
+        )
+    return bool(
+        source in _KNOWN_HOST_FRONT_DOOR_SOURCES
+        and output_source == source
+        and tool_identity
+        and output_identity == tool_identity
+        and _is_allowed_general_tool_identity(tool_identity)
+        and str(call.get("name", "") or "").strip().lower() == tool_identity
+        and str(call.get("correlation_id", "") or "").strip() == call_id
+        and str(output.get("correlation_id", "") or "").strip() == call_id
+        and boundary_id
+        and boundary_id == output_boundary
+        and boundary_id not in duplicate_boundaries
+        and call_packet_hash
+        and str(output.get("call_packet_sha256", "") or "").strip().lower() == call_packet_hash
+        and output_packet_hash
+        and output_packet_hash not in duplicate_packet_hashes
+        and output_packet_hash == _general_tool_packet_sha256(output)
+    )
+
+
+def _duplicate_tool_call_ids(events: Sequence[Dict[str, Any]]) -> List[str]:
+    if isinstance(events, DiskBackedSessionEvents):
+        return events.duplicate_tool_call_ids()
+    call_counts: Dict[str, int] = {}
+    output_counts: Dict[str, int] = {}
+    for event in events:
         payload = event.get("payload", {})
         if not isinstance(payload, dict):
             continue
-        payload_type = str(payload.get("type", ""))
         call_id = _payload_call_id(payload)
+        if not call_id:
+            continue
+        payload_type = str(payload.get("type", ""))
         if payload_type in {"function_call", "custom_tool_call"}:
-            if call_id:
-                pending[call_id] = (index, payload)
-            continue
-        if payload_type not in {"function_call_output", "custom_tool_call_output"} or not call_id:
-            continue
-        call_record = pending.pop(call_id, None)
-        if call_record is None:
-            continue
-        if not include_failed and not _runtime_tool_output_succeeded(payload):
-            continue
-        call_index, call = call_record
-        receipts.append(
-            CorrelatedToolReceipt(
-                call_index=call_index,
-                output_index=index,
-                call=call,
-                output=payload,
-                data=_json_object_from_text(_payload_text(payload)),
-            )
-        )
-    return receipts
+            call_counts[call_id] = call_counts.get(call_id, 0) + 1
+        elif payload_type in {"function_call_output", "custom_tool_call_output"}:
+            output_counts[call_id] = output_counts.get(call_id, 0) + 1
+    return sorted(
+        call_id
+        for call_id in set(call_counts) | set(output_counts)
+        if call_counts.get(call_id, 0) > 1 or output_counts.get(call_id, 0) > 1
+    )
 
 
 def _is_implementation_call(payload: Dict[str, Any]) -> bool:
@@ -6239,6 +12124,10 @@ def _is_implementation_call(payload: Dict[str, Any]) -> bool:
         return True
     if re.search(r"\btools\.(?:apply_patch|write_file|edit_file)\s*\(", lowered):
         return True
+    if ">" not in lowered and not any(
+        marker in lowered for marker in _SHELL_WRITE_MARKERS
+    ):
+        return False
     record = SessionTextRecord(
         text=_payload_text(payload),
         payload_type=str(payload.get("type", "")),
@@ -6467,73 +12356,47 @@ def _fresh_verification_receipt(
 
 def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
     events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("instruction supersession requires the streaming fact store")
     receipts = _correlated_tool_receipts(events)
-    corrections: List[Dict[str, Any]] = []
-    active_goal = False
-    completion_indexes: List[int] = []
-    latest_assistant_text = ""
-    latest_completion_index: int | None = None
-    for index, event in enumerate(events):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        payload_type = str(payload.get("type", ""))
-        role = str(payload.get("role", "")).lower()
-        if payload_type == "thread_goal_updated":
-            goal = payload.get("goal", {}) or {}
-            status = str(goal.get("status", "") or "").strip().lower() if isinstance(goal, dict) else ""
-            if status == "active":
-                active_goal = True
-            elif status in {"complete", "blocked"}:
-                active_goal = False
-        if payload_type == "agent_message" or (payload_type == "message" and role == "assistant"):
-            latest_assistant_text = _payload_text(payload)
-        if payload_type == "message" and role == "user":
-            user_text = _payload_text(payload)
-            if _is_synthetic_context_message(user_text):
-                continue
-            correction = _correction_signal(user_text, latest_assistant_text)
-            if correction["is_correction"]:
-                corrections.append(
-                    {
-                        "index": index,
-                        "active_goal": active_goal,
-                        "invalidated": correction["invalidated"],
-                        "replacements": correction["replacements"],
-                        "related_to_previous": correction["related_to_previous"],
-                        "prior_completion_index": (
-                            latest_completion_index
-                            if correction["related_to_previous"]
-                            else None
-                        ),
-                        "sample": _short(user_text),
-                    }
-                )
-            if latest_completion_index is not None and not _is_same_task_followup(
-                user_text,
-                latest_assistant_text,
-                allow_acknowledgement=False,
-            ):
-                latest_completion_index = None
-        if payload_type == "task_complete":
-            completion_indexes.append(index)
-            latest_completion_index = index
-
     issues: List[Dict[str, Any]] = []
-    for correction in corrections:
-        correction_index = int(correction["index"])
-        invalidated = list(correction["invalidated"])
-        completion_index = next(
-            (index for index in completion_indexes if index > correction_index),
-            len(events),
+    correction_rows = events._db.execute(
+        """
+        SELECT event_seq, active_goal, invalidated_json, replacements_json,
+               related_to_previous, prior_completion_seq, sample
+        FROM correction_facts
+        ORDER BY event_seq
+        """
+    )
+    for row in correction_rows:
+        correction_index = int(row[0])
+        active_goal = bool(row[1])
+        invalidated = [str(value) for value in _json_scalar_sequence(row[2])]
+        replacements = [str(value) for value in _json_scalar_sequence(row[3])]
+        related_to_previous = bool(row[4])
+        prior_completion_index = int(row[5]) if row[5] is not None else None
+        correction_sample = str(row[6])
+        completion_row = events._db.execute(
+            """
+            SELECT MIN(seq)
+            FROM events
+            WHERE payload_type = 'task_complete' AND seq > ?
+            """,
+            (correction_index,),
+        ).fetchone()
+        completion_index = (
+            int(completion_row[0])
+            if completion_row and completion_row[0] is not None
+            else len(events)
         )
         repeated: List[str] = []
         repeated_sample = ""
         admission_sample = ""
-        for event in events[correction_index + 1 : completion_index + 1]:
-            payload = event.get("payload", {})
-            if not isinstance(payload, dict):
-                continue
+        for _event_seq, payload in events.iter_payloads(
+            payload_types=("message", "agent_message", "task_complete"),
+            start=correction_index + 1,
+            stop=completion_index + 1,
+        ):
             payload_type = str(payload.get("type", ""))
             role = str(payload.get("role", "")).lower()
             if not (
@@ -6549,8 +12412,8 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
                 repeated_sample = _short(candidate_text)
                 break
         if (
-            correction.get("prior_completion_index") is not None
-            and correction.get("related_to_previous")
+            prior_completion_index is not None
+            and related_to_previous
             and admission_sample
         ):
             implementation = _correction_implementation_receipt(
@@ -6558,7 +12421,7 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
                 correction_index,
                 completion_index,
                 invalidated,
-                list(correction["replacements"]),
+                replacements,
             )
             verification = (
                 _fresh_verification_receipt(receipts, implementation.output_index, completion_index)
@@ -6578,8 +12441,8 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
                         "Do not claim completion until the correction is implemented and fresh evidence "
                         "verifies the corrected result."
                     ),
-                    "prior_completion_index": correction["prior_completion_index"],
-                    "correction": correction["sample"],
+                    "prior_completion_index": prior_completion_index,
+                    "correction": correction_sample,
                     "admission": admission_sample,
                     "corrected_completion_claimed": completion_index < len(events),
                     "corrected_completion_evidence": bool(implementation and verification),
@@ -6594,18 +12457,18 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
                     "reason": "The assistant reasserted a claim after the user explicitly invalidated it.",
                     "action": "Treat the latest user correction as authoritative and remove the invalidated assumption before completion.",
                     "invalidated_claims": repeated,
-                    "correction": correction["sample"],
+                    "correction": correction_sample,
                     "repetition": repeated_sample,
                 }
             )
-        if not correction["active_goal"] or completion_index >= len(events):
+        if not active_goal or completion_index >= len(events):
             continue
         implementation = _correction_implementation_receipt(
             receipts,
             correction_index,
             completion_index,
             invalidated,
-            list(correction["replacements"]),
+            replacements,
         )
         verification = (
             _fresh_verification_receipt(receipts, implementation.output_index, completion_index)
@@ -6629,7 +12492,7 @@ def _user_instruction_supersession_issues(path: Path) -> List[Dict[str, Any]]:
                     ),
                     "action": "Continue the same Goal, implement the correlated correction, then run fresh verification before task_complete.",
                     "missing_evidence": missing,
-                    "correction": correction["sample"],
+                    "correction": correction_sample,
                 }
             )
     return issues
@@ -6675,13 +12538,10 @@ def _apply_correction_completion_guard(
 def _aggregate_skill_runtime_evidence_issues(path: Path) -> List[Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
     seen: Set[str] = set()
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        if str(payload.get("type", "")) not in {"function_call_output", "custom_tool_call_output"}:
-            continue
-        data = _front_door_json(_payload_text(payload))
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("aggregate runtime audit requires indexed event facts")
+    for _event_seq, _payload, data in events.iter_front_door_claim_payloads():
         summary = data.get("skill_status_summary", {}) if data else {}
         if not isinstance(summary, dict):
             continue
@@ -6694,6 +12554,8 @@ def _aggregate_skill_runtime_evidence_issues(path: Path) -> List[Dict[str, Any]]
                 or status_record.get("runtime_evidence")
                 or str(skill_name) in seen
             ):
+                continue
+            if len(seen) >= _AUDIT_VALUE_SAMPLE_LIMIT:
                 continue
             seen.add(str(skill_name))
             issues.append(
@@ -6782,41 +12644,49 @@ def _introduces_constants_or_behavior(payload: Dict[str, Any]) -> bool:
 
 def _authoritative_reference_order_issues(path: Path) -> List[Dict[str, Any]]:
     events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("authoritative reference audit requires indexed event facts")
     receipts = _correlated_tool_receipts(events)
+    if not isinstance(receipts, DiskBackedToolReceipts):
+        raise RuntimeError("authoritative reference audit requires indexed receipts")
     issues: List[Dict[str, Any]] = []
-    for user_index, event in enumerate(events):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict) or not (
-            str(payload.get("type", "")) == "message"
-            and str(payload.get("role", "")).lower() == "user"
-        ):
-            continue
+    for user_index, payload in events.iter_payloads(
+        payload_types=("message",),
+        roles=("user",),
+    ):
         for reference in _authoritative_references(_payload_text(payload)):
-            task_boundary = next(
-                (
-                    index
-                    for index, candidate in enumerate(events[user_index + 1 :], start=user_index + 1)
-                    if isinstance(candidate.get("payload"), dict)
-                    and str(candidate["payload"].get("type", "")) == "task_complete"
-                ),
-                len(events),
+            boundary_row = events._db.execute(
+                """
+                SELECT MIN(seq) FROM events
+                WHERE payload_type = 'task_complete' AND seq > ?
+                """,
+                (user_index,),
+            ).fetchone()
+            task_boundary = (
+                int(boundary_row[0])
+                if boundary_row and boundary_row[0] is not None
+                else len(events)
             )
             read_output_index = min(
                 (
                     receipt.output_index
-                    for receipt in receipts
-                    if receipt.call_index > user_index
-                    and receipt.output_index < task_boundary
-                    and _is_reference_read_call(receipt.call, reference)
+                    for receipt in receipts.iter_range(
+                        after_index=user_index,
+                        before_index=task_boundary,
+                    )
+                    if _is_reference_read_call(receipt.call, reference)
                 ),
                 default=task_boundary,
             )
             premature = next(
                 (
-                    (index, candidate.get("payload", {}))
-                    for index, candidate in enumerate(events[user_index + 1 : read_output_index], start=user_index + 1)
-                    if isinstance(candidate.get("payload"), dict)
-                    and _introduces_constants_or_behavior(candidate["payload"])
+                    (index, candidate)
+                    for index, candidate in events.iter_payloads(
+                        payload_types=("function_call", "custom_tool_call"),
+                        start=user_index + 1,
+                        stop=read_output_index,
+                    )
+                    if _introduces_constants_or_behavior(candidate)
                 ),
                 None,
             )
@@ -6861,13 +12731,16 @@ def _residual_matches(text: str, patterns: Sequence[str]) -> List[str] | None:
 
 def _forbidden_residual_completion_issues(path: Path) -> List[Dict[str, Any]]:
     events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("residual completion audit requires indexed event facts")
     receipts = _correlated_tool_receipts(events)
-    forbidden: Dict[str, int] = {}
+    if not isinstance(receipts, DiskBackedToolReceipts):
+        raise RuntimeError("residual completion audit requires indexed receipts")
+    events._db.execute("DELETE FROM active_forbidden_claims")
     issues: List[Dict[str, Any]] = []
-    for index, event in enumerate(events):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    for index, payload in events.iter_payloads(
+        payload_types=("message", "task_complete")
+    ):
         payload_type = str(payload.get("type", ""))
         if payload_type == "message" and str(payload.get("role", "")).lower() == "user":
             user_text = _payload_text(payload)
@@ -6875,68 +12748,129 @@ def _forbidden_residual_completion_issues(path: Path) -> List[Dict[str, Any]]:
                 continue
             claims = _extract_correction_claims(user_text)
             for claim in claims["invalidated"]:
-                forbidden[claim] = index
-        if payload_type != "task_complete" or not forbidden:
+                events._db.execute(
+                    """
+                    INSERT OR REPLACE INTO active_forbidden_claims(
+                        claim, request_seq, scanned, matched, scan_sample
+                    ) VALUES (?, ?, 0, 0, '')
+                    """,
+                    (claim, index),
+                )
+        obligation_row = events._db.execute(
+            "SELECT COUNT(*), MIN(request_seq) FROM active_forbidden_claims"
+        ).fetchone()
+        if (
+            payload_type != "task_complete"
+            or obligation_row is None
+            or int(obligation_row[0]) == 0
+        ):
             continue
-        latest_implementation = max(
-            (
-                receipt.output_index
-                for receipt in receipts
-                if receipt.output_index < index and _is_implementation_call(receipt.call)
-            ),
-            default=-1,
+        latest_row = events._db.execute(
+            """
+            SELECT MAX(output_seq) FROM correlated_receipts
+            WHERE succeeded = 1 AND is_implementation = 1 AND output_seq < ?
+            """,
+            (index,),
+        ).fetchone()
+        latest_implementation = (
+            int(latest_row[0])
+            if latest_row and latest_row[0] is not None
+            else -1
         )
-        matched: List[str] = []
-        scanned: Set[str] = set()
-        scan_sample = ""
-        for receipt in receipts:
-            eligible = [
-                claim
-                for claim, request_index in forbidden.items()
-                if max(request_index, latest_implementation) < receipt.call_index < receipt.output_index < index
-            ]
-            if not eligible or not _is_residual_scan_call(receipt.call, eligible):
+        minimum_request = int(obligation_row[1])
+        for receipt in receipts.iter_range(
+            after_index=max(latest_implementation, minimum_request - 1),
+            before_index=index,
+        ):
+            call_text = _payload_text(receipt.call)
+            lowered_call = call_text.lower()
+            if not any(
+                marker in lowered_call
+                for marker in ("rg ", "select-string", "grep ", "findstr ")
+            ):
                 continue
-            scanned_by_call = [
-                claim
-                for claim in eligible
-                if _claim_in_text(claim, _payload_text(receipt.call))
-            ]
-            found = _residual_matches(_payload_text(receipt.output), scanned_by_call)
-            if found is None:
-                continue
-            scanned.update(scanned_by_call)
-            if found:
-                matched.extend(claim for claim in found if claim not in matched)
-                scan_sample = _short(_payload_text(receipt.output))
-        if matched:
-            issues.append(
-                {
-                    "skill": "verification-before-completion-harness",
-                    "status": "forbidden_residuals_at_completion",
-                    "severity": "P0",
-                    "reason": "task_complete followed a fresh residual scan whose correlated output still contained user-forbidden patterns.",
-                    "action": "Remove every reported residual and run a new clean scan before completion.",
-                    "forbidden_patterns": matched,
-                    "scan_output": scan_sample,
-                }
+            claim_rows = events._db.execute(
+                """
+                SELECT claim FROM active_forbidden_claims
+                WHERE request_seq < ?
+                ORDER BY claim
+                """,
+                (receipt.call_index,),
             )
-        missing_scans = [claim for claim in forbidden if claim not in scanned]
-        if missing_scans:
-            issues.append(
-                {
-                    "skill": "verification-before-completion-harness",
-                    "status": "missing_fresh_residual_scan_at_completion",
-                    "severity": "P0",
-                    "reason": (
-                        "task_complete was emitted with an active correction or forbidden-pattern "
-                        "obligation but no correlated residual scan receipt after the latest implementation."
+            for claim_row in claim_rows:
+                claim = str(claim_row[0])
+                if not _claim_in_text(claim, call_text):
+                    continue
+                found = _residual_matches(_payload_text(receipt.output), (claim,))
+                if found is None:
+                    continue
+                events._db.execute(
+                    """
+                    UPDATE active_forbidden_claims
+                    SET scanned = 1,
+                        matched = CASE WHEN ? THEN 1 ELSE matched END,
+                        scan_sample = CASE WHEN ? THEN ? ELSE scan_sample END
+                    WHERE claim = ?
+                    """,
+                    (
+                        int(bool(found)),
+                        int(bool(found)),
+                        _short(_payload_text(receipt.output)),
+                        claim,
                     ),
-                    "action": "Run a fresh residual scan for every forbidden pattern and correlate its output before completion.",
-                    "forbidden_patterns": missing_scans,
-                }
+                )
+        for matched_value, status, reason, action in (
+            (
+                1,
+                "forbidden_residuals_at_completion",
+                "task_complete followed a fresh residual scan whose correlated output still contained user-forbidden patterns.",
+                "Remove every reported residual and run a new clean scan before completion.",
+            ),
+            (
+                0,
+                "missing_fresh_residual_scan_at_completion",
+                "task_complete was emitted with an active correction or forbidden-pattern obligation but no correlated residual scan receipt after the latest implementation.",
+                "Run a fresh residual scan for every forbidden pattern and correlate its output before completion.",
+            ),
+        ):
+            predicate = "matched = 1" if matched_value else "scanned = 0"
+            count_row = events._db.execute(
+                f"SELECT COUNT(*) FROM active_forbidden_claims WHERE {predicate}"
+            ).fetchone()
+            count = int(count_row[0]) if count_row else 0
+            if not count:
+                continue
+            pattern_rows = events._db.execute(
+                f"""
+                SELECT claim FROM active_forbidden_claims
+                WHERE {predicate}
+                ORDER BY claim
+                LIMIT ?
+                """,
+                (_AUDIT_VALUE_SAMPLE_LIMIT,),
             )
-        forbidden.clear()
+            issue = {
+                "skill": "verification-before-completion-harness",
+                "status": status,
+                "severity": "P0",
+                "reason": reason,
+                "action": action,
+                "forbidden_patterns": [str(row[0]) for row in pattern_rows],
+            }
+            if matched_value:
+                sample_row = events._db.execute(
+                    """
+                    SELECT scan_sample FROM active_forbidden_claims
+                    WHERE matched = 1 AND scan_sample <> ''
+                    ORDER BY claim LIMIT 1
+                    """
+                ).fetchone()
+                issue["scan_output"] = str(sample_row[0]) if sample_row else ""
+            if count > len(issue["forbidden_patterns"]):
+                issue["forbidden_pattern_count"] = count
+                issue["forbidden_patterns_truncated"] = True
+            issues.append(issue)
+        events._db.execute("DELETE FROM active_forbidden_claims")
     return issues
 
 
@@ -7022,86 +12956,98 @@ def _is_fan_in_receipt(receipt: CorrelatedToolReceipt) -> bool:
 
 def _required_delegation_issues(path: Path) -> List[Dict[str, Any]]:
     events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("delegation audit requires indexed event facts")
     receipts = _correlated_tool_receipts(events)
-    requirement_indexes: List[int] = []
-    requirement_sources: List[str] = []
-    for index, event in enumerate(events):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        if (
-            str(payload.get("type", "")) == "message"
-            and str(payload.get("role", "")).lower() == "user"
-            and _explicit_user_delegation(_payload_text(payload))
-        ):
-            requirement_indexes.append(index)
-            requirement_sources.append("explicit_user_delegation")
+    if not isinstance(receipts, DiskBackedToolReceipts):
+        raise RuntimeError("delegation audit requires indexed receipt facts")
+    requirement_index: int | None = None
+    requirement_sources: Set[str] = set()
+    for index, payload in events.iter_payloads(
+        payload_types=("message",),
+        roles=("user",),
+    ):
+        if _explicit_user_delegation(_payload_text(payload)):
+            requirement_index = index if requirement_index is None else min(requirement_index, index)
+            requirement_sources.add("explicit_user_delegation")
     for output_index, receipt in _correlated_front_door_receipts(events).items():
         classification = receipt.data.get("classification", {}) or {}
         if isinstance(classification, dict) and str(classification.get("recommended_execution", "")) == "role_dag":
-            requirement_indexes.append(output_index)
-            requirement_sources.append("mandatory_role_dag")
-    if not requirement_indexes:
+            requirement_index = (
+                output_index
+                if requirement_index is None
+                else min(requirement_index, output_index)
+            )
+            requirement_sources.add("mandatory_role_dag")
+    if requirement_index is None:
         return []
-    requirement_index = min(requirement_indexes)
-    terminal_index = min(
-        (
-            index
-            for index, event in enumerate(events)
-            if isinstance(event.get("payload"), dict)
-            and str(event["payload"].get("type", "")) == "task_complete"
-            and index > requirement_index
-        ),
-        default=-1,
+    terminal_row = events._db.execute(
+        """
+        SELECT MIN(seq) FROM events
+        WHERE payload_type = 'task_complete' AND seq > ?
+        """,
+        (requirement_index,),
+    ).fetchone()
+    terminal_index = (
+        int(terminal_row[0])
+        if terminal_row and terminal_row[0] is not None
+        else -1
     )
-    implementation_index = min(
+    implementation_index = next(
         (
             index
-            for index, event in enumerate(events)
-            if index > requirement_index
-            and isinstance(event.get("payload"), dict)
-            and _is_implementation_call(event["payload"])
+            for index, payload in events.iter_payloads(
+                payload_types=("function_call", "custom_tool_call"),
+                start=requirement_index + 1,
+            )
+            if _is_implementation_call(payload)
         ),
-        default=-1,
+        -1,
     )
     decision_index = terminal_index if terminal_index >= 0 else implementation_index
     if decision_index < 0:
         return []
-    relevant_receipts = [
-        receipt
-        for receipt in receipts
-        if requirement_index < receipt.call_index < receipt.output_index < decision_index
-    ]
-    dispatches = [receipt for receipt in relevant_receipts if _is_dispatch_receipt(receipt)]
-    fan_ins = [
-        receipt
-        for receipt in relevant_receipts
-        if _is_fan_in_receipt(receipt)
-        and any(dispatch.output_index < receipt.call_index for dispatch in dispatches)
-    ]
+    dispatch_count = 0
+    fan_in_count = 0
+    latest_dispatch_output = -1
+    availability_count = 0
+    availability_true = False
+    availability_observed = False
+    for receipt in receipts.iter_range(
+        after_index=requirement_index,
+        before_index=decision_index,
+    ):
+        if _is_dispatch_receipt(receipt):
+            dispatch_count += 1
+            latest_dispatch_output = max(latest_dispatch_output, receipt.output_index)
+        if (
+            latest_dispatch_output >= 0
+            and _is_fan_in_receipt(receipt)
+            and latest_dispatch_output < receipt.call_index
+        ):
+            fan_in_count += 1
+        if _is_nested_capability_receipt(receipt):
+            availability_count += 1
+            availability = _nested_agents_availability_in_data(receipt.data)
+            availability_observed = availability_observed or availability is not None
+            availability_true = availability_true or availability is True
     user_waiver = any(
-        requirement_index < index < decision_index
-        and isinstance(event.get("payload"), dict)
-        and str(event["payload"].get("type", "")) == "message"
-        and str(event["payload"].get("role", "")).lower() == "user"
-        and _user_approved_delegation_waiver(_payload_text(event["payload"]))
-        for index, event in enumerate(events)
+        _user_approved_delegation_waiver(_payload_text(payload))
+        for _index, payload in events.iter_payloads(
+            payload_types=("message",),
+            roles=("user",),
+            start=requirement_index + 1,
+            stop=decision_index,
+        )
     )
-    availability_receipts = [
-        receipt for receipt in relevant_receipts if _is_nested_capability_receipt(receipt)
-    ]
-    availability_values = [
-        _nested_agents_availability_in_data(receipt.data)
-        for receipt in availability_receipts
-    ]
     nested_available: bool | None
-    if dispatches or any(value is True for value in availability_values):
+    if dispatch_count or availability_true:
         nested_available = True
-    elif availability_values:
+    elif availability_observed:
         nested_available = False
     else:
         nested_available = None
-    if (dispatches and fan_ins) or user_waiver:
+    if (dispatch_count and fan_in_count) or user_waiver:
         return []
     explicit_user_requirement = "explicit_user_delegation" in requirement_sources
     if nested_available is False:
@@ -7125,21 +13071,21 @@ def _required_delegation_issues(path: Path) -> List[Dict[str, Any]]:
             "severity": "P0" if terminal_index >= 0 else "P1",
             "reason": reason,
             "action": "Dispatch and fan in nested-agent work, or obtain an explicit waiver from the user; a controller-authored waiver is insufficient.",
-            "requirement_sources": sorted(set(requirement_sources)),
+            "requirement_sources": sorted(requirement_sources),
             "nested_agents_available": nested_available,
-            "availability_receipt": bool(availability_receipts),
-            "dispatch_receipts": len(dispatches),
-            "fan_in_receipts": len(fan_ins),
+            "availability_receipt": bool(availability_count),
+            "dispatch_receipts": dispatch_count,
+            "fan_in_receipts": fan_in_count,
             "user_approved_waiver": user_waiver,
         }
     ]
 
 
 def _front_door_selected_skill(path: Path, skill_name: str) -> bool:
-    for text in _session_texts(path):
-        data = _front_door_json(_strip_passive_prefix(text))
-        if not data:
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("front-door selection requires indexed claim facts")
+    for _event_seq, _payload, data in events.iter_front_door_claim_payloads():
         immediate = {str(item) for item in data.get("immediate_next_skills", []) or []}
         if skill_name in immediate:
             return True
@@ -7155,28 +13101,26 @@ def _front_door_selected_skill(path: Path, skill_name: str) -> bool:
 
 
 def _front_door_blocks_execution(path: Path) -> bool:
-    for text in _session_texts(path):
-        data = _front_door_json(_strip_passive_prefix(text))
-        if not data:
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("front-door gate check requires indexed claim facts")
+    for _event_seq, _payload, data in events.iter_front_door_claim_payloads():
         gate = data.get("execution_gate", {}) or {}
         if isinstance(gate, dict) and gate.get("can_execute") is False:
             return True
     return False
 
 
-def _subagent_strategy_issues(path: Path, postmortem: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _subagent_strategy_issues(
+    path: Path,
+    postmortem: Dict[str, Any],
+    *,
+    active_text: str | None = None,
+) -> List[Dict[str, Any]]:
     if not _is_subagent_session(path):
         return []
-    evidence_texts = []
-    for text in _session_texts(path):
-        if _is_passive_text(text):
-            continue
-        clean_text = _strip_passive_prefix(text)
-        if _looks_like_front_door_runtime_output(clean_text.lower()):
-            continue
-        evidence_texts.append(clean_text)
-    active_text = "\n".join(evidence_texts)
+    if active_text is None:
+        active_text = _bounded_text_aggregate(_active_non_front_door_texts(path))
     lowered = active_text.lower()
     subagents = postmortem.get("subagent_summary", {}) or {}
     token_gate = postmortem.get("token_gate", {}) or {}
@@ -7219,16 +13163,14 @@ def _subagent_strategy_issues(path: Path, postmortem: Dict[str, Any]) -> List[Di
     ]
 
 
-def _orchestration_decision_issues(path: Path, postmortem: Dict[str, Any]) -> List[Dict[str, Any]]:
-    evidence_texts = []
-    for text in _session_texts(path):
-        if _is_passive_text(text):
-            continue
-        clean_text = _strip_passive_prefix(text)
-        if _looks_like_front_door_runtime_output(clean_text.lower()):
-            continue
-        evidence_texts.append(clean_text)
-    active_text = "\n".join(evidence_texts)
+def _orchestration_decision_issues(
+    path: Path,
+    postmortem: Dict[str, Any],
+    *,
+    active_text: str | None = None,
+) -> List[Dict[str, Any]]:
+    if active_text is None:
+        active_text = _bounded_text_aggregate(_active_non_front_door_texts(path))
     lowered = active_text.lower()
 
     if not _session_has_implementation_activity(path, postmortem, lowered):
@@ -7323,13 +13265,14 @@ def _orchestration_decision_issues(path: Path, postmortem: Dict[str, Any]) -> Li
 
 def _validated_orchestration_artifacts(path: Path) -> Dict[str, bool]:
     records = _session_text_records(path)
+    if not isinstance(records, DiskBackedSessionTextRecords):
+        raise RuntimeError("orchestration audit requires indexed protocol facts")
     evidence = {"parallel_strategy": False, "role_execution_audit": False}
-    for call_index, call in enumerate(records):
-        if call.payload_type not in {"function_call", "custom_tool_call"} or _is_passive_text(call.text):
-            continue
-        lowered = call.text.lower()
-        if "validate_large_work_orchestration_bundle" in lowered:
-            output = _correlated_structured_tool_output(records, call_index)
+    for call_index, call, validates_bundle, audits_roles in (
+        records.iter_orchestration_protocol_calls()
+    ):
+        if validates_bundle:
+            output = records.immediate_structured_output(call_index)
             call_data = _json_object_from_text(call.text)
             bundle = call_data.get("bundle", call_data) if isinstance(call_data, dict) else {}
             if _valid_large_work_bundle_artifact(output):
@@ -7344,32 +13287,14 @@ def _validated_orchestration_artifacts(path: Path) -> Dict[str, bool]:
                 )
                 if _valid_pre_role_decision(role_status):
                     evidence["role_execution_audit"] = True
-        if any(
-            marker in lowered
-            for marker in ["audit_role_execution", "dispatch_project_workflow", "async_project_workflow"]
-        ):
-            output = _correlated_structured_tool_output(records, call_index)
+        if audits_roles:
+            output = records.immediate_structured_output(call_index)
             audit = _find_nested_mapping(output, "role_execution_audit") or output
             if _valid_role_execution_audit_artifact(audit):
                 evidence["role_execution_audit"] = True
                 if _role_audit_proves_parallel_execution(audit):
                     evidence["parallel_strategy"] = True
     return evidence
-
-
-def _correlated_structured_tool_output(
-    records: List[SessionTextRecord], call_index: int
-) -> Dict[str, Any]:
-    call = records[call_index]
-    for record in records[call_index + 1 :]:
-        if record.payload_type in {"function_call", "custom_tool_call"}:
-            break
-        if record.payload_type not in {"function_call_output", "custom_tool_call_output"}:
-            continue
-        if call.call_id and record.call_id != call.call_id:
-            continue
-        return _json_object_from_text(record.text)
-    return {}
 
 
 def _valid_large_work_bundle_artifact(output: Dict[str, Any]) -> bool:
@@ -7486,22 +13411,32 @@ def _early_domain_discovery_text(lowered: str) -> bool:
 
 
 def _function_call_count(path: Path, names: Set[str]) -> int:
-    count = 0
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("type") in {"function_call", "custom_tool_call"} and str(payload.get("name", "")) in names:
-            count += 1
-    return count
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("function-call counting requires indexed event facts")
+    normalized = tuple(dict.fromkeys(str(name) for name in names))
+    if not normalized:
+        return 0
+    placeholders = ",".join("?" for _ in normalized)
+    row = events._db.execute(
+        f"""
+        SELECT COUNT(*) FROM events
+        WHERE payload_type IN ('function_call', 'custom_tool_call')
+          AND name IN ({placeholders})
+        """,
+        normalized,
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 def _implementation_tool_samples(path: Path) -> List[str]:
     samples: List[str] = []
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("implementation sampling requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=("function_call", "custom_tool_call")
+    ):
         payload_type = str(payload.get("type", ""))
         if payload_type not in {"function_call", "custom_tool_call"}:
             continue
@@ -7554,23 +13489,11 @@ def _claims_brainstorming_complete_or_next_stage(lowered: str) -> bool:
 
 
 def _is_subagent_session(path: Path) -> bool:
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
-        try:
-            event = load_json_without_duplicate_keys(line)
-        except (json.JSONDecodeError, DuplicateJsonKeyError):
-            continue
-        if event.get("type") != "session_meta":
-            continue
-        payload = event.get("payload", {}) or {}
-        if not isinstance(payload, dict):
-            continue
-        if str(payload.get("thread_source", "")).lower() == "subagent":
-            return True
-        source = payload.get("source", {}) or {}
-        return isinstance(source, dict) and isinstance(source.get("subagent"), dict)
-    return False
+    payload = _session_metadata(path)
+    if str(payload.get("thread_source", "")).lower() == "subagent":
+        return True
+    source = payload.get("source", {}) or {}
+    return isinstance(source, dict) and isinstance(source.get("subagent"), dict)
 
 
 def _has_subagent_strategy_rationale(lowered: str) -> bool:
@@ -7756,8 +13679,7 @@ def _cross_scope_context_sample(target: Path, text: str) -> str:
     lowered = text.lower()
     if not any(marker in lowered for marker in ["get-childitem", "get-content", "select-string", "rg ", "test-path"]):
         return ""
-    target = _normalize_path(target)
-    parent = _normalize_path(target.parent)
+    parent = target.parent
     for raw_path in _extract_windows_paths(text):
         candidate = _normalize_path(Path(raw_path))
         if candidate == target or _path_is_relative_to(candidate, target):
@@ -7779,7 +13701,7 @@ def _target_substitution_sample(target: Path, text: str) -> str:
     target_name = target.name
     if not target_name:
         return ""
-    normalized_target = str(_normalize_path(target)).lower()
+    normalized_target = str(target).lower()
     normalized_text = (text or "").replace("\\", "/")
     lowered = normalized_text.lower()
     staging_markers = [
@@ -8024,51 +13946,155 @@ def _text_is_explicit_global_memory_import_request(text: str) -> bool:
 
 
 def _session_has_explicit_global_memory_import_request(path: Path) -> bool:
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("memory import detection requires indexed event facts")
     return any(
-        _payload_is_explicit_global_memory_import_request(event.get("payload", {}))
-        for event in _session_payload_events(path)
-        if isinstance(event.get("payload"), dict)
+        _payload_is_explicit_global_memory_import_request(payload)
+        for _event_seq, payload in events.iter_payloads(
+            payload_types=("message",),
+            roles=("user",),
+        )
     )
 
 
-def _payload_has_scoped_memory_import_approval(payload: Dict[str, Any]) -> bool:
-    return _text_has_scoped_memory_import_approval(_payload_text(payload))
+def _payload_has_scoped_memory_import_approval(
+    payload: Dict[str, Any],
+    metadata: Mapping[str, Any],
+) -> bool:
+    return _structured_user_memory_import_decision(payload, metadata) == "approve"
 
 
 def _session_has_scoped_memory_import_evidence(path: Path) -> bool:
-    for record in _session_text_records(path):
-        if _is_passive_text(record.text):
-            continue
-        if _text_has_scoped_memory_import_approval(record.text):
-            return True
-    return False
+    events = _session_payload_events(path)
+    active = False
+    for decision in _memory_import_approval_decisions(
+        events,
+        _session_metadata(path),
+    ).values():
+        active = decision == "approve"
+    return active
 
 
-def _text_has_scoped_memory_import_approval(text: str) -> bool:
-    lowered = text.lower()
-    truthy_patterns = [
-        r"\bmemory_import_approved\b\s*[:=]\s*(?:true|yes|approved|1)\b",
-        r'"memory_import_approved"\s*:\s*true\b',
-        r"'memory_import_approved'\s*:\s*true\b",
-        r"\bparent_memory_access_approved\b\s*[:=]\s*(?:true|yes|approved|1)\b",
-        r'"parent_memory_access_approved"\s*:\s*true\b',
-        r"'parent_memory_access_approved'\s*:\s*true\b",
-    ]
-    if any(re.search(pattern, lowered) for pattern in truthy_patterns):
-        return True
-    if "explicit_cross_scope_memory_import" in lowered and any(
-        marker in lowered
-        for marker in [
-            "approval_state=approved",
-            '"approval_state": "approved"',
-            "'approval_state': 'approved'",
-            "application_status=applied",
-            '"application_status": "applied"',
-            "'application_status': 'applied'",
-        ]
-    ):
-        return True
-    return False
+def _is_authenticated_memory_import_approval_receipt(
+    receipt: CorrelatedToolReceipt,
+    metadata: Mapping[str, Any],
+) -> bool:
+    return _authenticated_memory_import_decision(receipt, metadata) == "approve"
+
+
+def _authenticated_memory_import_decision(
+    receipt: CorrelatedToolReceipt,
+    metadata: Mapping[str, Any],
+) -> str:
+    tool_identity = str(receipt.call.get("tool_identity", "") or "").strip().lower()
+    if tool_identity not in _AUTHENTICATED_MEMORY_APPROVAL_TOOLS:
+        return ""
+    data = receipt.data if isinstance(receipt.data, Mapping) else {}
+    approval = data.get("memory_import_approval", data)
+    if not isinstance(approval, Mapping):
+        return ""
+    if str(approval.get("application_status", "") or "") != "applied":
+        return ""
+    return _validated_memory_import_decision(approval, metadata, exact_keys=False)
+
+
+def _memory_import_approval_decisions(
+    events: Sequence[Dict[str, Any]],
+    metadata: Mapping[str, Any],
+) -> Mapping[int, str]:
+    if isinstance(events, DiskBackedSessionEvents):
+        return events.memory_import_decisions(metadata)
+    raise RuntimeError("memory approval decisions require the streaming fact store")
+
+
+def _structured_user_memory_import_decision(
+    payload: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> str:
+    if str(payload.get("type", "")) != "message":
+        return ""
+    if str(payload.get("role", "")).strip().lower() != "user":
+        return ""
+    directive = _standalone_memory_import_directive(payload)
+    if directive is None:
+        return ""
+    return _validated_memory_import_decision(directive, metadata, exact_keys=True)
+
+
+def _standalone_memory_import_directive(
+    payload: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    embedded = payload.get("memory_import_directive")
+    if isinstance(embedded, Mapping):
+        if _content_text(payload.get("content")).strip():
+            return None
+        return embedded
+
+    content = payload.get("content")
+    text = ""
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list) and len(content) == 1:
+        item = content[0]
+        if not isinstance(item, Mapping):
+            return None
+        if set(item) - {"type", "text"}:
+            return None
+        if str(item.get("type", "")) not in {"input_text", "text"}:
+            return None
+        if not isinstance(item.get("text"), str):
+            return None
+        text = str(item["text"])
+    else:
+        return None
+    stripped = text.strip()
+    if not stripped.startswith("{") or not stripped.endswith("}"):
+        return None
+    try:
+        value = load_json_without_duplicate_keys(stripped)
+    except (json.JSONDecodeError, DuplicateJsonKeyError):
+        return None
+    return value if isinstance(value, Mapping) else None
+
+
+def _validated_memory_import_decision(
+    directive: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    *,
+    exact_keys: bool,
+) -> str:
+    if exact_keys and set(directive) != _MEMORY_IMPORT_DIRECTIVE_KEYS:
+        return ""
+    if not _MEMORY_IMPORT_DIRECTIVE_KEYS.issubset(directive):
+        return ""
+    if directive.get("claim_kind") != "kh_memory_import_approval":
+        return ""
+    if directive.get("scope") != "host-global":
+        return ""
+    expected_project = metadata.get("cwd")
+    expected_conversation = metadata.get("thread_id") or metadata.get("id")
+    if type(expected_project) is not str or not expected_project:
+        return ""
+    if type(expected_conversation) is not str or not expected_conversation:
+        return ""
+    project = directive.get("project")
+    conversation_id = directive.get("conversation_id")
+    if type(project) is not str or type(conversation_id) is not str:
+        return ""
+    if _session_path_key(Path(project)) != _session_path_key(Path(expected_project)):
+        return ""
+    if conversation_id != expected_conversation:
+        return ""
+
+    action = directive.get("action")
+    approval_state = directive.get("approval_state")
+    approved = directive.get("memory_import_approved")
+    if action == "approve" and approval_state == "approved" and approved is True:
+        return "approve"
+    if action == "revoke" and approval_state == "revoked" and approved is False:
+        return "revoke"
+    return ""
 
 
 def _is_stale_kh_skill_cache_failure(lowered: str) -> bool:
@@ -8089,18 +14115,141 @@ def _is_stale_kh_skill_cache_failure(lowered: str) -> bool:
     )
 
 
-def _session_payload_events(path: Path) -> List[Dict[str, Any]]:
-    events: List[Dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
-        try:
-            event = load_json_without_duplicate_keys(line)
-        except (json.JSONDecodeError, DuplicateJsonKeyError):
-            continue
-        if event.get("type") in {"response_item", "event_msg"} and isinstance(event.get("payload"), dict):
-            events.append(event)
-    return events
+def _session_payload_events(path: Path) -> Sequence[Dict[str, Any]]:
+    index = _current_session_event_index(path)
+    if index is None:
+        index = _build_session_event_index(path)
+    index.payload_events.note_check()
+    return index.payload_events
+
+
+def _session_path_key(path: Path) -> str:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path.absolute()
+    return str(resolved).replace("\\", "/").casefold()
+
+
+def _current_session_event_index(path: Path) -> SessionEventIndex | None:
+    index = _SESSION_EVENT_INDEX.get()
+    if index is None or index.path_key != _session_path_key(path):
+        return None
+    return index
+
+
+def _session_index_text_requires_lossless_capture(root_key: str, value: str) -> bool:
+    if root_key not in {"output", "packet"}:
+        return False
+    return any(marker in value for marker in _SESSION_INDEX_REQUIRED_EVIDENCE_MARKERS)
+
+
+def _bounded_session_index_value(
+    value: Any,
+    *,
+    root_key: str,
+) -> Any:
+    if isinstance(value, str):
+        if len(value) <= _SESSION_INDEX_TEXT_CAPTURE_LIMIT or _session_index_text_requires_lossless_capture(
+            root_key,
+            value,
+        ):
+            return value
+        marker = (
+            "\n[KH_SESSION_INDEX_TRUNCATED "
+            f"characters={len(value)}]\n"
+        )
+        return (
+            value[:_SESSION_INDEX_TEXT_CAPTURE_EDGE]
+            + marker
+            + value[-_SESSION_INDEX_TEXT_CAPTURE_EDGE:]
+        )
+    if isinstance(value, Mapping):
+        return {
+            str(key): _bounded_session_index_value(
+                item,
+                root_key=root_key,
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _bounded_session_index_value(
+                item,
+                root_key=root_key,
+            )
+            for item in value
+        ]
+    return value
+
+
+def _compact_session_event(event: Mapping[str, Any]) -> Dict[str, Any]:
+    payload = event.get("payload")
+    compact_payload: Dict[str, Any] = {}
+    if isinstance(payload, Mapping):
+        for key, value in payload.items():
+            if key not in _SESSION_EVENT_PAYLOAD_KEYS:
+                continue
+            compact_payload[key] = _bounded_session_index_value(
+                value,
+                root_key=key,
+            )
+    compact_event: Dict[str, Any] = {
+        "type": str(event.get("type") or ""),
+        "payload": compact_payload,
+    }
+    if "timestamp" in event:
+        compact_event["timestamp"] = event.get("timestamp")
+    return compact_event
+
+
+def _compact_session_metadata(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    metadata = {
+        key: _bounded_session_index_value(
+            payload[key],
+            root_key=key,
+        )
+        for key in _SESSION_METADATA_KEYS
+        if key in payload
+    }
+    return metadata
+
+
+def _retained_python_bytes(value: Any, seen: Set[int] | None = None) -> int:
+    seen = seen if seen is not None else set()
+    identity = id(value)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    size = sys.getsizeof(value)
+    if isinstance(value, Mapping):
+        size += sum(
+            _retained_python_bytes(key, seen) + _retained_python_bytes(item, seen)
+            for key, item in value.items()
+        )
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        size += sum(_retained_python_bytes(item, seen) for item in value)
+    return size
+
+
+def _build_session_event_index(
+    path: Path,
+    *,
+    collect_stage_telemetry: bool = False,
+) -> SessionEventIndex:
+    catalog = collect_packaged_skills()
+    pipeline = AuditStreamPipeline(
+        path,
+        catalog=catalog,
+        collect_stage_telemetry=collect_stage_telemetry,
+    )
+    try:
+        postmortem = analyze_codex_session_jsonl(path, event_stream=pipeline.stream())
+        index = pipeline.finalize(postmortem=postmortem)
+        return index
+    except Exception:
+        pipeline.close()
+        raise
 
 
 def _payload_call_id(payload: Dict[str, Any]) -> str:
@@ -8109,45 +14258,123 @@ def _payload_call_id(payload: Dict[str, Any]) -> str:
 
 def _correlated_front_door_receipts(
     events: Sequence[Dict[str, Any]],
-) -> Dict[int, CorrelatedFrontDoorReceipt]:
-    pending_calls: Dict[str, tuple[int, Dict[str, Any]]] = {}
-    receipts: Dict[int, CorrelatedFrontDoorReceipt] = {}
-    latest_request_boundary = -1
-    for index, event in enumerate(events):
+) -> Mapping[int, CorrelatedFrontDoorReceipt]:
+    if isinstance(events, DiskBackedSessionEvents):
+        return events.correlated_front_door_receipts()
+    raise RuntimeError("front-door receipts require the streaming fact store")
+
+
+def _duplicate_front_door_boundaries(events: Sequence[Dict[str, Any]]) -> Any:
+    if isinstance(events, DiskBackedSessionEvents):
+        return DiskBackedDuplicateFactKeys(events, "boundary")
+    counts: Dict[str, int] = {}
+    for event in events:
+        if str(event.get("type", "")) != "response_item":
+            continue
         payload = event.get("payload", {})
-        if not isinstance(payload, dict):
+        if not isinstance(payload, Mapping):
             continue
-        payload_type = str(payload.get("type", ""))
-        call_id = _payload_call_id(payload)
-        text = _payload_text(payload)
-        lowered = text.lower()
-        if (
-            payload_type == "message"
-            and str(payload.get("role", "")).lower() == "user"
-            and not _is_synthetic_context_message(text)
-            and not _is_bounded_same_task_continuation(text)
-        ) or payload_type == "task_complete":
-            latest_request_boundary = index
-        if payload_type in {"function_call", "custom_tool_call"}:
-            if call_id and _is_front_door_runtime_command(payload, lowered):
-                pending_calls[call_id] = (index, payload)
+        if str(payload.get("type", "")) not in {"function_call", "custom_tool_call"}:
             continue
-        if payload_type not in {"function_call_output", "custom_tool_call_output"} or not call_id:
-            continue
-        pending = pending_calls.pop(call_id, None)
-        if pending is None or not _front_door_output_succeeded(payload, pending[1]):
-            continue
-        call_index, _call = pending
-        if call_index <= latest_request_boundary:
-            continue
-        data = _front_door_json(_payload_text(payload))
-        if _has_normalized_front_door_receipt(data):
-            receipts[index] = CorrelatedFrontDoorReceipt(
-                call_index=call_index,
-                output_index=index,
-                data=data,
-            )
-    return receipts
+        boundary_id = str(payload.get("boundary_id", "") or "").strip()
+        if boundary_id:
+            counts[boundary_id] = counts.get(boundary_id, 0) + 1
+    return {boundary_id for boundary_id, count in counts.items() if count > 1}
+
+
+def _valid_host_front_door_provenance(
+    call: Mapping[str, Any],
+    output: Mapping[str, Any],
+    packet: Mapping[str, Any],
+    *,
+    duplicate_boundaries: Set[str],
+    duplicate_packet_hashes: Set[str] | None = None,
+) -> bool:
+    """Validate structural host provenance; JSONL authenticity is not established here."""
+    call_id = _payload_call_id(dict(call))
+    if not call_id or call_id != _payload_call_id(dict(output)):
+        return False
+
+    source = _front_door_provenance_value(call, "source", "host", "origin")
+    output_source = _front_door_provenance_value(output, "source", "host", "origin")
+    if source not in _KNOWN_HOST_FRONT_DOOR_SOURCES or output_source != source:
+        return False
+
+    tool_identity = str(call.get("tool_identity", "") or "").strip().lower()
+    output_tool_identity = str(output.get("tool_identity", "") or "").strip().lower()
+    call_name = str(call.get("name", "") or "").strip().lower()
+    if not tool_identity or tool_identity != output_tool_identity or tool_identity != call_name:
+        return False
+    if not _is_front_door_runtime_command(dict(call), _payload_text(dict(call)).lower()):
+        return False
+
+    boundary_id = str(call.get("boundary_id", "") or "").strip()
+    if (
+        not boundary_id
+        or boundary_id in duplicate_boundaries
+        or str(output.get("boundary_id", "") or "").strip() != boundary_id
+        or (
+            str(packet.get("boundary_id", "") or "").strip()
+            and str(packet.get("boundary_id", "") or "").strip() != boundary_id
+        )
+    ):
+        return False
+
+    correlation_id = str(
+        packet.get("correlation_id", "")
+        or output.get("correlation_id", "")
+    ).strip()
+    if (
+        correlation_id != call_id
+        or str(call.get("correlation_id", "") or "").strip() != call_id
+        or str(output.get("correlation_id", "") or "").strip() != call_id
+    ):
+        return False
+
+    packet_hash = _front_door_packet_hash_value(packet)
+    supplied_packet_hash = str(
+        packet.get("packet_sha256", "")
+        or packet.get("packet_hash", "")
+        or output.get("packet_sha256", "")
+        or output.get("packet_hash", "")
+    ).strip().lower()
+    if (
+        not packet_hash
+        or not supplied_packet_hash
+        or packet_hash != supplied_packet_hash
+        or packet_hash in (duplicate_packet_hashes or set())
+    ):
+        return False
+    return str(output.get("packet_sha256", "") or output.get("packet_hash", "")).strip().lower() == packet_hash
+
+
+def _front_door_provenance_value(payload: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = str(payload.get(key, "") or "").strip().lower()
+        if value:
+            return value
+    return ""
+
+
+def _front_door_packet_hash_value(
+    packet: Mapping[str, Any],
+    *,
+    supplied: bool = False,
+) -> str:
+    if supplied:
+        return str(packet.get("packet_sha256", "") or packet.get("packet_hash", "")).strip().lower()
+    unsigned = {
+        str(key): value
+        for key, value in packet.items()
+        if str(key) not in _FRONT_DOOR_PACKET_HASH_KEYS
+    }
+    encoded = json.dumps(
+        unsigned,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _front_door_output_succeeded(
@@ -8179,7 +14406,7 @@ def _front_door_output_succeeded(
         return False
     call_name = str(call_payload.get("name", "") or "").strip().lower()
     if _is_trusted_front_door_tool_name(call_name):
-        return not recorded_exit_codes or all(code == 0 for code in recorded_exit_codes)
+        return bool(recorded_exit_codes) and all(code == 0 for code in recorded_exit_codes)
     return bool(recorded_exit_codes) and all(code == 0 for code in recorded_exit_codes)
 
 
@@ -8253,38 +14480,33 @@ def _has_blocked_front_door_contract(data: Mapping[str, Any]) -> bool:
 def _latest_actual_runtime_token_optimizer_decision(
     events: Sequence[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    pending_calls: Dict[str, Dict[str, Any]] = {}
-    latest: Dict[str, Any] = {}
-    for event in events:
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        payload_type = str(payload.get("type", ""))
-        call_id = _payload_call_id(payload)
-        lowered = _payload_text(payload).lower()
-        if payload_type == "thread_goal_updated":
+    if isinstance(events, DiskBackedSessionEvents):
+        latest: Dict[str, Any] = {}
+        latest_seq = -1
+        for event_seq, payload in events.iter_payloads(
+            payload_types=("thread_goal_updated",)
+        ):
             if not _has_explicit_token_optimizer_runtime_source(payload):
                 continue
             decision = _actual_runtime_token_optimizer_decision(
-                json.dumps(payload, ensure_ascii=False)
+                _canonical_json(payload)
             )
-            if decision:
+            if decision and event_seq > latest_seq:
+                latest_seq = event_seq
                 latest = decision
-            continue
-        if payload_type in {"function_call", "custom_tool_call"}:
-            if call_id and _is_token_optimizer_runtime_command(lowered):
-                pending_calls[call_id] = payload
-            continue
-        if payload_type not in {"function_call_output", "custom_tool_call_output"} or not call_id:
-            continue
-        if pending_calls.pop(call_id, None) is None:
-            continue
-        if not _runtime_tool_output_succeeded(payload):
-            continue
-        decision = _actual_runtime_token_optimizer_decision(_payload_text(payload))
-        if decision:
-            latest = decision
-    return latest
+        for receipt in events.correlated_tool_receipts(include_failed=False):
+            if not _is_token_optimizer_runtime_command(
+                _payload_text(receipt.call).lower()
+            ):
+                continue
+            decision = _actual_runtime_token_optimizer_decision(
+                _payload_text(receipt.output)
+            )
+            if decision and receipt.output_index > latest_seq:
+                latest_seq = receipt.output_index
+                latest = decision
+        return latest
+    raise RuntimeError("token optimizer correlation requires the streaming fact store")
 
 
 def _runtime_tool_output_succeeded(payload: Dict[str, Any]) -> bool:
@@ -8397,19 +14619,16 @@ def _has_explicit_token_optimizer_runtime_source(value: Any) -> bool:
     return False
 
 
-def _full_summary_token_output_indexes(events: Sequence[Dict[str, Any]]) -> Set[int]:
-    indexes: Set[int] = set()
-    for index, event in enumerate(events):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict) or str(payload.get("type", "")) not in {
-            "function_call_output",
-            "custom_tool_call_output",
-        }:
-            continue
+def _has_full_summary_token_output(events: Sequence[Dict[str, Any]]) -> bool:
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("token output detection requires indexed event facts")
+    for _index, payload in events.iter_payloads(
+        payload_types=("function_call_output", "custom_tool_call_output")
+    ):
         data = _json_object_from_text(_payload_text(payload))
         if isinstance(data.get("token_optimizer_decision"), dict):
-            indexes.add(index)
-    return indexes
+            return True
+    return False
 
 
 def _threshold_token_gate_required(token_gate: Dict[str, Any]) -> bool:
@@ -8427,17 +14646,34 @@ def _apply_front_door_token_optimizer_evidence(
 ) -> int:
     events = _session_payload_events(path)
     correlated_receipts = _correlated_front_door_receipts(events)
-    full_summary_token_outputs = _full_summary_token_output_indexes(events)
-    decisions: List[Dict[str, Any]] = []
+    full_summary_token_output = _has_full_summary_token_output(events)
+    decision_count = 0
+    latest_front_door_decision: Dict[str, Any] = {}
     for receipt in correlated_receipts.values():
         data = receipt.data
         token_decision = data.get("token_optimizer", {}) or {}
         if isinstance(token_decision, dict) and str(token_decision.get("status", "")).strip():
-            decisions.append(token_decision)
+            decision_count += 1
+            latest_front_door_decision = token_decision
 
     latest_actual = _latest_actual_runtime_token_optimizer_decision(events)
+    has_correlated_runtime_activity = any(
+        not _is_front_door_runtime_command(
+            receipt.call,
+            _payload_text(receipt.call).lower(),
+        )
+        for receipt in _correlated_tool_receipts(events, include_failed=True)
+    )
 
     evidence = dict(postmortem.get("token_optimizer_evidence", {}) or {})
+    evidence["front_door_runtime_provenance"] = {
+        "status": "structural_jsonl_correlation_only",
+        "external_authenticity": "unverified",
+        "note": (
+            "The audit proves ordered host call/output correlation, identity, boundary, "
+            "correlation, and packet-hash consistency; it cannot prove file-level cryptographic authenticity."
+        ),
+    }
     existing_receipts = any(
         int(evidence.get(key, 0) or 0) > 0
         for key in [
@@ -8449,11 +14685,15 @@ def _apply_front_door_token_optimizer_evidence(
             "blocked_reason_records",
         ]
     )
-    full_summary_only_evidence = bool(full_summary_token_outputs) and not latest_actual
+    full_summary_only_evidence = full_summary_token_output and not latest_actual
     if full_summary_only_evidence:
         existing_receipts = False
     token_gate = dict(postmortem.get("token_gate", {}) or {})
-    token_gate["checked"] = bool(existing_receipts or decisions or latest_actual)
+    token_evidence_checked = bool(
+        existing_receipts or decision_count or latest_actual or full_summary_only_evidence
+    )
+    if token_evidence_checked:
+        token_gate["checked"] = bool(existing_receipts or decision_count or latest_actual)
 
     if latest_actual:
         status = str(latest_actual.get("status", "")).strip()
@@ -8463,8 +14703,8 @@ def _apply_front_door_token_optimizer_evidence(
         evidence["latest_actual_runtime_status"] = status
         evidence["latest_actual_runtime_decision"] = dict(latest_actual)
     elif (
-        decisions
-        and str(decisions[-1].get("status", "")) == "considered_not_needed"
+        decision_count
+        and str(latest_front_door_decision.get("status", "")) == "considered_not_needed"
         and _threshold_token_gate_required(token_gate)
     ):
         status = "blocked"
@@ -8477,32 +14717,37 @@ def _apply_front_door_token_optimizer_evidence(
         postmortem["token_optimizer_status"] = status
         postmortem["token_optimizer_status_reason"] = reason
         token_gate["satisfied"] = status in {"used", "passthrough"}
-    elif decisions:
-        latest = decisions[-1]
+    elif decision_count:
+        latest = latest_front_door_decision
         status = str(latest.get("status", "")).strip()
         postmortem["token_optimizer_status"] = status
         postmortem["token_optimizer_status_reason"] = str(
             latest.get("reason_code", "") or status
         )
         token_gate["decision_source"] = "kh_front_door_runtime_receipt"
-        evidence["front_door_runtime_receipts"] = len(decisions)
+        evidence["front_door_runtime_receipts"] = decision_count
         evidence["latest_front_door_decision"] = dict(latest)
     else:
         evidence.setdefault("front_door_runtime_receipts", 0)
-        if not existing_receipts and (
-            full_summary_only_evidence
-            or postmortem.get("token_optimizer_status") == "considered_not_needed"
+        if not existing_receipts and full_summary_only_evidence:
+            postmortem["token_optimizer_status"] = "not_checked"
+            postmortem["token_optimizer_status_reason"] = "no runtime token-optimizer receipt"
+        elif (
+            not existing_receipts
+            and not has_correlated_runtime_activity
+            and postmortem.get("token_optimizer_status") == "considered_not_needed"
         ):
+            token_gate["checked"] = False
             postmortem["token_optimizer_status"] = "not_checked"
             postmortem["token_optimizer_status_reason"] = "no runtime token-optimizer receipt"
 
-    evidence["front_door_runtime_receipts"] = len(decisions)
-    if decisions:
-        evidence["latest_front_door_decision"] = dict(decisions[-1])
+    evidence["front_door_runtime_receipts"] = decision_count
+    if decision_count:
+        evidence["latest_front_door_decision"] = dict(latest_front_door_decision)
 
     postmortem["token_gate"] = token_gate
     postmortem["token_optimizer_evidence"] = evidence
-    return len(decisions)
+    return decision_count
 
 
 def _has_normalized_front_door_receipt(data: Dict[str, Any]) -> bool:
@@ -8521,48 +14766,139 @@ def _has_normalized_front_door_receipt(data: Dict[str, Any]) -> bool:
 
 
 def _session_integrity_issues(path: Path) -> List[Dict[str, Any]]:
-    issues: List[Dict[str, Any]] = []
-    for line_number, line in enumerate(
-        path.read_text(encoding="utf-8", errors="replace").splitlines(),
-        start=1,
-    ):
-        if not line.strip():
-            continue
-        _, _, structure = _partial_session_json_string_fields(line)
-        duplicate_boundary_field = bool(structure.get("duplicate_boundary_field"))
-        error = ""
+    index = _current_session_event_index(path)
+    if index is None:
+        index = _build_session_event_index(path)
         try:
-            load_json_without_duplicate_keys(line)
-        except (json.JSONDecodeError, DuplicateJsonKeyError) as exc:
-            if not duplicate_boundary_field and not _malformed_line_can_hide_task_boundary(line):
-                continue
-            error = str(exc)
-        if not duplicate_boundary_field and not error:
-            continue
-        duplicate_reason = (
-            "Duplicate boundary-bearing JSON keys make a session event ambiguous even when the JSON "
-            "is syntactically valid."
-        )
-        malformed_reason = (
-            "Malformed session JSONL can hide a user-request or task-complete boundary, "
-            "so front-door acknowledgement reuse cannot be audited safely."
-        )
-        issues.append(
-            {
-                "skill": "always-on-front-door",
-                "status": "session_jsonl_integrity_error",
-                "severity": "P0",
-                "reason": duplicate_reason if duplicate_boundary_field else malformed_reason,
-                "action": (
-                    "Repair or regenerate the ambiguous session event before accepting front-door "
-                    "ordering or same-task acknowledgement reuse."
-                ),
-                "line_number": line_number,
-                "error": error or "duplicate boundary-bearing JSON key",
-                "sample": _short(line),
-            }
-        )
-    return issues
+            return [dict(issue) for issue in index.integrity_issues]
+        finally:
+            index.close()
+    return [dict(issue) for issue in index.integrity_issues]
+
+
+def _duplicate_tool_call_identity_issues(path: Path) -> List[Dict[str, Any]]:
+    duplicate_call_ids = _duplicate_tool_call_ids(_session_payload_events(path))
+    if not duplicate_call_ids:
+        return []
+    return [
+        {
+            "skill": "verification-before-completion-harness",
+            "status": "ambiguous_duplicate_tool_call_identity",
+            "severity": "P1",
+            "reason": (
+                "Duplicate function-call or function-output call_id values make tool provenance "
+                "ambiguous; no receipt with an ambiguous identity is accepted."
+            ),
+            "action": "Regenerate the affected tool calls with unique host-issued call_id values.",
+            "call_ids": duplicate_call_ids,
+            "samples": [],
+        }
+    ]
+
+
+def _duplicate_json_key_integrity_issue(
+    *,
+    line_number: int,
+    line: str,
+    duplicate_keys: Sequence[str],
+) -> Dict[str, Any]:
+    keys = _ordered_unique(
+        _short(str(key or ""), 160)
+        for key in duplicate_keys
+    )[:20]
+    return {
+        "skill": "always-on-front-door",
+        "status": "session_jsonl_integrity_error",
+        "issue_type": "input_integrity",
+        "blocking": True,
+        "integrity_code": "duplicate_json_key",
+        "severity": "P0",
+        "reason": (
+            "Duplicate JSON keys make the decoded session event ambiguous; the entire record "
+            "is excluded from postmortem and audit semantics instead of accepting last-key-wins values."
+        ),
+        "action": (
+            "Repair or regenerate the duplicate-key session event before accepting any audit result."
+        ),
+        "line_number": int(line_number),
+        "error": "duplicate JSON keys: " + ", ".join(keys),
+        "duplicate_keys": keys,
+        "sample": _short(line),
+    }
+
+
+def _session_line_integrity_issue(
+    *,
+    line_number: int,
+    line: str,
+    duplicate_boundary_field: bool,
+    parse_error: str,
+) -> Dict[str, Any] | None:
+    if parse_error and not duplicate_boundary_field and not _malformed_line_can_hide_task_boundary(line):
+        return None
+    if not duplicate_boundary_field and not parse_error:
+        return None
+    duplicate_reason = (
+        "Duplicate boundary-bearing JSON keys make a session event ambiguous even when the JSON "
+        "is syntactically valid."
+    )
+    malformed_reason = (
+        "Malformed session JSONL can hide a user-request or task-complete boundary, "
+        "so front-door acknowledgement reuse cannot be audited safely."
+    )
+    return {
+        "skill": "always-on-front-door",
+        "status": "session_jsonl_integrity_error",
+        "integrity_code": (
+            "duplicate_boundary_field"
+            if duplicate_boundary_field
+            else "malformed_task_boundary"
+        ),
+        "severity": "P0",
+        "reason": duplicate_reason if duplicate_boundary_field else malformed_reason,
+        "action": (
+            "Repair or regenerate the ambiguous session event before accepting front-door "
+            "ordering or same-task acknowledgement reuse."
+        ),
+        "line_number": line_number,
+        "error": parse_error or "duplicate boundary-bearing JSON key",
+        "sample": _short(line),
+    }
+
+
+def _record_bounded_integrity_issue(
+    groups: Dict[str, Dict[str, Any]],
+    issue: Mapping[str, Any],
+) -> None:
+    code = str(issue.get("integrity_code", "unknown_integrity_issue") or "unknown_integrity_issue")
+    line_number = int(issue.get("line_number", 0) or 0)
+    sample = {
+        "line_number": line_number,
+        "error": str(issue.get("error", "") or ""),
+        "sample": str(issue.get("sample", "") or ""),
+    }
+    current = groups.get(code)
+    if current is None:
+        current = dict(issue)
+        current["occurrences"] = 1
+        current["sample_line_numbers"] = [line_number] if line_number else []
+        current["samples"] = [sample]
+        groups[code] = current
+        return
+    current["occurrences"] = int(current.get("occurrences", 0) or 0) + 1
+    samples = current.get("samples")
+    if not isinstance(samples, list):
+        samples = []
+        current["samples"] = samples
+    if len(samples) >= _SESSION_INTEGRITY_SAMPLE_LIMIT:
+        return
+    samples.append(sample)
+    line_numbers = current.get("sample_line_numbers")
+    if not isinstance(line_numbers, list):
+        line_numbers = []
+        current["sample_line_numbers"] = line_numbers
+    if line_number:
+        line_numbers.append(line_number)
 
 
 def _malformed_line_can_hide_task_boundary(line: str) -> bool:
@@ -8570,7 +14906,7 @@ def _malformed_line_can_hide_task_boundary(line: str) -> bool:
     if structure.get("duplicate_boundary_field"):
         return True
     event_type, event_type_closed = event_fields.get("type", ("", False))
-    event_type = event_type.lower()
+    event_type = _partial_boundary_value(event_type).lower()
     if not event_type:
         if not structure.get("payload_first") or not (
             structure.get("root_unclosed") or structure.get("root_closed_trailing_garbage")
@@ -8579,13 +14915,13 @@ def _malformed_line_can_hide_task_boundary(line: str) -> bool:
         payload_type, payload_type_closed = payload_fields.get("type", ("", False))
         if not payload_type_closed:
             return False
-        payload_type = payload_type.lower()
+        payload_type = _partial_boundary_value(payload_type).lower()
         if payload_type == "task_complete":
             return True
         if payload_type != "message":
             return False
         role, role_closed = payload_fields.get("role", ("", False))
-        return bool(role_closed and role.lower() == "user")
+        return bool(role_closed and _partial_boundary_value(role).lower() == "user")
 
     if event_type_closed:
         if event_type not in {"response_item", "event_msg"}:
@@ -8597,7 +14933,7 @@ def _malformed_line_can_hide_task_boundary(line: str) -> bool:
         return False
 
     payload_type, payload_type_closed = payload_fields.get("type", ("", False))
-    payload_type = payload_type.lower()
+    payload_type = _partial_boundary_value(payload_type).lower()
     if event_type == "event_msg":
         return bool(
             payload_type == "task_complete"
@@ -8618,10 +14954,15 @@ def _malformed_line_can_hide_task_boundary(line: str) -> bool:
     role, role_closed = payload_fields.get("role", ("", False))
     if not role:
         return True
-    role = role.lower()
+    role = _partial_boundary_value(role).lower()
     if role_closed:
         return role == "user"
     return "user".startswith(role)
+
+
+def _partial_boundary_value(value: str) -> str:
+    """Ignore line terminators and undecodable trailing bytes in a partial JSON string."""
+    return str(value or "").rstrip("\r\n\ufffd")
 
 
 def _partial_session_json_string_fields(
@@ -8631,7 +14972,7 @@ def _partial_session_json_string_fields(
     Dict[str, tuple[str, bool]],
     Dict[str, bool],
 ]:
-    text = str(line or "")
+    text = str(line or "").rstrip("\r\n")
     if not text.lstrip().startswith("{"):
         return {}, {}, {"payload_first": False, "root_unclosed": False}
 
@@ -8754,12 +15095,13 @@ def _scan_partial_json_string(text: str, start: int) -> tuple[str, int, bool]:
 
 
 def _has_auditable_user_request(path: Path) -> bool:
-    for event in _session_payload_events(path):
-        payload = event.get("payload", {})
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("type") != "message" or str(payload.get("role", "")).lower() != "user":
-            continue
+    events = _session_payload_events(path)
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("user request detection requires indexed event facts")
+    for _event_seq, payload in events.iter_payloads(
+        payload_types=("message",),
+        roles=("user",),
+    ):
         text = _payload_text(payload)
         if text.strip() and not _is_synthetic_context_message(text):
             return True
@@ -9165,6 +15507,13 @@ def _is_front_door_runtime_command(payload: Dict[str, Any], lowered: str) -> boo
     tool_name = str(payload.get("name", "") or "").strip().lower()
     if _is_trusted_front_door_tool_name(tool_name):
         return True
+    raw = payload.get("arguments") or payload.get("input") or ""
+    raw_hint = str(raw).lower()
+    if not any(
+        marker in lowered or marker in raw_hint
+        for marker in ("kh_front_door", "front_door.py")
+    ):
+        return False
     return any(
         _command_invokes_front_door(command)
         for command in _runtime_command_candidates(payload)
@@ -9672,79 +16021,20 @@ def _dedupe_immediate_next_issues(issues: List[Dict[str, Any]]) -> List[Dict[str
     return list(grouped.values())
 
 
-def _session_texts(path: Path) -> List[str]:
-    return [record.text for record in _session_text_records(path)]
+def _session_texts(path: Path) -> Iterable[str]:
+    records = _session_text_records(path)
+    if isinstance(records, DiskBackedSessionTextRecords):
+        return records.iter_text_values()
+    return (record.text for record in records)
 
 
-def _session_text_records(path: Path) -> List[SessionTextRecord]:
-    texts: List[SessionTextRecord] = []
+def _session_text_records(path: Path) -> Sequence[SessionTextRecord]:
     events = _session_payload_events(path)
-    correlated_front_door_outputs = set(_correlated_front_door_receipts(events))
-    correlated_tool_outputs = {
-        receipt.output_index for receipt in _correlated_tool_receipts(events)
-    }
-    previous_call_was_passive = False
-    untrusted_assessment_active = False
-    latest_user_trigger = ""
-    work_activity_since_trigger = False
-    for event_index, event in enumerate(events):
-        payload = event.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("type") == "message":
-            role = str(payload.get("role", "")).lower()
-            if role in {"developer", "system"}:
-                previous_call_was_passive = False
-                continue
-        text = _payload_text(payload)
-        if text:
-            payload_type = str(payload.get("type", ""))
-            role = str(payload.get("role", "")).lower()
-            lowered = text.lower()
-            is_untrusted_assessment = _is_untrusted_assessment_transcript(lowered)
-            if payload_type == "message" and role == "user":
-                if is_untrusted_assessment:
-                    untrusted_assessment_active = True
-                elif not _is_synthetic_context_message(text):
-                    untrusted_assessment_active = False
-                    latest_user_trigger = text
-                    work_activity_since_trigger = False
-            trusted_host_native_fast_path = _is_trusted_host_native_fast_path_receipt(
-                payload,
-                text,
-                latest_user_trigger,
-                work_activity_since_trigger,
-            )
-            passive = untrusted_assessment_active or _is_synthetic_context_message(text) or _passive_reference(lowered) or (
-                payload_type in {"function_call_output", "custom_tool_call_output"}
-                and previous_call_was_passive
-            )
-            if passive:
-                text = PASSIVE_REFERENCE_PREFIX + text
-            texts.append(
-                SessionTextRecord(
-                    text=text,
-                    payload_type=payload_type,
-                    role=role,
-                    call_id=str(payload.get("call_id", "") or payload.get("tool_call_id", "")),
-                    name=str(payload.get("name", "")),
-                    arguments=_payload_arguments_text(payload),
-                    exit_codes=_payload_exit_codes(payload),
-                    trusted_host_native_fast_path=trusted_host_native_fast_path,
-                    trusted_front_door_runtime=event_index in correlated_front_door_outputs,
-                    trusted_correlated_tool_runtime=event_index in correlated_tool_outputs,
-                )
-            )
-            if (
-                not trusted_host_native_fast_path
-                and not (payload_type == "message" and role == "user")
-                and _is_non_kh_work_start(payload, lowered)
-            ):
-                work_activity_since_trigger = True
-            previous_call_was_passive = payload_type in {"function_call", "custom_tool_call"} and passive
-        else:
-            previous_call_was_passive = False
-    return texts
+    if not isinstance(events, DiskBackedSessionEvents):
+        raise RuntimeError("session text records require the streaming fact store")
+    if not events.text_records_ready:
+        raise RuntimeError("session text reducer was not finalized")
+    return events.text_records()
 
 
 def _payload_text(payload: Dict[str, Any]) -> str:
@@ -9831,6 +16121,340 @@ def _skill_aliases(skill: Dict[str, Any]) -> Set[str]:
     return {alias for alias in aliases if alias}
 
 
+@dataclass(frozen=True)
+class _CatalogObservationIndex:
+    specifications_by_name: Dict[str, Set[str]]
+    alias_owners: Dict[str, Set[str]]
+    runtime_owners: Dict[str, Set[str]]
+    candidate_needles: tuple[str, ...]
+    candidate_buckets: tuple[tuple[str, tuple[str, ...]], ...]
+
+
+def _literal_suffix_buckets(
+    needles: Iterable[str],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    buckets: Dict[str, List[str]] = {}
+    for needle in sorted(set(needles)):
+        buckets.setdefault(needle[-4:], []).append(needle)
+    return tuple(
+        (suffix, tuple(bucket_needles))
+        for suffix, bucket_needles in sorted(buckets.items())
+    )
+
+
+def _build_catalog_observation_index(
+    skills: Sequence[Mapping[str, Any]],
+) -> _CatalogObservationIndex:
+    specifications_by_name: Dict[str, Set[str]] = {}
+    alias_owners: Dict[str, Set[str]] = {}
+    runtime_owners: Dict[str, Set[str]] = {}
+    catalog_needles: Set[str] = {
+        "front_door_status",
+        "kh_fd_micro",
+        "host_native_semantic_fast_path",
+    }
+    for skill in skills:
+        skill_dict = dict(skill)
+        name = str(skill_dict.get("name", ""))
+        aliases = _skill_aliases(skill_dict)
+        lowered_aliases = tuple(alias.lower() for alias in aliases)
+        runtime_markers = tuple(
+            marker.lower() for marker in RUNTIME_MARKERS.get(name, [])
+        )
+        specifications_by_name[name] = aliases
+        for alias in lowered_aliases:
+            alias_owners.setdefault(alias, set()).add(name)
+        for marker in runtime_markers:
+            runtime_owners.setdefault(marker, set()).add(name)
+        catalog_needles.update(lowered_aliases)
+        catalog_needles.update(runtime_markers)
+    candidate_needles = tuple(sorted(catalog_needles))
+    return _CatalogObservationIndex(
+        specifications_by_name=specifications_by_name,
+        alias_owners=alias_owners,
+        runtime_owners=runtime_owners,
+        candidate_needles=candidate_needles,
+        candidate_buckets=_literal_suffix_buckets(candidate_needles),
+    )
+
+
+def _has_catalog_candidate(
+    lowered: str,
+    catalog_index: _CatalogObservationIndex,
+) -> bool:
+    for suffix, needles in catalog_index.candidate_buckets:
+        if suffix not in lowered:
+            continue
+        if any(needle in lowered for needle in needles):
+            return True
+    return False
+
+
+def _catalog_owner_hits(
+    lowered: str,
+    buckets: Sequence[tuple[str, tuple[str, ...]]],
+    owners_by_needle: Mapping[str, Set[str]],
+) -> Set[str]:
+    hits: Set[str] = set()
+    for suffix, needles in buckets:
+        if suffix not in lowered:
+            continue
+        for needle in needles:
+            owners = owners_by_needle.get(needle)
+            if owners and needle in lowered:
+                hits.update(owners)
+    return hits
+
+
+def _empty_observations() -> Dict[str, Any]:
+    return {
+        "status": "absent",
+        "mentions": 0,
+        "inspections": 0,
+        "runtime_hits": 0,
+        "claimed_unverified": 0,
+        "passive_references": 0,
+        "considered": 0,
+        "evidence": [],
+        "active_evidence": [],
+    }
+
+
+def _set_catalog_observation_status(observation: Dict[str, Any]) -> None:
+    status = "absent"
+    if observation["mentions"]:
+        status = "mentioned"
+    if observation["claimed_unverified"] and not observation["runtime_hits"]:
+        status = "claimed_unverified"
+    if observation["inspections"]:
+        status = "inspected"
+    if observation["considered"] and not observation["runtime_hits"]:
+        status = "considered"
+    if observation["runtime_hits"]:
+        status = "applied"
+    observation["status"] = status
+
+
+def _merge_catalog_observations(
+    target: Dict[str, Dict[str, Any]],
+    partial: Mapping[str, Mapping[str, Any]],
+) -> None:
+    for skill_name, incoming in partial.items():
+        observation = target.setdefault(str(skill_name), _empty_observations())
+        for key in (
+            "mentions",
+            "inspections",
+            "runtime_hits",
+            "claimed_unverified",
+            "passive_references",
+            "considered",
+        ):
+            observation[key] += int(incoming.get(key, 0) or 0)
+        for key in ("evidence", "active_evidence"):
+            remaining = 8 - len(observation[key])
+            if remaining > 0:
+                observation[key].extend(list(incoming.get(key, []) or [])[:remaining])
+        _set_catalog_observation_status(observation)
+
+
+def _catalog_observations(
+    texts: Iterable[SessionTextRecord | str],
+    skills: Sequence[Mapping[str, Any]],
+    *,
+    catalog_index: _CatalogObservationIndex | None = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Evaluate every catalog skill in one replay of the finalized text facts."""
+
+    index = catalog_index or _build_catalog_observation_index(skills)
+    specifications_by_name = index.specifications_by_name
+    alias_owners = index.alias_owners
+    runtime_owners = index.runtime_owners
+    results: Dict[str, Dict[str, Any]] = {
+        name: _empty_observations() for name in specifications_by_name
+    }
+
+    for item in texts:
+        if isinstance(item, SessionTextRecord):
+            text = item.text
+            payload_type = item.payload_type
+            role = item.role
+            name = item.name
+            arguments = item.arguments
+            trusted_host_native_fast_path = item.trusted_host_native_fast_path
+            trusted_front_door_runtime = item.trusted_front_door_runtime
+            trusted_correlated_tool_runtime = item.trusted_correlated_tool_runtime
+        else:
+            text = str(item)
+            payload_type = ""
+            role = ""
+            name = ""
+            arguments = ""
+            trusted_host_native_fast_path = False
+            trusted_front_door_runtime = False
+            trusted_correlated_tool_runtime = False
+
+        passive = _is_passive_text(text)
+        clean_text = _strip_passive_prefix(text)
+        lowered = clean_text.lower()
+        alias_hits = _catalog_owner_hits(
+            lowered,
+            index.candidate_buckets,
+            alias_owners,
+        )
+        runtime_marker_hits = _catalog_owner_hits(
+            lowered,
+            index.candidate_buckets,
+            runtime_owners,
+        )
+        host_native_packet_shape = _is_valid_host_native_front_door_packet(clean_text)
+        host_native_front_door = bool(
+            host_native_packet_shape and trusted_host_native_fast_path
+        )
+        normalized_front_door = _front_door_json(clean_text)
+        front_door_runtime_command = bool(
+            payload_type in {"function_call", "custom_tool_call"}
+            and _is_front_door_runtime_command(
+                {
+                    "type": payload_type,
+                    "name": name,
+                    "arguments": arguments,
+                },
+                lowered,
+            )
+        )
+        front_door_packet_claim = bool(
+            host_native_packet_shape
+            or normalized_front_door
+            or _looks_like_front_door_runtime_output(lowered)
+            or front_door_runtime_command
+        )
+        structured_application_claim = _looks_like_structured_skill_application_claim(
+            clean_text
+        )
+        untrusted_front_door_claim = bool(
+            (front_door_packet_claim or structured_application_claim)
+            and not trusted_front_door_runtime
+            and not trusted_correlated_tool_runtime
+            and not host_native_front_door
+        )
+
+        if untrusted_front_door_claim:
+            sample = ""
+            candidate_names = set(alias_hits)
+            if host_native_packet_shape or normalized_front_door:
+                candidate_names.update(results)
+            for skill_name in candidate_names:
+                front_door_claim_status = _front_door_skill_status_from_data(
+                    normalized_front_door,
+                    skill_name,
+                )
+                claim_mentions_skill = bool(
+                    (host_native_packet_shape and skill_name == "always-on-front-door")
+                    or (normalized_front_door and skill_name == "always-on-front-door")
+                    or front_door_claim_status
+                    or skill_name in alias_hits
+                )
+                if not claim_mentions_skill:
+                    continue
+                observation = results[skill_name]
+                observation["mentions"] += 1
+                observation["claimed_unverified"] += 1
+                if len(observation["evidence"]) < 8:
+                    if not sample:
+                        sample = _short(clean_text)
+                    observation["evidence"].append(sample)
+            continue
+
+        sample = ""
+        normalized_evidence = ""
+        candidate_names = set(alias_hits) | set(runtime_marker_hits)
+        if host_native_front_door or normalized_front_door:
+            candidate_names.update(results)
+        for skill_name in candidate_names:
+            aliases = specifications_by_name[skill_name]
+            observation = results[skill_name]
+            front_door_claim_status = _front_door_skill_status_from_data(
+                normalized_front_door,
+                skill_name,
+            )
+            front_door_status = (
+                front_door_claim_status if trusted_front_door_runtime else ""
+            )
+            if host_native_front_door and skill_name == "always-on-front-door":
+                front_door_status = "considered"
+            if (
+                skill_name == "token-optimizer"
+                and front_door_status
+                and payload_type not in {"function_call_output", "custom_tool_call_output"}
+            ):
+                front_door_status = ""
+            alias_hit = bool(front_door_status) or skill_name in alias_hits
+            runtime_marker_hit = bool(
+                not host_native_front_door
+                and not front_door_status
+                and skill_name in runtime_marker_hits
+            )
+            if skill_name == "token-optimizer" and runtime_marker_hit:
+                runtime_marker_hit = _is_token_optimizer_runtime_source(
+                    payload_type,
+                    role,
+                    lowered,
+                )
+            runtime_hit = front_door_status == "applied" or runtime_marker_hit
+            if not alias_hit and not runtime_hit:
+                continue
+
+            observation["mentions"] += 1
+            if passive or "skill.md" in lowered or "\\skills\\" in lowered or "/skills/" in lowered:
+                observation["inspections"] += 1
+            if passive:
+                observation["passive_references"] += 1
+            if skill_name == "token-optimizer" and front_door_status != "applied":
+                explicit_hit = False
+            else:
+                explicit_hit = (
+                    False
+                    if front_door_status and front_door_status != "applied"
+                    else _explicit_application(lowered, aliases)
+                )
+            if not passive and (runtime_hit or explicit_hit):
+                observation["runtime_hits"] += 1
+            if not passive and (
+                front_door_status in {"selected", "considered", "skipped", "blocked"}
+                or any(
+                    marker in lowered
+                    for marker in (
+                        "considered_not_needed",
+                        "skipped_with_rationale",
+                        "blocked",
+                        "passthrough",
+                    )
+                )
+            ):
+                observation["considered"] += 1
+            if len(observation["evidence"]) < 8:
+                if not sample:
+                    sample = _short(clean_text)
+                observation["evidence"].append(sample)
+            if not passive and len(observation["active_evidence"]) < 8:
+                if normalized_front_door and payload_type in {
+                    "function_call_output",
+                    "custom_tool_call_output",
+                }:
+                    if not normalized_evidence:
+                        normalized_evidence = json.dumps(
+                            normalized_front_door,
+                            sort_keys=True,
+                        )
+                    observation["active_evidence"].append(normalized_evidence)
+                else:
+                    observation["active_evidence"].append(clean_text)
+
+    for observation in results.values():
+        _set_catalog_observation_status(observation)
+    return results
+
+
 def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str], skill_name: str) -> Dict[str, Any]:
     mentions = 0
     inspections = 0
@@ -9865,11 +16489,23 @@ def _observations(texts: List[SessionTextRecord] | List[str], aliases: Set[str],
             host_native_packet_shape and trusted_host_native_fast_path
         )
         normalized_front_door = _front_door_json(clean_text)
+        front_door_runtime_command = bool(
+            payload_type in {"function_call", "custom_tool_call"}
+            and _is_front_door_runtime_command(
+                {
+                    "type": payload_type,
+                    "name": item.name if isinstance(item, SessionTextRecord) else "",
+                    "arguments": item.arguments if isinstance(item, SessionTextRecord) else "",
+                },
+                lowered,
+            )
+        )
         front_door_claim_status = _front_door_skill_status(clean_text, skill_name)
         front_door_packet_claim = bool(
             host_native_packet_shape
             or normalized_front_door
             or _looks_like_front_door_runtime_output(lowered)
+            or front_door_runtime_command
         )
         structured_application_claim = _looks_like_structured_skill_application_claim(
             clean_text
@@ -10039,6 +16675,13 @@ def _looks_like_token_optimizer_runtime_output(lowered: str) -> bool:
 
 def _front_door_skill_status(text: str, skill_name: str) -> str:
     data = _front_door_json(text)
+    return _front_door_skill_status_from_data(data, skill_name)
+
+
+def _front_door_skill_status_from_data(
+    data: Mapping[str, Any],
+    skill_name: str,
+) -> str:
     if not data:
         return ""
     status_summary = data.get("skill_status_summary", {}) or {}
@@ -10644,7 +17287,7 @@ def _acceptance_for_skill(
             "missing_outputs": [],
         }
 
-    active_text = "\n".join(observations.get("active_evidence", []))
+    active_text = _bounded_text_aggregate(observations.get("active_evidence", []))
     lowered = active_text.lower()
     structured_outputs = _structured_front_door_acceptance_outputs(skill_name, observations)
     satisfied_outputs = []
@@ -10707,7 +17350,7 @@ def _postmortem_acceptance_status(skill_name: str, postmortem: Dict[str, Any]) -
 
 
 def _has_resolution_rationale(observations: Dict[str, Any]) -> bool:
-    text = "\n".join(observations.get("active_evidence", [])).lower()
+    text = _bounded_text_aggregate(observations.get("active_evidence", [])).lower()
     return any(
         marker in text
         for marker in [
@@ -11038,19 +17681,90 @@ def _strip_passive_prefix(text: str) -> str:
     return text
 
 
+def _bounded_text_aggregate(
+    texts: Iterable[str],
+    *,
+    max_characters: int = _SESSION_TEXT_AGGREGATE_LIMIT,
+    item_limit: int = _SESSION_TEXT_AGGREGATE_ITEM_LIMIT,
+) -> str:
+    if max_characters <= 0 or item_limit <= 0:
+        return ""
+    first: List[tuple[int, str]] = []
+    last: deque[tuple[int, str]] = deque(maxlen=3)
+    signals: List[tuple[int, str]] = []
+    signal_count = 0
+    item_index = 0
+    for raw_text in texts:
+        text = str(raw_text or "")
+        if not text:
+            continue
+        if len(text) > item_limit:
+            edge = max(1, item_limit // 2)
+            text = text[:edge] + "\n[KH_TEXT_AGGREGATE_TRUNCATED]\n" + text[-edge:]
+        indexed = (item_index, text)
+        if len(first) < 3:
+            first.append(indexed)
+        last.append(indexed)
+        lowered = text.lower()
+        if any(signal in lowered for signal in _SESSION_TEXT_AGGREGATE_SIGNALS):
+            signal_count += 1
+            if len(signals) < 8:
+                signals.append(indexed)
+            else:
+                slot = (signal_count * 2654435761) % signal_count
+                if slot < 8:
+                    signals[slot] = indexed
+        item_index += 1
+    if item_index == 0:
+        return ""
+
+    parts: List[str] = []
+    retained = 0
+    selected = {index: text for index, text in (*first, *last, *signals)}
+    for index in sorted(selected):
+        text = selected[index]
+        remaining = max_characters - retained
+        if remaining <= 0:
+            break
+        if len(text) > remaining:
+            text = text[:remaining]
+        parts.append(text)
+        retained += len(text) + 1
+    return "\n".join(parts)
+
+
 def _required_skills(
     postmortem: Dict[str, Any],
     text: str,
     active_texts: List[str] | None = None,
     sql_scope_texts: List[str] | None = None,
+    analysis_summary: Mapping[str, Any] | None = None,
 ) -> Dict[str, str]:
     required: Dict[str, str] = {}
     lowered = text.lower()
-    sql_lowered = "\n".join(sql_scope_texts if sql_scope_texts is not None else (active_texts or [text])).lower()
+    summary = analysis_summary or {}
+    sql_lowered = (
+        str(summary.get("sql_scope_text", "")).lower()
+        if "sql_scope_text" in summary
+        else _bounded_text_aggregate(
+            sql_scope_texts if sql_scope_texts is not None else (active_texts or [text])
+        ).lower()
+    )
     token_gate = postmortem.get("token_gate", {}) or {}
     subagents = postmortem.get("subagent_summary", {}) or {}
     verification_commands = postmortem.get("verification_commands", []) or []
-    sql_specialist_scope = _is_sql_specialist_answer_scope(postmortem, sql_lowered, sql_scope_texts)
+    sql_output_request = bool(sql_lowered and looks_like_sql_output_request(sql_lowered))
+    sql_specialist_scope = _is_sql_specialist_answer_scope(
+        postmortem,
+        sql_lowered,
+        sql_scope_texts,
+        sql_output_request=sql_output_request,
+        non_front_door_tool_text=(
+            str(summary.get("non_front_door_tool_text", ""))
+            if "non_front_door_tool_text" in summary
+            else None
+        ),
+    )
 
     if token_gate.get("required"):
         token_reason = "token gate requires a runtime token-optimizer decision"
@@ -11074,7 +17788,7 @@ def _required_skills(
         _add(required, "plugin-composition-policy", "automatic intake should choose direct, single-provider, hybrid, or clarify route")
         _add(required, "request-complexity-router", "automatic intake should classify request complexity before work")
         _add(required, "skill-catalog", "automatic intake should resolve the packaged skill source before claiming skill use")
-    if looks_like_sql_output_request(sql_lowered):
+    if sql_output_request:
         _add(
             required,
             "sql-formatting-style-harness",
@@ -11122,12 +17836,16 @@ def _required_skills(
         _add(required, "workflow-skill-distiller", "compound learning should route to reusable skill/scenario/memory follow-up")
     if "memory_candidates" in lowered or "memory-state-harness" in lowered or "persistent memory" in lowered or "영구메모리" in text:
         _add(required, "memory-state-harness", "memory candidates or persistent memory appeared")
-    qa_scan_texts = active_texts or [text]
-    if any(
-        _mentions_browser_or_local_app_qa(chunk.lower())
-        for chunk in qa_scan_texts
-        if not _looks_like_front_door_runtime_output(chunk.lower())
-    ):
+    browser_or_local_app_qa = (
+        bool(summary.get("browser_or_local_app_qa"))
+        if "browser_or_local_app_qa" in summary
+        else any(
+            _mentions_browser_or_local_app_qa(chunk.lower())
+            for chunk in (active_texts or [text])
+            if not _looks_like_front_door_runtime_output(chunk.lower())
+        )
+    )
+    if browser_or_local_app_qa:
         _add(required, "qa-gate-harness", "browser or local app QA appeared")
     if _renderable_artifact_required(lowered):
         _add(required, "artifact-render-qa-harness", "renderable deliverables or artifacts appeared")
@@ -11140,7 +17858,7 @@ def _required_skills(
         _add(required, "guard-policy-harness", "permission, secret, or destructive-action risk appeared")
     if (
         _early_domain_discovery_text(lowered)
-        and not looks_like_sql_output_request(sql_lowered)
+        and not sql_output_request
         and not _looks_like_direct_code_question(lowered)
     ):
         _add(required, "brainstorming-harness", "early domain discovery appeared")
@@ -11155,8 +17873,15 @@ def _is_sql_specialist_answer_scope(
     postmortem: Dict[str, Any],
     lowered: str,
     active_texts: List[str] | None = None,
+    *,
+    sql_output_request: bool | None = None,
+    non_front_door_tool_text: str | None = None,
 ) -> bool:
-    if not looks_like_sql_output_request(lowered):
+    if not (
+        looks_like_sql_output_request(lowered)
+        if sql_output_request is None
+        else sql_output_request
+    ):
         return False
     subagents = postmortem.get("subagent_summary", {}) or {}
     if int(subagents.get("spawned", 0) or 0):
@@ -11187,15 +17912,16 @@ def _is_sql_specialist_answer_scope(
     ]
     if any(marker in lowered for marker in disqualifying_markers):
         return False
-    texts = active_texts or [lowered]
-    non_front_door_tool_text = "\n".join(
-        text.lower()
-        for text in texts
-        if "function_call" in text.lower()
-        and not _looks_like_front_door_prompt_bootstrap(text.lower())
-        and "kh_front_door" not in text.lower()
-        and "always_on_front_door" not in text.lower()
-    )
+    if non_front_door_tool_text is None:
+        texts = active_texts or [lowered]
+        non_front_door_tool_text = _bounded_text_aggregate(
+            text.lower()
+            for text in texts
+            if "function_call" in text.lower()
+            and not _looks_like_front_door_prompt_bootstrap(text.lower())
+            and "kh_front_door" not in text.lower()
+            and "always_on_front_door" not in text.lower()
+        )
     if any(marker in non_front_door_tool_text for marker in ["set-content", "remove-item", "invoke-webrequest"]):
         return False
     return True

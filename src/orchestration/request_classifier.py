@@ -4,9 +4,15 @@ import re
 import unicodedata
 from dataclasses import asdict, dataclass, field, replace
 from functools import lru_cache
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping
 
 from src.orchestration.request_act_parser import RequestActAnalysis, parse_request_act
+from src.orchestration.artifact_style_gate import (
+    analyze_artifact_style_context,
+    style_evidence_for_gate,
+    style_requirements_for_request,
+    validate_artifact_style_gate_snapshot,
+)
 
 
 COMPLEXITIES = {"light", "medium", "heavy", "high_risk", "ambiguous"}
@@ -80,6 +86,11 @@ CONTEXTUAL_REPAIR_REFERENCE_TERMS = {
     "\ubb38\uc81c\uc810",
 }
 CONTEXTUAL_REPAIR_ACTION_TERMS = {
+    "add",
+    "insert",
+    "include",
+    "integrate",
+    "put into",
     "harden",
     "fix",
     "repair",
@@ -93,6 +104,10 @@ CONTEXTUAL_REPAIR_ACTION_TERMS = {
     "\uace0\uccd0",
     "\uac1c\uc120",
     "\ucc98\ub9ac",
+    "\ucd94\uac00",
+    "\ub123\uc5b4",
+    "\ubc18\uc601",
+    "\ud1b5\ud569",
 }
 CONTEXTUAL_REPAIR_FAILURE_TERMS = {
     "\uc81c\ub300\ub85c \uc548",
@@ -392,6 +407,32 @@ SECURITY_HIGH_RISK_TERMS = {
     "해킹",
     "크랙",
     "탈취",
+}
+SECURITY_BEHAVIOR_TERMS = {
+    "authentication",
+    "authorization",
+    "auth",
+    "login",
+    "logout",
+    "oauth",
+    "jwt",
+    "access token",
+    "refresh token",
+    "credential",
+    "credentials",
+    "api key",
+    "secret",
+    "secrets",
+    "encrypt",
+    "encryption",
+    "decrypt",
+    "hash",
+    "hashing",
+    "password reset",
+    "rotate credentials",
+    "revoke token",
+    "secure storage",
+    "securely",
 }
 DESTRUCTIVE_ACTION_TERMS = {
     "delete all rows",
@@ -1199,13 +1240,21 @@ PB_TO_CSHARP_MIGRATION_SOURCE_TERMS = {
     "pb",
     "pbl",
     "pbd",
-    "pblscripter",
     "powerbuilder",
     "datawindow",
     "sru",
     "srw",
     "srd",
-    "gwerp",
+    "pb source",
+    "powerbuilder source",
+    "pb behavior",
+    "powerbuilder behavior",
+    "datawindow behavior",
+    "pb 소스",
+    "파워빌더 소스",
+    "pb 동작",
+    "파워빌더 동작",
+    "데이터윈도우 동작",
 }
 PB_TO_CSHARP_MIGRATION_TARGET_TERMS = {
     "c#",
@@ -1213,16 +1262,174 @@ PB_TO_CSHARP_MIGRATION_TARGET_TERMS = {
     "c sharp",
     "winforms",
     "devexpress",
-    "ty",
-    "c_kone110",
-    "c_kone110_1",
-    "select/save",
-    "select save",
-    "stored procedure",
-    "sp_",
-    "migration",
+    ".net",
+    "dotnet",
+    "c# project",
+    "c# screen",
+    "winforms project",
+    "winforms screen",
+    "c# 프로젝트",
+    "c# 화면",
+    "winforms 프로젝트",
+    "winforms 화면",
+}
+PB_TO_CSHARP_MIGRATION_ACTION_TERMS = {
     "migrate",
-    "\ub9c8\uc774\uadf8\ub808\uc774\uc158",
+    "convert",
+    "port",
+    "rebuild",
+    "rewrite",
+    "reimplement",
+    "transform",
+    "move to",
+    "migrate to",
+    "convert to",
+    "port to",
+    "rebuild in",
+    "rewrite in",
+    "transform into",
+    "마이그레이션해",
+    "마이그레이션 해",
+    "변환해",
+    "변환 해",
+    "변환시켜",
+    "이식해",
+    "포팅해",
+    "재구축해",
+    "옮겨",
+    "다시 만들어",
+}
+PB_TO_CSHARP_CREATION_ACTION_TERMS = {
+    "build",
+    "create",
+    "develop",
+    "implement",
+    "generate",
+    "make",
+    "만들어",
+    "개발해",
+    "구현해",
+    "생성해",
+}
+PB_TO_CSHARP_MIGRATION_NOUN_TERMS = {
+    "pb to c# migration",
+    "powerbuilder to c# migration",
+    "pb-to-c# migration",
+    "pb to csharp migration",
+    "powerbuilder migration",
+    "pb migration",
+    "pb to c# conversion",
+    "powerbuilder to c# conversion",
+    "pb-to-c# conversion",
+    "pb to c# 마이그레이션",
+    "pb to c# 변환",
+    "파워빌더 c# 마이그레이션",
+    "파워빌더 c# 변환",
+}
+PB_TO_CSHARP_NONEXECUTION_TERMS = {
+    "compare",
+    "comparison",
+    "difference",
+    "differences",
+    "explain",
+    "summarize",
+    "summary",
+    "documentation",
+    "document",
+    "audit",
+    "review",
+    "inspect",
+    "analyze",
+    "analysis",
+    "previous migration",
+    "prior migration",
+    "earlier migration",
+    "migration harness",
+    "conversion harness",
+    "비교",
+    "차이",
+    "설명",
+    "요약",
+    "정리",
+    "문서화",
+    "문서 작성",
+    "감사",
+    "리뷰",
+    "점검",
+    "분석",
+    "이전 마이그레이션",
+    "지난 마이그레이션",
+    "마이그레이션 하네스",
+}
+PB_MIGRATION_TOOL_TERMS = {
+    "pblscripter",
+    "export-pbl.ps1",
+    "orca",
+    "pborc70",
+    "pborc105",
+    "pborc125",
+}
+PB_MIGRATION_TOOL_EXECUTION_TERMS = {
+    "run",
+    "execute",
+    "invoke",
+    "call",
+    "use",
+    "export",
+    "extract",
+    "list objects",
+    "retry",
+    "run again",
+    "실행해",
+    "호출해",
+    "사용해",
+    "돌려",
+    "내보내",
+    "추출해",
+    "목록 조회",
+    "재실행",
+    "다시 실행",
+}
+PB_MIGRATION_TOOL_DIAGNOSTIC_TERMS = {
+    "error",
+    "failure",
+    "failed",
+    "fails",
+    "problem",
+    "troubleshoot",
+    "why",
+    "session open failed",
+    "bad library",
+    "오류",
+    "에러",
+    "실패",
+    "문제",
+    "원인",
+    "안 돼",
+    "못해",
+}
+PB_MIGRATION_SOURCE_READY_WITHOUT_TOOL_TERMS = {
+    "pasted source",
+    "pasted pb",
+    "source below",
+    "exported source",
+    "exported pb",
+    "described behavior",
+    "behavior description",
+    "attached source",
+    "붙여넣은 소스",
+    "아래 소스",
+    "export된 소스",
+    "내보낸 소스",
+    "동작 설명",
+    "설명한 동작",
+    "첨부한 소스",
+}
+PB_MIGRATION_CONTEXT_KINDS = {
+    "pb_to_csharp_migration",
+    "pb-to-csharp-migration",
+    "pb_migration",
+    "powerbuilder_migration",
 }
 LIGHT_TERMS = {
     "what is",
@@ -1473,7 +1680,6 @@ COMPLIANCE_TERMS = {
 HR_TERMS = {
     "performance improvement plan",
     "underperforming employee",
-    "candidate",
     "hire",
     "staffing plan",
     "support team",
@@ -1487,6 +1693,19 @@ HR_TERMS = {
     "job search",
     "interview",
     "career",
+}
+HR_CANDIDATE_CONTEXT_TERMS = {
+    "applicant",
+    "employment",
+    "hire",
+    "hiring",
+    "interview",
+    "job",
+    "recruit",
+    "recruiter",
+    "resume",
+    "role",
+    "staffing",
 }
 OPERATIONS_TERMS = {
     "ceo dashboard",
@@ -2427,6 +2646,82 @@ class RequestClassification:
         return asdict(self)
 
 
+def inherited_parent_goal_context(context: Mapping[str, Any] | None) -> Dict[str, str] | None:
+    """Accept parent Goal inheritance only from correlated structured host metadata."""
+    context = dict(context or {})
+    host_context = context.get("host_context")
+    if not isinstance(host_context, Mapping):
+        return None
+    source_context = dict(host_context)
+    source = source_context.get("source")
+    source = dict(source) if isinstance(source, Mapping) else {}
+    subagent = source.get("subagent")
+    subagent = dict(subagent) if isinstance(subagent, Mapping) else {}
+    thread_spawn = subagent.get("thread_spawn")
+    thread_spawn = dict(thread_spawn) if isinstance(thread_spawn, Mapping) else {}
+
+    thread_source = str(
+        source_context.get("thread_source") or context.get("thread_source") or ""
+    ).strip().lower()
+    subagent_id = str(
+        source_context.get("subagent_id")
+        or subagent.get("subagent_id")
+        or subagent.get("id")
+        or ""
+    ).strip()
+    parent_thread_id = str(
+        source_context.get("parent_thread_id")
+        or thread_spawn.get("parent_thread_id")
+        or context.get("parent_thread_id")
+        or ""
+    ).strip()
+    parent_goal_id = str(
+        source_context.get("parent_goal_id")
+        or context.get("parent_goal_id")
+        or ""
+    ).strip()
+    if thread_source != "subagent" or not subagent_id or not (parent_thread_id or parent_goal_id):
+        return None
+
+    active_goal = source_context.get("active_goal") or context.get("active_goal")
+    if not isinstance(active_goal, Mapping):
+        return None
+    active_goal = dict(active_goal)
+    if str(active_goal.get("status") or "").strip().lower() != "active":
+        return None
+    goal_id = str(active_goal.get("goal_id") or active_goal.get("id") or "").strip()
+    goal_thread_id = str(active_goal.get("thread_id") or "").strip()
+    objective = str(active_goal.get("objective") or "").strip()
+    goal_id_matches = bool(parent_goal_id and goal_id and parent_goal_id == goal_id)
+    thread_id_matches = bool(parent_thread_id and goal_thread_id and parent_thread_id == goal_thread_id)
+    if parent_goal_id and not goal_id_matches:
+        return None
+    if parent_thread_id and not thread_id_matches:
+        return None
+    if not (goal_id_matches or thread_id_matches) or not objective:
+        return None
+    return {
+        "goal_id": goal_id,
+        "thread_id": goal_thread_id or parent_thread_id,
+        "objective": objective,
+        "subagent_id": subagent_id,
+        "link_type": "parent_goal_id" if goal_id_matches else "parent_thread_id",
+    }
+
+
+def _normalize_delegated_parent_context(
+    context: Mapping[str, Any],
+    parent: Mapping[str, str],
+) -> Dict[str, Any]:
+    normalized = dict(context)
+    normalized["delegated_parent_goal"] = dict(parent)
+    normalized["delegated_parent_goal_active"] = True
+    normalized["requires_resume"] = False
+    normalized["long_running"] = False
+    normalized["needs_handoff"] = False
+    return normalized
+
+
 def classify_request(
     text: str,
     context: dict | None = None,
@@ -2434,14 +2729,86 @@ def classify_request(
     request_analysis: RequestActAnalysis | None = None,
 ) -> RequestClassification:
     context = context or {}
+    inherited_parent = inherited_parent_goal_context(context)
+    if inherited_parent:
+        context = _normalize_delegated_parent_context(context, inherited_parent)
     analysis = request_analysis or parse_request_act(text, context)
-    request_intent = resolve_request_intent(text, context)
+    request_intent = {
+        **resolve_request_intent(text, context),
+        **_analyze_pb_to_csharp_intent(text, context, analysis),
+    }
     result = _classify_request(
         text,
         context,
         request_analysis=analysis,
         request_intent=request_intent,
     )
+    style_requirements = style_requirements_for_request(
+        text,
+        pb_migration=bool(request_intent.get("migration_intent")),
+    )
+    style_gate = analyze_artifact_style_context(context)
+    runtime_style_gate = context.get("artifact_style_gate_runtime")
+    if isinstance(runtime_style_gate, Mapping):
+        runtime_validation = validate_artifact_style_gate_snapshot(
+            runtime_style_gate
+        )
+        if runtime_validation["valid"]:
+            style_gate = {
+                **runtime_validation["gate"],
+                "runtime_snapshot": dict(
+                    runtime_style_gate.get("runtime_snapshot", {}) or {}
+                ),
+                "executor_status": str(
+                    runtime_style_gate.get("executor_status") or ""
+                ),
+                "executor_errors": list(
+                    runtime_style_gate.get("executor_errors", []) or []
+                ),
+            }
+        else:
+            style_gate = {
+                **style_gate,
+                "style_passed": False,
+                "completion_blocked": bool(
+                    style_gate.get("completion_claimed")
+                    or style_gate.get("deployment_claimed")
+                ),
+                "runtime_snapshot_errors": list(
+                    runtime_validation["errors"]
+                ),
+            }
+    style_requirements = _dedupe([*style_requirements, *style_gate.get("required_skills", [])])
+    style_gate = {
+        **style_gate,
+        "required_skills": style_requirements,
+    }
+    request_intent = {
+        **request_intent,
+        "artifact_style_gate": style_gate,
+    }
+    if style_requirements:
+        style_evidence = style_evidence_for_gate(style_gate)
+        result = replace(
+            result,
+            recommended_skills=_dedupe([*result.recommended_skills, *style_requirements]),
+            required_harnesses=_dedupe([*result.required_harnesses, *style_requirements]),
+            evidence_required=_dedupe(
+                [*result.evidence_required, "artifact_style_gate", *style_evidence]
+            ),
+            reasons=_dedupe([*result.reasons, "artifact_style_gate_required"]),
+        )
+    if inherited_parent:
+        request_intent = {
+            **request_intent,
+            "delegated_scope": "bounded",
+            "parent_goal_id": inherited_parent["goal_id"],
+            "parent_thread_id": inherited_parent["thread_id"],
+        }
+        result = replace(
+            result,
+            reasons=_dedupe([*result.reasons, "inherited_parent_goal_delegated_scope"]),
+        )
     return replace(result, intent=request_intent)
 
 
@@ -2546,7 +2913,7 @@ def _classify_request(
     if memory_requested:
         return _memory_state_classification(domain, cross_cutting, evidence_required, reasons)
 
-    pb_migration_requested = _is_pb_to_csharp_migration_request(normalized)
+    pb_migration_requested = bool(request_intent.get("migration_intent"))
     if _is_readonly_source_audit_request(normalized, domain, request_analysis):
         readonly_skills = ["request-complexity-router"]
         readonly_reasons = [*reasons, "readonly_source_audit_request"]
@@ -3321,20 +3688,345 @@ def _complex_extraction_deliverable_classification(
     )
 
 
-def _is_pb_to_csharp_migration_request(normalized: str) -> bool:
-    if not _contains_any(normalized, PB_TO_CSHARP_MIGRATION_SOURCE_TERMS):
-        return False
-    if _contains_any(normalized, PB_TO_CSHARP_MIGRATION_TARGET_TERMS):
-        return True
-    return _contains_any(normalized, {"converter", "layout", "grid", "retrieve", "update", "save"})
+def _analyze_pb_to_csharp_intent(
+    text: str,
+    context: dict | None = None,
+    analysis: RequestActAnalysis | None = None,
+) -> Dict[str, object]:
+    """Separate migration intent from optional PB export-tool execution."""
+    context = context or {}
+    normalized = _normalize(text)
+    analysis = analysis or parse_request_act(text, context)
+
+    source_present = _contains_any(normalized, PB_TO_CSHARP_MIGRATION_SOURCE_TERMS)
+    target_present = _contains_any(normalized, PB_TO_CSHARP_MIGRATION_TARGET_TERMS)
+    concrete_source = _has_concrete_pb_migration_subject(normalized)
+    source_ready_without_tool = _has_pb_source_ready_without_tool(normalized)
+    opaque_pb_library = bool(re.search(r"\b[^\s\\/:*?\"<>|]+\.(?:pbl|pbd)\b", normalized))
+    nonexecution_discussion = _contains_any(normalized, PB_TO_CSHARP_NONEXECUTION_TERMS)
+
+    migration_candidate, migration_negated = _without_negated_pb_migration_actions(normalized)
+    transform_action = _has_pb_to_csharp_transform_action(
+        migration_candidate,
+        source_present=source_present,
+        target_present=target_present,
+        allow_noun_form=not nonexecution_discussion,
+    )
+    active_migration_context = _has_active_pb_migration_context(context)
+    contextual_followup = _is_pb_migration_execution_followup(
+        migration_candidate,
+        analysis,
+        active_migration_context=active_migration_context,
+        nonexecution_discussion=nonexecution_discussion,
+    )
+
+    explicit_source_target_transform = bool(
+        source_present
+        and target_present
+        and transform_action
+    )
+    migration_intent = bool(explicit_source_target_transform or contextual_followup)
+
+    tool_present = _contains_any(normalized, PB_MIGRATION_TOOL_TERMS)
+    tool_candidate, tool_forbidden = _without_negated_pb_tool_actions(normalized)
+    tool_action = _contains_any(tool_candidate, PB_MIGRATION_TOOL_EXECUTION_TERMS)
+    tool_diagnostic = _contains_any(normalized, PB_MIGRATION_TOOL_DIAGNOSTIC_TERMS)
+    tool_retry = _contains_any(
+        tool_candidate,
+        {
+            "retry",
+            "rerun",
+            "run again",
+            "try again",
+            "after fixing",
+            "then run",
+            "then export",
+            "재실행",
+            "다시 실행",
+            "다시 돌려",
+            "고친 뒤 실행",
+            "해결하고 실행",
+        },
+    )
+    tool_execution_intent = bool(
+        migration_intent
+        and tool_present
+        and tool_action
+        and not tool_forbidden
+        and (not tool_diagnostic or tool_retry)
+    )
+    capability_probe_allowed = bool(
+        migration_intent
+        and not tool_forbidden
+        and (
+            tool_execution_intent
+            or (opaque_pb_library and not source_ready_without_tool)
+            or _context_preserves_pb_probe_need(context, contextual_followup)
+        )
+    )
+
+    evidence: List[str] = []
+    if source_present:
+        evidence.append("pb_source_term")
+    if concrete_source:
+        evidence.append("concrete_pb_artifact_or_behavior")
+    if target_present:
+        evidence.append("csharp_target_term")
+    if transform_action:
+        evidence.append("source_to_target_transform_action")
+    if active_migration_context:
+        evidence.append("active_pb_migration_context")
+    if contextual_followup:
+        evidence.append("migration_execution_followup")
+    if source_ready_without_tool:
+        evidence.append("pb_source_ready_without_tool")
+    if opaque_pb_library:
+        evidence.append("opaque_pb_library_input")
+    if tool_present:
+        evidence.append("pb_export_tool_term")
+    if tool_execution_intent:
+        evidence.append("pb_export_tool_execution_action")
+
+    reasons: List[str] = []
+    if explicit_source_target_transform:
+        reasons.append("explicit_pb_source_to_csharp_transform")
+    elif contextual_followup:
+        reasons.append("active_pb_migration_execution_followup")
+    elif migration_negated:
+        reasons.append("pb_migration_explicitly_negated")
+    elif nonexecution_discussion:
+        reasons.append("pb_migration_nonexecution_discussion")
+    elif source_present and target_present:
+        reasons.append("pb_and_csharp_coexist_without_transform_intent")
+    elif source_present:
+        reasons.append("pb_source_without_csharp_target")
+    elif target_present:
+        reasons.append("csharp_target_without_pb_source")
+    else:
+        reasons.append("no_pb_to_csharp_linkage")
+
+    if tool_forbidden:
+        reasons.append("pb_tool_execution_forbidden")
+    elif tool_diagnostic and not tool_retry:
+        reasons.append("pb_tool_diagnostic_discussion_only")
+    elif capability_probe_allowed:
+        reasons.append("pb_tool_probe_allowed_for_required_source_extraction")
+    else:
+        reasons.append("pb_tool_probe_not_required")
+
+    return {
+        "migration_intent": migration_intent,
+        "tool_execution_intent": tool_execution_intent,
+        "capability_probe_allowed": capability_probe_allowed,
+        "migration_reasons": _dedupe(reasons),
+        "migration_evidence": _dedupe(evidence),
+        "migration_intent_scope": "pb-to-csharp",
+    }
+
+
+def _is_pb_to_csharp_migration_request(
+    normalized: str,
+    context: dict | None = None,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    return bool(
+        _analyze_pb_to_csharp_intent(normalized, context, analysis).get("migration_intent")
+    )
 
 
 def _has_concrete_pb_migration_subject(normalized: str) -> bool:
     return bool(
-        re.search(r"(?<![a-z0-9_])sp_[a-z0-9_]+\b", normalized)
-        or re.search(r"\b[a-z0-9_]+\.(?:pbl|srw|sru|srd)\b", normalized)
-        or _contains_any(normalized, {"datawindow object", "powerbuilder object", "데이터윈도우 객체", "pb 객체"})
+        re.search(r"\b[^\s\\/:*?\"<>|]+\.(?:pbl|pbd|srw|sru|srd)\b", normalized)
+        or _contains_any(
+            normalized,
+            {
+                "datawindow object",
+                "powerbuilder object",
+                "pasted pb source",
+                "exported pb source",
+                "described pb behavior",
+                "데이터윈도우 객체",
+                "pb 객체",
+                "붙여넣은 pb 소스",
+                "export된 pb 소스",
+                "pb 동작 설명",
+            },
+        )
     )
+
+
+def _has_pb_source_ready_without_tool(normalized: str) -> bool:
+    return bool(
+        re.search(r"\b[^\s\\/:*?\"<>|]+\.(?:srw|sru|srd)\b", normalized)
+        or _contains_any(normalized, PB_MIGRATION_SOURCE_READY_WITHOUT_TOOL_TERMS)
+    )
+
+
+def _without_negated_pb_migration_actions(normalized: str) -> tuple[str, bool]:
+    candidate = normalized
+    patterns = (
+        r"\b(?:do not|don't|never)\s+(?:migrate|convert|port|rebuild|rewrite|reimplement|transform|move|build|create|develop|implement)\b",
+        r"(?:마이그레이션|변환|이식|포팅|재구축|이동|개발|구현|생성)(?:하지|해서는)\s*(?:마|말|않)",
+        r"(?:옮기지|만들지)\s*(?:마|말|않)",
+    )
+    negated = False
+    for pattern in patterns:
+        candidate, count = re.subn(pattern, " ", candidate)
+        negated = negated or count > 0
+    return _normalize(candidate), negated
+
+
+def _without_negated_pb_tool_actions(normalized: str) -> tuple[str, bool]:
+    candidate = normalized
+    patterns = (
+        r"\b(?:do not|don't|never)\s+(?:run|execute|invoke|call|use|probe|export|extract)\s+(?:the\s+)?(?:pblscripter|orca|export-pbl\.ps1)\b",
+        r"\bwithout\s+(?:pblscripter|orca|export-pbl\.ps1)\b",
+        r"(?:pblscripter|orca|export-pbl\.ps1)(?:를|을|는|은)?\s*(?:실행|호출|사용|탐색|추출)?하지\s*(?:마|말|않)",
+        r"(?:pblscripter|orca|export-pbl\.ps1)\s*없이",
+    )
+    forbidden = False
+    for pattern in patterns:
+        candidate, count = re.subn(pattern, " ", candidate)
+        forbidden = forbidden or count > 0
+    return _normalize(candidate), forbidden
+
+
+def _has_pb_to_csharp_transform_action(
+    normalized: str,
+    *,
+    source_present: bool,
+    target_present: bool,
+    allow_noun_form: bool,
+) -> bool:
+    if _contains_any(normalized, PB_TO_CSHARP_MIGRATION_ACTION_TERMS):
+        return True
+    if re.search(
+        r"(?:마이그레이션|변환|이식|포팅|재구축)(?:을|를)?\s*(?:해|해줘|해주세요|하자|하려고|하고\s*싶|시켜|진행해)",
+        normalized,
+    ):
+        return True
+    directional_link = bool(
+        re.search(r"\b(?:pb|powerbuilder|datawindow)\b.{0,100}\b(?:to|into|as)\b.{0,100}\b(?:c#|csharp|winforms)\b", normalized)
+        or re.search(r"\b(?:c#|csharp|winforms)\b.{0,100}\b(?:from|using|based on)\b.{0,100}\b(?:pb|powerbuilder|datawindow)\b", normalized)
+        or _contains_any(normalized, {"pb에서 c#", "pb를 c#", "파워빌더에서 c#", "파워빌더를 c#", "pb 기반 c#"})
+    )
+    if (
+        source_present
+        and target_present
+        and directional_link
+        and _contains_any(normalized, PB_TO_CSHARP_CREATION_ACTION_TERMS)
+    ):
+        return True
+    return bool(
+        allow_noun_form
+        and source_present
+        and target_present
+        and _contains_any(normalized, PB_TO_CSHARP_MIGRATION_NOUN_TERMS)
+        and _contains_any(
+            normalized,
+            {
+                "start the migration",
+                "begin the migration",
+                "proceed with the migration",
+                "execute the migration",
+                "start migration",
+                "begin migration",
+                "마이그레이션 시작해",
+                "마이그레이션 진행해",
+                "마이그레이션 착수해",
+                "마이그레이션해줘",
+                "변환 시작해",
+                "변환 진행해",
+            },
+        )
+    )
+
+
+def _has_active_pb_migration_context(context: dict) -> bool:
+    context_kind = str(
+        context.get("active_context_kind")
+        or context.get("prior_context_kind")
+        or context.get("workflow_kind")
+        or ""
+    ).strip().lower()
+    if context_kind in PB_MIGRATION_CONTEXT_KINDS:
+        return True
+    if context.get("pb_migration_active") is True:
+        return True
+    for key in ("request_intent", "prior_request_intent", "previous_intent"):
+        value = context.get(key)
+        if isinstance(value, dict) and value.get("migration_intent") is True:
+            return True
+    for key in ("classification", "prior_classification", "previous_classification"):
+        value = context.get(key)
+        if not isinstance(value, dict):
+            continue
+        intent = value.get("intent")
+        if isinstance(intent, dict) and intent.get("migration_intent") is True:
+            return True
+    return False
+
+
+def _is_pb_migration_execution_followup(
+    normalized: str,
+    analysis: RequestActAnalysis,
+    *,
+    active_migration_context: bool,
+    nonexecution_discussion: bool,
+) -> bool:
+    if not active_migration_context or nonexecution_discussion:
+        return False
+    if _contains_any(normalized, PB_MIGRATION_TOOL_DIAGNOSTIC_TERMS) and not _contains_any(
+        normalized,
+        {"retry", "rerun", "run again", "재실행", "다시 실행", "다시 돌려"},
+    ):
+        return False
+    if analysis.has_question and not _contains_any(
+        normalized,
+        {"please", "해줘", "해주세요", "진행해", "계속해", "이어서 해"},
+    ):
+        return False
+    return _contains_any(
+        normalized,
+        {
+            "continue",
+            "proceed",
+            "go ahead",
+            "do it",
+            "apply it",
+            "same for",
+            "migrate",
+            "convert",
+            "port",
+            "rebuild",
+            "implement",
+            "build",
+            "create",
+            "계속해",
+            "이어서",
+            "그대로 진행",
+            "진행해",
+            "그걸로 해",
+            "다른 화면도",
+            "변환해",
+            "마이그레이션해",
+            "구현해",
+            "개발해",
+            "만들어",
+        },
+    )
+
+
+def _context_preserves_pb_probe_need(context: dict, contextual_followup: bool) -> bool:
+    if not contextual_followup:
+        return False
+    if context.get("pb_source_requires_tool") is True:
+        return True
+    for key in ("request_intent", "prior_request_intent", "previous_intent"):
+        value = context.get(key)
+        if isinstance(value, dict) and value.get("capability_probe_allowed") is True:
+            return True
+    return False
 
 
 def _memory_state_classification(
@@ -3434,6 +4126,41 @@ def _heavy_classification(
     )
 
 
+def _is_hr_domain_request(normalized: str) -> bool:
+    if _contains_any(normalized, HR_TERMS):
+        return True
+    has_candidate_phrase = bool(
+        re.search(r"\b(?:candidate|candidates)\b", normalized)
+    )
+    return has_candidate_phrase and _contains_any(
+        normalized,
+        HR_CANDIDATE_CONTEXT_TERMS,
+    )
+
+
+def _is_software_candidate_request(normalized: str) -> bool:
+    if not re.search(r"\b(?:candidate|candidates)\b", normalized):
+        return False
+    return _contains_any(
+        normalized,
+        {
+            ".cs",
+            "artifact",
+            "c#",
+            "code",
+            "database",
+            "formatted",
+            "formatter",
+            "procedure",
+            "query",
+            "schema",
+            "service",
+            "sql",
+            "verifier",
+        },
+    )
+
+
 def _detect_domain(
     normalized: str,
     context: dict,
@@ -3443,6 +4170,10 @@ def _detect_domain(
     context_override = _domain_override_from_text(normalized, analysis)
     if context_override:
         return context_override
+    if _is_ordinary_crud_request(normalized, analysis) and not _has_security_behavior_request(
+        normalized
+    ):
+        return "software"
     if explicit_domain:
         return explicit_domain
     if _is_bare_medical_fragment(normalized):
@@ -3451,6 +4182,8 @@ def _detect_domain(
         return "current-data"
     if _contains_any(normalized, CAREER_TERMS):
         return "hr"
+    if _is_software_candidate_request(normalized):
+        return "software"
     if _is_light_direct_task(normalized):
         return "general"
     if _contains_any(normalized, LANGUAGE_TERMS):
@@ -3528,7 +4261,7 @@ def _detect_domain(
         if _contains_any(normalized, PERSONAL_LEGAL_ADVICE_TERMS | {"vendor agreement", "without penalty"}):
             return "legal"
         return "vendor-ops"
-    if _contains_any(normalized, HR_TERMS):
+    if _is_hr_domain_request(normalized):
         return "hr"
     if _contains_any(normalized, OPERATIONS_TERMS):
         return "operations"
@@ -4224,7 +4957,8 @@ def _is_high_risk(
         return False
     if _contains_any(normalized, SAFETY_CRISIS_TERMS):
         return True
-    if _has_authorized_high_impact_destructive_act(normalized, analysis):
+    security_remediation = domain == "security" and _is_security_remediation_work(normalized)
+    if _has_authorized_high_impact_destructive_act(normalized, analysis) and not security_remediation:
         return True
     if context.get("transaction_intent") and domain in {
         "investment",
@@ -4246,6 +4980,8 @@ def _is_high_risk(
         "tax",
     }:
         return True
+    if security_remediation:
+        return False
     if domain == "medical" and _is_bare_medical_fragment(normalized) and context.get("domain") == "medical":
         return True
     if domain == "investment" and _contains_any(
@@ -5518,6 +6254,92 @@ def _is_defensive_security_work(normalized: str) -> bool:
     return _contains_any(normalized, {"fix", "review", "regression tests", "vulnerability"})
 
 
+def _is_security_remediation_work(normalized: str) -> bool:
+    """Keep bounded vulnerability remediation in heavy software/security work."""
+    if _contains_any(
+        normalized,
+        DESTRUCTIVE_ACTION_TERMS
+        | {
+            "delete all",
+            "drop all",
+            "disable audit logs",
+            "rotate all credentials",
+            "revoke all tokens",
+            "dump credentials",
+        },
+    ):
+        return False
+    return (
+        _contains_any(normalized, {"fix", "patch", "remediate", "resolve"})
+        and _contains_any(
+            normalized,
+            {
+                "vulnerability",
+                "security bug",
+                "security flaw",
+                "sql injection",
+                "password reset",
+                "auth bug",
+            },
+        )
+    ) or _contains_any(normalized, {"fix the vulnerability", "regression tests for the vulnerability"})
+
+
+def _is_ordinary_crud_request(
+    normalized: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    if not analysis.has_mutation_authorization:
+        return False
+    return _contains_any(normalized, {"crud", "create read update delete", "create/read/update/delete"}) and (
+        _contains_any(normalized, {"winforms", "windows form", "form", "screen", "grid"})
+        or _contains_any(normalized, {"field", "column", "property", "business data", "domain field"})
+    )
+
+
+def _has_security_behavior_request(normalized: str) -> bool:
+    if _contains_any(normalized, SECURITY_BEHAVIOR_TERMS):
+        return True
+    return _contains_any(
+        normalized,
+        {
+            "vulnerability",
+            "exploit",
+            "security review",
+            "security risks",
+            "encryption at rest",
+            "encryption in transit",
+            "protect the field",
+        },
+    )
+
+
+def _is_software_delivery_workflow_request(
+    normalized: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    if not analysis.has_mutation_authorization or not _contains_any(
+        normalized,
+        {"implement", "build", "modify", "fix", "change", "finish", "ship"},
+    ):
+        return False
+    workflow_terms = {
+        "tests",
+        "test",
+        "worktree",
+        "review",
+        "verify",
+        "verification",
+        "debug",
+        "push",
+        "commit",
+        "branch",
+    }
+    return sum(1 for term in workflow_terms if _contains_term(normalized, term)) >= 2
+
+
 def _is_privacy_read_only(normalized: str) -> bool:
     return _contains_any(normalized, {"are customer emails in", "is there", "does this contain", "contains ssns"})
 
@@ -5689,7 +6511,10 @@ def _is_contextual_audit_repair_request(
     context: dict,
     analysis: RequestActAnalysis | None = None,
 ) -> bool:
-    mutation_authorized = _has_structural_mutation_authorization(normalized, analysis)
+    mutation_authorized = (
+        _has_structural_mutation_authorization(normalized, analysis)
+        or _has_explicit_contextual_repair_command(normalized)
+    )
     has_repair_action = mutation_authorized and _contains_any(normalized, CONTEXTUAL_REPAIR_ACTION_TERMS)
     has_failure_signal = _contains_any(normalized, CONTEXTUAL_REPAIR_FAILURE_TERMS)
     if not has_repair_action and not has_failure_signal:
@@ -5702,6 +6527,19 @@ def _is_contextual_audit_repair_request(
     if has_subject and (has_reference or has_context):
         return True
     return has_repair_action and has_reference and has_context
+
+
+def _has_explicit_contextual_repair_command(normalized: str) -> bool:
+    return bool(
+        re.search(
+            r"^(?:please\s+)?(?:add|insert|include|integrate|put|fix|repair|patch|harden|improve|update)\b",
+            normalized,
+        )
+        or re.search(
+            r"(?:추가|넣어|반영|통합|보완|수정|고쳐|개선|처리)(?:해|해줘|해주세요|하자|시켜|시켜줘|줘)(?:\s|[.!?]|$)",
+            normalized,
+        )
+    )
 
 
 def _contextual_audit_repair_domain(domain: str, context: dict) -> str:
@@ -5875,6 +6713,8 @@ def _is_ambiguous(
 ) -> bool:
     analysis = analysis or parse_request_act(normalized, context)
     domain = _detect_domain(normalized, context, analysis)
+    if _is_software_delivery_workflow_request(normalized, analysis):
+        return False
     if _is_unresolved_mutation_pronoun(normalized, context, analysis):
         return True
     if _is_light_direct_task(normalized):

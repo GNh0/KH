@@ -1,7 +1,11 @@
+import gc
+import inspect
 import json
 import tempfile
+import tracemalloc
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from src.orchestration.development_progress import (
     DevelopmentRunProgress,
@@ -1317,6 +1321,211 @@ class SessionPostmortemGuardTests(unittest.TestCase):
 
         self.assertIn("postgresql+psycopg2://postgres:***", redacted)
         self.assertNotIn("1111@127", redacted)
+
+    def test_public_analysis_streams_once_without_read_text_or_splitlines(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "session_meta",
+                    "payload": {"id": "stream-once", "cwd": "D:/repo"},
+                },
+                {
+                    "type": "response_item",
+                    "payload": {"type": "token_count", "info": {}},
+                },
+            ]
+        )
+        source = inspect.getsource(analyze_codex_session_jsonl)
+        self.assertNotIn(".read_text(", source)
+        self.assertNotIn(".splitlines(", source)
+
+        original_open = Path.open
+        target_open_count = 0
+
+        def counting_open(path_object, *args, **kwargs):
+            nonlocal target_open_count
+            if path_object == path:
+                target_open_count += 1
+            return original_open(path_object, *args, **kwargs)
+
+        with mock.patch.object(
+            Path,
+            "read_text",
+            side_effect=AssertionError("full-file reads are forbidden"),
+        ), mock.patch.object(Path, "open", new=counting_open):
+            postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(target_open_count, 1)
+        self.assertEqual(postmortem.input_integrity["read_strategy"], "single_pass_streaming")
+        self.assertEqual(postmortem.input_integrity["stream_passes"], 1)
+        self.assertEqual(postmortem.input_integrity["temporary_artifacts_created"], 0)
+
+    def test_large_irrelevant_payload_does_not_scale_retained_memory(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+
+        def write_payload(path, size):
+            with path.open("w", encoding="utf-8", newline="") as stream:
+                json.dump(
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "debug_blob", "blob": "z" * size},
+                    },
+                    stream,
+                )
+                stream.write("\n")
+
+        small_path = root / "small.jsonl"
+        large_path = root / "large.jsonl"
+        write_payload(small_path, 4_096)
+        write_payload(large_path, 4 * 1024 * 1024)
+
+        def retained_bytes(path):
+            gc.collect()
+            tracemalloc.start()
+            result = analyze_codex_session_jsonl(path)
+            gc.collect()
+            retained, peak = tracemalloc.get_traced_memory()
+            serialized_size = len(json.dumps(result.to_dict(), ensure_ascii=False))
+            tracemalloc.stop()
+            return retained, peak, serialized_size, result
+
+        small_retained, _, small_result_size, _ = retained_bytes(small_path)
+        large_retained, large_peak, large_result_size, large_result = retained_bytes(large_path)
+
+        self.assertLessEqual(large_retained, small_retained + 256 * 1024)
+        self.assertLessEqual(large_result_size, small_result_size + 2_048)
+        self.assertLess(large_result_size, 64 * 1024)
+        self.assertGreater(large_peak, large_retained)
+        self.assertNotIn("z" * 1_024, json.dumps(large_result.to_dict()))
+
+    def test_relevant_events_at_end_of_large_stream_are_detected(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "late-events.jsonl"
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            for index in range(2_000):
+                stream.write(
+                    json.dumps(
+                        {
+                            "type": "response_item",
+                            "payload": {"type": "debug_blob", "index": index, "blob": "x" * 512},
+                        }
+                    )
+                    + "\n"
+                )
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "thread_goal_updated",
+                            "goal": {"status": "active", "objective": "Finish model training and backtest."},
+                        },
+                    }
+                )
+                + "\n"
+            )
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {
+                            "type": "task_complete",
+                            "last_agent_message": "Initial scaffold completed.",
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.line_count, 2_002)
+        self.assertEqual(postmortem.input_integrity["valid_event_count"], 2_002)
+        self.assertEqual(postmortem.completion_guard["status"], "blocked")
+        self.assertEqual(postmortem.scope_completion_delta["status"], "blocked")
+        self.assertIn("model_training", postmortem.scope_completion_delta["missing_markers"])
+
+    def test_malformed_duplicate_and_invalid_root_lines_are_reported(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "integrity.jsonl"
+        with path.open("w", encoding="utf-8", newline="") as stream:
+            stream.write('{"type":"session_meta","payload":{"id":"old","id":"new","cwd":"D:/repo"}}\n')
+            stream.write('{"type":"response_item","payload":\n')
+            stream.write('[]\n')
+            stream.write(
+                json.dumps(
+                    {
+                        "type": "response_item",
+                        "payload": {"type": "task_complete", "last_agent_message": "Work is blocked."},
+                    }
+                )
+                + "\n"
+            )
+
+        postmortem = analyze_codex_session_jsonl(path)
+        integrity = postmortem.input_integrity
+
+        self.assertEqual(postmortem.session_id, "")
+        self.assertEqual(postmortem.cwd, "")
+        self.assertEqual(postmortem.line_count, 4)
+        self.assertEqual(integrity["status"], "with_issues")
+        self.assertEqual(integrity["malformed_line_count"], 1)
+        self.assertEqual(integrity["duplicate_key_count"], 1)
+        self.assertEqual(integrity["duplicate_key_line_count"], 1)
+        self.assertEqual(integrity["invalid_event_count"], 1)
+        self.assertEqual(integrity["valid_event_count"], 1)
+        self.assertEqual(integrity["duplicate_key_lines"][0]["keys"], ["id"])
+        self.assertNotIn("old", json.dumps(integrity))
+        self.assertIn("Input integrity: with_issues", render_session_postmortem(postmortem))
+
+    def test_streaming_refactor_preserves_small_fixture_guard_semantics(self):
+        path = self.write_session(
+            [
+                {"type": "session_meta", "payload": {"id": "parity", "cwd": "D:/repo"}},
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "thread_goal_updated",
+                        "goal": {
+                            "status": "active",
+                            "objective": "Finish model training, backtest, DB persistence, and dashboard.",
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": '{"ok":false,"error":"Module not found: playwright"}',
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "task_complete",
+                        "last_agent_message": "Initial dashboard scaffold completed and verified.",
+                    },
+                },
+            ]
+        )
+
+        postmortem = analyze_codex_session_jsonl(path)
+
+        self.assertEqual(postmortem.session_id, "parity")
+        self.assertEqual(postmortem.cwd, "D:/repo")
+        self.assertEqual(postmortem.completion_guard["status"], "blocked")
+        self.assertEqual(postmortem.verification_claim_guard["status"], "blocked")
+        self.assertEqual(postmortem.verification_claim_guard["failed_verification_count"], 1)
+        self.assertEqual(postmortem.scope_completion_delta["status"], "blocked")
+        self.assertEqual(
+            postmortem.scope_completion_delta["missing_markers"],
+            ["model_training", "backtest", "db_persistence"],
+        )
+        self.assertEqual(postmortem.input_integrity["status"], "passed")
 
     def test_review_timeout_status_cannot_validate_as_complete(self):
         progress = DevelopmentRunProgress(

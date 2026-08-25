@@ -2,13 +2,24 @@
 
 Finalized: 2026-07-27
 
+## Current Documentation Boundary
+
+This is a historical release checkpoint, not the current PB-to-C# style
+authority. Current work must use the packaged contract and current runtime
+contracts: exact target behavior first, packaged style only by default,
+configured deterministic PBL acquisition, read-back SHA-256 artifact bindings,
+and independent project-inclusion/build/manual completion receipts. A caller
+label, caller JSON/manifest, or self-declared verification field is not proof.
+The PB skill does not require a front-door/Goal/Git step as part of its own
+documented workflow.
+
 ## Objective
 
 Harden KH UAF SQL formatting and PB-to-C# migration contracts so final SQL, source lineage, caller evidence, and session receipts fail closed when required evidence is missing, stale, malformed, or inconsistent.
 
 ## Release State
 
-- Worktree: `C:\Users\KONEIT\Desktop\Jang\KH\.worktrees\sol-sql-harness-redesign`
+- Worktree: `.worktrees/sol-sql-harness-redesign` (repository-relative)
 - Source branch: `codex-runtime-sol-audit`
 - Integration target: `origin/codex-runtime`
 - Base commit: `0f1872981d3c3f8760993b7712b0922238b8d646`

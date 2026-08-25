@@ -1,6 +1,6 @@
 # DataWindow Layout Mapping
 
-Use this reference with directly supplied SRD text, a user-provided field list, or a described DataWindow contract. Normal generation does not search for DataWindow files.
+Use this reference with directly supplied SRD text, a user-provided field list, or a described DataWindow contract. Normal generation does not search for DataWindow files or use them to learn style; they provide behavior, field, caption, order, and mapping evidence only.
 
 ## Column Extraction
 
@@ -16,6 +16,7 @@ Use this reference with directly supplied SRD text, a user-provided field list, 
 Use the selected control provider from the packaged style contract.
 
 - Grid/view names: `grd<Role>` and `gvw<Role>`.
+- Numeric/date/panel names: `Spin<Field>`, `ymd<Field>`, and `pn<Role>`.
 - XML column names: configured converter prefix plus exact uppercase field, preserving `#` and `$`.
 - C# column names: explicit valid `csharp_name` mappings; block when an XML name cannot safely become a C# identifier.
 - `FieldName`: exact supplied result field, including supported converter characters.
@@ -23,7 +24,7 @@ Use the selected control provider from the packaged style contract.
 - `Caption`: supplied caption or documented fallback.
 - `VisibleIndex`: one-based PB `column=(` occurrence order, matching the DataWindowToXml `Layout -> Load` baseline.
 - Explicit Designer members and `Columns.AddRange` are required.
-- Numeric, lookup, button, and boolean fields use the matching repository convention.
+- Numeric fields use `rpsSpin<Field>` with `RepositoryItemSpinEdit`. Other repository instance names require an exact `expected_control_contracts` entry rather than an invented fallback name.
 - Repository initialization and registration precede `ColumnEdit` assignment.
 
 For DevExpress-compatible output, default to a hidden group panel, visible auto-filter row, visible footer, disabled auto-width, even-row appearance, and centered headers when the API supports them. For KoneLib, keep the corresponding wrapper behavior. For WinForms, express unsupported repository behavior through cell/editor configuration and record the substitution.

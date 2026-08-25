@@ -11,6 +11,7 @@ REQUIRED_SUPPORT_FILES = [
     "references/packaged-style-contract.md",
     "references/packaged-style-contract.json",
     "references/profile-update-workflow.md",
+    "references/orca-runtime-contract.md",
     "references/datawindow-layout-mapping.md",
     "references/sql-formatting-bridge.md",
     "references/migration-output-checklist.md",
@@ -34,6 +35,17 @@ ORDINARY_RUNTIME_FILES = [
 ]
 SHIPPED_RUNTIME_SOURCE_FILES = [
     "src/skills/pb_to_csharp_migration.py",
+]
+REQUIRED_VERIFIER_TARGETS = [
+    "src.skills.pb_migration_authority.validate_pb_migration_authority_contract",
+    "src.skills.pb_migration_directives.evaluate_pb_migration_directives",
+    "src.skills.pb_event_save_contract.validate_pb_event_save_contract",
+    "src.skills.pb_event_state_contract.validate_pb_event_state_contract",
+    "src.skills.pb_performance_equivalence_contract.validate_pb_performance_equivalence_contract",
+    "src.skills.pb_designer_ui_contract.validate_pb_designer_ui_contract",
+    "src.skills.pb_migration_preflight.verify_gm31_project_build_contract",
+    "src.skills.pb_migration_preflight.plan_gm32_acquisition",
+    "src.skills.pb_sql_generation_policy.evaluate_pb_sql_generation_policy",
 ]
 GENERIC_PRIVATE_FINGERPRINT_PATTERNS = {
     "absolute_windows_path": re.compile(r"\b[A-Za-z]:\\"),
@@ -161,12 +173,49 @@ PRODUCTION_SOURCE_DIRECTORY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 NORMAL_GENERATION_DISCOVERY_TERMS = (
-    "PblScripter",
-    "ORCA",
+    "SYS.OBJECTS",
+    "SYS.SQL_MODULES",
     "source_sha256",
     "designer_sha256",
     "snapshot_date",
     "source_root",
+)
+STYLE_DISCOVERY_SOURCE_PATTERNS = (
+    ("PblScripter", re.compile(r"\bPblScripter\b", re.IGNORECASE)),
+    ("ORCA", re.compile(r"\bORCA\b", re.IGNORECASE)),
+    ("author", re.compile(r"\bauthors?\b", re.IGNORECASE)),
+    ("root", re.compile(r"\b(?:source\s+)?roots?\b", re.IGNORECASE)),
+    ("database", re.compile(r"\b(?:databases?|db)\b", re.IGNORECASE)),
+    ("SVN", re.compile(r"\bSVN\b", re.IGNORECASE)),
+    ("history", re.compile(r"\bhistor(?:y|ies)\b", re.IGNORECASE)),
+    (
+        "local project",
+        re.compile(r"\b(?:arbitrary\s+)?local\s+projects?\b", re.IGNORECASE),
+    ),
+)
+STYLE_DISCOVERY_SUBJECT_PATTERN = re.compile(
+    r"\b(?:style|styles|styling|profiles?|conventions?|patterns?|baseline|comparator)\b",
+    re.IGNORECASE,
+)
+STYLE_DISCOVERY_ACTION_PATTERN = re.compile(
+    r"\b(?:discover|search|scan|mine|mining|inspect|crawl|infer|derive|learn|"
+    r"select|adopt|copy|authority|authoritative)\w*\b",
+    re.IGNORECASE,
+)
+STYLE_DISCOVERY_PROHIBITION_PATTERN = re.compile(
+    r"(?:\b(?:do(?:es)?\s+not|never|must\s+not|may\s+not|cannot|can't|no)\b|"
+    r"\b(?:forbidden|prohibited)(?:\b|_))",
+    re.IGNORECASE,
+)
+STYLE_DISCOVERY_PROHIBITION_SECTION_PATTERN = re.compile(
+    r"\b(?:failure\s+cases?|forbidden|prohibited|disallowed)\b",
+    re.IGNORECASE,
+)
+PB_ACQUISITION_CONTEXT_PATTERN = re.compile(
+    r"\b(?:PB|PBL|PowerBuilder|acquisition|runtime|exports?|extraction|extract|"
+    r"capability|listing|ladder|rung|current-export|tools?|versions?|probe|"
+    r"commands?|artifacts?|receipts?)\b",
+    re.IGNORECASE,
 )
 REQUIRED_CONTRACT_KEYS = {
     "schema_version",
@@ -276,6 +325,63 @@ def resolve_target(repo_root: Path, ref: str) -> dict[str, str]:
 
 def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def scan_normal_generation_discovery_policy(
+    text: str,
+    path: str = "",
+) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    for term in NORMAL_GENERATION_DISCOVERY_TERMS:
+        if term in text:
+            issues.append({
+                "code": "discovery_term_in_normal_runtime_doc",
+                "path": path,
+                "term": term,
+            })
+
+    prohibition_section = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            prohibition_section = bool(
+                STYLE_DISCOVERY_PROHIBITION_SECTION_PATTERN.search(line)
+            )
+        for segment in re.split(r"(?<=[.!?;])\s+", line):
+            if not segment.strip():
+                continue
+            is_explicit_prohibition = prohibition_section or bool(
+                STYLE_DISCOVERY_PROHIBITION_PATTERN.search(segment)
+            )
+            has_style_discovery_context = bool(
+                STYLE_DISCOVERY_SUBJECT_PATTERN.search(segment)
+                and STYLE_DISCOVERY_ACTION_PATTERN.search(segment)
+            )
+            has_pb_acquisition_context = bool(
+                PB_ACQUISITION_CONTEXT_PATTERN.search(segment)
+            )
+
+            for term, source_pattern in STYLE_DISCOVERY_SOURCE_PATTERNS:
+                if not source_pattern.search(segment):
+                    continue
+                is_pb_tool = term in {"PblScripter", "ORCA"}
+                violates_style_authority = (
+                    has_style_discovery_context and not is_explicit_prohibition
+                )
+                violates_pb_tool_boundary = (
+                    is_pb_tool
+                    and not has_pb_acquisition_context
+                    and not is_explicit_prohibition
+                )
+                if violates_style_authority or violates_pb_tool_boundary:
+                    issue = {
+                        "code": "discovery_term_in_normal_runtime_doc",
+                        "path": path,
+                        "term": term,
+                    }
+                    if issue not in issues:
+                        issues.append(issue)
+
+    return issues
 
 
 def _default_runtime_privacy_patterns() -> dict[str, re.Pattern[str]]:
@@ -697,13 +803,7 @@ def main() -> int:
 
     for rel_path in ORDINARY_RUNTIME_FILES:
         text = _read_text(skill_dir / rel_path)
-        for term in NORMAL_GENERATION_DISCOVERY_TERMS:
-            if term in text:
-                issues.append({
-                    "code": "discovery_term_in_normal_runtime_doc",
-                    "path": rel_path,
-                    "term": term,
-                })
+        issues.extend(scan_normal_generation_discovery_policy(text, rel_path))
 
     update_text = _read_text(skill_dir / "references" / "profile-update-workflow.md")
     for marker in (
@@ -717,7 +817,7 @@ def main() -> int:
         if marker not in update_text:
             issues.append({"code": "profile_update_marker_missing", "marker": marker})
 
-    targets = parse_implementation_targets(content)
+    targets = list(dict.fromkeys([*parse_implementation_targets(content), *REQUIRED_VERIFIER_TARGETS]))
     if not targets:
         issues.append({"code": "missing_implementation_targets", "path": "SKILL.md"})
     missing_grid_targets = sorted(REQUIRED_GRID_IMPLEMENTATION_TARGETS - set(targets))

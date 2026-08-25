@@ -5,12 +5,21 @@ import re
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 
 from src.orchestration.plugin_composition import CapabilityProvider, compose_plugin_route
 from src.orchestration.goal_runtime import build_goal_activation
 from src.orchestration.request_act_parser import parse_request_act
-from src.orchestration.request_classifier import classify_request
+from src.orchestration.request_classifier import (
+    classify_request,
+    inherited_parent_goal_context,
+)
+from src.orchestration.artifact_style_gate import (
+    SQL_FORMATTING_SKILL,
+    execute_artifact_style_precompletion,
+    run_packaged_sql_formatting_provider,
+    should_execute_artifact_style_precompletion,
+)
 from src.skills.token_optimizer import compare_token_usage
 from src.skills.uaf_skill_catalog import collect_packaged_skills
 from src.skills.uaf_skill_validator import (
@@ -233,9 +242,6 @@ class KhFrontDoorResult:
         authorization = _compact_execution_authorization(self.execution_authorization)
         if authorization:
             payload["execution_authorization"] = authorization
-        deferred_count = _count_deferred_skills(self.skill_statuses, self.immediate_next_skills)
-        if deferred_count:
-            payload["deferred_skill_count"] = deferred_count
         if self.warnings:
             payload["warnings"] = list(self.warnings)
         return payload
@@ -292,6 +298,7 @@ def build_kh_front_door(
     host_skill_paths: Sequence[str] | None = None,
     prefer_cache: bool = False,
     request_context: Dict[str, Any] | None = None,
+    provider_runners: Mapping[str, Callable[[Dict[str, Any]], Any]] | None = None,
     micro: bool = False,
 ) -> KhFrontDoorResult:
     """Run KH intake before any source exploration or implementation work."""
@@ -359,7 +366,11 @@ def build_kh_front_door(
             "kh_front_door": True,
         },
     )
-    context = _normalize_active_resume_goal_context(context)
+    inherited_parent = inherited_parent_goal_context(context)
+    if inherited_parent:
+        context = _normalize_inherited_parent_goal_context(context, inherited_parent)
+    else:
+        context = _normalize_active_resume_goal_context(context)
     request_analysis = parse_request_act(prompt, context)
     classification_result = classify_request(
         prompt,
@@ -367,12 +378,6 @@ def build_kh_front_door(
         request_analysis=request_analysis,
     )
     classification = classification_result.to_dict()
-    goal_activation = build_goal_activation(
-        classification,
-        str(project_path),
-        context,
-        objective=prompt,
-    )
     provider_snapshot = (
         list(providers)
         if providers is not None
@@ -383,6 +388,11 @@ def build_kh_front_door(
             include_canonical_host_sql=micro,
         )
     )
+    provider_snapshot = _ensure_kh_replacement_controller(
+        provider_snapshot,
+        host=host,
+        packaged_skills_dir=skill_source.skills_dir,
+    )
     plugin_route = compose_plugin_route(
         prompt,
         providers=provider_snapshot,
@@ -390,6 +400,68 @@ def build_kh_front_door(
         classification=classification_result,
         request_analysis=request_analysis,
     ).to_dict()
+    if should_execute_artifact_style_precompletion(context):
+        selected_sql_provider = _selected_sql_formatting_provider_role(
+            plugin_route
+        )
+        sql_runner = _selected_provider_runner(
+            provider_runners,
+            selected_sql_provider,
+        )
+        try:
+            artifact_style_runtime = execute_artifact_style_precompletion(
+                context,
+                project_root=project_path,
+                selected_sql_provider=selected_sql_provider,
+                sql_formatter_runner=sql_runner,
+            )
+        except Exception as exc:  # fail closed at the runtime boundary
+            artifact_style_runtime = {
+                "project_root": str(project_path),
+                "required_skills": [],
+                "style_passed": False,
+                "completion_blocked": True,
+                "executor_status": "blocked",
+                "executor_errors": [
+                    f"artifact_style_executor_exception:{type(exc).__name__}"
+                ],
+            }
+        context = {
+            **context,
+            "artifact_style_gate_runtime": artifact_style_runtime,
+            "style_receipts": list(
+                artifact_style_runtime.get("style_receipts", []) or []
+            ),
+            "visual_qa_receipts": list(
+                artifact_style_runtime.get("visual_qa_receipts", []) or []
+            ),
+        }
+        request_analysis = parse_request_act(prompt, context)
+        classification_result = classify_request(
+            prompt,
+            context,
+            request_analysis=request_analysis,
+        )
+        classification = classification_result.to_dict()
+        plugin_route = compose_plugin_route(
+            prompt,
+            providers=provider_snapshot,
+            context=context,
+            classification=classification_result,
+            request_analysis=request_analysis,
+        ).to_dict()
+    if inherited_parent:
+        goal_activation = _inherited_parent_goal_activation(
+            inherited_parent,
+            prompt,
+        )
+    else:
+        goal_activation = build_goal_activation(
+            classification,
+            str(project_path),
+            context,
+            objective=prompt,
+        )
     recommended_skills = _recommended_skills(classification, plugin_route)
     if micro and skill_source.exists:
         targeted_names = _micro_packaged_skill_names(recommended_skills, plugin_route)
@@ -423,9 +495,14 @@ def build_kh_front_door(
     )
     token_optimizer_decision = _front_door_token_optimizer_decision(prompt, classification)
     skill_statuses = _apply_front_door_token_optimizer_gate(skill_statuses, token_optimizer_decision)
-    execution_gate = _execution_gate(classification, plugin_route, recommended_skills)
+    execution_gate = _execution_gate(
+        classification,
+        plugin_route,
+        recommended_skills,
+        context=context,
+    )
     immediate_next_skills = _immediate_next_skills(classification, plugin_route, recommended_skills, execution_gate)
-    if goal_activation.get("status") == "executed":
+    if goal_activation.get("status") in {"executed", "inherited"}:
         immediate_next_skills = [
             skill for skill in immediate_next_skills if skill != "goal-state-harness"
         ]
@@ -436,6 +513,7 @@ def build_kh_front_door(
         recommended_skills,
         execution_gate,
         immediate_next_skills,
+        context=context,
     )
     execution_authorization = _execution_authorization(
         execution_gate,
@@ -445,7 +523,7 @@ def build_kh_front_door(
 
     large_work_bundle = None
     large_work_validation = None
-    if classification.get("complexity") in {"heavy", "high_risk"}:
+    if classification.get("complexity") in {"heavy", "high_risk"} and not inherited_parent:
         from src.orchestration.skill_application import validate_large_work_orchestration_bundle
 
         bundle = _build_front_door_bundle(
@@ -457,6 +535,13 @@ def build_kh_front_door(
         )
         large_work_bundle = bundle.to_dict()
         large_work_validation = validate_large_work_orchestration_bundle(bundle)
+    elif inherited_parent and classification.get("complexity") in {"heavy", "high_risk"}:
+        large_work_validation = {
+            "valid": True,
+            "status": "skipped_inherited_parent_goal",
+            "skipped": True,
+            "reason": "The validated parent Goal owns the outer large-work preflight.",
+        }
 
     if skill_source.exists and any(check.status == "stale_kh_cache_path" for check in host_path_checks):
         warnings.append(
@@ -702,6 +787,53 @@ def _normalize_active_resume_goal_context(context: Dict[str, Any]) -> Dict[str, 
     return normalized
 
 
+def _normalize_inherited_parent_goal_context(
+    context: Dict[str, Any],
+    parent: Dict[str, str],
+) -> Dict[str, Any]:
+    normalized = dict(context)
+    normalized["delegated_parent_goal"] = dict(parent)
+    normalized["delegated_parent_goal_active"] = True
+    normalized["requires_resume"] = False
+    normalized["long_running"] = False
+    normalized["needs_handoff"] = False
+    return normalized
+
+
+def _inherited_parent_goal_activation(
+    parent: Dict[str, str],
+    delegated_objective: str,
+) -> Dict[str, Any]:
+    return {
+        "required": True,
+        "status": "inherited",
+        "goal_backend": "inherited_parent",
+        "recommended_backend": "inherited_parent",
+        "next_action": "continue_with_inherited_parent_goal",
+        "execution_evidence": ["structured_parent_goal_linkage"],
+        "host_goal_authorized": False,
+        "backend_reason": "Validated structured host context linked this bounded task to the active parent Goal.",
+        "goal_spec": {
+            "objective": parent["objective"],
+            "success_criteria": [],
+            "evidence_required": [],
+        },
+        "parent_goal_link": dict(parent),
+        "delegated_objective": delegated_objective,
+        "inheritance": "validated_active_parent_goal",
+        "channels": {
+            "routing": {"status": "inherited", "required": True},
+            "parent_goal": {
+                "status": "linked",
+                "validation": {"valid": True, "scope": "structured_host_parent_linkage"},
+            },
+        },
+        "runtime_receipts": {},
+        "receipt_validation_scope": "structured_host_parent_linkage",
+        "external_authenticity": "unverified",
+    }
+
+
 def _default_providers(
     host: str,
     packaged_skills_dir: str | os.PathLike[str] | None = None,
@@ -741,6 +873,38 @@ def _default_providers(
         packaged_sql_formatting_provider(packaged_skills_dir, host=host)
     )
     return providers
+
+
+def _ensure_kh_replacement_controller(
+    providers: Sequence[CapabilityProvider | Dict[str, Any]],
+    *,
+    host: str,
+    packaged_skills_dir: str | os.PathLike[str] | None,
+) -> List[CapabilityProvider | Dict[str, Any]]:
+    """Keep the replacement layer under KH control when Superpowers is present."""
+    snapshot = list(providers)
+
+    def provider_id(provider: CapabilityProvider | Dict[str, Any]) -> str:
+        if isinstance(provider, dict):
+            return str(provider.get("provider_id") or "").strip().lower()
+        return str(getattr(provider, "provider_id", "") or "").strip().lower()
+
+    ids = {provider_id(provider) for provider in snapshot}
+    if "superpowers" not in ids or "kh" in ids:
+        return snapshot
+    kh_provider = next(
+        (
+            provider
+            for provider in _default_providers(
+                host,
+                packaged_skills_dir,
+                include_host_local=False,
+            )
+            if provider_id(provider) == "kh"
+        ),
+        None,
+    )
+    return [kh_provider, *snapshot] if kh_provider is not None else snapshot
 
 
 def _is_codex_compatible_host(host: str) -> bool:
@@ -1096,6 +1260,9 @@ def _recommended_skills(classification: Dict[str, Any], plugin_route: Dict[str, 
         skills.append(selected_sql_provider)
     if _needs_sql_formatting_style_harness(classification, plugin_route):
         skills.append("sql-formatting-style-harness")
+    style_gate = classification.get("intent", {}).get("artifact_style_gate", {})
+    if isinstance(style_gate, dict):
+        skills.extend(str(item) for item in style_gate.get("required_skills", []) or [])
     if classification.get("complexity") in {"heavy", "high_risk"}:
         skills.extend(
             [
@@ -1142,6 +1309,46 @@ def _selected_sql_formatting_provider_skill(plugin_route: Dict[str, Any]) -> str
     return ""
 
 
+def _selected_sql_formatting_provider_role(
+    plugin_route: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    selected_roles = [plugin_route.get("controller", {}) or {}]
+    selected_roles.extend(plugin_route.get("assistants", []) or [])
+    for role in selected_roles:
+        if not isinstance(role, dict) or role.get("capability") != "sql_formatting":
+            continue
+        metadata = role.get("metadata", {}) or {}
+        compatibility = str(metadata.get("compatibility") or "compatible").lower()
+        if compatibility in {"compatible", "supported", "verified"}:
+            return dict(role)
+    return None
+
+
+def _selected_provider_runner(
+    provider_runners: Mapping[str, Callable[[Dict[str, Any]], Any]] | None,
+    selected_provider: Mapping[str, Any] | None,
+) -> Callable[[Dict[str, Any]], Any] | None:
+    if not isinstance(selected_provider, Mapping):
+        return None
+    provider_id = str(selected_provider.get("provider_id") or "").strip()
+    provider_path = str(
+        (selected_provider.get("metadata", {}) or {}).get("path") or ""
+    ).strip()
+    if provider_runners:
+        if provider_path in provider_runners:
+            runner = provider_runners[provider_path]
+            return runner if callable(runner) else None
+        if provider_id in provider_runners:
+            runner = provider_runners[provider_id]
+            return runner if callable(runner) else None
+    if (
+        provider_id == SQL_FORMATTING_SKILL
+        and selected_provider.get("capability") == "sql_formatting"
+    ):
+        return run_packaged_sql_formatting_provider
+    return None
+
+
 def _sql_provider_selection_receipt_allowed(execution_gate: Dict[str, Any]) -> bool:
     return bool(
         execution_gate.get("can_execute") is True
@@ -1150,6 +1357,9 @@ def _sql_provider_selection_receipt_allowed(execution_gate: Dict[str, Any]) -> b
 
 
 def _needs_sql_formatting_style_harness(classification: Dict[str, Any], plugin_route: Dict[str, Any]) -> bool:
+    style_gate = classification.get("intent", {}).get("artifact_style_gate", {})
+    if isinstance(style_gate, dict) and style_gate.get("sql_required"):
+        return True
     if "sql_formatting_style_check" in set(classification.get("evidence_required", []) or []):
         return True
     if "sql_formatting_style_request" in set(classification.get("reasons", []) or []):
@@ -1367,6 +1577,7 @@ def _immediate_next_skills(
         ordered = [
             *credential_first,
             *([selected_provider] if selected_provider else []),
+            *([SQL_FORMATTING_SKILL] if SQL_FORMATTING_SKILL in recommended else []),
             *(
                 ["sql-formatting-style-harness"]
                 if "sql-formatting-style-harness" in recommended
@@ -1374,6 +1585,12 @@ def _immediate_next_skills(
             ),
         ]
         return _dedupe(ordered)
+
+    style_gate = classification.get("intent", {}).get("artifact_style_gate", {})
+    if isinstance(style_gate, dict):
+        required = [str(item) for item in style_gate.get("required_skills", []) or []]
+        if required and not style_gate.get("style_passed"):
+            return _dedupe([*credential_first, *required])
 
     if controller_id and controller_id not in {"kh", "none"}:
         return credential_first
@@ -1467,6 +1684,9 @@ def _build_front_door_bundle(
                 "domain": classification.get("domain"),
                 "recommended_execution": classification.get("recommended_execution"),
             },
+            "artifact_style_gate": dict(
+                classification.get("intent", {}).get("artifact_style_gate", {}) or {}
+            ),
         },
     )
 
@@ -2186,7 +2406,9 @@ def _required_next_actions(
     recommended_skills: Sequence[str],
     execution_gate: Dict[str, Any] | None = None,
     immediate_next_skills: Sequence[str] | None = None,
+    context: Dict[str, Any] | None = None,
 ) -> List[str]:
+    context = context or {}
     actions = [
         "Do not continue from `recommended_skills` as a loose checklist. Execute `immediate_next_skills` first, in order, and record applied/skipped/blocked evidence for each before source exploration, implementation, verification, or final claims.",
         "Read only the immediate next skills needed for the next step through `python -m src.skills.uaf_skill_catalog --read <skill>`.",
@@ -2256,17 +2478,28 @@ def _required_next_actions(
             "Apply `memory-state-harness` with scoped evidence: record memory_scope, memory_provider_policy, prompt_snapshot_status, action_sensitive_memory_boundary, and global_memory_candidate_policy; default to project/chat-scoped prompt snapshots, treat host global Codex memory as a separate explicit promotion target, and keep important cross-project lessons as global_memory_candidate records until user-approved promotion evidence exists. Treat MEMORY.md/USER.md snapshots as frozen session-start context, use session search or scoped recall for old chats, and treat OpenClaw/Hermes-style external providers as additive evidence candidates rather than current truth."
         )
     if classification.get("complexity") in {"heavy", "high_risk"}:
-        actions.extend(
-            [
-                "Create or update GoalState before implementation.",
-                "Record workspace_strategy before edits.",
-                "Record token_optimizer_status=used|considered_not_needed|passthrough|blocked and token_optimizer_status_reason before broad reads, implementation tools, subagent packets, or long command-output handling.",
-                "Record host_runtime, nested_subagents_available or not_applicable, subagent_strategy with concrete rationale, parallel_strategy_decision with concrete rationale, and role_execution_audit.status before implementation.",
-                "For DB writes, destructive commands, or shared production state, record guard_policy plus rollback/snapshot strategy before the write.",
-                "When running inside a host subagent, record nested_subagents_available and subagent_strategy=dispatch|single-controller|review-only|blocked before implementation.",
-                "Run verification-before-completion before any done, commit, push, or handoff claim.",
-            ]
-        )
+        if context.get("delegated_parent_goal_active"):
+            actions.extend(
+                [
+                    "Use the validated parent Goal link for this bounded scope; do not create, replace, or resume an unrelated child Goal.",
+                    "Record token_optimizer_status=used|considered_not_needed|passthrough|blocked and token_optimizer_status_reason before implementation tools, subagent packets, or long command-output handling.",
+                    "Record host_runtime, nested_subagents_available or not_applicable, and subagent_strategy=dispatch|single-controller|review-only|blocked for this child scope.",
+                    "For DB writes, destructive commands, or shared production state, record guard_policy plus rollback/snapshot strategy before the write.",
+                    "Run verification-before-completion before any done, commit, push, or handoff claim.",
+                ]
+            )
+        else:
+            actions.extend(
+                [
+                    "Create or update GoalState before implementation.",
+                    "Record workspace_strategy before edits.",
+                    "Record token_optimizer_status=used|considered_not_needed|passthrough|blocked and token_optimizer_status_reason before broad reads, implementation tools, subagent packets, or long command-output handling.",
+                    "Record host_runtime, nested_subagents_available or not_applicable, subagent_strategy with concrete rationale, parallel_strategy_decision with concrete rationale, and role_execution_audit.status before implementation.",
+                    "For DB writes, destructive commands, or shared production state, record guard_policy plus rollback/snapshot strategy before the write.",
+                    "When running inside a host subagent, record nested_subagents_available and subagent_strategy=dispatch|single-controller|review-only|blocked before implementation.",
+                    "Run verification-before-completion before any done, commit, push, or handoff claim.",
+                ]
+            )
     if "command-output-harness" in recommended_skills:
         actions.append(
             "Record command_output_filter_plan before broad command reads: preserve exit code, file paths, line numbers, error codes, SQL/query text, and user-requested facts; if preservation cannot be proven, use passthrough or wider-context fallback."
@@ -2302,9 +2535,13 @@ def _execution_gate(
     classification: Dict[str, Any],
     plugin_route: Dict[str, Any],
     recommended_skills: Sequence[str],
+    *,
+    context: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
+    context = context or {}
     reasons = set(classification.get("reasons", []) or [])
     intent = classification.get("intent", {})
+    style_gate = intent.get("artifact_style_gate", {}) if isinstance(intent, dict) else {}
     if (
         (
             isinstance(intent, dict)
@@ -2331,6 +2568,22 @@ def _execution_gate(
                 "subagent_dispatch",
                 "completion_claim",
             ],
+        }
+    if isinstance(style_gate, dict) and style_gate.get("completion_blocked"):
+        required = [str(item) for item in style_gate.get("required_skills", []) or []]
+        return {
+            "status": "blocked_until_artifact_style_gate",
+            "can_execute": False,
+            "reason": "Current structured artifact receipts are missing, stale, blocked, or failed for a claimed build, DB deployment, or completion.",
+            "required_before_execution": _dedupe([
+                *required,
+                "changed_artifacts",
+                "exact_artifact_receipts",
+                "style_verification_receipts",
+            ]),
+            "artifact_style_gate": dict(style_gate),
+            "allowed_setup_actions": ["record_current_artifact_receipts", "run_selected_style_verifiers"],
+            "blocked_actions": ["deployment", "completion_claim", "claiming_build_or_db_success_as_completion"],
         }
     if reasons & {
         "readonly_source_audit_request",
@@ -2571,11 +2824,48 @@ def _execution_gate(
                 "browser_qa",
             ],
         }
+    if context.get("delegated_parent_goal_active"):
+        return {
+            "status": "execution_allowed_inherited_parent_goal",
+            "can_execute": True,
+            "reason": (
+                "A bounded delegated task is linked to a validated active parent Goal; the child keeps its "
+                "selected token, guard, skill, and verification contracts without repeating outer preflight."
+            ),
+            "required_before_execution": [
+                "structured_parent_goal_linkage",
+                "skill_statuses",
+                "token_optimizer_status",
+                "guard_policy_or_rollback_strategy",
+                "verification_plan",
+            ],
+            "allowed_setup_actions": [
+                "read_selected_skill_docs",
+                "record_delegated_scope",
+                "record_guard_or_rollback_policy",
+                "record_verification_plan",
+            ],
+            "blocked_actions": [
+                "child_goal_creation",
+                "active_parent_goal_replacement",
+                "unrelated_goal_resume",
+                "large_work_preflight_duplication",
+                "unbounded_source_exploration",
+            ],
+        }
     if (
         classification.get("complexity") in {"heavy", "high_risk"}
         or classification.get("recommended_execution") == "role_dag"
     ):
         required_before_execution = [
+            *[
+                str(item)
+                for item in (
+                    style_gate.get("required_skills", [])
+                    if isinstance(style_gate, dict)
+                    else []
+                ) or []
+            ],
             "goal-state-harness",
             "large_work_orchestration_bundle",
             "skill_statuses",
@@ -2656,6 +2946,7 @@ def _execution_gate(
         "can_execute": True,
         "reason": "No clarification or brainstorming stop gate was selected by front-door routing.",
         "required_before_execution": [],
+        "artifact_style_gate": dict(style_gate) if isinstance(style_gate, dict) else {},
         "blocked_actions": [],
     }
 

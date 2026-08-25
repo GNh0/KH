@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "contract_id": "csharp-winforms-devexpress-konelib-fixed",
+  "contract_version": "1.1",
+  "authority": {
+    "source": "packaged-fixed-contract",
+    "pb_independent": true,
+    "external_discovery_allowed": false,
+    "root_history_author_authority": false,
+    "allowed_inputs": ["exact source artifact receipt", "exact Designer artifact receipt", "query/save operations", "expected identities", "target identities", "packaged native helper names", "analysis mode"],
+    "standalone_authority": "fail-closed; caller-provided identity exceptions, provenance, type-chain claims, receiver identities, signatures, roots, and authenticators are not authoritative"
+  },
+  "style": {
+    "base_types": ["FrmDevBase", "DevBaseForm", "KoneFormBase", "XtraForm"],
+    "query_method": "CallSelectProcedure",
+    "save_method": "CallSaveProcedure",
+    "forbidden_methods": ["CallViewQuery", "CallSaveQuery", "CallQuery", "QueryView"],
+    "input_prefixes": ["txt", "btn", "cbo", "Spin", "ymd", "Chk", "memo"],
+    "control_prefixes": {
+      "text": "txt<Field>",
+      "button": "btn<Field>",
+      "lookup": "cbo<Field>",
+      "numeric": "Spin<Field>",
+      "date": "ymd<Field>",
+      "boolean": "Chk<Field>",
+      "memo": "memo<Field>",
+      "grid": "grd<Role>",
+      "view": "gvw<Role>",
+      "column": "col<Role>_<FIELD>",
+      "repository": "rpsSpin/rpscbo/rpsbtn/rpschk<Field>"
+    },
+    "native_helpers": ["InitControl", "DataRowToPanel", "GridToPanel", "dtMasterToDataTable", "MasterToDataTable", "Usr_ControlsProtect"],
+    "designer_owns": ["static controls", "static columns", "static repositories", "static bindings", "TabIndex", "VisibleIndex", "event subscriptions"],
+    "codebehind_owns": ["event handler bodies", "procedure calls", "validation", "runtime data binding", "command logic"],
+    "forbidden_generated_shapes": ["DTO", "Request/Criteria wrapper", "runtime grid column factory", "runtime Designer helper", "generic gridView1/gridColumn1/repositoryItem1"],
+    "field_binding": "BindingField/FieldName/DataPropertyName values are explicit Designer string assignments; a col<Role>_<FIELD> field maps to FIELD.",
+    "tab_index": "Input TabIndex values are explicit, unique, contiguous, and scoped to the supplied form.",
+    "db_call": "Canonical wrappers use SelectType for query and parameterless CallSaveProcedure for the normal save path; direct DB parameters are uppercase @ names and procedure identities end with _SELECT/_SAVE.",
+    "exception_handling": "CallSelectProcedure and CallSaveProcedure contain explicit try/catch handling.",
+    "receiver_authority": "Approved inherited receiver names are accepted only when the supplied source does not declare or shadow them. Noncanonical receivers require authority outside the standalone public verifier and therefore fail closed here.",
+    "identity_exceptions": "Unsupported by the standalone public verifier. Any supplied identity exception or caller-provided type-chain evidence produces blocked evidence and never authorizes a deviation.",
+    "verification_id_binding": "The verification id binds exact source, Designer, and contract hashes; receipt digests; operation input and effective operations; expected and target identities; native helpers; type-chain evidence; identity exceptions; analysis mode; success; status; and issue digest."
+  }
+}

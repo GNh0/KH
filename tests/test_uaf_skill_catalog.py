@@ -48,6 +48,7 @@ CORE_SKILLS = {
     "request-complexity-router",
     "scenario-evaluation-harness",
     "command-output-harness",
+    "csharp-designer-style-harness",
     "skill-catalog",
     "sql-formatting",
     "sql-formatting-style-harness",
@@ -111,8 +112,11 @@ class UafSkillCatalogTests(unittest.TestCase):
 
         skill_catalog = next(skill for skill in result["skills"] if skill["name"] == "skill-catalog")
         command_policy = next(skill for skill in result["skills"] if skill["name"] == "command-hook-policy-harness")
+        csharp_designer = next(skill for skill in result["skills"] if skill["name"] == "csharp-designer-style-harness")
         self.assertEqual(skill_catalog["execution_level"], "python-module")
         self.assertEqual(command_policy["execution_level"], "python-module")
+        self.assertEqual(csharp_designer["execution_level"], "python-module")
+        self.assertIn("Execution level: `python-module`", Path("skills/csharp_designer_style_harness/SKILL.md").read_text(encoding="utf-8"))
 
     def test_catalog_has_execution_level_for_every_packaged_skill(self):
         result = collect_packaged_skills()
@@ -173,6 +177,33 @@ class UafSkillCatalogTests(unittest.TestCase):
         data = json.loads(completed.stdout)
         self.assertTrue(data["success"], data)
         self.assertEqual(data["invalid_skills"], 0)
+        self.assertTrue(data["collectability"]["success"], data)
+        self.assertTrue(data["collectability"]["importable"], data)
+        self.assertEqual(data["collectability"]["collected_skills"], len(CORE_SKILLS))
+
+    def test_catalog_collects_from_a_clean_python_process(self):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import json; "
+                    "from src.skills.uaf_skill_catalog import collect_packaged_skills; "
+                    "r=collect_packaged_skills(); "
+                    "print(json.dumps({'count': r['total_skills_found'], "
+                    "'valid': r['validation']['success']}))"
+                ),
+            ],
+            cwd=os.getcwd(),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        payload = json.loads(completed.stdout)
+        self.assertEqual(payload["count"], len(CORE_SKILLS))
+        self.assertTrue(payload["valid"])
 
     def test_read_packaged_skill_returns_skill_folder_content(self):
         content = read_packaged_skill("parallel-orchestration-harness")
@@ -289,6 +320,8 @@ class UafSkillCatalogTests(unittest.TestCase):
         self.assertEqual(payload["total_skills"], len(CORE_SKILLS))
         self.assertEqual(payload["invalid_skills"], 0)
         self.assertIn("issue_count", payload)
+        self.assertTrue(payload["collectability"]["success"], payload)
+        self.assertTrue(payload["collectability"]["importable"], payload)
         self.assertNotIn('"skills": [', completed.stdout)
 
 

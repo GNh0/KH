@@ -8,7 +8,10 @@ Use this checklist before handoff or completion.
 - Excluded and proposal-only changes are visible.
 - Evidence mode is recorded.
 - `packaged-style-contract.md` is the only normal-generation style profile.
-- Contract identifier/version and selected screen, method, provider, and procedure families are recorded.
+- No unapproved external style discovery, private identity lookup, source-control metadata lookup, arbitrary-root traversal, sibling-project scan, or database style scan ran.
+- PB and target artifacts were used only for behavior, fields, captions, events, dependency availability, and DB mapping; they did not override style.
+- Contract identifier/version, selected screen, command/event handler family, provider, canonical query/save methods, and procedure family are recorded.
+- Exact current target class, direct base type, and paired code-behind/`.Designer.cs` identity are recorded. A custom base has a readable SHA-256-bound source/binary type-chain proof to `Form` or `UserControl`.
 - The maintenance-only profile-update workflow did not run.
 - Source text has `token_optimizer_status=passthrough`.
 
@@ -17,18 +20,24 @@ Use this checklist before handoff or completion.
 - Confirmed, inferred, blocked, and proposal-only facts are separate.
 - PB/SRU/SRD/DataWindow and target-project evidence governs behavior, captions, control roles, binding, events, and DB mapping; no UX, business field, control, or helper is invented.
 - Event/action to C# method mapping is complete.
+- The complete PB event inventory matches C# handler signatures and Designer subscriptions, including explicit absent/unsupported events.
 - Field to editor/`BindingField`/grid/result mapping is complete.
 - Caller value to SP parameter mapping is complete and ordered.
 - Derived values are listed as SP locals, not caller parameters.
 - SAVE row states, payload shape, write order, transaction, error, and logging behavior are documented.
-- The handoff includes PB behavior, event flow, control-role map, field/`BindingField` map, SP/caller contract, proven-versus-inferred labels, unresolved gaps, and manual tests so a separate developer can implement without rediscovery.
+- The handoff uses schema `kh.pb-migration-handoff.v1` JSON or schema-equivalent Markdown tables with non-empty artifact, event, field, SP, confirmed/inferred/blocked, unresolved, and manual-test inventories.
+- Every artifact row has a unique `artifact_id`, readable path, and read-back SHA-256; every event, field, and SP row references resolving artifact IDs; every event row maps PB event to C# method; every field row has control/`BindingField`/grid/result; every SP row has procedure/caller/branch/result; every manual test has workflow/expected and evidence IDs where applicable.
+- PBL parity is claimed only with absolute PBL path/hash, runtime/version, correlated object-list receipt, unique exported window/user-object and DataWindow path/hash receipts, and a complete hash-correlated linked-DataWindow graph.
+- Any direct PBL capability/list/export path follows `orca-runtime-contract.md`: the probe launches no process, one explicit version is selected, failure uses the documented fallback without implicit version retry, conversion mutates only the child `PATH`, and the exact exit code plus artifact receipts are recorded.
 
 ## C# And Designer
 
-- Supplied identifiers and APIs are preserved.
-- Missing identifiers use only packaged naming grammars.
-- One query path and one save path are used.
+- Behavior-significant source identifiers are preserved where the operation requires it; supplied target names are not treated as style authority.
+- Generated names use canonical `Spin<Field>`, `ymd<Field>`, `pn<Role>`, `grd<Role>`, `gvw<Role>`, `col<Role>_<FIELD>`, and `rpsSpin<Field>`.
+- The screen uses one event family. The sole query method is `CallSelectProcedure` and the sole save method is `CallSaveProcedure`.
+- Exactly one canonical query path and one canonical save path are used.
 - Provider fallback follows target wrapper, KoneLib, DevExpress, then WinForms from declared evidence.
+- Existing target wrapper/base defaults and inheritance are preserved; no comparator or framework base was substituted.
 - Existing wrapper defaults, `Size`, `Location`, `Margin`, `MaximumSize`, `Visible`, and horizontal/vertical label alignment match a separately captured pre-edit Designer baseline unless an exact contract value plus registry-bound source/user evidence authorizes change.
 - Lookup, search, and detail roles use the evidence-backed wrapper/repository and exact `BindingField`; no text-control substitution remains.
 - No dependency was added, upgraded, or retargeted.
@@ -55,12 +64,14 @@ Use this checklist before handoff or completion.
 ## Stored Procedures
 
 - The selected operation is recorded as `new_generation`, `pb_srd_generation`, `existing_sp_cleanup`, or `approved_inferred_draft`.
+- When a complete PB event inventory proves `save_event_present=false`, no `_SAVE`/`_SELECT_SAVE` procedure and no `INSERT`/`UPDATE`/`DELETE`/`MERGE` exists in the candidate.
 - Complete release-ready output has independently captured, readable, SHA-256-matched result/write/body evidence; schema summaries and candidate-as-source evidence do not qualify. An approved inferred draft remains pending.
 - Every executable statement and structural control event consumes one canonical event. IF/ELSE, WHILE body paths, generic nested BEGIN/END, TRY/CATCH openings and closings, and transaction-control statements preserve scope and order. Only the first root-level pre-body `SET NOCOUNT ON` in a procedure envelope is wrapper ordinal `0`; transaction-following, duplicate, later, nested, branch-path, and fragment-level forms require authority and a positive ordinal. One single independently bound source artifact or one complete SHA-bound branch/composite artifact covers the entire non-wrapper stream. A composite has exact candidate `target_procedure`, complete `trace_sql`, v2 canonical `trace_sha256`, and ordered lineage equal to every correlated source SHA-256. Structural omission/reordering/scope movement, condition-only artifacts, partial/unknown/duplicate/reordered lineage, wrong hashes, trace mismatch, cross-artifact splicing, flat fingerprint pools, branch/statement swaps, arm swaps, nested-arm swaps, and per-arm reordering are rejected.
 - `DESCRIPTION` is concrete. `AUTHOR` and `CREATE DATE` are absent unless exact authoritative source evidence supplies them. No metadata placeholder remains.
 - Every SP parameter exists in the caller matrix or has a documented external caller.
 - C# caller evidence names a strict one-part or two-part candidate `target_procedure`, and the bound artifact is globally delimiter-balanced and contains one complete `class`/`struct`/`record`, one complete ordinary method with a plausible built-in/qualified/generic/nullable/array/tuple/task-like return type, and exactly one active `dbClient` invocation. Invocation counting includes direct, conditional-access, parenthesized, null-forgiving, whitespace/comment-separated, and interpolated-string payload forms; unsupported methods also count, so a hidden second call fails. Reserved control keywords and ambiguous unsupported return-type syntax fail closed. The sole call is a complete semicolon-terminated, case-sensitive supported SP method used as a direct method-body expression or `return`. Constructors/static constructors, destructors, operators/conversions, accessors, bare fragments, top-level/local functions, lambdas, delegates, anonymous contexts, initializers, and nested expressions are rejected. Its first top-level argument is the direct SP string; every remaining top-level argument is a direct supported `new DbParameter` constructor whose value is a restricted scalar literal/identifier/member/indexer/method/cast/grouping/unary/`??` expression. Literal preprocessor conditions are evaluated; unknown-symbol regions containing caller evidence fail closed without symbol evidence. It does not claim SQL types, defaults, `OUTPUT`, or `READONLY`.
 - External caller evidence is verified and includes matching evidence/artifact caller identity and strict `target_procedure`, a readable artifact path (or host-resolved URI), SHA-256, and ordered SQL types. Empty or extra identity qualifiers fail closed.
+- A caller JSON/manifest, caller label, object name, or caller-supplied hash is not accepted as proof; any external caller input is read back, SHA-256-recomputed, and independently bound before use.
 - Pasted SQL has an explicit `existing_procedure`, `pb_query`, or `body_fragment` role and resolves to a readable, SHA-256-matched artifact, not only a summary, inline claim, or unresolved URI.
 - Existing-SP cleanup changes only whitespace/case and preserves procedure identity, every comment payload at its relative executable-token position, statements, operators, literals, terminators, and the complete ordered typed original signature, defaults, `OUTPUT`, and `READONLY`.
 - Parameter defaults are parsed with SQL string awareness; `OUTPUT`/`READONLY` inside literals are not options.
@@ -70,6 +81,7 @@ Use this checklist before handoff or completion.
 - Existing target-project clear/query/save helpers are used before generic assignments such as `DataSource = null`; no unnecessary DTO/helper abstraction is added.
 - Supplied predicates, literals, comments, calculations, result order, and write behavior are preserved.
 - Formatting verification and semantic-equivalence claims are separate.
+- SQL generation/semantic verification and presentation formatting are separate stages with correlated receipts.
 - Offline generation does not claim database parity.
 
 ## Forbidden Pattern Gate
@@ -97,6 +109,12 @@ Use this checklist before handoff or completion.
 - SP generation verifier status is recorded when SQL is generated.
 - SQL formatter/verifier status is recorded separately.
 - Emitted SQL has an actual final-response binding receipt with exact original/candidate/final hashes and correlated provider-selection evidence.
+- The SQL verifier history is non-empty and its verification ID plus original/candidate hashes correlate with the final binding; the release's nested binding equals the exposed binding.
+- Core stage order is exactly profile load, C# validation, SP validation, then final SQL binding.
+- Project inclusion, project build, and manual workflow each have an independent passing receipt with observable evidence and no nonzero exit code.
+- The exact target project, dependency declarations, generated-file owner, and explicit/implicit inclusion mode are bound before the build receipt.
+- Designer layout-load has an independent passing receipt whenever Designer source exists.
+- Database equivalence and deployment each have independent passing receipts when claimed; otherwise those claims remain absent.
 - Build/syntax/manual checks and exact commands are recorded.
 - Unsupported PB parity, UI fidelity, and DB equivalence claims remain blocked.
 - Residual risks and next required evidence are explicit.

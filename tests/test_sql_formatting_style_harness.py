@@ -808,7 +808,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         self.assertNotIn("join_indentation_not_relative", codes)
         self.assertNotIn("join_predicate_alignment_invalid", codes)
 
-    def test_verifier_blocks_where_subquery_inside_if_exists(self):
+    def test_verifier_preserves_existing_where_subqueries_in_formatting_mode(self):
         cases = [
             (
                 "IN",
@@ -858,12 +858,66 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
 
                 result = verify_sql_formatting_style(bad_block, bad_block)
 
-                self.assertFalse(result.success)
+                self.assertTrue(result.success, result.to_dict())
                 codes = {
                     issue["code"]
                     for issue in result.metadata["mechanical_checks"]["style_issues"]
                 }
-                self.assertIn("if_exists_where_subquery", codes)
+                self.assertNotIn("where_scalar_subquery_introduced", codes)
+                self.assertNotIn("if_exists_where_scalar_subquery", codes)
+
+    def test_generation_distinguishes_scalar_where_from_set_and_semi_join_subqueries(self):
+        predicates = {
+            "IN": (
+                "          WHERE A.ORDNUM IN (\n"
+                "                              SELECT T.ORDNUM\n"
+                "                              FROM @TMP T\n"
+                "                             )\n"
+            ),
+            "EXISTS": (
+                "          WHERE EXISTS (\n"
+                "                        SELECT 1\n"
+                "                        FROM @TMP T\n"
+                "                        WHERE T.ORDNUM = A.ORDNUM\n"
+                "                       )\n"
+            ),
+            "NOT EXISTS": (
+                "          WHERE NOT EXISTS (\n"
+                "                            SELECT 1\n"
+                "                            FROM @TMP T\n"
+                "                            WHERE T.ORDNUM = A.ORDNUM\n"
+                "                           )\n"
+            ),
+            "SCALAR": (
+                "          WHERE A.ORDSEQ = (\n"
+                "                            SELECT MAX(T.ORDSEQ)\n"
+                "                            FROM @TMP T\n"
+                "                           )\n"
+            ),
+        }
+        for label, predicate in predicates.items():
+            with self.subTest(label=label):
+                candidate = (
+                    "IF EXISTS (\n"
+                    "          SELECT 1\n"
+                    "          FROM SA100T A\n"
+                    f"{predicate}"
+                    "          )\n"
+                    "BEGIN\n"
+                    "    RETURN;\n"
+                    "END\n"
+                )
+                result = verify_sql_formatting_style("", candidate, operation="generation")
+                codes = {
+                    issue["code"]
+                    for issue in result.metadata["mechanical_checks"]["style_issues"]
+                }
+                if label == "SCALAR":
+                    self.assertFalse(result.success)
+                    self.assertIn("if_exists_where_scalar_subquery", codes)
+                else:
+                    self.assertTrue(result.success, result.to_dict())
+                    self.assertNotIn("if_exists_where_scalar_subquery", codes)
 
     def test_verifier_allows_simple_where_predicate_inside_if_exists(self):
         guard_block = (
@@ -968,7 +1022,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("cte_introduced_without_reason", codes)
+        self.assertIn("cte_exception_provenance_invalid", codes)
 
     def test_verifier_blocks_semicolon_prefixed_cte_introduction(self):
         original = (
@@ -1002,7 +1056,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("cte_introduced_without_reason", codes)
+        self.assertIn("cte_exception_provenance_invalid", codes)
 
     def test_verifier_blocks_new_temp_table_introduction_by_default(self):
         original = (
@@ -1030,7 +1084,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("temp_table_introduced_without_reason", codes)
+        self.assertIn("temp_table_exception_provenance_invalid", codes)
 
     def test_verifier_allows_existing_cte_and_temp_table_to_remain(self):
         sql = (
@@ -1075,7 +1129,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("cte_introduced_without_reason", codes)
+        self.assertIn("cte_exception_provenance_invalid", codes)
 
     def test_verifier_blocks_cte_after_begin_introduction(self):
         original = (
@@ -1110,7 +1164,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("cte_introduced_without_reason", codes)
+        self.assertIn("cte_exception_provenance_invalid", codes)
 
     def test_verifier_does_not_treat_nolock_as_cte(self):
         sql = (
@@ -1164,7 +1218,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("cte_exception_reason_recorded", codes)
+        self.assertIn("cte_exception_provenance_invalid", codes)
 
     def test_verifier_rejects_vague_cte_exception_reason(self):
         original = (
@@ -1193,7 +1247,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("cte_introduced_without_reason", codes)
+        self.assertIn("cte_exception_provenance_invalid", codes)
 
     def test_verifier_blocks_added_cte_when_original_already_has_one(self):
         original = (
@@ -1225,7 +1279,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("cte_introduced_without_reason", codes)
+        self.assertIn("cte_exception_provenance_invalid", codes)
 
     def test_verifier_rejects_negated_exception_reason(self):
         original = (
@@ -1254,7 +1308,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("cte_introduced_without_reason", codes)
+        self.assertIn("cte_exception_provenance_invalid", codes)
 
     def test_verifier_rejects_negated_performance_exception_reason(self):
         original = (
@@ -1283,7 +1337,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("cte_introduced_without_reason", codes)
+        self.assertIn("cte_exception_provenance_invalid", codes)
 
     def test_verifier_records_temp_table_reason_without_waiving_token_preservation(self):
         original = (
@@ -1312,7 +1366,257 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             issue["code"]
             for issue in result.metadata["mechanical_checks"]["style_issues"]
         }
-        self.assertIn("temp_table_exception_reason_recorded", codes)
+        self.assertIn("temp_table_exception_provenance_invalid", codes)
+
+    def test_generation_rejects_general_scalar_where_subquery_but_formatting_preserves_it(self):
+        sql = (
+            "SELECT A.ITEMCD\n"
+            "FROM SA100T A\n"
+            "WHERE A.ORDSEQ = (\n"
+            "                  SELECT MAX(B.ORDSEQ)\n"
+            "                  FROM SA110T B\n"
+            "                 );\n"
+        )
+
+        preserved = verify_sql_formatting_style(sql, sql, operation="formatting")
+        generated = verify_sql_formatting_style("", sql, operation="generation")
+
+        self.assertTrue(preserved.success, preserved.to_dict())
+        self.assertFalse(generated.success)
+        self.assertIn("where_scalar_subquery_introduced", _issue_codes(generated))
+        self.assertEqual(
+            generated.metadata["style_lint"]["where_subquery_policy"]["introduced_scalar_count"],
+            1,
+        )
+
+    def test_generation_and_refactor_reject_scalar_where_subqueries_across_dml(self):
+        cases = [
+            (
+                "SELECT",
+                "SELECT A.ITEMCD FROM SA100T A WHERE A.ORDSEQ = @ORDSEQ;",
+                "SELECT A.ITEMCD FROM SA100T A WHERE A.ORDSEQ = (SELECT MAX(B.ORDSEQ) FROM SA110T B);",
+            ),
+            (
+                "UPDATE",
+                "UPDATE A SET A.ITEMCD = @ITEMCD FROM SA100T A WHERE A.ORDSEQ = @ORDSEQ;",
+                "UPDATE A SET A.ITEMCD = @ITEMCD FROM SA100T A WHERE A.ORDSEQ = (SELECT MAX(B.ORDSEQ) FROM SA110T B);",
+            ),
+            (
+                "DELETE",
+                "DELETE A FROM SA100T A WHERE A.ORDSEQ = @ORDSEQ;",
+                "DELETE A FROM SA100T A WHERE A.ORDSEQ = (SELECT MAX(B.ORDSEQ) FROM SA110T B);",
+            ),
+        ]
+        for label, original, candidate in cases:
+            for operation in ("generation", "refactor"):
+                with self.subTest(label=label, operation=operation):
+                    result = verify_sql_formatting_style(
+                        "" if operation == "generation" else original,
+                        candidate,
+                        operation=operation,
+                    )
+                    self.assertFalse(result.success)
+                    self.assertIn("where_scalar_subquery_introduced", _issue_codes(result))
+
+    def test_generation_accepts_scalar_where_only_from_exact_bound_source_artifact(self):
+        sql = (
+            "SELECT A.ITEMCD\n"
+            "FROM SA100T A\n"
+            "WHERE A.ORDSEQ = (\n"
+            "                  SELECT MAX(B.ORDSEQ)\n"
+            "                  FROM SA110T B\n"
+            "                 );\n"
+        )
+        formatted_sha256 = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "bound-source.sql"
+            source_path.write_text(sql, encoding="utf-8")
+            source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            contract = {
+                "kind": "source_artifact",
+                "requirement": "preserve_where_scalar_subquery",
+                "formatted_sha256": formatted_sha256,
+                "artifact_path": str(source_path.resolve()),
+                "artifact_sha256": source_sha256,
+            }
+            accepted = verify_sql_formatting_style(
+                "",
+                sql,
+                operation="generation",
+                where_subquery_source_contract=contract,
+            )
+            tampered = dict(contract)
+            tampered["artifact_sha256"] = "0" * 64
+            rejected = verify_sql_formatting_style(
+                "",
+                sql,
+                operation="generation",
+                where_subquery_source_contract=tampered,
+            )
+
+        self.assertTrue(accepted.success, accepted.to_dict())
+        self.assertEqual(
+            accepted.metadata["style_lint"]["where_subquery_policy"]["status"],
+            "verified_source_preservation",
+        )
+        self.assertFalse(rejected.success)
+        self.assertIn("where_scalar_subquery_introduced", _issue_codes(rejected))
+
+    def test_generation_requires_authenticated_user_directive_for_cte_exception(self):
+        sql = (
+            "WITH ORDER_BASE AS (\n"
+            "    SELECT A.ORDNUM\n"
+            "    FROM SA110T A\n"
+            ")\n"
+            "SELECT A.ORDNUM\n"
+            "FROM ORDER_BASE A;\n"
+        )
+        formatted_sha256 = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+        directive_text = "Use a CTE for this generated SQL candidate."
+        directive_sha256 = hashlib.sha256(directive_text.encode("utf-8")).hexdigest()
+        receipt = {
+            "receipt_id": "directive-cte-1",
+            "directive_sha256": directive_sha256,
+            "formatted_sha256": formatted_sha256,
+            "authorized_constructs": ["cte"],
+        }
+        key = b"sql-cte-test-key"
+        payload = json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        receipt["signature"] = hmac.new(key, payload, hashlib.sha256).hexdigest()
+        provenance = {
+            "kind": "user_directive",
+            "authorized_constructs": ["cte"],
+            "formatted_sha256": formatted_sha256,
+            "directive": {"text": directive_text, "sha256": directive_sha256},
+            "receipt": receipt,
+        }
+
+        accepted = verify_sql_formatting_style(
+            "",
+            sql,
+            operation="generation",
+            cte_temp_table_provenance=provenance,
+            runtime_receipt_authenticator=lambda value, signature: hmac.compare_digest(
+                hmac.new(key, value, hashlib.sha256).hexdigest(),
+                signature,
+            ),
+        )
+        free_text_only = verify_sql_formatting_style(
+            "",
+            sql,
+            operation="generation",
+            cte_temp_table_reason="explicit user request for a CTE",
+        )
+
+        self.assertTrue(accepted.success, accepted.to_dict())
+        self.assertFalse(free_text_only.success)
+        self.assertIn("cte_exception_provenance_invalid", _issue_codes(free_text_only))
+
+    def test_generation_accepts_temp_table_only_when_bound_source_contains_it(self):
+        sql = (
+            "SELECT A.ORDNUM\n"
+            "INTO #ORDER_WORK\n"
+            "FROM SA100T A;\n"
+            "\n"
+            "SELECT A.ORDNUM\n"
+            "FROM #ORDER_WORK A;\n"
+        )
+        formatted_sha256 = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "temp-source.sql"
+            source_path.write_text(sql, encoding="utf-8")
+            provenance = {
+                "kind": "source_artifact",
+                "authorized_constructs": ["temp_table"],
+                "formatted_sha256": formatted_sha256,
+                "artifact_path": str(source_path.resolve()),
+                "artifact_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+            }
+            result = verify_sql_formatting_style(
+                "",
+                sql,
+                operation="generation",
+                cte_temp_table_provenance=provenance,
+            )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(
+            result.metadata["style_lint"]["cte_temp_table_policy"]["status"],
+            "verified",
+        )
+
+    def test_generation_requires_authenticated_measurement_for_necessity_exception(self):
+        sql = (
+            "SELECT A.ORDNUM\n"
+            "INTO #ORDER_WORK\n"
+            "FROM SA100T A;\n"
+        )
+        formatted_sha256 = hashlib.sha256(sql.encode("utf-8")).hexdigest()
+        key = b"sql-necessity-test-key"
+        with tempfile.TemporaryDirectory() as tmp:
+            measurement_path = Path(tmp) / "measurement.json"
+            measurement_path.write_text(
+                json.dumps({"logical_reads_before": 1200, "logical_reads_after": 200}),
+                encoding="utf-8",
+            )
+            measurement_sha256 = hashlib.sha256(measurement_path.read_bytes()).hexdigest()
+            receipt = {
+                "receipt_id": "necessity-temp-1",
+                "measurement_artifact_sha256": measurement_sha256,
+                "formatted_sha256": formatted_sha256,
+                "authorized_constructs": ["temp_table"],
+                "necessity_verified": True,
+                "equivalence_verified": True,
+                "comparison_count": 3,
+            }
+            payload = json.dumps(
+                receipt,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            receipt["signature"] = hmac.new(key, payload, hashlib.sha256).hexdigest()
+            provenance = {
+                "kind": "verified_necessity",
+                "authorized_constructs": ["temp_table"],
+                "formatted_sha256": formatted_sha256,
+                "measurement_artifact_path": str(measurement_path.resolve()),
+                "measurement_artifact_sha256": measurement_sha256,
+                "receipt": receipt,
+            }
+            accepted = verify_sql_formatting_style(
+                "",
+                sql,
+                operation="generation",
+                cte_temp_table_provenance=provenance,
+                runtime_receipt_authenticator=lambda value, signature: hmac.compare_digest(
+                    hmac.new(key, value, hashlib.sha256).hexdigest(),
+                    signature,
+                ),
+            )
+            tampered = dict(provenance)
+            tampered_receipt = dict(receipt)
+            tampered_receipt["equivalence_verified"] = False
+            tampered["receipt"] = tampered_receipt
+            rejected = verify_sql_formatting_style(
+                "",
+                sql,
+                operation="generation",
+                cte_temp_table_provenance=tampered,
+                runtime_receipt_authenticator=lambda value, signature: hmac.compare_digest(
+                    hmac.new(key, value, hashlib.sha256).hexdigest(),
+                    signature,
+                ),
+            )
+
+        self.assertTrue(accepted.success, accepted.to_dict())
+        self.assertFalse(rejected.success)
+        self.assertIn("temp_table_exception_provenance_invalid", _issue_codes(rejected))
 
     def test_powerbuilder_update_host_variable_semicolon_spacing_is_preserved(self):
         original = _fixture("pbl_update_semicolon_space.original.sql")

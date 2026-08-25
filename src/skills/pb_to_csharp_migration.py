@@ -1,14 +1,46 @@
 import hashlib
+import inspect
 import json
 import os
 import re
+from fnmatch import fnmatchcase
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 from src.contracts import HarnessResult
+from src.skills import pb_event_save_contract as _pb_event_save_contract_module
+from src.skills.pb_designer_ui_contract import (
+    validate_pb_designer_ui_contract,
+    validate_pb_field_lineage_contract,
+)
+from src.skills.pb_event_save_contract import validate_pb_event_save_contract
+from src.skills.pb_event_state_contract import validate_pb_event_state_contract
+from src.skills.pb_migration_authority import (
+    validate_pb_migration_authority_contract,
+)
+from src.skills.pb_migration_directives import (
+    ACTION_WRITE,
+    MODE_IMPLEMENTATION,
+    evaluate_pb_migration_directives,
+)
+from src.skills.pb_migration_preflight import (
+    plan_gm32_acquisition,
+    verify_gm31_project_build_contract,
+)
+from src.skills.pb_sql_generation_policy import (
+    POLICY_ID,
+    POLICY_VERSION,
+    build_source_equivalence_evidence,
+    evaluate_pb_sql_generation_policy,
+    sha256_text,
+)
+from src.skills.pb_performance_equivalence_contract import (
+    validate_pb_performance_equivalence_contract,
+)
 
 
 _PB_MIGRATION_REFERENCE_ROOT = (
@@ -18,6 +50,104 @@ _PB_MIGRATION_REFERENCE_ROOT = (
     / "references"
 )
 PACKAGED_MIGRATION_PROFILE_PATH = _PB_MIGRATION_REFERENCE_ROOT / "packaged-style-contract.json"
+
+PACKAGED_PROFILE_MAX_BYTES = 2 * 1024 * 1024
+TARGET_CSHARP_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024
+TARGET_PROJECT_FILE_MAX_BYTES = 8 * 1024 * 1024
+TARGET_PROJECT_ASSEMBLY_MAX_BYTES = 256 * 1024 * 1024
+PB_PBL_MAX_BYTES = 256 * 1024 * 1024
+PB_EXPORT_ARTIFACT_MAX_BYTES = 32 * 1024 * 1024
+PB_RECEIPT_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024
+SAVE_EVIDENCE_ARTIFACT_MAX_BYTES = 16 * 1024 * 1024
+COMPLETION_EVIDENCE_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
+_ARTIFACT_READ_CHUNK_BYTES = 1024 * 1024
+
+
+class _ArtifactReadError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _read_bounded_artifact(
+    path_value: str | Path,
+    *,
+    maximum_bytes: int,
+    collect_bytes: bool,
+) -> tuple[Path, int, str, bytes]:
+    path = Path(path_value)
+    try:
+        before = path.stat()
+    except OSError as exc:
+        raise _ArtifactReadError("artifact_unreadable", str(exc)) from exc
+    if not path.is_file():
+        raise _ArtifactReadError("artifact_not_regular_file", "Artifact path is not a regular file.")
+    if before.st_size > maximum_bytes:
+        raise _ArtifactReadError(
+            "artifact_size_limit_exceeded",
+            f"Artifact size {before.st_size} exceeds the {maximum_bytes}-byte limit.",
+        )
+
+    digest = hashlib.sha256()
+    chunks: List[bytes] = []
+    total = 0
+    try:
+        with path.open("rb") as stream:
+            while True:
+                chunk = stream.read(_ARTIFACT_READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > maximum_bytes:
+                    raise _ArtifactReadError(
+                        "artifact_size_limit_exceeded",
+                        f"Artifact exceeded the {maximum_bytes}-byte limit while reading.",
+                    )
+                digest.update(chunk)
+                if collect_bytes:
+                    chunks.append(chunk)
+        after = path.stat()
+    except _ArtifactReadError:
+        raise
+    except OSError as exc:
+        raise _ArtifactReadError("artifact_unreadable", str(exc)) from exc
+
+    if total != before.st_size or (
+        after.st_size,
+        after.st_mtime_ns,
+    ) != (
+        before.st_size,
+        before.st_mtime_ns,
+    ):
+        raise _ArtifactReadError(
+            "artifact_changed_during_read",
+            "Artifact changed while its current SHA-256 was being computed.",
+        )
+    return path.resolve(), total, digest.hexdigest(), b"".join(chunks)
+
+
+def _read_bounded_text_artifact(
+    path_value: str | Path,
+    *,
+    maximum_bytes: int,
+) -> tuple[Path, int, str, str]:
+    path, size, digest, raw = _read_bounded_artifact(
+        path_value,
+        maximum_bytes=maximum_bytes,
+        collect_bytes=True,
+    )
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise _ArtifactReadError("artifact_decode_failed", str(exc)) from exc
+    return path, size, digest, text
+
+
+def _absolute_path_key(value: str | Path) -> str:
+    raw = str(value or "").strip()
+    if not raw or not os.path.isabs(raw):
+        return ""
+    return os.path.normcase(os.path.abspath(raw))
 
 
 DATAWINDOW_COLUMN_PATTERN = re.compile(r"column\s*=\s*\(", re.IGNORECASE)
@@ -43,7 +173,12 @@ CSHARP_PROPERTY_ASSIGNMENT_PATTERN = re.compile(
     r"^\s*this\.(?P<control>[A-Za-z_][A-Za-z0-9_]*)\.(?P<property>[A-Za-z_][A-Za-z0-9_.]*)\s*=\s*(?P<value>.*?);\s*$"
 )
 CSHARP_CONTROLS_ADD_PATTERN = re.compile(
-    r"^\s*this(?:\.(?P<parent>[A-Za-z_][A-Za-z0-9_]*))?\.Controls\.Add\(this\.(?P<child>[A-Za-z_][A-Za-z0-9_]*)\);\s*$"
+    r"^\s*this(?:\.(?P<parent>[A-Za-z_][A-Za-z0-9_]*))?\.Controls\.Add\(\s*this\.(?P<child>[A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:\s*,\s*(?P<column>-?\d+)\s*,\s*(?P<row>-?\d+))?\s*\);\s*$"
+)
+CSHARP_SET_CHILD_INDEX_PATTERN = re.compile(
+    r"^\s*this(?:\.(?P<parent>[A-Za-z_][A-Za-z0-9_]*))?\.Controls\.SetChildIndex\(\s*"
+    r"this\.(?P<child>[A-Za-z_][A-Za-z0-9_]*)\s*,\s*(?P<index>-?\d+)\s*\);\s*$"
 )
 CSHARP_COLLECTION_ADD_RANGE_START_PATTERN = re.compile(
     r"^\s*this\.(?P<control>[A-Za-z_][A-Za-z0-9_]*)\.(?P<method>[A-Za-z_][A-Za-z0-9_.]*AddRange)\s*\("
@@ -308,80 +443,60 @@ SP_PROCEDURE_NAME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-AUTHOR_TAGGED_CSHARP_STYLE_BASELINE: Dict[str, Any] = {
-    "source": "packaged_sanitized_profile",
-    "baseline_exclusions": {
-        "MIGRATIONTARGET": "active migration targets cannot seed their own style evidence",
-    },
-    "positive_generation_recipe": {
-        "source_priority": [
-            "verified stored-procedure definition",
-            "normalized program key from procedure name",
-            "same-program primary C# file",
-            "same-program Designer file",
-            "same-module neighbor only when the active program is excluded or unmapped",
-        ],
-        "screen_base": {
-            "normal_screen": "FrmDevBase",
-            "popup_screen": "FrmPopBase",
-            "evidence": "use only the immutable packaged profile or explicit reviewed evidence",
-        },
-        "command_flow": [
-            "keep SearchCommand, SaveCommand, and ClearCommand override/event flow when the matched source has it",
-            "keep existing local event names and do not invent generic wrapper methods",
-            "use focused-row events directly for detail refresh instead of generated CallDetailQuery helpers",
-        ],
-        "select_flow": [
-            "prefer the matched source's CallSelectProcedure or CallViewQuery shape",
-            "keep dbClient.GetDataSetFromSP calls local to the procedure-call method",
-            "pass explicit new DbParameter entries near the stored-procedure call",
-            "pass raw control or focused-row values; let the stored procedure own wildcard and derived-date handling",
-        ],
-        "save_flow": [
-            "serialize changed grid/table data with DataUtil.DataTableToXml when the matched source family does it",
-            "use dbClient.ExecSPTrn for transactional saves and dbClient.ExecSP only when the matched source proves that local path",
-            "do not create DTO/request/context objects for ordinary save or retrieve parameters",
-        ],
-        "focused_row_detail_flow": [
-            "use gvw*.GetFocusedDataRow() and direct dr[\"FIELD\"].ToString() style when matched evidence supports focused detail refresh",
-            "use target-evidenced grid reset helpers instead of inventing a new reset path",
-            "avoid DBNull ternary wrappers, null-coalesced wildcard defaults, and generated value helper methods",
-        ],
-        "designer_flow": [
-            "use target custom controls before generic DevExpress controls",
-            "when DevExpress is present, use the target project's referenced DevExpress version and existing API surface; do not generate code from the latest DevExpress API by default",
-            "declare explicit GridColumn fields named colList_FIELD, colDetail_FIELD, colTABLE_FIELD, or colPURPOSE_FIELD",
-            "register columns with Columns.AddRange",
-            "preserve BindingField, TabIndex, containment, size, location, and Properties assignments when Designer evidence exists",
-            "set header UseFont plus horizontal and vertical center alignment where target columns use them",
-            "set cell UseFont where target columns use it",
-            "use RepositoryItemSpinEdit through ColumnEdit for numeric grid columns instead of DisplayFormat-only output",
-        ],
-        "sp_flow": [
-            "keep the metadata header immediately above CREATE/ALTER PROCEDURE",
-            "preserve procedure names, parameter names, Korean literals, comments, aliases, predicates, calculations, and row contracts",
-            "do not add defensive parameter defaults or normalization blocks unless same-procedure evidence proves them",
-            "do not invent SELECT TOP 0 schema-only branches, CTEs, #temp tables, MERGE, or NOT EXISTS by default",
-        ],
-        "evidence_discipline": [
-            "do not claim PB behavior parity from generated C# alone",
-            "do not upgrade, re-target, or assume newer third-party libraries such as DevExpress; use target project references or mark the dependency contract blocked",
-            "mark source-unverified behavior as inferred draft unless PB, pasted source, matched C#, DB schema, or explicit user approval proves it",
-            "reading a reference file is not runtime use; require verifier, module, artifact, or blocked/passthrough evidence",
-        ],
+CANONICAL_PB_CSHARP_STYLE_PROFILE: Dict[str, Any] = {
+    "style_family_id": "kone-pb-csharp-single-family-v1",
+    "event_family": "exactly_one_of_command_or_event",
+    "query_method": "CallSelectProcedure",
+    "save_method": "CallSaveProcedure",
+    "control_names": {
+        "numeric": "Spin<Field>",
+        "date": "ymd<Field>",
+        "panel": "pn<Role>",
+        "grid": "grd<Role>",
+        "view": "gvw<Role>",
+        "grid_column": "col<Role>_<FIELD>",
+        "numeric_repository": "rpsSpin<Field>",
     },
 }
 
-AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS: Dict[str, List[str]] = {
-    "GENERALIZED": [
-        r"packaged\style\GENERALIZED.cs",
-        r"packaged\style\GENERALIZED.Designer.cs",
-    ],
-    "REFERENCESCREEN": [
-        r"packaged\style\ReferenceScreen.cs",
-        r"packaged\style\ReferenceScreen.Designer.cs",
-    ],
-}
+def _packaged_document_canonical_mismatches(payload: Mapping[str, Any]) -> List[Dict[str, str]]:
+    naming = payload.get("naming_grammar")
+    naming = dict(naming) if isinstance(naming, Mapping) else {}
+    controls = naming.get("controls")
+    controls = dict(controls) if isinstance(controls, Mapping) else {}
+    repositories = naming.get("repositories")
+    repositories = dict(repositories) if isinstance(repositories, Mapping) else {}
+    style_families = payload.get("style_families")
+    style_families = dict(style_families) if isinstance(style_families, Mapping) else {}
+    observed = {
+        "style_families.methods": style_families.get("methods"),
+        "naming_grammar.query_method": naming.get("query_method"),
+        "naming_grammar.save_method": naming.get("save_method"),
+        "naming_grammar.controls.numeric": controls.get("numeric"),
+        "naming_grammar.controls.date": controls.get("date"),
+        "naming_grammar.controls.panel": controls.get("panel"),
+        "naming_grammar.controls.grid": controls.get("grid"),
+        "naming_grammar.controls.view": controls.get("view"),
+        "naming_grammar.grid_column": naming.get("grid_column"),
+        "naming_grammar.repositories.numeric": repositories.get("numeric"),
+    }
+    expected = {
+        "style_families.methods": ["command", "event"],
+        "naming_grammar.query_method": CANONICAL_PB_CSHARP_STYLE_PROFILE["query_method"],
+        "naming_grammar.save_method": CANONICAL_PB_CSHARP_STYLE_PROFILE["save_method"],
+        "naming_grammar.controls.numeric": CANONICAL_PB_CSHARP_STYLE_PROFILE["control_names"]["numeric"],
+        "naming_grammar.controls.date": CANONICAL_PB_CSHARP_STYLE_PROFILE["control_names"]["date"],
+        "naming_grammar.controls.panel": CANONICAL_PB_CSHARP_STYLE_PROFILE["control_names"]["panel"],
+        "naming_grammar.controls.grid": CANONICAL_PB_CSHARP_STYLE_PROFILE["control_names"]["grid"],
+        "naming_grammar.controls.view": CANONICAL_PB_CSHARP_STYLE_PROFILE["control_names"]["view"],
+        "naming_grammar.grid_column": CANONICAL_PB_CSHARP_STYLE_PROFILE["control_names"]["grid_column"],
+        "naming_grammar.repositories.numeric": CANONICAL_PB_CSHARP_STYLE_PROFILE["control_names"]["numeric_repository"],
+    }
+    return [
+        {"field": field, "expected": json.dumps(expected[field]), "actual": json.dumps(observed[field])}
+        for field in expected
+        if observed[field] != expected[field]
+    ]
 
 
 def _canonical_profile_payload(profile: Mapping[str, Any]) -> Dict[str, Any]:
@@ -446,6 +561,20 @@ def _profile_method_names(value: Any) -> List[str]:
     ]
 
 
+def _canonical_style_profile_for_document(
+    query_methods: Sequence[str],
+    save_methods: Sequence[str],
+) -> Dict[str, Any]:
+    profile = json.loads(json.dumps(CANONICAL_PB_CSHARP_STYLE_PROFILE))
+    unique_query_methods = list(dict.fromkeys(query_methods))
+    unique_save_methods = list(dict.fromkeys(save_methods))
+    if len(unique_query_methods) == 1:
+        profile["query_method"] = unique_query_methods[0]
+    if len(unique_save_methods) == 1:
+        profile["save_method"] = unique_save_methods[0]
+    return profile
+
+
 def _generalized_contract_profile_entry(
     payload: Mapping[str, Any],
     raw_bytes: bytes,
@@ -495,6 +624,7 @@ def _generalized_contract_profile_entry(
         or not isinstance(packaged_csharp_rules, Mapping)
     ):
         return None
+
     sanitized = bool(
         normal_generation.get("profile_source") == "packaged-only"
         and normal_generation.get("external_discovery_allowed") is False
@@ -508,6 +638,7 @@ def _generalized_contract_profile_entry(
     focus_identifier_pattern = _identifier_template_pattern(focus_handler_template)
     query_methods = _profile_method_names(naming_grammar.get("query_method"))
     save_methods = _profile_method_names(naming_grammar.get("save_method"))
+    canonical_style = _canonical_style_profile_for_document(query_methods, save_methods)
     command_handlers = _profile_method_names(event_shapes.get("command_handlers"))
     procedure_template = str(naming_grammar.get("procedure") or "").strip()
     if (
@@ -554,6 +685,7 @@ def _generalized_contract_profile_entry(
         "artifact_hash": artifact_hash,
         "rules": {
             "csharp": {
+                "canonical_style": canonical_style,
                 "required_patterns": _normalized_profile_patterns(
                     packaged_csharp_rules.get("required_patterns")
                 ),
@@ -564,8 +696,8 @@ def _generalized_contract_profile_entry(
                     "form_template": form_template,
                     "form_identifier_pattern": form_identifier_pattern,
                     "load_handler_template": load_handler_template,
-                    "query_methods": query_methods,
-                    "save_methods": save_methods,
+                    "query_methods": [canonical_style["query_method"]],
+                    "save_methods": [canonical_style["save_method"]],
                     "focus_handler_template": focus_handler_template,
                     "command_handlers": command_handlers,
                     "requested_mapping_required": True,
@@ -621,9 +753,26 @@ def _profile_load_result(
     issues: List[Dict[str, Any]],
     profile_path: str = "",
     rules: Mapping[str, Any] | None = None,
+    document_mismatches: Sequence[Mapping[str, Any]] | None = None,
 ) -> HarnessResult:
     normalized_rules = dict(rules or {})
     rules_hash = _profile_rules_hash(normalized_rules) if success else ""
+    csharp_rules = normalized_rules.get("csharp")
+    csharp_rules = dict(csharp_rules) if isinstance(csharp_rules, Mapping) else {}
+    canonical_style = csharp_rules.get("canonical_style")
+    canonical_style = (
+        dict(canonical_style)
+        if isinstance(canonical_style, Mapping)
+        else dict(CANONICAL_PB_CSHARP_STYLE_PROFILE)
+    )
+    canonical_style_hash = "sha256:" + hashlib.sha256(
+        json.dumps(
+            canonical_style,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     consumption = {
         "status": "loaded" if success else "blocked",
         "consumed": False,
@@ -653,6 +802,12 @@ def _profile_load_result(
         "profile_path": profile_path,
         "profile_rules": normalized_rules,
         "profile_consumption": consumption,
+        "canonical_style_profile": canonical_style,
+        "canonical_style_profile_hash": canonical_style_hash,
+        "packaged_document_alignment": {
+            "status": "matched" if not document_mismatches else "docs_update_required",
+            "mismatches": [dict(item) for item in (document_mismatches or [])],
+        },
         "issues": issues,
         "external_sources_consulted": [],
         "token_optimizer_status": "passthrough",
@@ -716,9 +871,13 @@ def load_packaged_migration_profile(
             ],
         )
     try:
-        raw_bytes = path.read_bytes()
+        _, _, _, raw_bytes = _read_bounded_artifact(
+            path,
+            maximum_bytes=PACKAGED_PROFILE_MAX_BYTES,
+            collect_bytes=True,
+        )
         payload = json.loads(raw_bytes.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (_ArtifactReadError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         return _profile_load_result(
             success=False,
             profile_id=requested_id,
@@ -837,6 +996,11 @@ def load_packaged_migration_profile(
         issues=issues,
         profile_path=str(path),
         rules=canonical["rules"] if success else {},
+        document_mismatches=(
+            _packaged_document_canonical_mismatches(payload)
+            if isinstance(payload, Mapping)
+            else []
+        ),
     )
 
 
@@ -855,9 +1019,13 @@ def _load_runtime_packaged_migration_profile(
 
     path = Path(PACKAGED_MIGRATION_PROFILE_PATH)
     try:
-        raw_bytes = path.read_bytes()
+        _, _, _, raw_bytes = _read_bounded_artifact(
+            path,
+            maximum_bytes=PACKAGED_PROFILE_MAX_BYTES,
+            collect_bytes=True,
+        )
         payload = json.loads(raw_bytes.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except (_ArtifactReadError, UnicodeDecodeError, json.JSONDecodeError):
         return load_packaged_migration_profile("packaged-contract", "missing", "sha256:missing")
     entry = (
         _generalized_contract_profile_entry(payload, raw_bytes)
@@ -1293,6 +1461,7 @@ def _apply_consumed_profile_rules(
     procedure_name: str = "",
     required_source_text: str | None = None,
     preserve_existing: bool = False,
+    structurally_validated_forbidden_pattern_ids: Iterable[str] = (),
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     if not profile_context.get("consumption"):
         return [], profile_context
@@ -1334,12 +1503,20 @@ def _apply_consumed_profile_rules(
         else:
             matched_required_pattern_ids.append(item["id"])
 
+    structural_pattern_ids = {
+        str(item).strip()
+        for item in structurally_validated_forbidden_pattern_ids
+        if str(item).strip()
+    }
     forbidden_patterns = (
         [] if preserve_existing else _normalized_profile_patterns(rules.get("forbidden_patterns"))
     )
-    if forbidden_patterns:
+    active_forbidden_patterns = [
+        item for item in forbidden_patterns if item["id"] not in structural_pattern_ids
+    ]
+    if active_forbidden_patterns:
         applied.append(f"{domain}.forbidden_patterns")
-    for item in forbidden_patterns:
+    for item in active_forbidden_patterns:
         try:
             matched = re.search(item["pattern"], source_text, flags=re.IGNORECASE | re.MULTILINE) is not None
         except re.error as exc:
@@ -1398,17 +1575,43 @@ def _apply_consumed_profile_rules(
     consumption["required_pattern_ids"] = required_pattern_ids
     consumption["matched_required_pattern_ids"] = matched_required_pattern_ids
     consumption["missing_required_pattern_ids"] = missing_required_pattern_ids
+    consumption["structurally_validated_forbidden_pattern_ids"] = sorted(
+        structural_pattern_ids
+    )
     profile_context = {"consumption": consumption, "rules": rules}
     return issues, profile_context
 
 
-def get_author_tagged_csharp_style_baseline() -> Dict[str, Any]:
-    """Return the detached generalized style recipe through the legacy API."""
-    return json.loads(json.dumps(AUTHOR_TAGGED_CSHARP_STYLE_BASELINE))
+def get_packaged_csharp_style_contract(
+    profile_id: str = "",
+    profile_version: str = "",
+    profile_hash: str = "",
+) -> Dict[str, Any]:
+    """Return a detached fixed style contract from the packaged profile loader."""
+    loaded = _load_runtime_packaged_migration_profile(
+        profile_id,
+        profile_version,
+        profile_hash,
+    )
+    return {
+        "status": "loaded" if loaded.success else "blocked",
+        "profile_identity": {
+            "profile_id": loaded.metadata.get("profile_consumption", {}).get("profile_id", ""),
+            "profile_version": loaded.metadata.get("profile_consumption", {}).get("profile_version", ""),
+            "profile_hash": loaded.metadata.get("profile_consumption", {}).get("profile_hash", ""),
+        },
+        "canonical_style_profile": json.loads(
+            json.dumps(loaded.metadata.get("canonical_style_profile", {}))
+        ),
+        "canonical_style_profile_hash": loaded.metadata.get(
+            "canonical_style_profile_hash", ""
+        ),
+        "issues": [dict(item) for item in loaded.metadata.get("issues", [])],
+    }
 
 
-def normalize_author_tagged_program_key(procedure_name: str) -> str:
-    """Normalize sp_<PROGRAM>_SELECT/SAVE names to the matched C# program key."""
+def normalize_procedure_program_key(procedure_name: str) -> str:
+    """Normalize sp_<PROGRAM>_SELECT/SAVE names to one procedure program key."""
     name = str(procedure_name or "").strip().strip("[]")
     if "." in name:
         name = name.split(".")[-1].strip().strip("[]")
@@ -1422,272 +1625,45 @@ def normalize_author_tagged_program_key(procedure_name: str) -> str:
     return upper
 
 
-def _normalize_author_tagged_evidence_path(path: str) -> str:
-    return re.sub(r"[\\/]+", "\\\\", str(path or "").strip()).upper()
-
-
-def _author_tagged_path_parts(path: str) -> List[str]:
-    return [part.upper() for part in re.split(r"[\\/]+", str(path or "").strip()) if part]
-
-
-def _author_tagged_path_file_name(path: str) -> str:
-    parts = _author_tagged_path_parts(path)
-    return parts[-1] if parts else ""
-
-
-def _author_tagged_path_tail(path: str, length: int = 2) -> str:
-    parts = _author_tagged_path_parts(path)
-    if not parts:
-        return ""
-    return "\\\\".join(parts[-length:])
-
-
-def _author_tagged_path_uses_excluded_segment(path: str) -> bool:
-    excluded = {"BACKUP", "BIN", "OBJ", ".GIT", ".VS"}
-    return bool(excluded.intersection(_author_tagged_path_parts(path)))
-
-
-def _expected_author_tagged_style_paths(program_key: str) -> List[str]:
-    return list(AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS.get(str(program_key or "").upper(), []))
-
-
-def _author_tagged_evidence_paths_match(program_key: str, evidence_paths: Iterable[str]) -> bool:
-    expected_paths = _expected_author_tagged_style_paths(program_key)
-    if not expected_paths:
-        return False
-    actual_paths = [str(path or "") for path in evidence_paths if str(path or "").strip()]
-    if any(_author_tagged_path_uses_excluded_segment(path) for path in actual_paths):
-        return False
-    expected_tails = {_author_tagged_path_tail(path) for path in expected_paths}
-    actual_tails = {_author_tagged_path_tail(path) for path in actual_paths}
-    return bool(expected_tails) and expected_tails.issubset(actual_tails)
-
-
-def _discover_author_tagged_csharp_paths(program_key: str, csharp_root: str) -> List[str]:
-    """Find same-program C# and Designer files under a root without trusting localized folder text."""
-    root = str(csharp_root or "").strip()
-    key = str(program_key or "").strip().upper()
-    if not root or not key or not os.path.isdir(root):
-        return []
-    skip_dirs = {"BACKUP", "BIN", "OBJ", ".GIT", ".VS"}
-    primary_path = ""
-    designer_path = ""
-    primary_name = f"{key}.CS"
-    designer_name = f"{key}.DESIGNER.CS"
-    for current_root, dir_names, file_names in os.walk(root):
-        dir_names[:] = [name for name in dir_names if name.upper() not in skip_dirs]
-        for file_name in file_names:
-            upper_name = file_name.upper()
-            full_path = os.path.normpath(os.path.join(current_root, file_name))
-            if upper_name == primary_name and not primary_path:
-                primary_path = full_path
-            elif upper_name == designer_name and not designer_path:
-                designer_path = full_path
-        if primary_path and designer_path:
-            break
-    return [path for path in (primary_path, designer_path) if path]
-
-
-def _build_author_tagged_screen_style_profile(program_key: str, source_text: str, designer_text: str = "") -> Dict[str, Any]:
-    """Build a portable same-program style profile from full C#/Designer text."""
-    source = str(source_text or "")
-    designer = str(designer_text or "")
-    combined = source + "\n" + designer
-    method_names = sorted(
-        set(
-            re.findall(
-                r"\b(?:private|protected|public|internal)\s+(?:override\s+)?(?:void|DataSet|bool|string|int)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
-                source,
-            )
-        )
-    )
-    sp_calls = re.findall(r'dbClient\.(GetDataSetFromSP|ExecSPTrn|ExecSP)\s*\(\s*"([^"]+)"', source)
-    db_parameters = re.findall(r'new\s+DbParameter\s*\(\s*"(@[A-Za-z0-9_]+)"', source)
-    grid_controls = sorted(set(re.findall(r"\b(grd[A-Za-z0-9_]*)\b", combined)))
-    grid_views = sorted(set(re.findall(r"\b(gvw[A-Za-z0-9_]*)\b", combined)))
-    grid_columns = sorted(set(re.findall(r"\b(col(?:List|Detail|[A-Za-z0-9]+)_[A-Z0-9_]+)\b", designer)))
-    binding_fields = sorted(set(re.findall(r'\.BindingField\s*=\s*"([^"]+)"', designer)))
-    repository_spin = sorted(set(re.findall(r"\b(rpsSpin[A-Za-z0-9_]*)\b", designer)))
-    return {
-        "program_key": str(program_key or "").upper(),
-        "base_class": (
-            "FrmPopBase"
-            if re.search(r":\s*FrmPopBase\b", source)
-            else "FrmDevBase"
-            if re.search(r":\s*FrmDevBase\b", source)
-            else ""
-        ),
-        "method_names": method_names,
-        "command_handlers": [name for name in method_names if name in {"SearchCommand", "SaveCommand", "ClearCommand"}],
-        "select_methods": [name for name in method_names if name in {"CallSelectProcedure", "CallViewQuery", "CallProc"}],
-        "focused_row_methods": [name for name in method_names if "FocusedRow" in name or name == "fnFocusedRowChanged"],
-        "sp_calls": [{"method": method, "procedure": procedure} for method, procedure in sp_calls],
-        "db_parameters": db_parameters,
-        "grid_controls": grid_controls,
-        "grid_views": grid_views,
-        "grid_columns": grid_columns[:200],
-        "grid_column_count": len(grid_columns),
-        "binding_fields": binding_fields[:200],
-        "binding_field_count": len(binding_fields),
-        "repository_spin_controls": repository_spin,
-        "has_data_table_to_xml": "DataUtil.DataTableToXml" in source,
-        "has_exec_sp_trn": "dbClient.ExecSPTrn" in source,
-        "has_get_focused_data_row": "GetFocusedDataRow" in source,
-        "has_devfnc_initcontrol": "devFnc.InitControl" in source,
-        "has_columns_addrange": ".Columns.AddRange" in designer,
-        "has_header_usefont": "AppearanceHeader.Options.UseFont = true" in designer,
-        "has_header_center_alignment": "AppearanceHeader.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.Center" in designer,
-        "has_cell_usefont": "AppearanceCell.Options.UseFont = true" in designer,
-    }
-
-
-def build_author_tagged_style_profile_update(
-    procedure_name: str,
-    *,
-    csharp_root: str,
-    profile_id: str,
-    profile_version: str,
-) -> HarnessResult:
-    """Inspect live C# only through an explicit, candidate-only relearning operation."""
-    program_key = normalize_author_tagged_program_key(procedure_name)
-    discovered_paths = _discover_author_tagged_csharp_paths(program_key, csharp_root)
-    issues: List[Dict[str, Any]] = []
-    if not profile_id or not profile_version:
-        issues.append(
-            {
-                "code": "profile_update_identity_required",
-                "severity": "error",
-                "message": "Explicit profile update requires profile_id and profile_version.",
-            }
-        )
-    if len(discovered_paths) < 2:
-        issues.append(
-            {
-                "code": "profile_update_csharp_pair_missing",
-                "severity": "error",
-                "message": "Explicit profile update requires matching primary C# and Designer files.",
-            }
-        )
-    candidate: Dict[str, Any] = {}
-    if not issues:
-        try:
-            source_text = Path(discovered_paths[0]).read_text(encoding="utf-8-sig", errors="ignore")
-            designer_text = Path(discovered_paths[1]).read_text(encoding="utf-8-sig", errors="ignore")
-        except OSError as exc:
-            issues.append(
-                {
-                    "code": "profile_update_csharp_read_failed",
-                    "severity": "error",
-                    "message": str(exc),
-                }
-            )
-        else:
-            extracted = _build_author_tagged_screen_style_profile(
-                program_key,
-                source_text,
-                designer_text,
-            )
-            candidate = {
-                "profile_id": str(profile_id),
-                "version": str(profile_version),
-                "sanitized": False,
-                "candidate_source": "explicit_live_csharp_update",
-                "program_key": program_key,
-                "extracted_style": extracted,
-            }
-    success = not issues
-    metadata = {
-        "harness": "pb-to-csharp-migration-harness",
-        "operation": "explicit_profile_update",
-        "status": "candidate_ready" if success else "blocked",
-        "write_status": "candidate_only",
-        "program_key": program_key,
-        "profile_id": str(profile_id or ""),
-        "profile_version": str(profile_version or ""),
-        "source_paths": discovered_paths,
-        "candidate_profile": candidate,
-        "issues": issues,
-        "runtime_generation_eligible": False,
-        "next_action": (
-            "Sanitize, generalize, review, hash, and package the candidate before runtime use."
-            if success
-            else "Provide a valid C# root and explicit profile identity."
-        ),
-        "token_optimizer_status": "passthrough",
-    }
-    return HarnessResult(
-        success=success,
-        stdout=json.dumps(
-            {
-                "status": metadata["status"],
-                "operation": metadata["operation"],
-                "program_key": program_key,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        ),
-        stderr="" if success else "Explicit profile update could not build a candidate.",
-        exit_code=0 if success else 1,
-        metadata=metadata,
-    )
-
-
 def build_migration_profile_update(
     procedure_name: str,
     *,
-    csharp_root: str,
     profile_id: str,
     profile_version: str,
+    explicit_user_authorization: bool = False,
+    artifact_allowlist: Sequence[str] | None = None,
+    expected_sha256: Mapping[str, str] | None = None,
+    independent_provenance: Mapping[str, Mapping[str, Any]] | None = None,
+    custody_records: Mapping[str, Mapping[str, Any]] | None = None,
+    uniqueness_decision: Mapping[str, Any] | None = None,
 ) -> HarnessResult:
-    """Public maintenance entrypoint for explicit profile relearning."""
-    return build_author_tagged_style_profile_update(
+    """Build one explicit fixed-profile maintenance candidate from exact artifacts."""
+    from src.skills.pb_to_csharp_profile_maintenance import build_profile_update_candidate
+
+    return build_profile_update_candidate(
         procedure_name,
-        csharp_root=csharp_root,
         profile_id=profile_id,
         profile_version=profile_version,
+        explicit_user_authorization=explicit_user_authorization,
+        artifact_allowlist=artifact_allowlist,
+        expected_sha256=expected_sha256,
+        independent_provenance=independent_provenance,
+        custody_records=custody_records,
+        uniqueness_decision=uniqueness_decision,
     )
 
 
-def resolve_author_tagged_style_evidence(
+def resolve_packaged_migration_profile(
     procedure_name: str,
     *,
-    csharp_root: str = "",
     profile_id: str = "",
     profile_version: str = "",
     profile_hash: str = "",
 ) -> HarnessResult:
-    """Resolve runtime style only from an immutable packaged profile identity."""
-    program_key = normalize_author_tagged_program_key(procedure_name)
-    if str(csharp_root or "").strip():
-        metadata = {
-            "harness": "pb-to-csharp-migration-harness",
-            "operation": "runtime_profile_resolution",
-            "procedure_name": procedure_name,
-            "program_key": program_key,
-            "status": "explicit_profile_update_required",
-            "issues": [
-                {
-                    "code": "live_csharp_source_forbidden_in_runtime_generation",
-                    "severity": "error",
-                    "message": (
-                        "Runtime generation does not walk or read C# roots. Use "
-                        "build_author_tagged_style_profile_update for explicit relearning."
-                    ),
-                }
-            ],
-            "external_sources_consulted": [],
-        }
-        return HarnessResult(
-            success=False,
-            stdout=json.dumps({"status": metadata["status"], "program_key": program_key}),
-            stderr="Live C# style discovery is disabled during runtime generation.",
-            exit_code=1,
-            metadata=metadata,
-        )
-
-    requested_profile_id = str(profile_id or program_key).strip()
+    """Resolve normal runtime style only from one immutable packaged profile identity."""
+    program_key = normalize_procedure_program_key(procedure_name)
     loaded = load_packaged_migration_profile(
-        requested_profile_id,
+        profile_id,
         profile_version,
         profile_hash,
     )
@@ -1697,9 +1673,8 @@ def resolve_author_tagged_style_evidence(
             "operation": "runtime_profile_resolution",
             "procedure_name": procedure_name,
             "program_key": program_key,
-            "primary_style_evidence_paths": [],
-            "path_evidence_accepted": False,
             "style_profile": dict(metadata.get("profile_rules") or {}),
+            "external_sources_consulted": [],
         }
     )
     return HarnessResult(
@@ -1927,15 +1902,26 @@ class MigrationInputState:
     target_project_name: str = ""
     target_style: str = ""
     pb_version: str = ""
+    pb_runtime: str = ""
     pbl_export_tool: str = ""
+    pbl_export_requested: bool = False
+    orca_tool_root: str = ""
+    pbl_export_action: str = ""
+    pbl_object_name: str = ""
+    pbl_output_directory: str = ""
+    orca_ascii_stage_root: str = ""
+    pbl_path: str = ""
+    pbl_sha256: str = ""
+    pbl_object_list_receipt: Dict[str, Any] = field(default_factory=dict)
+    exported_pb_artifacts: List[Dict[str, Any]] = field(default_factory=list)
+    linked_datawindow_graph: Dict[str, Any] = field(default_factory=dict)
+    acquisition_preflight: Dict[str, Any] = field(default_factory=dict)
+    acquisition_preflight_supplied: bool = False
     procedure_name: str = ""
     program_key: str = ""
-    fallback_program_key: str = ""
     profile_id: str = ""
     profile_version: str = ""
     profile_hash: str = ""
-    author_tagged_required: bool = False
-    primary_style_evidence_paths: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1953,15 +1939,26 @@ class MigrationInputState:
             "target_project_name": self.target_project_name,
             "target_style": self.target_style,
             "pb_version": self.pb_version,
+            "pb_runtime": self.pb_runtime,
             "pbl_export_tool": self.pbl_export_tool,
+            "pbl_export_requested": self.pbl_export_requested,
+            "orca_tool_root": self.orca_tool_root,
+            "pbl_export_action": self.pbl_export_action,
+            "pbl_object_name": self.pbl_object_name,
+            "pbl_output_directory": self.pbl_output_directory,
+            "orca_ascii_stage_root": self.orca_ascii_stage_root,
+            "pbl_path": self.pbl_path,
+            "pbl_sha256": self.pbl_sha256,
+            "pbl_object_list_receipt": dict(self.pbl_object_list_receipt),
+            "exported_pb_artifacts": [dict(item) for item in self.exported_pb_artifacts],
+            "linked_datawindow_graph": dict(self.linked_datawindow_graph),
+            "acquisition_preflight": dict(self.acquisition_preflight),
+            "acquisition_preflight_supplied": self.acquisition_preflight_supplied,
             "procedure_name": self.procedure_name,
             "program_key": self.program_key,
-            "fallback_program_key": self.fallback_program_key,
             "profile_id": self.profile_id,
             "profile_version": self.profile_version,
             "profile_hash": self.profile_hash,
-            "author_tagged_required": self.author_tagged_required,
-            "primary_style_evidence_paths": list(self.primary_style_evidence_paths),
             "notes": list(self.notes),
         }
 
@@ -1983,17 +1980,59 @@ class MigrationInputState:
             target_project_name=str(data.get("target_project_name", "")),
             target_style=str(data.get("target_style", "")),
             pb_version=str(data.get("pb_version", data.get("powerbuilder_version", ""))),
+            pb_runtime=str(data.get("pb_runtime", data.get("runtime", ""))),
             pbl_export_tool=str(data.get("pbl_export_tool", data.get("export_tool", ""))),
+            pbl_export_requested=bool(
+                data.get("pbl_export_requested", data.get("orca_probe_requested", False))
+            ),
+            orca_tool_root=str(data.get("orca_tool_root", data.get("pbl_tool_root", ""))),
+            pbl_export_action=str(data.get("pbl_export_action", data.get("orca_action", ""))),
+            pbl_object_name=str(data.get("pbl_object_name", data.get("object_name", ""))),
+            pbl_output_directory=str(
+                data.get("pbl_output_directory", data.get("export_output_directory", ""))
+            ),
+            orca_ascii_stage_root=str(data.get("orca_ascii_stage_root", "")),
+            pbl_path=str(data.get("pbl_path", "")),
+            pbl_sha256=str(data.get("pbl_sha256", "")),
+            pbl_object_list_receipt=dict(data.get("pbl_object_list_receipt") or {}),
+            exported_pb_artifacts=[
+                dict(item)
+                for item in (data.get("exported_pb_artifacts") or [])
+                if isinstance(item, Mapping)
+            ],
+            linked_datawindow_graph=dict(data.get("linked_datawindow_graph") or {}),
+            acquisition_preflight=dict(
+                data.get("acquisition_preflight")
+                or data.get("gm32_acquisition")
+                or (
+                    data.get("migration_preflight_contract", {}).get("acquisition", {})
+                    if isinstance(data.get("migration_preflight_contract"), Mapping)
+                    else {}
+                )
+                or {
+                    key: data[key]
+                    for key in ("pblscripter", "orca_runtime", "exported_objects")
+                    if key in data
+                }
+            ),
+            acquisition_preflight_supplied=bool(
+                data.get("acquisition_preflight_supplied", False)
+                or "acquisition_preflight" in data
+                or "gm32_acquisition" in data
+                or (
+                    isinstance(data.get("migration_preflight_contract"), Mapping)
+                    and "acquisition" in data.get("migration_preflight_contract", {})
+                )
+                or any(
+                    key in data
+                    for key in ("pblscripter", "orca_runtime", "exported_objects")
+                )
+            ),
             procedure_name=str(data.get("procedure_name", "")),
             program_key=str(data.get("program_key", "")),
-            fallback_program_key=str(data.get("fallback_program_key", "")),
             profile_id=str(data.get("profile_id", "")),
             profile_version=str(data.get("profile_version", data.get("version", ""))),
             profile_hash=str(data.get("profile_hash", "")),
-            author_tagged_required=bool(data.get("author_tagged_required", False)),
-            primary_style_evidence_paths=[
-                str(item) for item in data.get("primary_style_evidence_paths", []) if str(item)
-            ],
             notes=[str(item) for item in data.get("notes", [])],
         )
 
@@ -2098,13 +2137,742 @@ class CSharpDesignerControlSpec:
         }
 
 
+def _pbl_parity_readiness(input_state: MigrationInputState) -> Dict[str, Any]:
+    pbl_specified = bool(input_state.pbl_path.strip() or input_state.pbl_sha256.strip())
+    if not pbl_specified:
+        proposal_only = bool(
+            input_state.has_behavior_description
+            or not (input_state.has_exported_pb_sources or input_state.has_pasted_source)
+        )
+        return {
+            "status": "proposal_only" if proposal_only else "bounded_source_only",
+            "parity_ready": False,
+            "claim_scope": "proposal-only" if proposal_only else "bounded-source-draft",
+            "missing": ["pbl_path", "pbl_sha256"],
+            "artifact_registry": [],
+        }
+
+    missing: List[str] = []
+    readback_issues: List[Dict[str, Any]] = []
+    artifact_registry: List[Dict[str, Any]] = []
+    pbl_path = input_state.pbl_path.strip()
+    pbl_path_key = _absolute_path_key(pbl_path)
+    expected_pbl_hash = _normalized_sha256(input_state.pbl_sha256)
+    actual_pbl_hash = ""
+    if not pbl_path_key:
+        missing.append("absolute_pbl_path")
+    elif not expected_pbl_hash:
+        missing.append("pbl_sha256")
+    else:
+        try:
+            resolved, size, actual_pbl_hash, _ = _read_bounded_artifact(
+                pbl_path,
+                maximum_bytes=PB_PBL_MAX_BYTES,
+                collect_bytes=False,
+            )
+            pbl_path_key = os.path.normcase(str(resolved))
+            artifact_registry.append(
+                {
+                    "artifact_id": "pbl",
+                    "path": str(resolved),
+                    "sha256": f"sha256:{actual_pbl_hash}",
+                    "size_bytes": size,
+                    "kind": "pbl",
+                }
+            )
+            if actual_pbl_hash != expected_pbl_hash:
+                missing.append("pbl_sha256_readback_mismatch")
+        except _ArtifactReadError as exc:
+            missing.append("pbl_artifact_readback")
+            readback_issues.append({"artifact": "pbl", "code": exc.code, "message": str(exc)})
+    if not input_state.pb_runtime.strip():
+        missing.append("pb_runtime")
+    if not input_state.pb_version.strip():
+        missing.append("pb_runtime_version")
+
+    list_receipt = input_state.pbl_object_list_receipt
+    list_payload: Dict[str, Any] = {}
+    list_receipt_hash = ""
+    list_receipt_valid = False
+    if isinstance(list_receipt, Mapping):
+        receipt_path = str(list_receipt.get("path") or "").strip()
+        expected_receipt_hash = _normalized_sha256(list_receipt.get("sha256"))
+        if _absolute_path_key(receipt_path) and expected_receipt_hash:
+            try:
+                resolved, size, list_receipt_hash, receipt_text = _read_bounded_text_artifact(
+                    receipt_path,
+                    maximum_bytes=PB_RECEIPT_ARTIFACT_MAX_BYTES,
+                )
+                artifact_registry.append(
+                    {
+                        "artifact_id": "object-list-receipt",
+                        "path": str(resolved),
+                        "sha256": f"sha256:{list_receipt_hash}",
+                        "size_bytes": size,
+                        "kind": "object-list-receipt",
+                    }
+                )
+                parsed = json.loads(receipt_text)
+                if isinstance(parsed, Mapping):
+                    list_payload = dict(parsed)
+                list_receipt_valid = bool(
+                    list_receipt_hash == expected_receipt_hash
+                    and list_payload.get("schema_version") == "kh.pb-object-list-receipt.v1"
+                    and _absolute_path_key(list_payload.get("pbl_path", "")) == pbl_path_key
+                    and _normalized_sha256(list_payload.get("pbl_sha256")) == actual_pbl_hash
+                    and str(list_payload.get("runtime") or "").strip() == input_state.pb_runtime.strip()
+                    and str(list_payload.get("runtime_version") or "").strip() == input_state.pb_version.strip()
+                    and str(list_payload.get("receipt_id") or "").strip()
+                    and str(list_payload.get("run_id") or "").strip()
+                )
+            except (json.JSONDecodeError, _ArtifactReadError) as exc:
+                code = exc.code if isinstance(exc, _ArtifactReadError) else "artifact_json_invalid"
+                readback_issues.append(
+                    {"artifact": "object-list-receipt", "code": code, "message": str(exc)}
+                )
+    if not list_receipt_valid:
+        missing.append("pbl_object_list_receipt")
+
+    listed_objects = list_payload.get("objects", []) if list_receipt_valid else []
+    listed_by_id: Dict[str, Dict[str, Any]] = {}
+    if isinstance(listed_objects, Sequence) and not isinstance(listed_objects, (str, bytes)):
+        for item in listed_objects:
+            if not isinstance(item, Mapping):
+                continue
+            artifact_id = str(item.get("artifact_id") or "").strip()
+            if artifact_id and artifact_id not in listed_by_id:
+                listed_by_id[artifact_id] = dict(item)
+
+    exports_by_id: Dict[str, Dict[str, Any]] = {}
+    export_text_by_id: Dict[str, str] = {}
+    extensions: set[str] = set()
+    export_paths: set[str] = set()
+    for item in input_state.exported_pb_artifacts:
+        artifact_id = str(item.get("artifact_id") or "").strip()
+        path = str(item.get("path") or "").strip()
+        expected_digest = _normalized_sha256(item.get("sha256"))
+        extension = Path(path).suffix.lower()
+        path_key = _absolute_path_key(path)
+        if (
+            not artifact_id
+            or artifact_id in exports_by_id
+            or not path_key
+            or path_key in export_paths
+            or extension not in {".sru", ".srw", ".srd"}
+            or not expected_digest
+        ):
+            missing.append("exported_pb_artifact_identity_path_or_hash")
+            continue
+        try:
+            resolved, size, actual_digest, text = _read_bounded_text_artifact(
+                path,
+                maximum_bytes=PB_EXPORT_ARTIFACT_MAX_BYTES,
+            )
+        except _ArtifactReadError as exc:
+            missing.append("exported_pb_artifact_readback")
+            readback_issues.append(
+                {"artifact": artifact_id or path, "code": exc.code, "message": str(exc)}
+            )
+            continue
+        resolved_key = os.path.normcase(str(resolved))
+        if actual_digest != expected_digest:
+            missing.append("exported_pb_artifact_sha256_readback_mismatch")
+        listed = listed_by_id.get(artifact_id, {})
+        listed_valid = bool(
+            listed
+            and _absolute_path_key(listed.get("path", "")) == resolved_key
+            and _normalized_sha256(listed.get("sha256")) == actual_digest
+            and str(listed.get("object_name") or "").strip()
+            and str(listed.get("object_type") or "").strip()
+        )
+        if not listed_valid:
+            missing.append("exported_pb_artifact_not_correlated_to_object_list")
+        object_name = str(listed.get("object_name") or item.get("object_name") or "").strip()
+        export = {
+            "artifact_id": artifact_id,
+            "path": resolved_key,
+            "sha256": f"sha256:{actual_digest}",
+            "size_bytes": size,
+            "extension": extension,
+            "object_name": object_name,
+            "object_type": str(listed.get("object_type") or "").strip(),
+        }
+        exports_by_id[artifact_id] = export
+        export_text_by_id[artifact_id] = text
+        export_paths.add(resolved_key)
+        extensions.add(extension)
+        artifact_registry.append(dict(export))
+    if set(listed_by_id) != set(exports_by_id):
+        missing.append("object_list_export_set_mismatch")
+    if not extensions.intersection({".sru", ".srw"}):
+        missing.append("exported_window_or_userobject_source")
+    if ".srd" not in extensions:
+        missing.append("exported_datawindow_source")
+
+    graph = input_state.linked_datawindow_graph
+    graph_payload: Dict[str, Any] = {}
+    graph_valid = False
+    if isinstance(graph, Mapping):
+        graph_path = str(graph.get("path") or "").strip()
+        expected_graph_hash = _normalized_sha256(graph.get("sha256"))
+        if _absolute_path_key(graph_path) and expected_graph_hash:
+            try:
+                resolved, size, actual_graph_hash, graph_text = _read_bounded_text_artifact(
+                    graph_path,
+                    maximum_bytes=PB_RECEIPT_ARTIFACT_MAX_BYTES,
+                )
+                artifact_registry.append(
+                    {
+                        "artifact_id": "linked-datawindow-graph",
+                        "path": str(resolved),
+                        "sha256": f"sha256:{actual_graph_hash}",
+                        "size_bytes": size,
+                        "kind": "linked-datawindow-graph",
+                    }
+                )
+                parsed_graph = json.loads(graph_text)
+                if isinstance(parsed_graph, Mapping):
+                    graph_payload = dict(parsed_graph)
+                graph_valid = actual_graph_hash == expected_graph_hash
+            except (json.JSONDecodeError, _ArtifactReadError) as exc:
+                code = exc.code if isinstance(exc, _ArtifactReadError) else "artifact_json_invalid"
+                readback_issues.append(
+                    {"artifact": "linked-datawindow-graph", "code": code, "message": str(exc)}
+                )
+
+    graph_nodes = graph_payload.get("nodes", []) if graph_valid else []
+    graph_edges = graph_payload.get("edges", []) if graph_valid else []
+    nodes_by_id: Dict[str, Dict[str, Any]] = {}
+    if isinstance(graph_nodes, Sequence) and not isinstance(graph_nodes, (str, bytes)):
+        for node in graph_nodes:
+            if not isinstance(node, Mapping):
+                continue
+            artifact_id = str(node.get("artifact_id") or "").strip()
+            if artifact_id and artifact_id not in nodes_by_id:
+                nodes_by_id[artifact_id] = dict(node)
+    nodes_correlated = bool(exports_by_id) and set(nodes_by_id) == set(exports_by_id) and all(
+        _absolute_path_key(nodes_by_id[artifact_id].get("path", "")) == export["path"]
+        and _normalized_sha256(nodes_by_id[artifact_id].get("sha256"))
+        == _normalized_sha256(export["sha256"])
+        and str(nodes_by_id[artifact_id].get("object_name") or "").strip()
+        == export["object_name"]
+        for artifact_id, export in exports_by_id.items()
+    )
+    linked_srd_ids: set[str] = set()
+    edges_correlated = bool(graph_edges)
+    if isinstance(graph_edges, Sequence) and not isinstance(graph_edges, (str, bytes)):
+        for edge in graph_edges:
+            if not isinstance(edge, Mapping):
+                edges_correlated = False
+                continue
+            source_id = str(edge.get("source_artifact_id") or "").strip()
+            target_id = str(edge.get("datawindow_artifact_id") or "").strip()
+            evidence_token = str(edge.get("evidence_token") or "").strip()
+            source = exports_by_id.get(source_id, {})
+            target = exports_by_id.get(target_id, {})
+            target_name = str(target.get("object_name") or "").strip()
+            if not (
+                source.get("extension") in {".sru", ".srw"}
+                and target.get("extension") == ".srd"
+                and evidence_token
+                and target_name
+                and evidence_token.casefold() == target_name.casefold()
+                and evidence_token.casefold() in export_text_by_id.get(source_id, "").casefold()
+                and Path(str(target.get("path") or "")).stem.casefold() == target_name.casefold()
+            ):
+                edges_correlated = False
+                continue
+            linked_srd_ids.add(target_id)
+    expected_srd_ids = {
+        artifact_id
+        for artifact_id, item in exports_by_id.items()
+        if item.get("extension") == ".srd"
+    }
+    graph_valid = bool(
+        graph_valid
+        and graph_payload.get("schema_version") == "kh.pb-datawindow-graph.v1"
+        and graph_payload.get("status") == "complete"
+        and _normalized_sha256(graph_payload.get("pbl_sha256")) == actual_pbl_hash
+        and _normalized_sha256(graph_payload.get("object_list_sha256")) == list_receipt_hash
+        and nodes_correlated
+        and edges_correlated
+        and linked_srd_ids == expected_srd_ids
+    )
+    if not graph_valid:
+        missing.append("linked_datawindow_graph")
+
+    missing = sorted(set(missing))
+    return {
+        "status": "ready" if not missing else "blocked",
+        "parity_ready": not missing,
+        "claim_scope": "pbl-source-parity" if not missing else "proposal-only",
+        "pbl_path": pbl_path_key,
+        "pbl_sha256": f"sha256:{actual_pbl_hash}" if actual_pbl_hash else "",
+        "pb_runtime": input_state.pb_runtime.strip(),
+        "pb_runtime_version": input_state.pb_version.strip(),
+        "list_receipt": dict(list_receipt) if isinstance(list_receipt, Mapping) else {},
+        "list_receipt_readback": list_payload,
+        "artifact_registry": artifact_registry,
+        "linked_datawindow_graph": graph_payload,
+        "readback_issues": readback_issues,
+        "missing": missing,
+    }
+
+
+def _normalize_orca_version_selection(value: Any) -> str | None:
+    raw = str(value or "").strip().casefold()
+    if not raw:
+        return None
+    raw = re.sub(r"^(?:powerbuilder|pb)\s*", "", raw)
+    compact = re.sub(r"[^0-9]", "", raw)
+    if compact == "7":
+        return "70"
+    return compact or raw
+
+
+def _build_orca_runtime_plan(input_state: MigrationInputState) -> Dict[str, Any]:
+    explicit_tool = input_state.pbl_export_tool.strip()
+    explicit_intent = bool(
+        input_state.pbl_export_requested
+        or explicit_tool.casefold() in {"orca", "pblscripter", "export-pbl", "export-pbl.ps1"}
+        or (explicit_tool and os.path.isabs(explicit_tool))
+    )
+    if not explicit_intent:
+        return {
+            "capability_probe": {
+                "status": "not_requested",
+                "reason_code": "no_explicit_pbl_export_intent",
+                "executed_process_count": 0,
+            },
+            "selected_explicit_version": None,
+            "tool_execution_intent": {
+                "status": "not_requested",
+                "probe_only": True,
+                "conversion_executed": False,
+            },
+            "fallback": {
+                "status": "not_needed",
+                "order": ["exported_source", "pasted_source", "described_behavior"],
+            },
+            "invocation_contract": {},
+        }
+
+    from src.skills.pb_orca_runtime import OrcaRequest, PbOrcaRuntime
+
+    selected_version = _normalize_orca_version_selection(input_state.pb_version)
+    tool_root_text = input_state.orca_tool_root.strip()
+    if not tool_root_text and explicit_tool and os.path.isabs(explicit_tool):
+        tool_root_text = str(Path(explicit_tool).parent)
+    tool_root = (
+        Path(tool_root_text)
+        if tool_root_text
+        else Path.cwd() / ".pb-orca-tool-root-not-supplied"
+    )
+    pbl_path = (
+        Path(input_state.pbl_path)
+        if input_state.pbl_path.strip()
+        else Path.cwd() / ".pb-orca-input-not-supplied.pbl"
+    )
+    output_directory = (
+        Path(input_state.pbl_output_directory)
+        if input_state.pbl_output_directory.strip()
+        else None
+    )
+    ascii_stage_root = (
+        Path(input_state.orca_ascii_stage_root)
+        if input_state.orca_ascii_stage_root.strip()
+        else None
+    )
+    action = input_state.pbl_export_action.strip().casefold() or "list"
+    object_name = input_state.pbl_object_name.strip() or None
+    request = OrcaRequest(
+        tool_root=tool_root,
+        version=selected_version,
+        pbl_path=pbl_path,
+        action=action,
+        object_name=object_name,
+        output_directory=output_directory,
+        ascii_stage_root=ascii_stage_root,
+    )
+    decision = PbOrcaRuntime().probe(request)
+    probe = decision.to_dict()
+    probe.update(
+        {
+            "operation": "probe",
+            "executed": False,
+            "contract_owner": "src.skills.pb_orca_runtime.PbOrcaRuntime",
+        }
+    )
+    request_contract = {
+        "tool_root": str(request.tool_root),
+        "version": request.version,
+        "pbl_path": str(request.pbl_path),
+        "action": request.action,
+        "object_name": request.object_name,
+        "output_directory": (
+            str(request.output_directory) if request.output_directory else None
+        ),
+        "ascii_stage_root": (
+            str(request.ascii_stage_root) if request.ascii_stage_root else None
+        ),
+    }
+    return {
+        "capability_probe": probe,
+        "selected_explicit_version": selected_version,
+        "tool_execution_intent": {
+            "status": "planned" if decision.ready else "blocked",
+            "requested_action": action,
+            "probe_only": True,
+            "conversion_executed": False,
+            "conversion_allowed_after_probe": decision.ready,
+        },
+        "fallback": {
+            "status": "standalone_required" if not decision.ready else "not_needed",
+            "reason_code": decision.reason_code if not decision.ready else "",
+            "order": list(decision.fallback_order),
+        },
+        "invocation_contract": {
+            "contract_owner": "src.skills.pb_orca_runtime",
+            "request_type": "OrcaRequest",
+            "probe_entrypoint": "PbOrcaRuntime.probe",
+            "conversion_entrypoint": "PbOrcaRuntime.convert",
+            "request": request_contract,
+            "typed_argument_transport": True,
+            "execution_logic_duplicated": False,
+        },
+    }
+
+
+def _acquisition_issue(code: str, field: str, message: str) -> Dict[str, Any]:
+    return {
+        "code": code,
+        "severity": "error",
+        "field": field,
+        "message": message,
+    }
+
+
+def _explicit_acquisition_payload(
+    state: MigrationInputState | Mapping[str, Any] | None,
+    input_state: MigrationInputState,
+) -> Dict[str, Any] | None:
+    if isinstance(state, Mapping):
+        if "acquisition_preflight" in state:
+            value = state.get("acquisition_preflight")
+            return dict(value) if isinstance(value, Mapping) else {}
+        if "gm32_acquisition" in state:
+            value = state.get("gm32_acquisition")
+            return dict(value) if isinstance(value, Mapping) else {}
+        migration_contract = state.get("migration_preflight_contract")
+        if isinstance(migration_contract, Mapping) and "acquisition" in migration_contract:
+            value = migration_contract.get("acquisition")
+            return dict(value) if isinstance(value, Mapping) else {}
+        direct_keys = {
+            key: state[key]
+            for key in (
+                "pblscripter",
+                "orca_runtime",
+                "exported_objects",
+                "requested_pbl",
+                "requested_objects",
+            )
+            if key in state
+        }
+        if direct_keys:
+            return direct_keys
+    if input_state.acquisition_preflight_supplied:
+        return dict(input_state.acquisition_preflight)
+    return None
+
+
+def _explicit_tool_identity_issues(
+    receipt: Any,
+    *,
+    expected_tool_id: str,
+    field: str,
+) -> List[Dict[str, Any]]:
+    if not isinstance(receipt, Mapping):
+        return []
+    tool_id = str(receipt.get("tool_id") or "").strip().casefold()
+    tool_version = str(receipt.get("tool_version") or "").strip()
+    receipt_id = str(receipt.get("receipt_id") or "").strip()
+    verified = receipt.get("verified") is True
+    expected_ids = {
+        "pblscripter": {"pblscripter", "export-pbl"},
+        "orca": {"orca", "powerbuilder-orca"},
+    }[expected_tool_id]
+    issues: List[Dict[str, Any]] = []
+    if tool_id not in expected_ids or not tool_version or not receipt_id or not verified:
+        issues.append(
+            _acquisition_issue(
+                f"gm32_{expected_tool_id}_identity_invalid",
+                field,
+                "The supplied tool needs an explicit verified tool id, version, and receipt id.",
+            )
+        )
+    if (
+        expected_tool_id == "orca"
+        and tool_version
+        and str(receipt.get("selected_version") or "").strip() != tool_version
+    ):
+        issues.append(
+            _acquisition_issue(
+                "gm32_orca_identity_invalid",
+                f"{field}.selected_version",
+                "The selected ORCA version must equal the verified tool version.",
+            )
+        )
+    return issues
+
+
+def _validate_explicit_acquisition_scope(
+    payload: Mapping[str, Any],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    requested_pbl = payload.get("requested_pbl")
+    requested_pbl_metadata: Dict[str, Any] = {}
+    if not isinstance(requested_pbl, Mapping):
+        issues.append(
+            _acquisition_issue(
+                "gm32_requested_pbl_invalid",
+                "requested_pbl",
+                "One exact requested PBL path and SHA-256 receipt is required.",
+            )
+        )
+    else:
+        pbl_path = str(requested_pbl.get("path") or "").strip()
+        expected_sha = _normalized_sha256(requested_pbl.get("sha256"))
+        if not _absolute_path_key(pbl_path) or not expected_sha:
+            issues.append(
+                _acquisition_issue(
+                    "gm32_requested_pbl_invalid",
+                    "requested_pbl",
+                    "The requested PBL path must be absolute and carry a SHA-256.",
+                )
+            )
+        else:
+            try:
+                resolved, size, actual_sha, _ = _read_bounded_artifact(
+                    pbl_path,
+                    maximum_bytes=PB_PBL_MAX_BYTES,
+                    collect_bytes=False,
+                )
+                requested_pbl_metadata = {
+                    "path": str(resolved),
+                    "sha256": f"sha256:{actual_sha}",
+                    "size_bytes": size,
+                }
+                if actual_sha != expected_sha:
+                    issues.append(
+                        _acquisition_issue(
+                            "gm32_requested_pbl_invalid",
+                            "requested_pbl.sha256",
+                            "The requested PBL SHA-256 does not match current readback.",
+                        )
+                    )
+            except _ArtifactReadError as exc:
+                issues.append(
+                    _acquisition_issue(
+                        "gm32_requested_pbl_invalid",
+                        "requested_pbl.path",
+                        f"The requested PBL could not be read exactly: {exc.code}.",
+                    )
+                )
+
+    requested_values = payload.get("requested_objects")
+    requested_objects: List[Dict[str, str]] = []
+    requested_keys: set[tuple[str, str]] = set()
+    if (
+        not isinstance(requested_values, Sequence)
+        or isinstance(requested_values, (str, bytes))
+        or not requested_values
+        or len(requested_values) > 128
+    ):
+        issues.append(
+            _acquisition_issue(
+                "gm32_requested_object_set_invalid",
+                "requested_objects",
+                "A bounded non-empty requested PB object set is required.",
+            )
+        )
+    else:
+        for index, item in enumerate(requested_values):
+            if not isinstance(item, Mapping):
+                issues.append(
+                    _acquisition_issue(
+                        "gm32_requested_object_set_invalid",
+                        f"requested_objects[{index}]",
+                        "Requested PB objects must be objects with name and type.",
+                    )
+                )
+                continue
+            name = str(item.get("object_name") or item.get("name") or "").strip()
+            object_type = str(item.get("object_type") or item.get("type") or "").strip().casefold()
+            key = (name.casefold(), object_type)
+            if not name or not object_type or key in requested_keys:
+                issues.append(
+                    _acquisition_issue(
+                        "gm32_requested_object_set_invalid",
+                        f"requested_objects[{index}]",
+                        "Requested PB object names and types must be non-empty and unique.",
+                    )
+                )
+                continue
+            requested_keys.add(key)
+            requested_objects.append({"object_name": name, "object_type": object_type})
+
+    exported_objects = payload.get("exported_objects")
+    if isinstance(exported_objects, Sequence) and not isinstance(exported_objects, (str, bytes)) and exported_objects:
+        export_keys: set[tuple[str, str]] = set()
+        expected_path = _absolute_path_key(requested_pbl_metadata.get("path", ""))
+        expected_sha = _normalized_sha256(requested_pbl_metadata.get("sha256", ""))
+        for index, receipt in enumerate(exported_objects):
+            if not isinstance(receipt, Mapping):
+                continue
+            source_path = _absolute_path_key(
+                receipt.get("source_pbl_path") or receipt.get("pbl_path") or ""
+            )
+            source_sha = _normalized_sha256(receipt.get("exported_from_sha256"))
+            object_name = str(receipt.get("object_name") or "").strip()
+            object_type = str(receipt.get("object_type") or "").strip().casefold()
+            export_keys.add((object_name.casefold(), object_type))
+            if (
+                not source_path
+                or source_path != expected_path
+                or not source_sha
+                or source_sha != expected_sha
+                or not object_name
+                or not object_type
+            ):
+                issues.append(
+                    _acquisition_issue(
+                        "gm32_export_request_binding_mismatch",
+                        f"exported_objects[{index}]",
+                        "Current exports must bind to the exact requested PBL path, hash, object name, and object type.",
+                    )
+                )
+        if export_keys != requested_keys:
+            issues.append(
+                _acquisition_issue(
+                    "gm32_export_request_binding_mismatch",
+                    "exported_objects",
+                    "The current export receipt set must equal the requested PB object set.",
+                )
+            )
+
+    return issues, {
+        "requested_pbl": requested_pbl_metadata,
+        "requested_objects": requested_objects,
+    }
+
+
+def _plan_explicit_gm32_acquisition(payload: Mapping[str, Any]) -> Dict[str, Any]:
+    pblscripter = payload.get("pblscripter")
+    orca_runtime = payload.get("orca_runtime")
+    exported_objects = payload.get("exported_objects", ())
+    pbl_identity_issues = _explicit_tool_identity_issues(
+        pblscripter,
+        expected_tool_id="pblscripter",
+        field="pblscripter",
+    )
+    orca_identity_issues = _explicit_tool_identity_issues(
+        orca_runtime,
+        expected_tool_id="orca",
+        field="orca_runtime",
+    )
+    planner_pblscripter = pblscripter
+    if pbl_identity_issues and isinstance(pblscripter, Mapping):
+        planner_pblscripter = {**dict(pblscripter), "usable": False}
+    planner_orca = orca_runtime
+    if orca_identity_issues and isinstance(orca_runtime, Mapping):
+        planner_orca = {**dict(orca_runtime), "usable": False}
+    planner = plan_gm32_acquisition(
+        pblscripter=planner_pblscripter if isinstance(planner_pblscripter, Mapping) else None,
+        orca_runtime=planner_orca if isinstance(planner_orca, Mapping) else None,
+        exported_objects=(
+            exported_objects
+            if isinstance(exported_objects, Sequence)
+            and not isinstance(exported_objects, (str, bytes))
+            else ()
+        ),
+        requested_pbl=(
+            payload.get("requested_pbl")
+            if isinstance(payload.get("requested_pbl"), Mapping)
+            else None
+        ),
+        requested_objects=(
+            payload.get("requested_objects")
+            if isinstance(payload.get("requested_objects"), Sequence)
+            and not isinstance(payload.get("requested_objects"), (str, bytes))
+            else None
+        ),
+    )
+    scope_issues, request_scope = _validate_explicit_acquisition_scope(payload)
+    selected = str(planner.metadata.get("selected_method") or "unresolved")
+    failed_identity_issues = [*pbl_identity_issues, *orca_identity_issues]
+    blocking_identity_issues = failed_identity_issues if selected == "unresolved" else []
+    issues = [
+        *[dict(item) for item in planner.issues],
+        *scope_issues,
+        *blocking_identity_issues,
+    ]
+    issues.sort(key=lambda item: (str(item.get("code", "")), str(item.get("field", ""))))
+    metadata = {
+        **dict(planner.metadata),
+        "status": "passed" if not issues else "blocked",
+        "request_scope": request_scope,
+        "supplemental_attempt_issues": failed_identity_issues,
+        "issue_codes": sorted({str(item.get("code", "")) for item in issues}),
+        "executed_process_count": 0,
+        "orca_executed": False,
+        "explicit_inputs_only": True,
+    }
+    return {
+        "success": not issues,
+        "issue_codes": list(metadata["issue_codes"]),
+        "issues": issues,
+        "metadata": metadata,
+    }
+
+
 def build_pbl_export_strategy(state: MigrationInputState | Dict[str, Any] | None = None) -> Dict[str, Any]:
     """Choose the portable PBL export provider and version handling strategy."""
     input_state = _coerce_state(state)
+    acquisition_payload = _explicit_acquisition_payload(state, input_state)
+    acquisition_preflight = (
+        _plan_explicit_gm32_acquisition(acquisition_payload)
+        if acquisition_payload is not None
+        else None
+    )
     explicit_tool = input_state.pbl_export_tool.strip().lower()
     pb_version = input_state.pb_version.strip()
     runtime_lookup_required = False
-    if input_state.has_exported_pb_sources:
+    parity_readiness = _pbl_parity_readiness(input_state)
+    orca_runtime_plan = _build_orca_runtime_plan(input_state)
+    if acquisition_preflight is not None:
+        selected_method = str(
+            acquisition_preflight.get("metadata", {}).get("selected_method")
+            or "unresolved"
+        )
+        provider = {
+            "pblscripter": "pblscripter",
+            "orca": "orca",
+            "current_exports": "pre_exported_source",
+        }.get(selected_method, "unresolved")
+        status = (
+            "available"
+            if acquisition_preflight["success"] and selected_method in {"pblscripter", "orca"}
+            else "not_needed"
+            if acquisition_preflight["success"] and selected_method == "current_exports"
+            else "blocked"
+        )
+        confidence = "strong" if acquisition_preflight["success"] else "none"
+        reason = (
+            "The deterministic GM-32 planner selected the first usable explicit acquisition rung."
+            if acquisition_preflight["success"]
+            else "The explicit GM-32 acquisition ladder did not produce an authorized rung."
+        )
+    elif input_state.has_exported_pb_sources:
         provider = "pre_exported_source"
         status = "not_needed"
         confidence = "strong"
@@ -2164,8 +2932,16 @@ def build_pbl_export_strategy(state: MigrationInputState | Dict[str, Any] | None
         "license/SySAM failure",
         "encoding damage in exported source",
     ]
+    effective_provider = (
+        provider
+        if acquisition_preflight is not None
+        else "standalone_fallback"
+        if orca_runtime_plan["fallback"].get("status") == "standalone_required"
+        else provider
+    )
     return {
         "provider": provider,
+        "effective_provider": effective_provider,
         "status": status,
         "confidence": confidence,
         "reason": reason,
@@ -2182,14 +2958,31 @@ def build_pbl_export_strategy(state: MigrationInputState | Dict[str, Any] | None
         "operations": operations,
         "blocked_conditions": blocked_conditions,
         "runtime_lookup_required": runtime_lookup_required,
+        "parity_readiness": parity_readiness,
+        "parity_ready": parity_readiness["parity_ready"],
+        "claim_scope": parity_readiness["claim_scope"],
+        "capability_probe": dict(orca_runtime_plan["capability_probe"]),
+        "selected_explicit_version": orca_runtime_plan["selected_explicit_version"],
+        "tool_execution_intent": dict(orca_runtime_plan["tool_execution_intent"]),
+        "fallback": dict(orca_runtime_plan["fallback"]),
+        "invocation_contract": dict(orca_runtime_plan["invocation_contract"]),
+        "acquisition_preflight": acquisition_preflight,
     }
 
 
-def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None = None) -> Dict[str, Any]:
+def classify_migration_mode(
+    state: MigrationInputState | Dict[str, Any] | None = None,
+    *,
+    pbl_export_strategy: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Classify whether the migration run is standalone, described-behavior, partial-reference, full-reference, or pasted-source."""
     input_state = _coerce_state(state)
     has_csharp_reference = input_state.has_target_csharp_samples or input_state.has_ty_csharp_samples
-    export_strategy = build_pbl_export_strategy(input_state)
+    export_strategy = (
+        dict(pbl_export_strategy)
+        if isinstance(pbl_export_strategy, Mapping)
+        else build_pbl_export_strategy(input_state)
+    )
     if input_state.has_exported_pb_sources and has_csharp_reference and input_state.has_sp_style_reference:
         mode = "full-reference"
         confidence = 0.9 if input_state.has_live_db_access else 0.82
@@ -2220,9 +3013,9 @@ def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None =
     if input_state.has_exported_pb_sources:
         strong_evidence.append("exported .sru/.srw/.srd source")
     if has_csharp_reference:
-        strong_evidence.append("target-project C# samples")
+        strong_evidence.append("target-project behavior, field, dependency, and API availability evidence")
     if input_state.has_sp_style_reference:
-        strong_evidence.append("packaged KH SP style reference")
+        strong_evidence.append("packaged fixed style contract identity")
     if input_state.has_live_db_access:
         strong_evidence.append("live DB schema/procedure verification")
     if input_state.has_pblscripter and not input_state.has_exported_pb_sources:
@@ -2244,12 +3037,784 @@ def classify_migration_mode(state: MigrationInputState | Dict[str, Any] | None =
         "weak_evidence": weak_evidence,
         "pbl_export_strategy": export_strategy,
         "runtime_lookup_required": export_strategy["runtime_lookup_required"],
+        "parity_readiness": dict(export_strategy["parity_readiness"]),
+        "claim_scope": export_strategy["claim_scope"],
         "fallback_policy": (
             "Use PblScripter when available, direct ORCA when PblScripter is missing, already-exported "
             ".sru/.srw/.srd/.srm files when export tooling is absent, then pasted source or described behavior. "
-            "Use bundled references as the portable baseline and do not claim source parity without exported or pasted PB source."
+            "Use the packaged fixed style contract as the only style authority. Target C# and PB source may prove behavior, fields, dependencies, and API availability only."
         ),
     }
+
+
+def _xml_local_name(tag: str) -> str:
+    return str(tag or "").rsplit("}", 1)[-1]
+
+
+def _project_reference_version(include: str, element: ET.Element) -> str:
+    explicit = str(element.attrib.get("Version") or "").strip()
+    if explicit:
+        return explicit
+    for child in list(element):
+        if _xml_local_name(child.tag) == "Version" and str(child.text or "").strip():
+            return str(child.text or "").strip()
+    match = re.search(r"(?:^|,)\s*Version\s*=\s*([^,]+)", str(include or ""), re.IGNORECASE)
+    return str(match.group(1)).strip() if match else ""
+
+
+def _parse_target_project_contract(project_path: Path, project_text: str) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    issues: List[Dict[str, Any]] = []
+    if re.search(r"<!\s*(?:DOCTYPE|ENTITY)\b", project_text, re.IGNORECASE):
+        return [
+            {
+                "code": "target_project_xml_entity_forbidden",
+                "severity": "error",
+                "message": "Target project XML must not contain DTD or entity declarations.",
+            }
+        ], {}
+    try:
+        root = ET.fromstring(project_text)
+    except ET.ParseError as exc:
+        return [
+            {
+                "code": "target_project_xml_invalid",
+                "severity": "error",
+                "detail": str(exc),
+                "message": "Target project must be valid MSBuild XML.",
+            }
+        ], {}
+
+    properties: Dict[str, str] = {}
+    references: List[Dict[str, str]] = []
+    compile_includes: List[str] = []
+    compile_removes: List[str] = []
+    sdk_names: List[str] = []
+    root_sdk = str(root.attrib.get("Sdk") or "").strip()
+    if root_sdk:
+        sdk_names.append(root_sdk)
+    for element in root.iter():
+        name = _xml_local_name(element.tag)
+        if name in {
+            "TargetFramework",
+            "TargetFrameworks",
+            "TargetFrameworkVersion",
+            "TargetFrameworkProfile",
+            "AssemblyName",
+            "RootNamespace",
+            "EnableDefaultCompileItems",
+        }:
+            value = str(element.text or "").strip()
+            if value:
+                properties[name] = value
+        if name == "Sdk":
+            sdk_name = str(element.attrib.get("Name") or element.text or "").strip()
+            if sdk_name:
+                sdk_names.append(sdk_name)
+        if name == "Compile":
+            include = str(element.attrib.get("Include") or "").strip()
+            remove = str(element.attrib.get("Remove") or "").strip()
+            if include:
+                compile_includes.append(include.replace("/", "\\"))
+            if remove:
+                compile_removes.append(remove.replace("/", "\\"))
+        if name not in {"Reference", "PackageReference", "ProjectReference"}:
+            continue
+        include = str(element.attrib.get("Include") or element.attrib.get("Update") or "").strip()
+        if not include:
+            continue
+        reference_name = include.split(",", 1)[0].strip()
+        hint_path = ""
+        for child in list(element):
+            if _xml_local_name(child.tag) == "HintPath":
+                raw_hint = str(child.text or "").strip()
+                if raw_hint:
+                    hint_path = str((project_path.parent / raw_hint).resolve())
+                break
+        references.append(
+            {
+                "kind": name,
+                "include": include,
+                "name": reference_name,
+                "version": _project_reference_version(include, element),
+                "hint_path": hint_path,
+            }
+        )
+    framework = (
+        properties.get("TargetFramework")
+        or properties.get("TargetFrameworks")
+        or properties.get("TargetFrameworkVersion")
+        or ""
+    )
+    if not framework:
+        issues.append(
+            {
+                "code": "target_project_framework_missing",
+                "severity": "error",
+                "message": "The exact target framework must be present in the bound project file.",
+            }
+        )
+    return issues, {
+        "project_path": str(project_path.resolve()),
+        "project_name": properties.get("AssemblyName") or project_path.stem,
+        "root_namespace": properties.get("RootNamespace", ""),
+        "target_framework": framework,
+        "target_framework_profile": properties.get("TargetFrameworkProfile", ""),
+        "references": sorted(
+            references,
+            key=lambda item: (
+                item["kind"].casefold(),
+                item["name"].casefold(),
+                item["version"].casefold(),
+                item["hint_path"].casefold(),
+            ),
+        ),
+        "compile_includes": sorted(set(compile_includes), key=str.casefold),
+        "compile_removes": sorted(set(compile_removes), key=str.casefold),
+        "sdk_names": sorted(set(sdk_names), key=str.casefold),
+        "sdk_style": bool(sdk_names),
+        "enable_default_compile_items": (
+            properties.get("EnableDefaultCompileItems", "true").casefold() != "false"
+        ),
+    }
+
+
+def _target_project_source_inclusion(
+    project_contract: Mapping[str, Any],
+    source_path: str | Path,
+) -> str:
+    """Prove one exact source path without enumerating the project directory."""
+    project_path = Path(str(project_contract.get("project_path") or ""))
+    source_key = _absolute_path_key(source_path)
+    if not source_key or not project_path.is_absolute():
+        return ""
+    for include in project_contract.get("compile_includes", []) or []:
+        raw = str(include or "").strip()
+        if not raw or "$(" in raw or any(marker in raw for marker in ("*", "?")):
+            continue
+        included_path = project_path.parent / raw.replace("\\", os.sep)
+        if _absolute_path_key(included_path) == source_key:
+            return "explicit"
+    if not (
+        project_contract.get("sdk_style")
+        and project_contract.get("enable_default_compile_items") is True
+    ):
+        return ""
+    try:
+        source = Path(source_path).resolve(strict=False)
+        project_root = project_path.parent.resolve(strict=False)
+        relative = source.relative_to(project_root)
+    except (OSError, ValueError):
+        return ""
+    if source.suffix.casefold() != ".cs":
+        return ""
+    relative_text = str(relative).replace("/", "\\")
+    relative_key = relative_text.casefold()
+    for remove in project_contract.get("compile_removes", []) or []:
+        pattern = str(remove or "").strip().replace("/", "\\").casefold()
+        if pattern and fnmatchcase(relative_key, pattern):
+            return ""
+    return "sdk-default"
+
+
+def _csharp_namespace_for_type(source: str, position: int) -> str:
+    matches = list(
+        re.finditer(
+            r"\bnamespace\s+([A-Za-z_][A-Za-z0-9_.]*)\s*(?:;|\{)",
+            source[:position],
+        )
+    )
+    return matches[-1].group(1) if matches else ""
+
+
+def _parse_csharp_project_type_facts(source_text: str) -> List[Dict[str, Any]]:
+    source = str(source_text or "")
+    structural = _lex_csharp_non_code(source).code
+    facts: List[Dict[str, Any]] = []
+    pattern = re.compile(
+        r"\b(?:(?:public|internal|protected|private|abstract|sealed|static|partial)\s+)*"
+        r"class\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*"
+        r"(?:\:\s*(?P<bases>[^\{\r\n]+))?\s*\{"
+    )
+    for match in pattern.finditer(structural):
+        body_start = structural.find("{", match.start())
+        if body_start < 0:
+            continue
+        depth = 0
+        body_end = -1
+        for offset in range(body_start, len(structural)):
+            if structural[offset] == "{":
+                depth += 1
+            elif structural[offset] == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = offset + 1
+                    break
+        if body_end < 0:
+            continue
+        namespace = _csharp_namespace_for_type(structural, match.start())
+        type_name = match.group("name")
+        full_type = f"{namespace}.{type_name}" if namespace else type_name
+        raw_bases = [
+            re.sub(r"\s+", "", item).replace("global::", "")
+            for item in str(match.group("bases") or "").split(",")
+            if str(item).strip()
+        ]
+        body = source[body_start:body_end]
+        properties = sorted(
+            set(
+                re.findall(
+                    r"\b(?:public|protected|internal)\s+(?:virtual\s+|override\s+)?"
+                    r"[A-Za-z_][A-Za-z0-9_.<>?\[\]]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{",
+                    body,
+                )
+            )
+        )
+        methods = sorted(
+            set(
+                re.findall(
+                    r"\b(?:public|protected|internal)\s+(?:virtual\s+|override\s+|static\s+)*"
+                    r"[A-Za-z_][A-Za-z0-9_.<>?\[\]]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+                    body,
+                )
+            )
+        )
+        defaults: Dict[str, str] = {}
+        for assignment in re.finditer(
+            r"(?P<property>(?:\bthis\.)?[A-Za-z_][A-Za-z0-9_.]*)\s*=\s*"
+            r"(?P<value>\"(?:\\.|[^\"])*\"|true|false|-?\d+|[A-Za-z_][A-Za-z0-9_.]*)\s*;",
+            body,
+        ):
+            defaults.setdefault(
+                assignment.group("property"),
+                re.sub(r"\s+", "", assignment.group("value")),
+            )
+        facts.append(
+            {
+                "name": type_name,
+                "full_type": full_type,
+                "namespace": namespace,
+                "declared_bases": raw_bases,
+                "properties": properties,
+                "methods": methods,
+                "default_property_facts": defaults,
+            }
+        )
+    return facts
+
+
+def _target_project_baseline_hash(payload: Mapping[str, Any]) -> str:
+    canonical_payload = {
+        key: value
+        for key, value in dict(payload).items()
+        if key not in {"baseline_sha256", "status", "issues"}
+    }
+    canonical = json.dumps(
+        canonical_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _read_exact_artifact_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    role: str,
+    maximum_bytes: int,
+    text: bool,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any], str | bytes]:
+    path_value = str(receipt.get("path") or "").strip()
+    expected = _normalized_sha256(receipt.get("sha256"))
+    issues: List[Dict[str, Any]] = []
+    if not path_value or not os.path.isabs(path_value) or not expected:
+        return [
+            {
+                "code": f"target_project_{role}_receipt_invalid",
+                "severity": "error",
+                "message": "Target project artifact receipts require an absolute path and exact SHA-256.",
+            }
+        ], {}, "" if text else b""
+    try:
+        if text:
+            path, size, digest, content = _read_bounded_text_artifact(
+                path_value,
+                maximum_bytes=maximum_bytes,
+            )
+        else:
+            path, size, digest, content = _read_bounded_artifact(
+                path_value,
+                maximum_bytes=maximum_bytes,
+                collect_bytes=False,
+            )
+    except _ArtifactReadError as exc:
+        return [
+            {
+                "code": f"target_project_{role}_artifact_unreadable",
+                "severity": "error",
+                "detail_code": exc.code,
+                "message": "A target project artifact receipt could not be read safely.",
+            }
+        ], {}, "" if text else b""
+    actual = f"sha256:{digest}"
+    if digest != expected:
+        issues.append(
+            {
+                "code": f"target_project_{role}_artifact_hash_mismatch",
+                "severity": "error",
+                "expected": f"sha256:{expected}",
+                "actual": actual,
+                "message": "Target project artifact content no longer matches its receipt.",
+            }
+        )
+    return issues, {
+        "role": role,
+        "path": str(path),
+        "sha256": actual,
+        "size_bytes": size,
+    }, content
+
+
+def build_target_project_baseline(
+    project_path: str | Path,
+    project_sha256: str,
+    *,
+    source_artifacts: Iterable[Mapping[str, Any]],
+    assembly_artifacts: Iterable[Mapping[str, Any]] = (),
+    generated_surface_base_type: str,
+    target_project_controls: Mapping[str, str] | None = None,
+) -> HarnessResult:
+    """Build an immutable target-project UI baseline from exact, non-recursive artifact receipts."""
+    project_receipt = {"path": str(project_path), "sha256": str(project_sha256)}
+    project_issues, project_binding, project_text = _read_exact_artifact_receipt(
+        project_receipt,
+        role="project",
+        maximum_bytes=TARGET_PROJECT_FILE_MAX_BYTES,
+        text=True,
+    )
+    issues = list(project_issues)
+    project_contract: Dict[str, Any] = {}
+    project_resolved = Path(project_binding["path"]) if project_binding.get("path") else Path()
+    if project_binding and isinstance(project_text, str):
+        parse_issues, project_contract = _parse_target_project_contract(
+            project_resolved,
+            project_text,
+        )
+        issues.extend(parse_issues)
+
+    source_bindings: List[Dict[str, Any]] = []
+    type_facts: List[Dict[str, Any]] = []
+    for receipt in source_artifacts or ():
+        receipt_issues, binding, source = _read_exact_artifact_receipt(
+            receipt,
+            role="source",
+            maximum_bytes=TARGET_PROJECT_FILE_MAX_BYTES,
+            text=True,
+        )
+        issues.extend(receipt_issues)
+        inclusion = ""
+        if binding and project_contract:
+            inclusion = _target_project_source_inclusion(
+                project_contract,
+                binding["path"],
+            )
+            binding["project_inclusion"] = inclusion or "unproven"
+            if not inclusion:
+                issues.append(
+                    {
+                        "code": "target_project_source_not_in_project",
+                        "severity": "error",
+                        "path": binding["path"],
+                        "message": "Every custom-control source receipt must be explicitly included or covered by SDK default compile items.",
+                    }
+                )
+        if binding:
+            source_bindings.append(binding)
+        if binding and isinstance(source, str) and not receipt_issues and inclusion:
+            facts = _parse_csharp_project_type_facts(source)
+            if not facts:
+                issues.append(
+                    {
+                        "code": "target_project_source_type_facts_missing",
+                        "severity": "error",
+                        "path": binding["path"],
+                        "message": "A bound target-project source artifact must expose class/type facts.",
+                    }
+                )
+            for item in facts:
+                item["artifact_path"] = binding["path"]
+                item["artifact_sha256"] = binding["sha256"]
+                type_facts.append(item)
+    if not source_bindings:
+        issues.append(
+            {
+                "code": "target_project_source_receipt_required",
+                "severity": "error",
+                "message": "Target-project control and inheritance selection requires at least one exact source receipt.",
+            }
+        )
+
+    assembly_bindings: List[Dict[str, Any]] = []
+    reference_names = {
+        str(item.get("name") or "").casefold(): item
+        for item in project_contract.get("references", [])
+    }
+    for receipt in assembly_artifacts or ():
+        receipt_issues, binding, _ = _read_exact_artifact_receipt(
+            receipt,
+            role="assembly",
+            maximum_bytes=TARGET_PROJECT_ASSEMBLY_MAX_BYTES,
+            text=False,
+        )
+        issues.extend(receipt_issues)
+        if not binding:
+            continue
+        reference_name = str(receipt.get("reference_name") or Path(binding["path"]).stem).strip()
+        reference = reference_names.get(reference_name.casefold())
+        if reference is None:
+            issues.append(
+                {
+                    "code": "target_project_assembly_not_referenced",
+                    "severity": "error",
+                    "reference_name": reference_name,
+                    "message": "Every assembly receipt must bind to an exact project Reference or PackageReference.",
+                }
+            )
+        elif reference.get("hint_path") and _absolute_path_key(reference["hint_path"]) != _absolute_path_key(binding["path"]):
+            issues.append(
+                {
+                    "code": "target_project_assembly_hint_path_mismatch",
+                    "severity": "error",
+                    "reference_name": reference_name,
+                    "message": "Assembly receipt path must match the project HintPath.",
+                }
+            )
+        binding["reference_name"] = reference_name
+        binding["reference_version"] = str((reference or {}).get("version") or "")
+        assembly_bindings.append(binding)
+
+    types_by_name = {str(item["full_type"]).casefold(): item for item in type_facts}
+    short_types: Dict[str, List[Dict[str, Any]]] = {}
+    for item in type_facts:
+        short_types.setdefault(str(item["name"]).casefold(), []).append(item)
+
+    standard_types = {
+        "form": "System.Windows.Forms.Form",
+        "system.windows.forms.form": "System.Windows.Forms.Form",
+        "usercontrol": "System.Windows.Forms.UserControl",
+        "system.windows.forms.usercontrol": "System.Windows.Forms.UserControl",
+    }
+
+    def resolve_bound_type(value: str) -> str:
+        requested = str(value or "").strip().replace("global::", "")
+        standard = standard_types.get(requested.casefold())
+        if standard:
+            return standard
+        if requested.casefold() in types_by_name:
+            return str(types_by_name[requested.casefold()]["full_type"])
+        matches = short_types.get(requested.casefold(), [])
+        return str(matches[0]["full_type"]) if len(matches) == 1 else ""
+
+    surface_kinds = {
+        "form": "form",
+        "system.windows.forms.form": "form",
+        "xtraform": "form",
+        "devexpress.xtraeditors.xtraform": "form",
+        "usercontrol": "usercontrol",
+        "system.windows.forms.usercontrol": "usercontrol",
+        "xtrausercontrol": "usercontrol",
+        "devexpress.xtraeditors.xtrausercontrol": "usercontrol",
+    }
+
+    def resolve_surface_kind(value: str, trail: tuple[str, ...] = ()) -> str:
+        requested = str(value or "").strip().replace("global::", "")
+        direct_kind = surface_kinds.get(requested.casefold())
+        if direct_kind:
+            return direct_kind
+        resolved = resolve_bound_type(requested)
+        key = resolved.casefold()
+        if not resolved or key in trail:
+            return ""
+        fact = types_by_name.get(key)
+        if not fact:
+            return ""
+        for declared_base in fact.get("declared_bases", [])[:1]:
+            kind = resolve_surface_kind(declared_base, (*trail, key))
+            if kind:
+                return kind
+        return ""
+
+    for fact in type_facts:
+        inheritance: List[str] = []
+        current = str(fact["full_type"])
+        seen: set[str] = set()
+        while current and current.casefold() not in seen:
+            seen.add(current.casefold())
+            current_fact = types_by_name.get(current.casefold())
+            if not current_fact or not current_fact.get("declared_bases"):
+                break
+            declared = str(current_fact["declared_bases"][0])
+            resolved = resolve_bound_type(declared) or declared
+            inheritance.append(resolved)
+            current = resolved
+        fact["inheritance"] = inheritance
+
+    resolved_base_type = resolve_bound_type(generated_surface_base_type)
+    generated_surface_kind = ""
+    if not resolved_base_type:
+        issues.append(
+            {
+                "code": "target_project_surface_base_type_unproven",
+                "severity": "error",
+                "requested": str(generated_surface_base_type or ""),
+                "message": "The generated Form/UserControl base type must resolve from a bound source artifact.",
+            }
+        )
+    else:
+        generated_surface_kind = resolve_surface_kind(resolved_base_type)
+        if not generated_surface_kind:
+            issues.append(
+                {
+                    "code": "target_project_surface_base_type_not_form_or_usercontrol",
+                    "severity": "error",
+                    "requested": str(generated_surface_base_type or ""),
+                    "resolved": resolved_base_type,
+                    "message": "The generated surface base must inherit a validated Form or UserControl family.",
+                }
+            )
+    resolved_controls: Dict[str, str] = {}
+    resolved_control_facts: Dict[str, Dict[str, Any]] = {}
+    for role, requested_type in dict(target_project_controls or {}).items():
+        resolved = resolve_bound_type(requested_type)
+        if not resolved or resolved.casefold().startswith("system.windows.forms."):
+            issues.append(
+                {
+                    "code": "target_project_control_type_unproven",
+                    "severity": "error",
+                    "role": str(role),
+                    "requested": str(requested_type),
+                    "message": "Target-project controls must resolve to a custom type in an exact source receipt.",
+                }
+            )
+        else:
+            normalized_role = str(role).lower()
+            resolved_controls[normalized_role] = resolved
+            resolved_control_facts[normalized_role] = dict(
+                types_by_name[resolved.casefold()]
+            )
+
+    baseline = {
+        "schema_version": "kh.pb-target-project-baseline.v1",
+        "project": {
+            **project_binding,
+            **project_contract,
+        },
+        "source_artifacts": source_bindings,
+        "assembly_artifacts": assembly_bindings,
+        "type_facts": sorted(type_facts, key=lambda item: str(item["full_type"]).casefold()),
+        "generated_surface_base_type": resolved_base_type,
+        "generated_surface_kind": generated_surface_kind,
+        "target_project_controls": dict(sorted(resolved_controls.items())),
+        "target_project_control_facts": dict(sorted(resolved_control_facts.items())),
+    }
+    baseline["baseline_sha256"] = _target_project_baseline_hash(baseline)
+    passed = not issues
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "status": "passed" if passed else "blocked",
+        "target_project_baseline": baseline,
+        "issues": issues,
+        "recursive_search_performed": False,
+        "token_optimizer_status": "passthrough",
+    }
+    return HarnessResult(
+        success=passed,
+        stdout=json.dumps(
+            {
+                "status": metadata["status"],
+                "baseline_sha256": baseline["baseline_sha256"],
+                "type_count": len(type_facts),
+            },
+            sort_keys=True,
+        ),
+        stderr="" if passed else "Target project baseline could not be proven.",
+        exit_code=0 if passed else 1,
+        metadata=metadata,
+    )
+
+
+def _coerce_target_project_baseline(value: Any) -> Dict[str, Any]:
+    if isinstance(value, HarnessResult):
+        return dict(value.metadata.get("target_project_baseline") or {})
+    if isinstance(value, Mapping):
+        if isinstance(value.get("target_project_baseline"), Mapping):
+            return dict(value["target_project_baseline"])
+        return dict(value)
+    return {}
+
+
+def verify_target_project_baseline(
+    target_project_baseline: Any,
+    *,
+    current_project_path: str | Path = "",
+    current_project_sha256: str = "",
+) -> HarnessResult:
+    """Re-read the exact target baseline and reject framework/reference/control substitutions."""
+    baseline = _coerce_target_project_baseline(target_project_baseline)
+    issues: List[Dict[str, Any]] = []
+    if baseline.get("schema_version") != "kh.pb-target-project-baseline.v1":
+        issues.append(
+            {
+                "code": "target_project_baseline_schema_invalid",
+                "severity": "error",
+                "message": "Target project baseline must use kh.pb-target-project-baseline.v1.",
+            }
+        )
+    declared_hash = _normalized_sha256(baseline.get("baseline_sha256"))
+    actual_hash = _normalized_sha256(_target_project_baseline_hash(baseline)) if baseline else ""
+    if not declared_hash or declared_hash != actual_hash:
+        issues.append(
+            {
+                "code": "target_project_baseline_hash_mismatch",
+                "severity": "error",
+                "expected": declared_hash,
+                "actual": actual_hash,
+                "message": "Target project baseline metadata was changed after capture.",
+            }
+        )
+
+    project = dict(baseline.get("project") or {})
+    expected_project_path = str(project.get("path") or project.get("project_path") or "")
+    requested_project_path = str(current_project_path or expected_project_path)
+    requested_project_hash = _normalized_sha256(current_project_sha256) or _normalized_sha256(project.get("sha256"))
+    project_issues, current_binding, current_text = _read_exact_artifact_receipt(
+        {"path": requested_project_path, "sha256": requested_project_hash},
+        role="project",
+        maximum_bytes=TARGET_PROJECT_FILE_MAX_BYTES,
+        text=True,
+    )
+    issues.extend(project_issues)
+    current_contract: Dict[str, Any] = {}
+    if current_binding and isinstance(current_text, str):
+        parse_issues, current_contract = _parse_target_project_contract(
+            Path(current_binding["path"]),
+            current_text,
+        )
+        issues.extend(parse_issues)
+    if _absolute_path_key(requested_project_path) != _absolute_path_key(expected_project_path):
+        issues.append(
+            {
+                "code": "target_project_path_substitution",
+                "severity": "error",
+                "message": "Current project verification must use the exact project path captured by the baseline.",
+            }
+        )
+    expected_project_digest = _normalized_sha256(project.get("sha256"))
+    current_project_digest = _normalized_sha256(current_binding.get("sha256"))
+    if (
+        expected_project_digest
+        and current_project_digest
+        and expected_project_digest != current_project_digest
+    ):
+        issues.append(
+            {
+                "code": "target_project_project_artifact_changed",
+                "severity": "error",
+                "expected": f"sha256:{expected_project_digest}",
+                "actual": f"sha256:{current_project_digest}",
+                "message": "The current project artifact must be byte-for-byte equal to the captured baseline.",
+            }
+        )
+    if current_contract:
+        if current_contract.get("target_framework") != project.get("target_framework"):
+            issues.append(
+                {
+                    "code": "target_project_framework_changed",
+                    "severity": "error",
+                    "expected": project.get("target_framework"),
+                    "actual": current_contract.get("target_framework"),
+                    "message": "PB migration must not change or substitute the target framework.",
+                }
+            )
+        if current_contract.get("references") != project.get("references"):
+            issues.append(
+                {
+                    "code": "target_project_reference_set_changed",
+                    "severity": "error",
+                    "message": "DevExpress, KoneLib, custom, and framework references must remain exactly equal to the baseline.",
+                }
+            )
+        if current_contract.get("compile_includes") != project.get("compile_includes"):
+            issues.append(
+                {
+                    "code": "target_project_compile_includes_changed",
+                    "severity": "error",
+                    "expected": project.get("compile_includes"),
+                    "actual": current_contract.get("compile_includes"),
+                    "message": "Exact custom-control Compile inclusion must remain equal to the baseline.",
+                }
+            )
+
+    source_inclusion_preserved = True
+    for source_receipt in baseline.get("source_artifacts", []) or []:
+        if current_contract and not _target_project_source_inclusion(
+            current_contract,
+            source_receipt.get("path", ""),
+        ):
+            source_inclusion_preserved = False
+            issues.append(
+                {
+                    "code": "target_project_source_inclusion_changed",
+                    "severity": "error",
+                    "path": source_receipt.get("path", ""),
+                    "message": "A baseline custom-control source is no longer included by the current project.",
+                }
+            )
+
+    for role, receipts, maximum, text_mode in (
+        ("source", baseline.get("source_artifacts", []), TARGET_PROJECT_FILE_MAX_BYTES, True),
+        ("assembly", baseline.get("assembly_artifacts", []), TARGET_PROJECT_ASSEMBLY_MAX_BYTES, False),
+    ):
+        for receipt in receipts if isinstance(receipts, list) else []:
+            receipt_issues, _, _ = _read_exact_artifact_receipt(
+                receipt,
+                role=role,
+                maximum_bytes=maximum,
+                text=text_mode,
+            )
+            issues.extend(receipt_issues)
+    passed = not issues
+    metadata = {
+        "harness": "pb-to-csharp-migration-harness",
+        "status": "passed" if passed else "blocked",
+        "target_project_baseline": baseline,
+        "current_project": {**current_binding, **current_contract},
+        "issues": issues,
+        "recursive_search_performed": False,
+        "framework_preserved": bool(
+            current_contract
+            and current_contract.get("target_framework") == project.get("target_framework")
+        ),
+        "references_preserved": bool(
+            current_contract and current_contract.get("references") == project.get("references")
+        ),
+        "project_artifact_preserved": bool(
+            expected_project_digest
+            and current_project_digest
+            and expected_project_digest == current_project_digest
+        ),
+        "source_inclusion_preserved": source_inclusion_preserved,
+    }
+    return HarnessResult(
+        success=passed,
+        stdout=json.dumps(
+            {"status": metadata["status"], "issue_count": len(issues)},
+            sort_keys=True,
+        ),
+        stderr="" if passed else "Target project baseline verification failed.",
+        exit_code=0 if passed else 1,
+        metadata=metadata,
+    )
 
 
 def resolve_csharp_control_stack(
@@ -2269,12 +3834,45 @@ def resolve_csharp_control_stack(
         "check",
         "tree",
     ),
+    *,
+    target_project_baseline: Any = None,
+    current_project_path: str | Path = "",
+    current_project_sha256: str = "",
 ) -> Dict[str, Any]:
-    """Choose target-project controls first, then DevExpress, then WinForms basics."""
+    """Choose target wrappers, declared KoneLib controls, DevExpress, then WinForms."""
     inventory = _normalize_control_inventory(available_controls)
+    baseline_result = None
+    baseline_supplied = target_project_baseline is not None
+    if baseline_supplied:
+        baseline_result = verify_target_project_baseline(
+            target_project_baseline,
+            current_project_path=current_project_path,
+            current_project_sha256=current_project_sha256,
+        )
+    caller_target_controls = dict(inventory.get("target_project_controls") or {})
+    inventory["target_project_controls"] = {}
+    inventory["types"] = {
+        item
+        for item in inventory["types"]
+        if str(item).lower().startswith(("konelib.", "devexpress.", "system.windows.forms."))
+    }
+    if baseline_result is not None and baseline_result.success:
+        baseline = baseline_result.metadata["target_project_baseline"]
+        baseline_controls = dict(baseline.get("target_project_controls") or {})
+        inventory["target_project_controls"] = baseline_controls
+        inventory["types"].update(baseline_controls.values())
+        inventory["project_name"] = str(baseline.get("project", {}).get("project_name") or "")
+        reference_names = {
+            str(item.get("name") or "").lower()
+            for item in baseline.get("project", {}).get("references", [])
+        }
+        inventory["has_devexpress"] = any("devexpress" in item for item in reference_names)
+        inventory["has_konelib"] = any("konelib" in item for item in reference_names)
     selections: Dict[str, Dict[str, Any]] = {}
     missing: List[str] = []
     notes: List[str] = []
+    if caller_target_controls and not (baseline_result and baseline_result.success):
+        notes.append("unbound target-project control names were ignored")
 
     for logical_name in required_controls:
         spec = CONTROL_FALLBACKS.get(str(logical_name).lower())
@@ -2295,12 +3893,26 @@ def resolve_csharp_control_stack(
             selections[str(logical_name)] = selection
             continue
 
+        konelib_control = _find_konelib_control(str(logical_name).lower(), inventory)
+        if konelib_control:
+            selection = {
+                "provider": "konelib",
+                "type": konelib_control,
+                "fallback_level": 1,
+                "reason": "a declared KoneLib control is available for this logical role",
+            }
+            if str(logical_name).lower() == "grid" and inventory["has_devexpress"]:
+                selection["view_type"] = spec["devexpress_view"]
+            selections[str(logical_name)] = selection
+            notes.append(f"{logical_name}: used declared KoneLib fallback")
+            continue
+
         if inventory["has_devexpress"]:
             selection = {
                 "provider": "devexpress",
                 "type": spec["devexpress"],
-                "fallback_level": 1,
-                "reason": "target-project/custom control was not available",
+                "fallback_level": 2,
+                "reason": "target-project and declared KoneLib controls were not available",
             }
             if str(logical_name).lower() == "grid":
                 selection["view_type"] = spec["devexpress_view"]
@@ -2312,16 +3924,21 @@ def resolve_csharp_control_stack(
             selections[str(logical_name)] = {
                 "provider": "winforms",
                 "type": spec["winforms"],
-                "fallback_level": 2,
-                "reason": "target-project/custom and DevExpress controls were not available",
+                "fallback_level": 3,
+                "reason": "target-project, KoneLib, and DevExpress controls were not available",
             }
             notes.append(f"{logical_name}: used WinForms fallback")
             continue
 
         missing.append(str(logical_name))
 
+    baseline_issues = list(
+        baseline_result.metadata.get("issues", [])
+        if baseline_result is not None
+        else []
+    )
     return {
-        "status": "passed" if not missing else "blocked",
+        "status": "passed" if not missing and not baseline_issues else "blocked",
         "strategy": "target-project-controls-first",
         "project_name": inventory["project_name"],
         "required_controls": [str(item) for item in required_controls],
@@ -2330,11 +3947,24 @@ def resolve_csharp_control_stack(
         "available_control_types": sorted(inventory["types"]),
         "providers_available": {
             "target_project_controls": bool(inventory["types"] or inventory["target_project_controls"]),
+            "konelib": inventory["has_konelib"],
             "devexpress": inventory["has_devexpress"],
             "winforms": inventory["has_winforms"],
         },
-        "fallback_order": ["target-project/custom controls", "DevExpress controls", "WinForms basic controls"],
+        "fallback_order": [
+            "target-project/custom controls",
+            "declared KoneLib controls",
+            "DevExpress controls",
+            "WinForms basic controls",
+        ],
         "notes": notes,
+        "target_project_baseline_status": (
+            baseline_result.metadata.get("status")
+            if baseline_result is not None
+            else "not_supplied"
+        ),
+        "target_project_baseline_issues": baseline_issues,
+        "unbound_target_project_controls_ignored": sorted(caller_target_controls),
     }
 
 
@@ -2751,7 +4381,33 @@ def build_detail_form_layout_plan(
         field_name = field["field_name"]
         caption = field["caption"] or field_name
         editor_type = field["editor_type"]
-        editor_name = field.get("csharp_editor_name") or _build_editor_control_name(editor_type, logical_name, field_name)
+        canonical_editor_name = _build_editor_control_name(editor_type, logical_name, field_name)
+        requested_editor_name = str(field.get("csharp_editor_name") or "").strip()
+        if requested_editor_name and requested_editor_name != canonical_editor_name:
+            issues.append(
+                {
+                    "code": "noncanonical_detail_editor_name",
+                    "severity": "error",
+                    "field_name": field_name,
+                    "expected": canonical_editor_name,
+                    "actual": requested_editor_name,
+                    "message": "Caller or target-source names cannot override the packaged canonical control naming family.",
+                }
+            )
+        editor_name = canonical_editor_name
+        canonical_label_name = f"lbl{_normalize_datawindow_field_name(field_name)}"
+        requested_label_name = str(field.get("csharp_label_name") or "").strip()
+        if requested_label_name and requested_label_name != canonical_label_name:
+            issues.append(
+                {
+                    "code": "noncanonical_detail_label_name",
+                    "severity": "error",
+                    "field_name": field_name,
+                    "expected": canonical_label_name,
+                    "actual": requested_label_name,
+                    "message": "Caller or target-source names cannot override the packaged canonical label naming family.",
+                }
+            )
         binding_evidence = supplied_binding_map.get(field_name, supplied_binding_map.get(editor_name, {}))
         if isinstance(binding_evidence, str):
             binding_evidence = {"result_field": binding_evidence}
@@ -2793,7 +4449,7 @@ def build_detail_form_layout_plan(
                 field_name=field_name,
                 caption=caption,
                 editor_type=editor_type,
-                csharp_label_name=field.get("csharp_label_name") or f"lbl{_normalize_datawindow_field_name(field_name)}",
+                csharp_label_name=canonical_label_name,
                 csharp_editor_name=editor_name,
                 binding_property=binding_property,
                 binding_code=binding_code,
@@ -2824,7 +4480,7 @@ def build_detail_form_layout_plan(
         ),
         "binding_rule": (
             "Each editor carries the source/result field through provider-supported BindingField or an explicit "
-            "DataBindings map. Existing target control names override generated fallback names."
+            "DataBindings map. Caller and target-source names cannot override packaged canonical names."
         ),
         "provider_contract": provider,
         "result_fields": sorted(normalized_result_fields or []),
@@ -2847,10 +4503,11 @@ def build_offline_pb_to_csharp_runtime_generation(
     profile_id: str,
     profile_version: str,
     profile_hash: str,
-    csharp_root: str = "",
+    source_state: MigrationInputState | Dict[str, Any] | None = None,
 ) -> HarnessResult:
     """Build ordinary runtime-generation context from packaged profile data only."""
     loaded = load_packaged_migration_profile(profile_id, profile_version, profile_hash)
+    source_plan = build_pbl_export_strategy(source_state) if source_state is not None else None
     objective_present = bool(str(objective or "").strip())
     success = bool(objective_present and loaded.success)
     issues = list(loaded.metadata.get("issues", []))
@@ -2869,12 +4526,24 @@ def build_offline_pb_to_csharp_runtime_generation(
         "status": "ready" if success else "blocked",
         "objective": str(objective or ""),
         "profile_consumption": dict(loaded.metadata.get("profile_consumption", {})),
+        "profile_identity": {
+            "profile_id": loaded.metadata.get("profile_consumption", {}).get("profile_id", ""),
+            "profile_version": loaded.metadata.get("profile_consumption", {}).get("profile_version", ""),
+            "profile_hash": loaded.metadata.get("profile_consumption", {}).get("profile_hash", ""),
+        },
         "profile_rules": dict(loaded.metadata.get("profile_rules", {})),
         "profile_path": loaded.metadata.get("profile_path", ""),
+        "canonical_style_profile": dict(loaded.metadata.get("canonical_style_profile", {})),
+        "canonical_style_profile_hash": loaded.metadata.get("canonical_style_profile_hash", ""),
+        "packaged_document_alignment": dict(loaded.metadata.get("packaged_document_alignment", {})),
         "external_sources_consulted": [],
-        "ignored_live_source_request": bool(str(csharp_root or "").strip()),
+        "pb_source_plan": dict(source_plan or {}),
+        "capability_probe": dict((source_plan or {}).get("capability_probe", {})),
+        "selected_explicit_version": (source_plan or {}).get("selected_explicit_version"),
+        "tool_execution_intent": dict((source_plan or {}).get("tool_execution_intent", {})),
+        "fallback": dict((source_plan or {}).get("fallback", {})),
+        "invocation_contract": dict((source_plan or {}).get("invocation_contract", {})),
         "capabilities_invoked": {
-            "csharp_root_walk": False,
             "csharp_source_read": False,
             "db": False,
             "pbl": False,
@@ -2893,6 +4562,8 @@ def build_offline_pb_to_csharp_runtime_generation(
                 "runtime_mode": metadata["runtime_mode"],
                 "profile_id": profile_id,
                 "profile_version": profile_version,
+                "profile_hash": loaded.metadata.get("profile_consumption", {}).get("profile_hash", ""),
+                "canonical_style_family": loaded.metadata.get("canonical_style_profile", {}).get("style_family_id", ""),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -2908,14 +4579,17 @@ def build_pb_to_csharp_migration_plan(
     state: MigrationInputState | Dict[str, Any] | None = None,
 ) -> HarnessResult:
     """Build a deterministic migration plan that works without host-local PB/C#/DB assets."""
-    mode = classify_migration_mode(state)
     input_state = _coerce_state(state)
     pbl_export_strategy = build_pbl_export_strategy(input_state)
+    mode = classify_migration_mode(
+        input_state,
+        pbl_export_strategy=pbl_export_strategy,
+    )
     control_stack = resolve_csharp_control_stack(dict(state or {}).get("available_controls") if isinstance(state, dict) else None)
     resolved_program_key = (
         input_state.program_key.upper()
         if input_state.program_key
-        else normalize_author_tagged_program_key(input_state.procedure_name)
+        else normalize_procedure_program_key(input_state.procedure_name)
     )
     loaded_profile = _load_runtime_packaged_migration_profile(
         input_state.profile_id,
@@ -2932,6 +4606,9 @@ def build_pb_to_csharp_migration_plan(
         "profile_path": loaded_profile.metadata.get("profile_path", ""),
         "profile_consumption": dict(loaded_profile.metadata.get("profile_consumption", {})),
         "profile_rules": dict(loaded_profile.metadata.get("profile_rules", {})),
+        "canonical_style_profile": dict(loaded_profile.metadata.get("canonical_style_profile", {})),
+        "canonical_style_profile_hash": loaded_profile.metadata.get("canonical_style_profile_hash", ""),
+        "packaged_document_alignment": dict(loaded_profile.metadata.get("packaged_document_alignment", {})),
         "issues": list(loaded_profile.metadata.get("issues", [])),
         "external_sources_consulted": [],
         "source_analysis_invoked": False,
@@ -2949,7 +4626,7 @@ def build_pb_to_csharp_migration_plan(
         "For detail forms, lay out label/editor pairs in clean aligned rows and columns instead of blindly copying PB coordinates.",
         "Resolve the target-project control stack before generating C# so project-specific controls are not replaced by a fixed private-wrapper assumption.",
         "Load and consume the generalized packaged style contract before generating C# or SQL.",
-        "Draft C# flow by preserving existing target-project method paths such as CallViewQuery, CallProc, SelectType, DataTableToXml, and SetModified when present.",
+        "Generate one canonical command/query/save family from the packaged fixed style contract; target source cannot select a style or method family.",
         "Draft SELECT/SAVE stored procedures from the packaged generalized style contract and host-local sql-formatting contract.",
         "Separate formatting-only cleanup from semantic/performance rewrites; require DB-backed evidence for semantic changes.",
         "Produce a migration checklist, traceability table, and verification plan before implementation claims.",
@@ -2976,8 +4653,20 @@ def build_pb_to_csharp_migration_plan(
         "deliverables": deliverables,
         "target_project_name": input_state.target_project_name,
         "pbl_export_strategy": pbl_export_strategy,
+        "capability_probe": dict(pbl_export_strategy["capability_probe"]),
+        "selected_explicit_version": pbl_export_strategy["selected_explicit_version"],
+        "tool_execution_intent": dict(pbl_export_strategy["tool_execution_intent"]),
+        "fallback": dict(pbl_export_strategy["fallback"]),
+        "invocation_contract": dict(pbl_export_strategy["invocation_contract"]),
         "control_stack": control_stack,
         "packaged_style_resolution": packaged_style_resolution,
+        "claim_scope": pbl_export_strategy["claim_scope"],
+        "parity_ready": pbl_export_strategy["parity_ready"],
+        "source_authority_boundary": {
+            "style": "packaged_fixed_contract_only",
+            "pb_and_target_source": ["behavior", "fields", "events", "dependencies", "api_availability"],
+            "style_reanalysis_allowed": False,
+        },
         "token_optimizer_status": "passthrough",
         "token_optimizer_status_reason": (
             "PB source, SQL, C# style rules, and business literals are source-of-truth content; do not compress them."
@@ -3038,129 +4727,748 @@ def _user_directive_scope_contract_coverage(text: str) -> Dict[str, bool]:
     }
 
 
-def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
-    """Require a composition- and evidence-complete PB-to-C# analysis handoff before C# generation."""
-    text = str(markdown_text or "")
-    lines = text.splitlines()
-    headings = [
-        line.strip()
-        for line in lines
-        if re.match(r"^\s*#{1,3}\s+\S", line)
-    ]
-    code_fence_pairs = text.count("```") // 2
-    section_coverage: Dict[str, bool] = {}
-    evidence_anchor_coverage: Dict[str, bool] = {}
-    development_spec_coverage: Dict[str, bool] = {}
-    development_spec_detail_coverage: Dict[str, Dict[str, bool]] = {}
-    readiness: Dict[str, bool] = {}
+def _pb_handoff_json_contract(text: str) -> Dict[str, Any] | None:
+    candidates = [text.strip()]
+    candidates.extend(
+        match.group("body").strip()
+        for match in re.finditer(
+            r"```json\s*(?P<body>.*?)```",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+    for candidate in candidates:
+        if not candidate.startswith("{"):
+            continue
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, Mapping):
+            return dict(payload)
+    return None
+
+
+def _pb_handoff_markdown_contract(text: str) -> Dict[str, Any] | None:
+    sections: Dict[str, List[str]] = {}
+    current = ""
+    for line in text.splitlines():
+        heading = re.match(r"^\s*#{1,4}\s+(?P<title>.+?)\s*$", line)
+        if heading:
+            current = re.sub(r"[^a-z0-9]+", " ", heading.group("title").lower()).strip()
+            sections[current] = []
+        elif current:
+            sections[current].append(line)
+
+    def rows_for(*title_tokens: str) -> List[Dict[str, str]]:
+        body: List[str] = []
+        for title, lines in sections.items():
+            if all(token in title for token in title_tokens):
+                body = lines
+                break
+        table_lines = [line.strip() for line in body if line.strip().startswith("|")]
+        if len(table_lines) < 3:
+            return []
+        cells = lambda line: [item.strip() for item in line.strip().strip("|").split("|")]
+        headers = [re.sub(r"[^a-z0-9]+", "_", item.lower()).strip("_") for item in cells(table_lines[0])]
+        if not all(re.fullmatch(r":?-{3,}:?", item.replace(" ", "")) for item in cells(table_lines[1])):
+            return []
+        return [
+            dict(zip(headers, values))
+            for values in (cells(line) for line in table_lines[2:])
+            if len(values) == len(headers) and any(values)
+        ]
+
+    artifacts = rows_for("artifact", "registry")
+    objects = rows_for("object", "registry")
+    events = rows_for("pb", "event", "c")
+    fields = rows_for("datawindow", "field")
+    procedures = rows_for("sp", "caller", "branch", "result")
+    statuses = rows_for("confirmed", "inferred", "blocked")
+    unresolved = rows_for("unresolved")
+    manual_tests = rows_for("manual", "test")
+    if not any((artifacts, objects, events, fields, procedures, statuses, unresolved, manual_tests)):
+        return None
+    status_map = {"confirmed": [], "inferred": [], "blocked": []}
+    for row in statuses:
+        status = str(row.get("status") or "").lower()
+        if status in status_map and str(row.get("fact") or row.get("item") or "").strip():
+            status_map[status].append(str(row.get("fact") or row.get("item")))
+    return {
+        "schema_version": "kh.pb-migration-handoff.v1",
+        "artifacts": artifacts,
+        "objects": objects,
+        "event_mappings": events,
+        "field_mappings": fields,
+        "sp_mappings": procedures,
+        "evidence_status": status_map,
+        "unresolved": unresolved,
+        "manual_tests": manual_tests,
+    }
+
+
+def _handoff_searchable_source(role: str, text: str) -> str:
+    normalized_role = str(role or "").strip().lower()
+    if normalized_role == "csharp_code":
+        return _lex_csharp_non_code(text).code
+    if normalized_role == "csharp_designer":
+        return _mask_csharp_comments_with_code_positions(text)[0]
+    if normalized_role == "sql_procedure":
+        return _mask_sql_comments_and_strings(text, mask_strings=False)
+    if normalized_role == "pb_source":
+        return re.sub(
+            r"//[^\r\n]*|/\*[\s\S]*?\*/",
+            lambda match: re.sub(r"[^\r\n]", " ", match.group(0)),
+            text,
+        )
+    return text
+
+
+def _handoff_token_present(text: str, token: Any) -> bool:
+    value = str(token or "").strip()
+    if not value:
+        return False
+    return bool(
+        re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(value)}(?![A-Za-z0-9_])",
+            text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _validate_pb_handoff_contract(contract: Mapping[str, Any] | None) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
+    payload = dict(contract or {})
 
-    for section, patterns in PB_MIGRATION_ANALYSIS_SECTION_RULES.items():
-        covered = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
-        section_coverage[section] = covered
-        if not covered:
+    def rows(name: str) -> List[Mapping[str, Any]]:
+        value = payload.get(name)
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return []
+        return [item for item in value if isinstance(item, Mapping)]
+
+    artifacts = rows("artifacts")
+    objects = rows("objects")
+    events = rows("event_mappings")
+    fields = rows("field_mappings")
+    procedures = rows("sp_mappings")
+    unresolved = payload.get("unresolved")
+    manual_tests = rows("manual_tests")
+    status = payload.get("evidence_status")
+    status = dict(status) if isinstance(status, Mapping) else {}
+
+    def require_rows(code: str, name: str, value: Sequence[Any]) -> None:
+        if not value:
             issues.append(
-                {
-                    "code": "migration_analysis_required_section_missing",
-                    "severity": "error",
-                    "section": section,
-                    "message": (
-                        "PB-to-C# analysis markdown is below the minimum handoff standard; "
-                        "implementation needs this section before C# generation."
-                    ),
-                }
+                {"code": code, "severity": "error", "section": name, "message": f"Structured handoff requires {name} rows."}
             )
 
-    for anchor, patterns in PB_MIGRATION_ANALYSIS_EVIDENCE_ANCHORS.items():
-        covered = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
-        evidence_anchor_coverage[anchor] = covered
-        if not covered:
+    require_rows("migration_handoff_artifact_registry_required", "artifacts", artifacts)
+    require_rows("migration_handoff_object_registry_required", "objects", objects)
+    require_rows("migration_handoff_event_mapping_required", "event_mappings", events)
+    require_rows("migration_handoff_field_mapping_required", "field_mappings", fields)
+    require_rows("migration_handoff_sp_mapping_required", "sp_mappings", procedures)
+    require_rows("migration_handoff_manual_tests_required", "manual_tests", manual_tests)
+
+    artifact_registry: Dict[str, Dict[str, Any]] = {}
+    allowed_roles = {"pb_source", "csharp_code", "csharp_designer", "sql_procedure"}
+    for index, item in enumerate(artifacts):
+        artifact_id = str(item.get("artifact_id") or "").strip()
+        object_id = str(item.get("object_id") or "").strip()
+        role = str(item.get("role") or "").strip().lower()
+        path = str(item.get("path") or "").strip()
+        digest = _normalized_sha256(item.get("sha256"))
+        if (
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", artifact_id)
+            or artifact_id in artifact_registry
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", object_id)
+            or role not in allowed_roles
+            or not _absolute_path_key(path)
+            or not digest
+        ):
             issues.append(
                 {
-                    "code": "migration_analysis_evidence_anchor_missing",
+                    "code": "migration_handoff_artifact_binding_invalid",
                     "severity": "error",
-                    "anchor": anchor,
-                    "message": (
-                        "PB-to-C# analysis quality is judged by implementation evidence, not document length. "
-                        "This handoff is missing a required evidence anchor."
-                    ),
+                    "index": index,
+                    "message": "Every artifact row requires unique artifact/object IDs, a supported role, an absolute path, and SHA-256.",
                 }
             )
-
-    for rule, requirements in PB_MIGRATION_ANALYSIS_READINESS_RULES.items():
-        ready = all(section_coverage.get(item, evidence_anchor_coverage.get(item, False)) for item in requirements)
-        readiness[rule] = ready
-        if not ready:
+            continue
+        try:
+            resolved, size, actual_digest, text = _read_bounded_text_artifact(
+                path,
+                maximum_bytes=PB_EXPORT_ARTIFACT_MAX_BYTES,
+            )
+        except _ArtifactReadError as exc:
             issues.append(
                 {
-                    "code": "migration_analysis_readiness_missing",
+                    "code": "migration_handoff_artifact_readback_failed",
                     "severity": "error",
-                    "readiness_rule": rule,
-                    "requirements": list(requirements),
-                    "message": (
-                        "The analysis handoff is not ready for C# implementation because one or more "
-                        "composition/evidence requirements are missing."
-                    ),
+                    "index": index,
+                    "artifact_id": artifact_id,
+                    "detail_code": exc.code,
+                    "message": str(exc),
                 }
             )
+            continue
+        if actual_digest != digest:
+            issues.append(
+                {
+                    "code": "migration_handoff_artifact_sha256_mismatch",
+                    "severity": "error",
+                    "index": index,
+                    "artifact_id": artifact_id,
+                    "message": "Handoff artifact SHA-256 must match a current file readback.",
+                }
+            )
+            continue
+        structural_role_valid = True
+        lower_path = str(resolved).lower()
+        if role == "csharp_code":
+            structural_role_valid = lower_path.endswith(".cs") and not lower_path.endswith(
+                ".designer.cs"
+            ) and bool(_declared_partial_class_names(_lex_csharp_non_code(text).code))
+        elif role == "csharp_designer":
+            structural_role_valid = lower_path.endswith(".designer.cs") and bool(
+                re.search(r"\bInitializeComponent\s*\(", _lex_csharp_non_code(text).code)
+            )
+        elif role == "sql_procedure":
+            structural_role_valid = lower_path.endswith(".sql") and bool(
+                _extract_sp_procedure_name(text)
+            )
+        elif role == "pb_source":
+            structural_role_valid = Path(lower_path).suffix in {".sru", ".srw", ".srd"}
+        if not structural_role_valid:
+            issues.append(
+                {
+                    "code": "migration_handoff_artifact_role_mismatch",
+                    "severity": "error",
+                    "index": index,
+                    "artifact_id": artifact_id,
+                    "role": role,
+                    "message": "Artifact content and file role must agree structurally.",
+                }
+            )
+            continue
+        artifact_registry[artifact_id] = {
+            "artifact_id": artifact_id,
+            "object_id": object_id,
+            "role": role,
+            "path": str(resolved),
+            "sha256": f"sha256:{actual_digest}",
+            "size_bytes": size,
+            "text": text,
+            "searchable": _handoff_searchable_source(role, text),
+        }
 
-    for item, patterns in PB_MIGRATION_DEVELOPMENT_SPEC_RULES.items():
-        if item == "user_directive_scope_contract":
-            detail = _user_directive_scope_contract_coverage(text)
-            development_spec_detail_coverage[item] = detail
-            covered = all(detail.values())
+    object_registry: Dict[str, Dict[str, Any]] = {}
+    for index, item in enumerate(objects):
+        object_id = str(item.get("object_id") or "").strip()
+        program_key = str(item.get("program_key") or "").strip().upper()
+        artifact_ids = item.get("artifact_ids")
+        if isinstance(artifact_ids, str):
+            artifact_ids = [part.strip() for part in artifact_ids.split(",") if part.strip()]
+        artifact_ids = list(artifact_ids) if isinstance(artifact_ids, Sequence) else []
+        valid = bool(
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]*", object_id)
+            and object_id not in object_registry
+            and re.fullmatch(r"[A-Z][A-Z0-9_]*", program_key)
+            and artifact_ids
+            and len(artifact_ids) == len(set(artifact_ids))
+            and all(
+                artifact_id in artifact_registry
+                and artifact_registry[artifact_id]["object_id"] == object_id
+                for artifact_id in artifact_ids
+            )
+        )
+        if not valid:
+            issues.append(
+                {
+                    "code": "migration_handoff_object_registry_invalid",
+                    "severity": "error",
+                    "index": index,
+                    "object_id": object_id,
+                    "message": "Each object requires a program key and exact correlated artifact IDs.",
+                }
+            )
+            continue
+        object_registry[object_id] = {
+            "object_id": object_id,
+            "program_key": program_key,
+            "artifact_ids": artifact_ids,
+        }
+    if artifact_registry and set(artifact["object_id"] for artifact in artifact_registry.values()) != set(
+        object_registry
+    ):
+        issues.append(
+            {
+                "code": "migration_handoff_artifact_object_set_mismatch",
+                "severity": "error",
+                "message": "Every bound artifact must belong to exactly one declared object.",
+            }
+        )
+
+    def correlated_artifact(
+        row: Mapping[str, Any],
+        key: str,
+        *,
+        role: str,
+        object_id: str,
+    ) -> Dict[str, Any] | None:
+        artifact = artifact_registry.get(str(row.get(key) or "").strip())
+        if not artifact or artifact.get("role") != role or artifact.get("object_id") != object_id:
+            return None
+        return artifact
+
+    for index, item in enumerate(events):
+        object_id = str(item.get("object_id") or "").strip()
+        pb_event = str(item.get("pb_event") or item.get("event") or "").strip()
+        csharp_method = str(item.get("csharp_method") or item.get("method") or "").strip()
+        pb_artifact = correlated_artifact(
+            item, "pb_artifact_id", role="pb_source", object_id=object_id
+        )
+        csharp_artifact = correlated_artifact(
+            item, "csharp_artifact_id", role="csharp_code", object_id=object_id
+        )
+        if not (
+            object_id in object_registry
+            and pb_event
+            and csharp_method
+            and pb_artifact
+            and csharp_artifact
+            and _handoff_token_present(pb_artifact["searchable"], pb_event)
+            and _handoff_token_present(csharp_artifact["searchable"], csharp_method)
+        ):
+            issues.append(
+                {"code": "migration_handoff_event_mapping_invalid", "severity": "error", "index": index, "message": "Map each PB event to one artifact-bound C# method for the same object."}
+            )
+    for index, item in enumerate(fields):
+        object_id = str(item.get("object_id") or "").strip()
+        required = {
+            "field": item.get("dw_field") or item.get("field"),
+            "control": item.get("control"),
+            "binding_field": item.get("binding_field") or item.get("bindingfield"),
+            "grid_column": item.get("grid_column") or item.get("grid"),
+            "result_field": item.get("result_field") or item.get("result"),
+        }
+        pb_artifact = correlated_artifact(
+            item, "pb_artifact_id", role="pb_source", object_id=object_id
+        )
+        designer_artifact = correlated_artifact(
+            item, "designer_artifact_id", role="csharp_designer", object_id=object_id
+        )
+        result_artifact_id = str(item.get("result_artifact_id") or "").strip()
+        result_artifact = artifact_registry.get(result_artifact_id)
+        values_present = not any(not str(value or "").strip() for value in required.values())
+        tokens_present = bool(
+            values_present
+            and pb_artifact
+            and designer_artifact
+            and result_artifact
+            and result_artifact.get("object_id") == object_id
+            and result_artifact.get("role") in {"csharp_code", "sql_procedure"}
+            and _handoff_token_present(pb_artifact["searchable"], required["field"])
+            and all(
+                _handoff_token_present(designer_artifact["searchable"], required[key])
+                for key in ("control", "binding_field", "grid_column")
+            )
+            and _handoff_token_present(result_artifact["searchable"], required["result_field"])
+        )
+        if object_id not in object_registry or not tokens_present:
+            issues.append(
+                {"code": "migration_handoff_field_mapping_invalid", "severity": "error", "index": index, "missing": [key for key, value in required.items() if not str(value or "").strip()], "message": "DW field mapping must correlate PB, Designer, and result artifacts for one object."}
+            )
+    for index, item in enumerate(procedures):
+        object_id = str(item.get("object_id") or "").strip()
+        required = ("procedure", "caller", "branch", "result")
+        caller_artifact = correlated_artifact(
+            item, "caller_artifact_id", role="csharp_code", object_id=object_id
+        )
+        procedure_artifact = correlated_artifact(
+            item, "procedure_artifact_id", role="sql_procedure", object_id=object_id
+        )
+        object_program_key = str(object_registry.get(object_id, {}).get("program_key") or "")
+        procedure_key = normalize_procedure_program_key(item.get("procedure"))
+        valid = bool(
+            object_id in object_registry
+            and not any(not str(item.get(key) or "").strip() for key in required)
+            and caller_artifact
+            and procedure_artifact
+            and procedure_key == object_program_key
+            and _handoff_token_present(caller_artifact["searchable"], item.get("caller"))
+            and all(
+                _handoff_token_present(procedure_artifact["searchable"], item.get(key))
+                for key in ("procedure", "branch", "result")
+            )
+        )
+        if not valid:
+            issues.append(
+                {"code": "migration_handoff_sp_mapping_invalid", "severity": "error", "index": index, "message": "SP mapping must bind one program-key-correlated caller and procedure artifact."}
+            )
+    for key in ("confirmed", "inferred", "blocked"):
+        value = status.get(key)
+        if (
+            not isinstance(value, Sequence)
+            or isinstance(value, (str, bytes))
+            or not value
+            or any(not str(item or "").strip() for item in value)
+        ):
+            issues.append(
+                {"code": "migration_handoff_evidence_status_missing", "severity": "error", "status": key, "message": "confirmed, inferred, and blocked inventories must each be explicit."}
+            )
+    if (
+        not isinstance(unresolved, Sequence)
+        or isinstance(unresolved, (str, bytes))
+        or not unresolved
+        or any(not str(item or "").strip() for item in unresolved)
+    ):
+        issues.append(
+            {"code": "migration_handoff_unresolved_required", "severity": "error", "message": "The handoff requires an explicit unresolved inventory."}
+        )
+    for index, item in enumerate(manual_tests):
+        if not str(item.get("workflow") or item.get("test") or "").strip() or not str(
+            item.get("expected") or item.get("expected_result") or item.get("expected_ui") or ""
+        ).strip():
+            issues.append(
+                {"code": "migration_handoff_manual_test_invalid", "severity": "error", "index": index, "message": "Each manual test requires a workflow and expected result."}
+            )
+    if payload.get("schema_version") != "kh.pb-migration-handoff.v1":
+        issues.append(
+            {"code": "migration_handoff_schema_invalid", "severity": "error", "message": "Use schema kh.pb-migration-handoff.v1."}
+        )
+    payload["artifact_readbacks"] = [
+        {key: value for key, value in artifact.items() if key not in {"text", "searchable"}}
+        for artifact in artifact_registry.values()
+    ]
+    payload["object_registry"] = list(object_registry.values())
+    return issues, payload
+
+
+def _validate_artifact_bound_field_lineage_contract(
+    contract: Any,
+    *,
+    source_text: str,
+    designer_source: str,
+    result_fields: Iterable[str],
+    source_artifact_binding: Mapping[str, Any],
+    designer_artifact_binding: Mapping[str, Any],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    if contract is None:
+        return [], {"status": "not_requested", "mappings": []}
+
+    issues: List[Dict[str, Any]] = []
+    if not isinstance(contract, Mapping):
+        issue = {
+            "code": "field_lineage_contract_mapping_invalid",
+            "severity": "error",
+            "message": "field_lineage_contract must be a mapping.",
+        }
+        return [issue], {"status": "blocked", "mappings": [], "issues": [issue]}
+
+    payload = dict(contract)
+    if payload.get("schema_version") != "kh.pb-field-lineage.v1":
+        issues.append(
+            {
+                "code": "field_lineage_contract_schema_invalid",
+                "severity": "error",
+                "message": "Field lineage must use kh.pb-field-lineage.v1.",
+            }
+        )
+
+    handoff_receipt = payload.get("handoff_artifact")
+    handoff_receipt = dict(handoff_receipt) if isinstance(handoff_receipt, Mapping) else {}
+    handoff_path = str(handoff_receipt.get("path") or "").strip()
+    expected_handoff_sha = _normalized_sha256(handoff_receipt.get("sha256"))
+    handoff_payload: Dict[str, Any] = {}
+    normalized_handoff: Dict[str, Any] = {}
+    if not handoff_path or not expected_handoff_sha:
+        issues.append(
+            {
+                "code": "field_lineage_handoff_artifact_binding_invalid",
+                "severity": "error",
+                "message": "Field lineage requires an exact handoff path and SHA-256.",
+            }
+        )
+    else:
+        try:
+            resolved, _, actual_handoff_sha, handoff_text = _read_bounded_text_artifact(
+                handoff_path,
+                maximum_bytes=PB_EXPORT_ARTIFACT_MAX_BYTES,
+            )
+        except _ArtifactReadError as exc:
+            issues.append(
+                {
+                    "code": "field_lineage_handoff_artifact_readback_failed",
+                    "severity": "error",
+                    "detail_code": exc.code,
+                    "message": str(exc),
+                }
+            )
         else:
-            covered = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
-        development_spec_coverage[item] = covered
-        if not covered:
+            handoff_path = str(resolved)
+            if actual_handoff_sha != expected_handoff_sha:
+                issues.append(
+                    {
+                        "code": "field_lineage_handoff_artifact_sha256_mismatch",
+                        "severity": "error",
+                        "message": "Field-lineage handoff SHA-256 must match current bytes.",
+                    }
+                )
+            try:
+                parsed_handoff = json.loads(handoff_text)
+            except (TypeError, ValueError) as exc:
+                issues.append(
+                    {
+                        "code": "field_lineage_handoff_artifact_json_invalid",
+                        "severity": "error",
+                        "message": f"Field-lineage handoff JSON is invalid: {exc}",
+                    }
+                )
+            else:
+                if not isinstance(parsed_handoff, Mapping):
+                    issues.append(
+                        {
+                            "code": "field_lineage_handoff_artifact_json_invalid",
+                            "severity": "error",
+                            "message": "Field-lineage handoff JSON must contain one object.",
+                        }
+                    )
+                else:
+                    handoff_payload = dict(parsed_handoff)
+                    handoff_issues, normalized_handoff = _validate_pb_handoff_contract(
+                        handoff_payload
+                    )
+                    lineage_handoff_issue_prefixes = (
+                        "migration_handoff_artifact_",
+                        "migration_handoff_object_",
+                        "migration_handoff_field_",
+                    )
+                    issues.extend(
+                        issue
+                        for issue in handoff_issues
+                        if str(issue.get("code") or "").startswith(
+                            lineage_handoff_issue_prefixes
+                        )
+                        or issue.get("code") == "migration_handoff_schema_invalid"
+                    )
+
+    artifact_readbacks = list(normalized_handoff.get("artifact_readbacks") or [])
+    for role, binding in (
+        ("csharp_code", source_artifact_binding),
+        ("csharp_designer", designer_artifact_binding),
+    ):
+        binding_path = _absolute_path_key(binding.get("path", ""))
+        binding_sha = _normalized_sha256(binding.get("actual_sha256"))
+        exact_matches = [
+            item
+            for item in artifact_readbacks
+            if str(item.get("role") or "") == role
+            and _absolute_path_key(item.get("path", "")) == binding_path
+            and _normalized_sha256(item.get("sha256")) == binding_sha
+        ]
+        if binding.get("status") == "passed" and len(exact_matches) != 1:
             issues.append(
                 {
-                    "code": "migration_analysis_development_spec_missing",
+                    "code": "field_lineage_target_artifact_crosswired",
                     "severity": "error",
-                    "spec_item": item,
-                    "missing_detail": [
-                        name
-                        for name, present in development_spec_detail_coverage.get(item, {}).items()
-                        if not present
-                    ],
-                    "message": (
-                        "The PB-to-C# analysis handoff must be detailed enough for a separate developer agent "
-                        "to implement from the analysis output without re-inferring PB behavior."
-                    ),
+                    "role": role,
+                    "message": "Field lineage must reference the exact validated source and Designer artifacts.",
                 }
             )
 
-    readiness["developer_agent_handoff_ready"] = all(development_spec_coverage.values())
+    raw_handoff_fields = handoff_payload.get("field_mappings")
+    handoff_fields = (
+        [dict(item) for item in raw_handoff_fields if isinstance(item, Mapping)]
+        if isinstance(raw_handoff_fields, Sequence)
+        and not isinstance(raw_handoff_fields, (str, bytes))
+        else []
+    )
+    handoff_by_id = {
+        str(item.get("mapping_id") or "").strip(): item
+        for item in handoff_fields
+        if str(item.get("mapping_id") or "").strip()
+    }
+    mappings_value = payload.get("mappings")
+    mappings = (
+        [dict(item) for item in mappings_value if isinstance(item, Mapping)]
+        if isinstance(mappings_value, Sequence)
+        and not isinstance(mappings_value, (str, bytes))
+        else []
+    )
+    if not mappings:
+        issues.append(
+            {
+                "code": "field_lineage_mapping_required",
+                "severity": "error",
+                "message": "Field lineage requires at least one exact field mapping.",
+            }
+        )
 
+    seen_mapping_ids: set[str] = set()
+    verified_mappings: List[Dict[str, Any]] = []
+    result_field_set = {str(item) for item in result_fields}
+    artifacts_by_id = {
+        str(item.get("artifact_id") or ""): item for item in artifact_readbacks
+    }
+    for index, mapping in enumerate(mappings):
+        mapping_id = str(mapping.get("mapping_id") or "").strip()
+        handoff_mapping_id = str(mapping.get("handoff_mapping_id") or "").strip()
+        if not mapping_id or mapping_id in seen_mapping_ids:
+            issues.append(
+                {
+                    "code": "field_lineage_mapping_identity_invalid",
+                    "severity": "error",
+                    "index": index,
+                    "message": "Each field-lineage mapping requires a unique mapping_id.",
+                }
+            )
+            continue
+        seen_mapping_ids.add(mapping_id)
+        handoff_mapping = handoff_by_id.get(handoff_mapping_id)
+        if handoff_mapping is None or mapping_id != handoff_mapping_id:
+            issues.append(
+                {
+                    "code": "field_lineage_handoff_mapping_missing",
+                    "severity": "error",
+                    "mapping_id": mapping_id,
+                    "message": "Each lineage mapping must bind one exact handoff field mapping ID.",
+                }
+            )
+            continue
+
+        expected_pb_field = str(
+            handoff_mapping.get("dw_field") or handoff_mapping.get("field") or ""
+        ).strip()
+        expected_editor = str(handoff_mapping.get("control") or "").strip()
+        expected_binding = str(
+            handoff_mapping.get("binding_field") or handoff_mapping.get("bindingfield") or ""
+        ).strip()
+        expected_grid = str(
+            handoff_mapping.get("grid_column") or handoff_mapping.get("grid") or ""
+        ).strip()
+        expected_result = str(
+            handoff_mapping.get("result_field") or handoff_mapping.get("result") or ""
+        ).strip()
+        expected_values = {
+            "pb_field": expected_pb_field,
+            "editor": expected_editor,
+            "binding_field": expected_binding,
+            "grid_column": expected_grid,
+            "grid_field_name": expected_result,
+            "select_field": expected_result,
+            "result_field": expected_result,
+            "datatable_field": expected_result,
+            "display_field": expected_result,
+        }
+        actual_values = {
+            key: str(mapping.get(key) or "").strip() for key in expected_values
+        }
+        crosswired = {
+            key: {"expected": expected, "actual": actual_values[key]}
+            for key, expected in expected_values.items()
+            if not expected or actual_values[key] != expected
+        }
+        if expected_result not in result_field_set:
+            crosswired["authoritative_result_fields"] = {
+                "expected": expected_result,
+                "actual": sorted(result_field_set),
+            }
+        if crosswired:
+            issues.append(
+                {
+                    "code": "field_lineage_crosswired",
+                    "severity": "error",
+                    "mapping_id": mapping_id,
+                    "mismatches": crosswired,
+                    "message": "PB, editor, BindingField, GridColumn, SELECT, result, DataTable, and display identities must remain one exact chain.",
+                }
+            )
+
+        if expected_result and not _handoff_token_present(
+            source_text, mapping.get("datatable_field")
+        ):
+            issues.append(
+                {
+                    "code": "field_lineage_datatable_field_missing",
+                    "severity": "error",
+                    "mapping_id": mapping_id,
+                    "message": "The mapped DataTable field must exist in the exact bound C# source artifact.",
+                }
+            )
+
+        pb_artifact = artifacts_by_id.get(
+            str(handoff_mapping.get("pb_artifact_id") or "")
+        )
+        if pb_artifact:
+            lineage_result = validate_pb_field_lineage_contract(
+                designer_source,
+                srd_path=str(pb_artifact.get("path") or ""),
+                srd_sha256=_normalized_sha256(pb_artifact.get("sha256")),
+                result_fields=result_field_set,
+                field_lineages=[
+                    {
+                        "field_name": expected_result,
+                        "pb_field_name": mapping.get("pb_field"),
+                        "result_field_name": mapping.get("result_field"),
+                        "binding_control_name": mapping.get("editor"),
+                        "grid_column_name": mapping.get("grid_column"),
+                        "numeric": bool(str(mapping.get("repository") or "").strip()),
+                        "repository_name": mapping.get("repository"),
+                    }
+                ],
+            )
+            issues.extend(dict(item) for item in lineage_result.issues)
+        verified_mappings.append({**mapping, "handoff_mapping_id": handoff_mapping_id})
+
+    metadata = {
+        "status": "passed" if not issues else "blocked",
+        "schema_version": str(payload.get("schema_version") or ""),
+        "handoff_artifact": {
+            "path": handoff_path,
+            "sha256": f"sha256:{expected_handoff_sha}" if expected_handoff_sha else "",
+        },
+        "mappings": verified_mappings,
+        "issues": issues,
+    }
+    return issues, metadata
+
+
+def verify_pb_migration_analysis_document(markdown_text: str) -> HarnessResult:
+    """Require a structured, artifact-bound PB-to-C# implementation handoff."""
+    text = str(markdown_text or "")
+    json_contract = _pb_handoff_json_contract(text)
+    contract = json_contract or _pb_handoff_markdown_contract(text)
+    issues, normalized_contract = _validate_pb_handoff_contract(contract)
+    if contract is None:
+        issues.insert(
+            0,
+            {
+                "code": "migration_handoff_structured_contract_required",
+                "severity": "error",
+                "message": "Keyword prose is not a handoff contract; provide structured sections/tables or schema v1 JSON.",
+            },
+        )
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
         "check": "migration_analysis_document_quality",
-        "quality_model": "composition_and_evidence_over_length",
-        "reference_baseline": "019f178e-7387-7172-b99b-d97f9c5cf441",
-        "reference_baseline_use": "content structure and implementation usefulness only; no hard line-count or code-block-count gate",
-        "line_count": len(lines),
-        "heading_count": len(headings),
-        "code_fence_pairs": code_fence_pairs,
-        "section_coverage": section_coverage,
-        "evidence_anchor_coverage": evidence_anchor_coverage,
-        "development_spec_coverage": development_spec_coverage,
-        "development_spec_detail_coverage": development_spec_detail_coverage,
-        "cross_agent_contract": {
-            "analysis_agent_output": "migration analysis plus development specification",
-            "developer_agent_input": "same document; no hidden chat context or source re-inference required",
-            "developer_agent_handoff_ready": readiness["developer_agent_handoff_ready"],
+        "quality_model": "structured_artifact_bound_handoff",
+        "handoff_format": "json" if json_contract is not None else "markdown_tables" if contract is not None else "none",
+        "line_count": len(text.splitlines()),
+        "heading_count": sum(bool(re.match(r"^\s*#{1,4}\s+\S", line)) for line in text.splitlines()),
+        "structured_contract": normalized_contract,
+        "readiness": {
+            "developer_agent_handoff_ready": not issues,
+            "hidden_session_context_required": False,
         },
-        "readiness": readiness,
         "issues": issues,
         "token_optimizer_status": "passthrough",
-        "token_optimizer_status_reason": (
-            "Migration analysis markdown is source-of-truth handoff context for C# generation and is not compressed."
-        ),
+        "token_optimizer_status_reason": "Migration handoff content is contract-sensitive and was not compressed.",
     }
     return HarnessResult(
         success=not issues,
         stdout=json.dumps(metadata, ensure_ascii=False, sort_keys=True),
-        stderr="" if not issues else "PB-to-C# migration analysis markdown is below the minimum handoff standard.",
+        stderr="" if not issues else "PB-to-C# migration handoff is not structurally complete.",
         exit_code=0 if not issues else 1,
         metadata=metadata,
     )
@@ -3359,15 +5667,26 @@ def _grid_column_mapping_issues(
                     "message": "GridColumn csharp_name must be a valid C# identifier distinct from XML Name.",
                 }
             )
-        elif not column.csharp_name.startswith(prefix):
+        elif re.fullmatch(r"[A-Z_][A-Z0-9_]*", column.field_name) and column.csharp_name != expected_xml_name:
             issues.append(
                 {
-                    "code": "grid_column_csharp_prefix_mismatch",
+                    "code": "grid_column_csharp_name_mismatch",
+                    "severity": "error",
+                    "field_name": column.field_name,
+                    "expected": expected_xml_name,
+                    "actual": column.csharp_name,
+                    "message": "GridColumn csharp_name must equal col<Role>_<FIELD> under the packaged canonical naming family.",
+                }
+            )
+        elif not re.fullmatch(r"[A-Z_][A-Z0-9_]*", column.field_name) and not column.csharp_name.startswith(prefix):
+            issues.append(
+                {
+                    "code": "grid_column_special_field_mapping_prefix_mismatch",
                     "severity": "error",
                     "field_name": column.field_name,
                     "expected_prefix": prefix,
                     "actual": column.csharp_name,
-                    "message": "GridColumn csharp_name must use the verified custom or role prefix.",
+                    "message": "A special-character PB field requires one explicit valid C# member mapping under the canonical role prefix.",
                 }
             )
         elif column.csharp_name in seen_csharp:
@@ -3931,12 +6250,15 @@ def build_csharp_grid_column_designer_plan(
         )
     numeric_repository_by_column: Dict[str, str] = {}
     for column in normalized:
-        field_upper = str(column.field_name or "").upper()
         if _is_numeric_grid_column(column):
-            if "QTY" in field_upper or "WGT" in field_upper:
-                numeric_repository_by_column[column.csharp_name] = "rpsSpinQty"
-            else:
-                numeric_repository_by_column[column.csharp_name] = "rpsSpinAmt"
+            csharp_field_name = (
+                column.csharp_name[len(resolved_prefix) :]
+                if column.csharp_name.startswith(resolved_prefix)
+                else column.csharp_name
+            )
+            numeric_repository_by_column[column.csharp_name] = (
+                f"rpsSpin{csharp_field_name}"
+            )
     required_repositories = sorted(set(numeric_repository_by_column.values()))
     declarations = [
         f"private DevExpress.XtraGrid.GridControl {grid_names['grid_control_name']};",
@@ -4211,12 +6533,56 @@ def _requested_csharp_form_class(program_key: str, form_class: str) -> str:
     return program if program.lower().endswith("form") else f"{program}Form"
 
 
+PACKAGED_STANDALONE_SURFACE_BASES = {
+    "form": "System.Windows.Forms.Form",
+    "usercontrol": "System.Windows.Forms.UserControl",
+}
+
+
+def _declared_csharp_class_bases(source: str, class_name: str) -> List[str]:
+    pattern = re.compile(
+        rf"\b(?:(?:public|internal|protected|private|abstract|sealed|partial)\s+)*"
+        rf"class\s+{re.escape(class_name)}\s*(?:\:\s*(?P<bases>[^\{{\r\n]+))?\s*\{{",
+        re.IGNORECASE,
+    )
+    match = pattern.search(source)
+    if not match:
+        return []
+    return [
+        re.sub(r"\s+", "", item).replace("global::", "")
+        for item in str(match.group("bases") or "").split(",")
+        if str(item).strip()
+    ]
+
+
+def _csharp_base_type_matches(source: str, declared: str, expected: str) -> bool:
+    actual = str(declared or "").replace("global::", "").strip()
+    target = str(expected or "").replace("global::", "").strip()
+    if not actual or not target:
+        return False
+    if actual.casefold() == target.casefold():
+        return True
+    if "." in actual or actual.casefold() != target.rsplit(".", 1)[-1].casefold():
+        return False
+    namespace = target.rsplit(".", 1)[0] if "." in target else ""
+    return bool(
+        namespace
+        and re.search(
+            rf"\busing\s+{re.escape(namespace)}\s*;",
+            source,
+            re.IGNORECASE,
+        )
+    )
+
+
 def _validate_csharp_program_form_contract(
     source: str,
     rules: Mapping[str, Any],
     *,
     program_key: str,
     form_class: str,
+    expected_base_type: str = "",
+    base_type_contract_required: bool = False,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     contract = rules.get("form_contract")
     contract = dict(contract) if isinstance(contract, Mapping) else {}
@@ -4227,6 +6593,12 @@ def _validate_csharp_program_form_contract(
         source,
     )
     mapped = bool(expected_form and expected_form.lower() in {item.lower() for item in declared_forms})
+    declared_bases = _declared_csharp_class_bases(source, expected_form) if expected_form else []
+    base_type_matched = bool(
+        expected_base_type
+        and declared_bases
+        and _csharp_base_type_matches(source, declared_bases[0], expected_base_type)
+    )
     issues: List[Dict[str, Any]] = []
     if contract.get("requested_mapping_required") is not True or not expected_form:
         issues.append(
@@ -4246,6 +6618,24 @@ def _validate_csharp_program_form_contract(
                 "declared_form_classes": declared_forms,
             }
         )
+    if base_type_contract_required and not expected_base_type:
+        issues.append(
+            {
+                "code": "generated_csharp_surface_base_type_required",
+                "severity": "error",
+                "message": "Generated Form/UserControl verification requires an evidence-bound or packaged fallback base type.",
+            }
+        )
+    elif base_type_contract_required and not base_type_matched:
+        issues.append(
+            {
+                "code": "generated_csharp_surface_base_type_mismatch",
+                "severity": "error",
+                "expected_base_type": expected_base_type,
+                "declared_bases": declared_bases,
+                "message": "The generated Form/UserControl must inherit the exact evidence-bound target base type.",
+            }
+        )
     return issues, {
         "requested_program_key": str(program_key or ""),
         "requested_form_class": str(form_class or ""),
@@ -4253,6 +6643,10 @@ def _validate_csharp_program_form_contract(
         "declared_form_classes": declared_forms,
         "profile_form_template": str(contract.get("form_template") or ""),
         "mapped": mapped,
+        "expected_base_type": expected_base_type,
+        "declared_bases": declared_bases,
+        "base_type_contract_required": base_type_contract_required,
+        "base_type_matched": base_type_matched,
     }
 
 
@@ -4556,17 +6950,31 @@ def _validate_csharp_result_field_contract(
     designer_view: _CSharpLexicalView,
     result_fields: Iterable[str] | None,
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    source_mappings, source_unresolved = _extract_csharp_result_field_mappings(source_view)
+    designer_mappings, designer_unresolved = _extract_csharp_result_field_mappings(designer_view)
+    mappings = source_mappings + designer_mappings
+    unresolved = source_unresolved + designer_unresolved
     if result_fields is None:
-        return [], {"status": "not_requested", "declared_result_fields": [], "mappings": []}
+        issues: List[Dict[str, Any]] = []
+        if mappings or unresolved:
+            issues.append(
+                {
+                    "code": "csharp_expected_result_fields_required",
+                    "severity": "error",
+                    "message": "Observed BindingField/FieldName mappings require explicit expected result_fields metadata.",
+                }
+            )
+        return issues, {
+            "status": "blocked" if issues else "not_applicable",
+            "declared_result_fields": [],
+            "mappings": mappings,
+            "unresolved_mappings": unresolved,
+        }
     declared = {
         _normalize_datawindow_field_name(item)
         for item in result_fields
         if _normalize_datawindow_field_name(item)
     }
-    source_mappings, source_unresolved = _extract_csharp_result_field_mappings(source_view)
-    designer_mappings, designer_unresolved = _extract_csharp_result_field_mappings(designer_view)
-    mappings = source_mappings + designer_mappings
-    unresolved = source_unresolved + designer_unresolved
     mismatches = [item for item in mappings if item["field_name"] not in declared]
     issues = [
         {
@@ -4629,7 +7037,7 @@ def _validate_designer_owned_ui_contract(
     role = str(source_role or "code-behind").strip().lower()
     if role in {"codebehind", "code_behind", "runtime"}:
         role = "code-behind"
-    findings = _designer_owned_ui_findings(source) if role != "designer" else []
+    findings = _designer_owned_ui_findings(source)
     designer_findings = _designer_owned_ui_findings(designer_source) if designer_source.strip() else []
     dynamic_allowances, evidence_accepted = _runtime_dynamic_ui_allowances(
         runtime_dynamic_ui_evidence
@@ -4653,10 +7061,39 @@ def _validate_designer_owned_ui_contract(
         for item in blocked
         if contract.get("static_ui_requires_designer") is True
     ]
+    if role != "code-behind":
+        issues.append(
+            {
+                "code": "csharp_source_role_invalid",
+                "severity": "error",
+                "source_role": role,
+                "message": "The primary source slot is always code-behind; Designer content belongs in designer_source_text.",
+            }
+        )
     source_classes = _declared_partial_class_names(source)
     designer_classes = _declared_partial_class_names(designer_source)
     companion_class_matches = bool(source_classes.intersection(designer_classes))
-    if require_designer_companion and role == "code-behind" and not designer_source.strip():
+    source_declares_initializer = bool(
+        re.search(
+            r"\b(?:private|protected|public|internal)\s+void\s+InitializeComponent\s*\(",
+            source,
+        )
+    )
+    designer_declares_initializer = bool(
+        re.search(
+            r"\b(?:private|protected|public|internal)\s+void\s+InitializeComponent\s*\(",
+            designer_source,
+        )
+    )
+    if source_declares_initializer:
+        issues.append(
+            {
+                "code": "csharp_code_behind_role_mismatch",
+                "severity": "error",
+                "message": "InitializeComponent implementation belongs only to the paired Designer artifact.",
+            }
+        )
+    if require_designer_companion and not designer_source.strip():
         issues.append(
             {
                 "code": "designer_companion_required",
@@ -4664,7 +7101,9 @@ def _validate_designer_owned_ui_contract(
                 "message": "Generated code-behind validation requires its paired Designer source.",
             }
         )
-    if designer_source.strip() and source_classes and not companion_class_matches:
+    if designer_source.strip() and (
+        not source_classes or not designer_classes or not companion_class_matches
+    ):
         issues.append(
             {
                 "code": "designer_companion_class_mismatch",
@@ -4672,6 +7111,14 @@ def _validate_designer_owned_ui_contract(
                 "message": "The supplied Designer companion must declare the same partial form class as code-behind.",
                 "code_behind_classes": sorted(source_classes),
                 "designer_classes": sorted(designer_classes),
+            }
+        )
+    if designer_source.strip() and not designer_declares_initializer and not allow_empty_designer:
+        issues.append(
+            {
+                "code": "designer_companion_initialize_component_missing",
+                "severity": "error",
+                "message": "The paired Designer artifact must structurally own InitializeComponent.",
             }
         )
     if designer_source.strip() and not designer_findings and not allow_empty_designer:
@@ -4683,11 +7130,13 @@ def _validate_designer_owned_ui_contract(
             }
         )
     split_contract_validated = bool(
-        role == "code-behind"
-        and designer_source.strip()
+        designer_source.strip()
         and designer_findings
         and companion_class_matches
+        and designer_declares_initializer
+        and not source_declares_initializer
         and not blocked
+        and role == "code-behind"
     )
     return issues, {
         "source_role": role,
@@ -4705,6 +7154,8 @@ def _validate_designer_owned_ui_contract(
             {item["category"] for item in designer_findings}
         ),
         "companion_class_matches": companion_class_matches,
+        "source_declares_initialize_component": source_declares_initializer,
+        "designer_declares_initialize_component": designer_declares_initializer,
         "split_contract_validated": split_contract_validated,
         "designer_companion_required": bool(require_designer_companion),
     }
@@ -5189,6 +7640,7 @@ def _validate_text_artifact_binding(
         "path": "",
         "expected_sha256": f"sha256:{expected_digest}" if expected_digest else "",
         "actual_sha256": "",
+        "size_bytes": 0,
         "readback_matches_supplied_text": False,
     }
     if not path_text and not expected_digest:
@@ -5212,23 +7664,30 @@ def _validate_text_artifact_binding(
         )
         metadata["status"] = "blocked"
         return issues, metadata, ""
-    path = Path(path_text)
     try:
-        raw_bytes = path.read_bytes()
-    except OSError as exc:
+        path, size, actual_digest, readback = _read_bounded_text_artifact(
+            path_text,
+            maximum_bytes=TARGET_CSHARP_ARTIFACT_MAX_BYTES,
+        )
+    except _ArtifactReadError as exc:
         issues.append(
             {
-                "code": f"target_{role}_artifact_unreadable",
+                "code": (
+                    f"target_{role}_artifact_size_limit_exceeded"
+                    if exc.code == "artifact_size_limit_exceeded"
+                    else f"target_{role}_artifact_unreadable"
+                ),
                 "severity": "error",
                 "message": f"Target {role} artifact path must be readable.",
                 "detail": str(exc),
+                "detail_code": exc.code,
             }
         )
         metadata["status"] = "blocked"
         return issues, metadata, ""
-    actual_digest = hashlib.sha256(raw_bytes).hexdigest()
     metadata["path"] = str(path.resolve())
     metadata["actual_sha256"] = f"sha256:{actual_digest}"
+    metadata["size_bytes"] = size
     if actual_digest != expected_digest:
         issues.append(
             {
@@ -5237,18 +7696,6 @@ def _validate_text_artifact_binding(
                 "message": f"Target {role} artifact SHA-256 does not match the expected digest.",
             }
         )
-    try:
-        readback = raw_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        issues.append(
-            {
-                "code": f"target_{role}_artifact_decode_failed",
-                "severity": "error",
-                "message": f"Target {role} artifact must be UTF-8 or UTF-8 with BOM.",
-                "detail": str(exc),
-            }
-        )
-        readback = ""
     metadata["readback_matches_supplied_text"] = readback == str(supplied_text or "")
     if not metadata["readback_matches_supplied_text"]:
         issues.append(
@@ -5271,6 +7718,40 @@ def _validate_target_artifact_path_separation(
     source_path = str(source_binding.get("path") or "")
     designer_path = str(designer_binding.get("path") or "")
     baseline_path = str(baseline_binding.get("path") or "")
+    if source_path and (
+        not source_path.lower().endswith(".cs")
+        or source_path.lower().endswith(".designer.cs")
+    ):
+        issues.append(
+            {
+                "code": "target_source_artifact_role_mismatch",
+                "severity": "error",
+                "path": source_path,
+                "message": "Code-behind evidence must bind to a non-Designer .cs file.",
+            }
+        )
+    if designer_path and not designer_path.lower().endswith(".designer.cs"):
+        issues.append(
+            {
+                "code": "target_designer_artifact_role_mismatch",
+                "severity": "error",
+                "path": designer_path,
+                "message": "Designer evidence must bind to an exact .Designer.cs file.",
+            }
+        )
+    if source_path and designer_path:
+        source_identity = Path(source_path).name[:-3]
+        designer_identity = Path(designer_path).name[: -len(".Designer.cs")]
+        if source_identity.casefold() != designer_identity.casefold():
+            issues.append(
+                {
+                    "code": "target_csharp_artifact_pair_identity_mismatch",
+                    "severity": "error",
+                    "source_path": source_path,
+                    "designer_path": designer_path,
+                    "message": "Code-behind and Designer file identities must form one exact pair.",
+                }
+            )
     if source_path and designer_path and source_path.lower() == designer_path.lower():
         issues.append(
             {
@@ -6855,23 +9336,32 @@ def _validate_devexpress_designer_grid_contract(
     artifact_issue_codes: List[str] = []
     artifact_path_resolved = ""
     artifact_sha256 = ""
+    artifact_size_bytes = 0
     artifact_source = ""
     artifact_text = str(layout_load_artifact_text or "")
     if str(layout_load_artifact_path or "").strip():
-        path = Path(layout_load_artifact_path)
         try:
-            path_xml_text = path.read_text(encoding="utf-8-sig")
-        except OSError as exc:
+            path, artifact_size_bytes, path_digest, path_xml_text = _read_bounded_text_artifact(
+                layout_load_artifact_path,
+                maximum_bytes=DEVEXPRESS_GRID_XML_MAX_BYTES,
+            )
+        except _ArtifactReadError as exc:
             issues.append(
                 {
-                    "code": "layout_load_artifact_unreadable",
+                    "code": (
+                        "layout_load_artifact_size_limit_exceeded"
+                        if exc.code == "artifact_size_limit_exceeded"
+                        else "layout_load_artifact_unreadable"
+                    ),
                     "severity": "error",
                     "message": "The explicit Layout Load artifact path must be readable.",
                     "detail": str(exc),
+                    "detail_code": exc.code,
                 }
             )
         else:
             artifact_path_resolved = str(path.resolve())
+            artifact_sha256 = f"sha256:{path_digest}"
             if artifact_text and artifact_text != path_xml_text:
                 issues.append(
                     {
@@ -6895,7 +9385,9 @@ def _validate_devexpress_designer_grid_contract(
             }
         )
     if artifact_text:
-        artifact_sha256 = "sha256:" + hashlib.sha256(artifact_text.encode("utf-8")).hexdigest()
+        if not artifact_sha256:
+            artifact_sha256 = "sha256:" + hashlib.sha256(artifact_text.encode("utf-8")).hexdigest()
+            artifact_size_bytes = len(artifact_text.encode("utf-8"))
         xml_result = verify_devexpress_grid_xml_contract(
             artifact_text,
             expected_columns=expected_input,
@@ -7053,6 +9545,7 @@ def _validate_devexpress_designer_grid_contract(
                 expected=expected_order,
                 actual=actual_order,
             )
+    numeric_repository_users: Dict[str, List[str]] = {}
     for visible_index, item in enumerate(normalized_columns, start=1):
         column_name = item["csharp_name"]
         field_name = item["field_name"]
@@ -7144,6 +9637,22 @@ def _validate_devexpress_designer_grid_contract(
                 )
             else:
                 repository_name = repository_match.group(1)
+                repository_field_token = (
+                    column_name[len(prefix) :]
+                    if column_name.startswith(prefix)
+                    else field_name
+                )
+                expected_repository_name = f"rpsSpin{repository_field_token}"
+                numeric_repository_users.setdefault(repository_name, []).append(field_name)
+                if repository_name != expected_repository_name:
+                    add_missing(
+                        "numeric_grid_repository_field_mismatch",
+                        "Each numeric GridColumn must use its exact field-specific rpsSpin<Field> repository.",
+                        column=column_name,
+                        field=field_name,
+                        expected=expected_repository_name,
+                        actual=repository_name,
+                    )
                 repository_declared = bool(
                     re.search(
                         rf"\b(?:private\s+)?(?:DevExpress\.XtraEditors\.Repository\.)?RepositoryItemSpinEdit\s+{re.escape(repository_name)}\s*;",
@@ -7182,6 +9691,15 @@ def _validate_devexpress_designer_grid_contract(
                     column=column_name,
                 )
 
+    for repository_name, fields in sorted(numeric_repository_users.items()):
+        if len(fields) > 1:
+            add_missing(
+                "numeric_grid_repository_shared",
+                "A numeric RepositoryItemSpinEdit cannot be shared across fields.",
+                repository=repository_name,
+                fields=sorted(fields),
+            )
+
     return issues, {
         "status": "passed" if not issues else "blocked",
         "expected_grid_role": expected_grid_role or "inferred",
@@ -7198,8 +9716,179 @@ def _validate_devexpress_designer_grid_contract(
         "layout_load_artifact_source": artifact_source,
         "layout_load_artifact_path": artifact_path_resolved,
         "layout_load_artifact_sha256": artifact_sha256,
+        "layout_load_artifact_size_bytes": artifact_size_bytes,
         "layout_load_artifact_issue_codes": artifact_issue_codes,
         "designer_source_used": True,
+        "numeric_repository_checks_executed": bool(
+            any(
+                _is_numeric_grid_data_type(str(item.get("data_type") or "")) is True
+                for item in normalized_columns
+            )
+        ),
+    }
+
+
+def _validate_canonical_csharp_style_family(
+    source_code: str,
+    designer_code: str,
+    canonical_style: Mapping[str, Any],
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    combined = f"{source_code}\n{designer_code}"
+    canonical_query_method = str(
+        canonical_style.get("query_method")
+        or CANONICAL_PB_CSHARP_STYLE_PROFILE["query_method"]
+    )
+    canonical_save_method = str(
+        canonical_style.get("save_method")
+        or CANONICAL_PB_CSHARP_STYLE_PROFILE["save_method"]
+    )
+    observed_call_methods = set(
+        re.findall(r"\b(Call[A-Z][A-Za-z0-9_]*)\s*\(", source_code)
+    )
+    query_methods = {
+        name
+        for name in observed_call_methods
+        if name in {"CallSelectProcedure", "CallViewQuery", canonical_query_method}
+        or any(token in name.casefold() for token in ("select", "query", "view", "retrieve"))
+    }
+    save_methods = {
+        name
+        for name in observed_call_methods
+        if name in {"CallSaveProcedure", "CallProc", canonical_save_method}
+        or any(token in name.casefold() for token in ("save", "persist", "commit", "upsert"))
+    }
+    command_handlers = {
+        name
+        for name in ("SearchCommand", "SaveCommand", "ClearCommand", "DeleteCommand")
+        if re.search(rf"\b{name}\s*\(", source_code)
+    }
+    direct_command_events = set(
+        re.findall(
+            r"\b(btn(?:Search|Save|Clear|Delete)[A-Za-z0-9_]*)_Click\s*\(",
+            source_code,
+            flags=re.IGNORECASE,
+        )
+    )
+    issues: List[Dict[str, Any]] = []
+    if len(query_methods) > 1:
+        issues.append(
+            {
+                "code": "mixed_query_method_family",
+                "severity": "error",
+                "observed": sorted(query_methods),
+                "message": "More than one query method family cannot coexist in one generated screen.",
+            }
+        )
+    noncanonical_query_methods = sorted(query_methods - {canonical_query_method})
+    if noncanonical_query_methods:
+        issues.append(
+            {
+                "code": "noncanonical_query_method",
+                "severity": "error",
+                "expected": canonical_query_method,
+                "observed": noncanonical_query_methods,
+                "message": "Generated query flow must use the single method selected by the fixed packaged profile.",
+            }
+        )
+    if len(save_methods) > 1:
+        issues.append(
+            {
+                "code": "mixed_save_method_family",
+                "severity": "error",
+                "observed": sorted(save_methods),
+                "message": "More than one save method family cannot coexist in one generated screen.",
+            }
+        )
+    noncanonical_save_methods = sorted(save_methods - {canonical_save_method})
+    if noncanonical_save_methods:
+        issues.append(
+            {
+                "code": "noncanonical_save_method",
+                "severity": "error",
+                "expected": canonical_save_method,
+                "observed": noncanonical_save_methods,
+                "message": "Generated SAVE flow must use the single method selected by the fixed packaged profile.",
+            }
+        )
+    if command_handlers and direct_command_events:
+        issues.append(
+            {
+                "code": "mixed_command_event_family",
+                "severity": "error",
+                "command_handlers": sorted(command_handlers),
+                "direct_events": sorted(direct_command_events),
+                "message": "Command overrides and direct search/save/clear/delete click handlers cannot be mixed.",
+            }
+        )
+
+    legacy_naming_patterns = {
+        "numeric": r"\bspn[A-Z][A-Za-z0-9_]*\b",
+        "date": r"\bdt[A-Z][A-Za-z0-9_]*\b",
+        "panel": r"\bpnl[A-Z][A-Za-z0-9_]*\b",
+        "numeric_repository": r"\brepSpin[A-Z][A-Za-z0-9_]*\b",
+    }
+    legacy_names = {
+        role: sorted(set(re.findall(pattern, combined)))
+        for role, pattern in legacy_naming_patterns.items()
+    }
+    legacy_names = {role: names for role, names in legacy_names.items() if names}
+    if legacy_names:
+        issues.append(
+            {
+                "code": "noncanonical_control_naming_family",
+                "severity": "error",
+                "observed": legacy_names,
+                "expected": dict(canonical_style.get("control_names") or CANONICAL_PB_CSHARP_STYLE_PROFILE["control_names"]),
+                "message": "Generated controls must use one fixed Spin/ymd/pn/grd/gvw/col/rpsSpin naming family.",
+            }
+        )
+    typed_name_rules = {
+        "numeric": ("SpinEdit|u_SpinEdit", r"Spin[A-Z0-9_][A-Za-z0-9_]*"),
+        "date": ("DateEdit|u_DateEdit", r"ymd[A-Z0-9_][A-Za-z0-9_]*"),
+        "panel": ("PanelControl|u_Panel", r"pn[A-Z0-9_][A-Za-z0-9_]*"),
+        "grid": ("GridControl|u_GridControl", r"grd[A-Z0-9_][A-Za-z0-9_]*"),
+        "view": ("GridView", r"gvw[A-Z0-9_][A-Za-z0-9_]*"),
+        "grid_column": ("GridColumn", r"col[A-Za-z0-9]+_[A-Z0-9_]+"),
+        "numeric_repository": (
+            "RepositoryItemSpinEdit",
+            r"rpsSpin[A-Z0-9_][A-Za-z0-9_]*",
+        ),
+    }
+    typed_name_mismatches: Dict[str, List[str]] = {}
+    for role, (type_tail_pattern, expected_name_pattern) in typed_name_rules.items():
+        declared_names = set(
+            re.findall(
+                rf"\b(?:[A-Za-z_][A-Za-z0-9_]*\.)*(?:{type_tail_pattern})\s+([A-Za-z_][A-Za-z0-9_]*)\s*;",
+                combined,
+                flags=re.IGNORECASE,
+            )
+        )
+        mismatches = sorted(
+            name for name in declared_names if not re.fullmatch(expected_name_pattern, name)
+        )
+        if mismatches:
+            typed_name_mismatches[role] = mismatches
+    if typed_name_mismatches:
+        issues.append(
+            {
+                "code": "noncanonical_typed_control_name",
+                "severity": "error",
+                "observed": typed_name_mismatches,
+                "expected": dict(canonical_style.get("control_names") or CANONICAL_PB_CSHARP_STYLE_PROFILE["control_names"]),
+                "message": "Typed controls must use the packaged Spin/ymd/pn/grd/gvw/col/rpsSpin naming family.",
+            }
+        )
+    return issues, {
+        "status": "passed" if not issues else "blocked",
+        "style_family_id": canonical_style.get("style_family_id", ""),
+        "query_method": canonical_query_method,
+        "save_method": canonical_save_method,
+        "query_methods": sorted(query_methods),
+        "save_methods": sorted(save_methods),
+        "command_handlers": sorted(command_handlers),
+        "direct_command_events": sorted(direct_command_events),
+        "legacy_names": legacy_names,
+        "typed_name_mismatches": typed_name_mismatches,
     }
 
 
@@ -7209,11 +9898,11 @@ def verify_migration_generated_csharp_style(
     designer_source_text: str = "",
     profile_evidence: Any = None,
     program_key: str = "",
-    fallback_program_key: str = "",
     form_class: str = "",
     source_role: str = "code-behind",
     runtime_dynamic_ui_evidence: Any = None,
     result_fields: Iterable[str] | None = None,
+    designer_ui_contract: Mapping[str, Any] | None = None,
     expected_control_contracts: Iterable[Mapping[str, Any]] | None = None,
     no_control_contract_evidence: Any = None,
     evidence_registry: Any = None,
@@ -7223,6 +9912,11 @@ def verify_migration_generated_csharp_style(
     target_designer_sha256: str = "",
     baseline_designer_path: str | Path = "",
     baseline_designer_sha256: str = "",
+    target_project_baseline: Any = None,
+    current_project_path: str | Path = "",
+    current_project_sha256: str = "",
+    standalone_surface_kind: str = "",
+    field_lineage_contract: Mapping[str, Any] | None = None,
     expected_grid_role: str = "",
     expected_grid_suffix: str = "",
     expected_grid_prefix: str = "",
@@ -7232,9 +9926,6 @@ def verify_migration_generated_csharp_style(
     layout_load_artifact_text: str = "",
     layout_load_evidence: Any = None,
     require_designer_companion: bool = False,
-    primary_style_evidence_paths: Any = None,
-    excluded_paths: Any = None,
-    require_author_tagged_evidence: bool = False,
 ) -> HarnessResult:
     """Block generated C# patterns that do not match control, Designer, and grid contracts."""
     result_fields_list = None if result_fields is None else list(result_fields)
@@ -7257,8 +9948,6 @@ def verify_migration_generated_csharp_style(
             }
         )
     normalized_program_key = str(program_key or "").upper()
-    primary_paths = [str(path) for path in (primary_style_evidence_paths or []) if str(path)]
-    excluded = [str(path) for path in (excluded_paths or []) if str(path)]
     profile_context, profile_issues = _consume_profile_evidence(profile_evidence, "csharp")
     issues.extend(profile_issues)
     if not profile_issues:
@@ -7270,21 +9959,54 @@ def verify_migration_generated_csharp_style(
         )
         issues.extend(applied_issues)
     profile_rules = dict(profile_context.get("rules") or {}) if isinstance(profile_context, dict) else {}
+    packaged_canonical_style = profile_rules.get("canonical_style")
+    packaged_canonical_style = (
+        dict(packaged_canonical_style)
+        if isinstance(packaged_canonical_style, Mapping)
+        else dict(CANONICAL_PB_CSHARP_STYLE_PROFILE)
+    )
+    canonical_style_issues, canonical_style_contract = _validate_canonical_csharp_style_family(
+        source_view.code,
+        designer_view.code,
+        packaged_canonical_style,
+    )
+    issues.extend(canonical_style_issues)
+    required_canonical_fields = {
+        "style_family_id",
+        "event_family",
+        "query_method",
+        "save_method",
+        "control_names",
+    }
+    if profile_rules and not required_canonical_fields.issubset(packaged_canonical_style):
+        issues.append(
+            {
+                "code": "packaged_canonical_style_contract_missing",
+                "severity": "error",
+                "message": "C# verification requires the fixed canonical style family embedded in the packaged profile.",
+            }
+        )
+    canonical_style_profile_hash = "sha256:" + hashlib.sha256(
+        json.dumps(
+            packaged_canonical_style,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    canonical_style_contract["profile_hash"] = canonical_style_profile_hash
     designer_contract_rules = profile_rules.get("designer_contract")
     designer_contract_rules = (
         dict(designer_contract_rules)
         if isinstance(designer_contract_rules, Mapping)
         else {}
     )
-    target_artifact_required = bool(
-        designer_contract_rules.get("target_artifact_binding_required")
-    )
     source_artifact_issues, source_artifact_binding, _ = _validate_text_artifact_binding(
         source_text,
         path_value=target_source_path,
         expected_sha256=target_source_sha256,
         role="source",
-        required=target_artifact_required,
+        required=True,
     )
     issues.extend(source_artifact_issues)
     designer_artifact_issues, designer_artifact_binding, _ = _validate_text_artifact_binding(
@@ -7292,7 +10014,7 @@ def verify_migration_generated_csharp_style(
         path_value=target_designer_path,
         expected_sha256=target_designer_sha256,
         role="designer",
-        required=bool(target_artifact_required and designer_source_text.strip()),
+        required=bool(designer_source_text.strip() or require_designer_companion),
     )
     issues.extend(designer_artifact_issues)
     baseline_artifact_issues, baseline_artifact_binding, baseline_designer_source = (
@@ -7347,11 +10069,58 @@ def verify_migration_generated_csharp_style(
         ),
     )
     issues.extend(registry_issues)
+    target_project_baseline_result = None
+    expected_surface_base_type = ""
+    surface_contract_source = ""
+    if target_project_baseline is not None:
+        target_project_baseline_result = verify_target_project_baseline(
+            target_project_baseline,
+            current_project_path=current_project_path,
+            current_project_sha256=current_project_sha256,
+        )
+        issues.extend(target_project_baseline_result.metadata.get("issues", []))
+        if target_project_baseline_result.success:
+            verified_baseline = target_project_baseline_result.metadata[
+                "target_project_baseline"
+            ]
+            expected_surface_base_type = str(
+                verified_baseline.get("generated_surface_base_type") or ""
+            )
+            surface_contract_source = "target_project_baseline"
+    else:
+        normalized_surface_kind = str(standalone_surface_kind or "").strip().lower()
+        expected_surface_base_type = PACKAGED_STANDALONE_SURFACE_BASES.get(
+            normalized_surface_kind,
+            "",
+        )
+        if normalized_surface_kind and not expected_surface_base_type:
+            issues.append(
+                {
+                    "code": "standalone_surface_kind_invalid",
+                    "severity": "error",
+                    "actual": standalone_surface_kind,
+                    "allowed": sorted(PACKAGED_STANDALONE_SURFACE_BASES),
+                    "message": "Standalone fallback must explicitly select form or usercontrol.",
+                }
+            )
+        elif expected_surface_base_type:
+            surface_contract_source = "packaged_standalone_fallback"
+        else:
+            issues.append(
+                {
+                    "code": "target_project_baseline_or_standalone_fallback_required",
+                    "severity": "error",
+                    "message": "Final generated C# verification requires a validated target-project baseline or an explicit packaged standalone Form/UserControl fallback.",
+                }
+            )
+
     program_form_issues, program_form_contract = _validate_csharp_program_form_contract(
         source_view.code,
         profile_rules,
         program_key=program_key,
         form_class=form_class,
+        expected_base_type=expected_surface_base_type,
+        base_type_contract_required=True,
     )
     issues.extend(program_form_issues)
     designer_issues, designer_owned_ui_contract = _validate_designer_owned_ui_contract(
@@ -7370,16 +10139,8 @@ def verify_migration_generated_csharp_style(
         result_fields_list,
     )
     issues.extend(result_field_issues)
-    control_designer_source = (
-        designer_source
-        if designer_view.code.strip()
-        else (source if str(source_role).lower() == "designer" else "")
-    )
-    control_designer_code = (
-        designer_view.code
-        if designer_view.code.strip()
-        else (source_view.code if str(source_role).lower() == "designer" else "")
-    )
+    control_designer_source = designer_source
+    control_designer_code = designer_view.code
     control_contract_issues, control_contracts, exact_control_properties = (
         _validate_expected_control_contracts(
             control_designer_source,
@@ -7433,21 +10194,26 @@ def verify_migration_generated_csharp_style(
             for item in consumed_control_exceptions
             if item.get("control") == control_contract.get("control")
         ]
-    grid_designer_source = designer_source if designer_view.code.strip() else (source if str(source_role).lower() == "designer" else "")
-    grid_designer_code = (
-        designer_view.code
-        if designer_view.code.strip()
-        else (source_view.code if str(source_role).lower() == "designer" else "")
-    )
+    grid_designer_source = designer_source
+    grid_designer_code = designer_view.code
     explicit_grid_requested = bool(
         expected_grid_contracts_list
         or str(expected_grid_role or expected_grid_suffix or expected_grid_prefix).strip()
         or expected_grid_columns_list is not None
         or str(layout_load_artifact_path or layout_load_artifact_text).strip()
     )
-    raw_grid_source = designer_source_text if str(designer_source_text or "").strip() else (
-        source_text if str(source_role).lower() == "designer" else ""
+    devexpress_grid_present = bool(
+        re.search(r"\bDevExpress\.XtraGrid\.(?:GridControl|Views\.Grid\.GridView)\b", designer_view.code)
     )
+    if require_designer_companion and devexpress_grid_present and not explicit_grid_requested:
+        issues.append(
+            {
+                "code": "expected_grid_contract_metadata_missing",
+                "severity": "error",
+                "message": "A generated DevExpress grid requires explicit expected grid columns/result metadata and layout contract evidence.",
+            }
+        )
+    raw_grid_source = designer_source_text
     if explicit_grid_requested and _has_unknown_csharp_preprocessor(raw_grid_source):
         issues.append(
             {
@@ -7499,10 +10265,92 @@ def verify_migration_generated_csharp_style(
             layout_load_evidence=layout_load_evidence,
         )
         issues.extend(grid_contract_issues)
+    field_lineage_issues, field_lineage_contract_result = (
+        _validate_artifact_bound_field_lineage_contract(
+            field_lineage_contract,
+            source_text=source_view.code,
+            designer_source=designer_source,
+            result_fields=result_fields_list or (),
+            source_artifact_binding=source_artifact_binding,
+            designer_artifact_binding=designer_artifact_binding,
+        )
+    )
+    issues.extend(field_lineage_issues)
     tab_order_issues, input_tab_order_contract = _validate_input_tab_order(
-        designer_view.code if designer_view.code.strip() else (source_view.code if str(source_role).lower() == "designer" else "")
+        designer_view.code
     )
     issues.extend(tab_order_issues)
+    designer_ui_contract_result: Dict[str, Any] = {"status": "not_requested"}
+    if designer_ui_contract is not None:
+        if not isinstance(designer_ui_contract, Mapping):
+            mapping_issue = {
+                "code": "designer_ui_contract_mapping_invalid",
+                "severity": "error",
+                "message": "designer_ui_contract must be a mapping when supplied.",
+            }
+            issues.append(mapping_issue)
+            designer_ui_contract_result = {
+                "success": False,
+                "stdout": json.dumps(
+                    {"status": "blocked", "issue_count": 1},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                "stderr": "PB Designer UI contract validation failed.",
+                "exit_code": 1,
+                "issues": [dict(mapping_issue)],
+                "metadata": {
+                    "status": "blocked",
+                    "issues": [dict(mapping_issue)],
+                    "contract": "pb_designer_ui_contract",
+                    "verification_scope": "static_designer_source",
+                    "actual_live_designer_load_observed": False,
+                },
+            }
+        else:
+            ui_contract = dict(designer_ui_contract)
+            ui_result = validate_pb_designer_ui_contract(
+                designer_source,
+                form_source=source,
+                form_class_name=str(
+                    ui_contract.get("form_class_name")
+                    or ui_contract.get("form_class")
+                    or program_form_contract.get("expected_form_class")
+                    or ""
+                ),
+                expected_base_type=str(ui_contract.get("expected_base_type") or ""),
+                base_type_evidence=(
+                    ui_contract.get("base_type_evidence")
+                    if isinstance(ui_contract.get("base_type_evidence"), Mapping)
+                    else None
+                ),
+                numeric_fields=ui_contract.get("numeric_fields") or (),
+                field_lineages=ui_contract.get("field_lineages") or (),
+                result_fields=result_fields_list or (),
+                label_editor_pairs=ui_contract.get("label_editor_pairs") or (),
+                year_fields=ui_contract.get("year_fields") or (),
+                proven_year_wrappers=ui_contract.get("proven_year_wrappers") or (),
+                srd_path=ui_contract.get("srd_path"),
+                srd_sha256=str(ui_contract.get("srd_sha256") or ""),
+                caption_field_mappings=ui_contract.get("caption_field_mappings") or (),
+                code_behind_source=source,
+                input_names=ui_contract.get("input_names"),
+                dynamic_property_allowlist=ui_contract.get("dynamic_property_allowlist") or (),
+                baseline_designer_path=baseline_designer_path or None,
+                baseline_designer_sha256=str(baseline_designer_sha256 or ""),
+            )
+            issues.extend(dict(issue) for issue in ui_result.issues)
+            designer_ui_contract_result = ui_result.to_dict()
+        designer_ui_contract_result["input_contract"] = {
+            "source_view": "comments_removed",
+            "designer_view": "comments_removed",
+            "result_fields": list(result_fields_list or []),
+            "baseline_designer": {
+                "path": str(baseline_designer_path or ""),
+                "expected_sha256": str(baseline_designer_sha256 or ""),
+                "artifact_binding": dict(baseline_artifact_binding),
+            },
+        }
     profile_consumption = dict(
         profile_context.get("consumption", profile_context)
         if isinstance(profile_context, dict)
@@ -7522,102 +10370,6 @@ def verify_migration_generated_csharp_style(
             if group not in applied_groups:
                 applied_groups.append(group)
         profile_consumption["applied_rule_groups"] = applied_groups
-
-    if require_author_tagged_evidence and not primary_paths and not profile_consumption.get("consumed"):
-        issues.append(
-            {
-                "code": "author_tagged_style_evidence_required",
-                "severity": "error",
-                "message": (
-                    "Target-style generated C# must name primary style evidence resolved from "
-                    "a reviewed procedure-to-program mapping."
-                ),
-            }
-        )
-    excluded_keys = (
-        {key.upper() for key in AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["baseline_exclusions"]}
-        if require_author_tagged_evidence
-        else set()
-    )
-    excluded_seed_used = any(key in path.upper() for key in excluded_keys for path in primary_paths)
-    expected_style_program_key = normalized_program_key
-    normalized_fallback_program_key = str(fallback_program_key or "").upper()
-    if require_author_tagged_evidence and normalized_program_key in excluded_keys:
-        expected_style_program_key = normalized_fallback_program_key
-        if not normalized_fallback_program_key:
-            issues.append(
-                {
-                    "code": "author_tagged_fallback_program_key_required",
-                    "severity": "error",
-                    "message": (
-                        "Excluded or current repair targets cannot seed their own style. Provide a fallback_program_key "
-                        "resolved from established same-module evidence."
-                    ),
-                    "program_key": normalized_program_key,
-                }
-            )
-    if require_author_tagged_evidence and expected_style_program_key and primary_paths:
-        expected_paths = _expected_author_tagged_style_paths(expected_style_program_key)
-        if expected_paths and not _author_tagged_evidence_paths_match(expected_style_program_key, primary_paths):
-            issues.append(
-                {
-                    "code": "author_tagged_style_evidence_path_mismatch",
-                    "severity": "error",
-                    "message": (
-                        "Primary style evidence must match the reviewed procedure-to-program same-program "
-                        "C# and Designer mapping, not an arbitrary same-project file."
-                    ),
-                    "program_key": normalized_program_key,
-                    "expected_style_program_key": expected_style_program_key,
-                    "expected_paths": expected_paths,
-                    "actual_paths": primary_paths,
-                }
-            )
-        elif not expected_paths:
-            issues.append(
-                {
-                    "code": "author_tagged_style_mapping_missing",
-                    "severity": "error",
-                    "message": "No bundled generalized C# mapping exists for the requested style program key.",
-                    "program_key": normalized_program_key,
-                    "expected_style_program_key": expected_style_program_key,
-                }
-            )
-    if require_author_tagged_evidence and normalized_program_key in excluded_keys and not primary_paths:
-        issues.append(
-            {
-                "code": "excluded_program_cannot_seed_author_tagged_style",
-                "severity": "error",
-                "message": "This program is excluded from seed style evidence and must be verified against another matched baseline source.",
-                "program_key": normalized_program_key,
-            }
-        )
-    if require_author_tagged_evidence and excluded_seed_used:
-        issues.append(
-            {
-                "code": "excluded_path_cannot_seed_author_tagged_style",
-                "severity": "error",
-                "message": "Current repair targets or SP-only/non-screen mappings cannot be used as primary C# style evidence.",
-                "program_key": normalized_program_key,
-            }
-        )
-
-    if require_author_tagged_evidence and re.search(
-        r"dbClient\.(?:GetDataSetFromSP|ExecSPTrn|ExecSP)\s*\(",
-        source,
-    ) and not re.search(
-        r"new\s+DbParameter\s*\(", source
-    ):
-        issues.append(
-            {
-                "code": "author_tagged_sp_call_missing_explicit_dbparameters",
-                "severity": "error",
-                "message": (
-                    "Matched target screen retrieve code keeps explicit DbParameter entries near "
-                    "dbClient.GetDataSetFromSP; do not present a bare SP call as style-complete generated C#."
-                ),
-            }
-        )
 
     if re.search(r"<PackageReference\s+Include=\"DevExpress", source, flags=re.IGNORECASE) or re.search(
         r"\bdotnet\s+add\s+package\s+DevExpress", source, flags=re.IGNORECASE
@@ -7729,7 +10481,7 @@ def verify_migration_generated_csharp_style(
                 "message": (
                     "Target-style screen retrieval code should not invent private sealed DTO/context "
                     "classes such as RetrieveContext. Keep ordinary retrieve parameters as local variables "
-                    "near the procedure call unless the target source already proves this pattern."
+                    "near the procedure call as required by the packaged style contract."
                 ),
             }
         )
@@ -7742,7 +10494,7 @@ def verify_migration_generated_csharp_style(
                 "severity": "error",
                 "message": (
                     "Generated C# should not create a context object flow for ordinary screen retrieve "
-                    "parameters unless the target program already uses that style."
+                    "parameters because it is outside the packaged style contract."
                 ),
             }
         )
@@ -7781,17 +10533,17 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_set_visible_index_helper_detected",
                 "severity": "error",
-                "message": "Do not generate a runtime SetVisibleIndex helper when the target style expects explicit Designer columns and direct column property assignments.",
+                "message": "Do not generate a runtime SetVisibleIndex helper when the packaged style contract requires explicit Designer columns and direct column property assignments.",
             }
         )
     generated_helper_patterns = {
         "generated_call_detail_query_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+CallDetailQuery\s*\(",
-            "Do not invent CallDetailQuery for target focused-row detail handling; use the target event shape or proven fnFocusedRowChanged/CallViewQuery pattern.",
+            "Do not invent CallDetailQuery for focused-row detail handling; use the single method family declared by the packaged style contract.",
         ),
         "generated_default_search_values_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+SetDefaultSearchValues\s*\(",
-            "Do not invent SetDefaultSearchValues for ordinary target screens; set default control values directly in Load/Clear unless a target file proves that helper.",
+            "Do not invent SetDefaultSearchValues for ordinary screens; set default control values directly in Load/Clear under the packaged style contract.",
         ),
         "generated_list_column_layout_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?void\s+ApplyListColumnLayout\s*\(",
@@ -7799,15 +10551,15 @@ def verify_migration_generated_csharp_style(
         ),
         "generated_basis_year_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?string\s+GetDerivedYear\s*\(",
-            "Do not invent GetDerivedYear for date inputs; read the date control near the procedure call in the same style as existing screens.",
+            "Do not invent GetDerivedYear for date inputs; keep the date value near the procedure call as required by the packaged style contract.",
         ),
         "generated_customer_like_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?string\s+GetEntityCodeLike\s*\(",
-            "Do not invent GetEntityCodeLike wrappers; keep simple LIKE parameter composition near the SP call unless target code already has the helper.",
+            "Do not invent GetEntityCodeLike wrappers; keep simple parameter handling within the packaged style contract.",
         ),
         "generated_validate_search_helper_detected": (
             r"\b(?:private|protected|public|internal)?\s*(?:static\s+)?bool\s+ValidateSearch\s*\(",
-            "Do not add generic ValidateSearch helpers for simple search screens; use existing required-control behavior or proven local validation patterns.",
+            "Do not add generic ValidateSearch helpers for simple search screens; use behavior evidence only to implement validation within the packaged style contract.",
         ),
     }
     for code, (pattern, message) in generated_helper_patterns.items():
@@ -7852,7 +10604,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_dbnull_ternary_row_value_detected",
                 "severity": "error",
-                "message": "Do not generate DBNull ternary wrappers around focused-row values for ordinary target detail lookups; follow target direct row-value access unless source proves otherwise.",
+                "message": "Do not generate DBNull ternary wrappers around focused-row values outside the packaged direct row-value contract.",
             }
         )
     dbnull_variant_patterns = {
@@ -7867,7 +10619,7 @@ def verify_migration_generated_csharp_style(
                 {
                     "code": code,
                     "severity": "error",
-                    "message": "Do not generate alternate DBNull/DataRow null wrappers for ordinary matched-source C# row access.",
+                "message": "Do not generate alternate DBNull/DataRow null wrappers outside the packaged style contract.",
                 }
             )
     if re.search(r"_selectType\s*==\s*SelectType\.DETAIL\s*\?", source):
@@ -7933,7 +10685,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_direct_grid_datasource_null_reset_detected",
                 "severity": "error",
-                "message": "Do not generate direct grd*.DataSource = null resets for target-wrapper screens; use the reset helper proven by active target evidence.",
+                "message": "Do not generate direct grd*.DataSource = null resets outside the packaged wrapper contract.",
             }
         )
     if any(
@@ -7949,7 +10701,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_month_end_datetime_block_detected",
                 "severity": "error",
-                "message": "Do not generate ad hoc month-end DateTime construction blocks in migrated screen code unless matched target evidence proves that exact pattern.",
+                "message": "Do not generate ad hoc month-end DateTime construction blocks outside the packaged style contract.",
             }
         )
     if re.search(r"new\s+DateTime\s*\(\s*ymd[A-Za-z0-9_]*\.DateTime\.Year\s*-\s*1\s*,\s*12\s*,\s*31\s*\)", source):
@@ -7957,7 +10709,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_year_end_datetime_block_detected",
                 "severity": "error",
-                "message": "Do not generate ad hoc year-end DateTime construction blocks from DateEdit values unless matched target evidence proves that exact pattern.",
+                "message": "Do not generate ad hoc year-end DateTime construction blocks outside the packaged style contract.",
             }
         )
     if re.search(r"\(\s*ymd[A-Za-z0-9_]*\.DateTime\.Year\s*-\s*1\s*\)\s*\.ToString\s*\(\s*\"0000\"\s*\)\s*\+\s*\"1231\"", source):
@@ -7973,7 +10725,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_percent_null_coalesce_detected",
                 "severity": "error",
-                "message": "Do not generate null-coalescing wildcard defaults such as _entityCode ?? \"%\" for migration C# unless the target code proves that pattern.",
+                "message": "Do not generate null-coalescing wildcard defaults such as _entityCode ?? \"%\" outside the packaged style contract.",
             }
         )
     if re.search(r"btn[A-Z0-9_]*\.EditValue\s*==\s*null\s*\?\s*string\.Empty", source):
@@ -7981,7 +10733,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_buttonedit_null_stringempty_ternary_detected",
                 "severity": "error",
-                "message": "Do not generate ButtonEdit null/string.Empty ternary extraction for ordinary search parameters; use the target's direct Text/EditValue style.",
+                "message": "Do not generate ButtonEdit null/string.Empty ternary extraction outside the packaged direct-value contract.",
             }
         )
     if re.search(r"string\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*Convert\.ToString\s*\(\s*rad[A-Z0-9_]*\.EditValue\s*\)", source):
@@ -7989,7 +10741,7 @@ def verify_migration_generated_csharp_style(
             {
                 "code": "generated_radio_convert_tostring_local_detected",
                 "severity": "error",
-                "message": "Do not generate extra Convert.ToString(rad*.EditValue) local variables for SP parameters; pass the target control value in the existing style.",
+                "message": "Do not generate extra Convert.ToString(rad*.EditValue) local variables for SP parameters; follow the packaged direct-value contract.",
             }
         )
     if re.search(
@@ -8090,11 +10842,36 @@ def verify_migration_generated_csharp_style(
         "status": "passed" if passed else "blocked",
         "issues": issues,
         "program_key": normalized_program_key,
-        "fallback_program_key": normalized_fallback_program_key,
-        "expected_style_program_key": expected_style_program_key,
-        "require_author_tagged_evidence": bool(require_author_tagged_evidence),
         "profile_consumption": profile_consumption,
+        "profile_identity": {
+            "profile_id": profile_consumption.get("profile_id", ""),
+            "profile_version": profile_consumption.get("profile_version", ""),
+            "profile_hash": profile_consumption.get("profile_hash", ""),
+        },
+        "canonical_style_contract": canonical_style_contract,
+        "canonical_style_profile": packaged_canonical_style,
+        "canonical_style_profile_hash": canonical_style_profile_hash,
         "program_form_contract": program_form_contract,
+        "surface_base_contract": {
+            "status": (
+                "passed"
+                if expected_surface_base_type
+                and program_form_contract.get("base_type_matched")
+                and not (
+                    target_project_baseline_result is not None
+                    and not target_project_baseline_result.success
+                )
+                else "blocked"
+            ),
+            "source": surface_contract_source,
+            "standalone_surface_kind": str(standalone_surface_kind or ""),
+            "expected_base_type": expected_surface_base_type,
+            "target_project_baseline_status": (
+                target_project_baseline_result.metadata.get("status")
+                if target_project_baseline_result is not None
+                else "not_supplied"
+            ),
+        },
         "designer_owned_ui_contract": designer_owned_ui_contract,
         "result_field_contract": result_field_contract,
         "control_contracts": control_contracts,
@@ -8107,14 +10884,9 @@ def verify_migration_generated_csharp_style(
         "control_evidence_registry": registry_metadata,
         "baseline_designer_preservation": baseline_designer_preservation,
         "grid_designer_contract": grid_designer_contract,
+        "field_lineage_contract": field_lineage_contract_result,
         "input_tab_order_contract": input_tab_order_contract,
-        "primary_style_evidence_paths": primary_paths,
-        "excluded_paths": excluded,
-        "author_tagged_generation_recipe": (
-            AUTHOR_TAGGED_CSHARP_STYLE_BASELINE["positive_generation_recipe"]
-            if require_author_tagged_evidence
-            else {}
-        ),
+        "designer_ui_contract": designer_ui_contract_result,
         "column_style_contract": (
             "Generated grid columns must use explicit target-style names, Designer/AddRange registration, "
             "and RepositoryItemSpinEdit ColumnEdit for numeric AMT/QTY/UNP/WGT/PRICE/RATE/COST/TOTAL columns instead of GridColumn DisplayFormat."
@@ -9408,6 +12180,7 @@ def _existing_sp_cleanup_preservation_issues(
 
 def _source_definition_text(item: Dict[str, Any]) -> tuple[str, str]:
     text = str(item.get("definition_text") or "")
+    actual_hash = ""
     path = str(
         item.get("resolved_path")
         or item.get("definition_path")
@@ -9416,13 +12189,16 @@ def _source_definition_text(item: Dict[str, Any]) -> tuple[str, str]:
     ).strip()
     if not text and path:
         try:
-            text = Path(path).read_text(encoding="utf-8")
-        except OSError:
+            _, _, actual_hash, text = _read_bounded_text_artifact(
+                path,
+                maximum_bytes=SAVE_EVIDENCE_ARTIFACT_MAX_BYTES,
+            )
+        except _ArtifactReadError:
             return "", "existing_sp_definition_unreadable"
     if not text:
         return "", "existing_sp_definition_missing"
     expected_hash = str(item.get("sha256") or item.get("definition_hash") or "").strip().lower()
-    if expected_hash and hashlib.sha256(text.encode("utf-8")).hexdigest() != expected_hash:
+    if expected_hash and (actual_hash or hashlib.sha256(text.encode("utf-8")).hexdigest()) != expected_hash:
         return "", "existing_sp_definition_hash_mismatch"
     return text, ""
 
@@ -9448,8 +12224,11 @@ def _bound_source_artifact_text(item: Dict[str, Any]) -> tuple[str, str, str]:
     declared_text = str(item.get("definition_text") or item.get("artifact_text") or "")
     text = declared_text
     try:
-        path_text = Path(definition_path).read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+        _, _, actual_hash, path_text = _read_bounded_text_artifact(
+            definition_path,
+            maximum_bytes=SAVE_EVIDENCE_ARTIFACT_MAX_BYTES,
+        )
+    except _ArtifactReadError:
         return "", "source_artifact_unreadable", locator
     if declared_text and declared_text != path_text:
         return "", "source_artifact_text_path_mismatch", locator
@@ -9460,7 +12239,7 @@ def _bound_source_artifact_text(item: Dict[str, Any]) -> tuple[str, str, str]:
     expected_hash = str(item.get("sha256") or item.get("definition_hash") or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
         return "", "source_artifact_hash_missing_or_invalid", locator
-    if hashlib.sha256(text.encode("utf-8")).hexdigest() != expected_hash:
+    if actual_hash != expected_hash:
         return "", "source_artifact_hash_mismatch", locator
     return text, "", locator
 
@@ -9518,8 +12297,11 @@ def _bound_caller_artifact_text(item: Dict[str, Any]) -> tuple[str, str]:
     text = declared_text
     if path:
         try:
-            path_text = Path(path).read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
+            _, _, actual_hash, path_text = _read_bounded_text_artifact(
+                path,
+                maximum_bytes=SAVE_EVIDENCE_ARTIFACT_MAX_BYTES,
+            )
+        except _ArtifactReadError:
             return "", "caller_artifact_unreadable"
         if declared_text and declared_text != path_text:
             return "", "caller_artifact_text_path_mismatch"
@@ -9529,7 +12311,7 @@ def _bound_caller_artifact_text(item: Dict[str, Any]) -> tuple[str, str]:
     expected_hash = str(item.get("sha256") or item.get("definition_hash") or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
         return "", "caller_artifact_hash_missing_or_invalid"
-    if hashlib.sha256(text.encode("utf-8")).hexdigest() != expected_hash:
+    if actual_hash != expected_hash:
         return "", "caller_artifact_hash_mismatch"
     return text, ""
 
@@ -11739,18 +14521,22 @@ def _save_evidence_entry_is_authoritative(value: Any) -> bool:
         inline_source = value.get("source_text") if "source_text" in value else value.get("content")
         if not isinstance(inline_source, str) or not inline_source:
             return False
-        actual_hash = hashlib.sha256(inline_source.encode("utf-8")).hexdigest()
+        inline_bytes = inline_source.encode("utf-8")
+        if len(inline_bytes) > SAVE_EVIDENCE_ARTIFACT_MAX_BYTES:
+            return False
+        actual_hash = hashlib.sha256(inline_bytes).hexdigest()
         return actual_hash == expected_hash
 
     artifact_path = str(value.get("path") or "").strip()
     if not artifact_path:
         return False
     try:
-        path = Path(artifact_path)
-        if not path.is_file():
-            return False
-        actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
-    except (OSError, ValueError):
+        _, _, actual_hash, _ = _read_bounded_artifact(
+            artifact_path,
+            maximum_bytes=SAVE_EVIDENCE_ARTIFACT_MAX_BYTES,
+            collect_bytes=False,
+        )
+    except (_ArtifactReadError, ValueError):
         return False
     return actual_hash == expected_hash
 
@@ -12764,6 +15550,7 @@ def verify_pb_migration_sp_generation_contract(
     external_caller_contract: Any = None,
     save_field_contract: Any = None,
     save_csharp_source_text: str = "",
+    generation_construct_authorization: Any = None,
 ) -> HarnessResult:
     """Check that generated SELECT/SAVE SP work is evidence-gated before it is presented as migration output."""
     sql = str(sql_text or "")
@@ -12784,6 +15571,11 @@ def verify_pb_migration_sp_generation_contract(
             domain="sql",
             procedure_name=_extract_sp_procedure_name(sql),
             preserve_existing=effective_operation == "existing_sp_cleanup",
+            structurally_validated_forbidden_pattern_ids=(
+                ()
+                if effective_operation == "existing_sp_cleanup"
+                else ("not_exists", "temporary_table")
+            ),
         )
         issues.extend(applied_issues)
     profile_consumption = dict(
@@ -12825,6 +15617,8 @@ def verify_pb_migration_sp_generation_contract(
         "external_caller",
         "branch_contract",
         "composite_contract",
+        "pb_event_inventory",
+        "pb_behavior_contract",
     }
     accepted_source_evidence = []
     accepted_body_source_evidence: List[Dict[str, Any]] = []
@@ -12833,6 +15627,7 @@ def verify_pb_migration_sp_generation_contract(
     bound_source_trace_by_hash: Dict[str, List[str]] = {}
     branch_contract_authorities: List[Dict[str, Any]] = []
     candidate_fingerprint = _sql_evidence_fingerprint(sql)
+    complete_pb_event_inventories: List[Dict[str, Any]] = []
     for item in normalized_source_evidence:
         kind = str(item.get("kind") or "")
         if kind not in allowed_evidence_kinds:
@@ -12854,6 +15649,39 @@ def verify_pb_migration_sp_generation_contract(
                         "kind": kind,
                     }
                 )
+            continue
+        if kind in {"pb_event_inventory", "pb_behavior_contract"}:
+            source_text, source_error, source_locator = _bound_source_artifact_text(item)
+            if source_error:
+                issues.append(
+                    {
+                        "code": source_error,
+                        "severity": "error",
+                        "message": "PB event inventory evidence requires a readable SHA-256-bound artifact.",
+                        "kind": kind,
+                        "locator": source_locator,
+                    }
+                )
+            elif item.get("complete_event_inventory") is not True or type(item.get("save_event_present")) is not bool:
+                issues.append(
+                    {
+                        "code": "pb_event_inventory_incomplete",
+                        "severity": "error",
+                        "message": "PB event inventory must explicitly prove completeness and whether a SAVE event exists.",
+                        "locator": source_locator,
+                    }
+                )
+            else:
+                accepted = dict(item)
+                accepted.update(
+                    {
+                        "verified": True,
+                        "definition_path": source_locator,
+                        "definition_text": source_text,
+                    }
+                )
+                accepted_source_evidence.append(accepted)
+                complete_pb_event_inventories.append(accepted)
             continue
         if kind == "approved_inferred_draft" and effective_operation != "approved_inferred_draft":
             issues.append(
@@ -13296,6 +16124,8 @@ def verify_pb_migration_sp_generation_contract(
             "external_caller",
             "branch_contract",
             "composite_contract",
+            "pb_event_inventory",
+            "pb_behavior_contract",
         }
     ]
 
@@ -13309,6 +16139,22 @@ def verify_pb_migration_sp_generation_contract(
         )
     if not sql.strip():
         issues.append({"code": "missing_sql_text", "severity": "error", "message": "No SQL text was provided."})
+    save_absence_proven = any(
+        item.get("complete_event_inventory") is True and item.get("save_event_present") is False
+        for item in complete_pb_event_inventories
+    )
+    candidate_invents_save = bool(
+        candidate_target_procedure.upper().endswith(("_SAVE", "_SELECT_SAVE"))
+        or re.search(r"\b(?:INSERT|UPDATE|DELETE|MERGE)\b", upper_unprotected)
+    )
+    if save_absence_proven and candidate_invents_save:
+        issues.append(
+            {
+                "code": "invented_save_without_pb_event_authority",
+                "severity": "error",
+                "message": "A complete PB event inventory proves that no SAVE flow exists; generated SAVE/DML is proposal-only and cannot pass.",
+            }
+        )
     header_match = SP_METADATA_HEADER_PATTERN.search(sql)
     if sql.strip() and not header_match:
         issues.append(
@@ -13826,14 +16672,6 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not add source-unbacked SELECT TOP 0/SELECT TOP (0) CAST/CONVERT/TRY_CONVERT(...) schema-only fallback blocks to migration SP output.",
             }
         )
-    if effective_operation != "existing_sp_cleanup" and re.search(r"#[A-Z0-9_]+", upper_unprotected):
-        issues.append(
-            {
-                "code": "temp_table_in_generated_sp",
-                "severity": "error",
-                "message": "Do not introduce # temporary tables in migration SP generation by default.",
-            }
-        )
     if effective_operation != "existing_sp_cleanup" and "MERGE " in upper_unprotected:
         issues.append(
             {
@@ -13842,25 +16680,24 @@ def verify_pb_migration_sp_generation_contract(
                 "message": "Do not introduce MERGE in migration SP generation by default.",
             }
         )
-    if effective_operation != "existing_sp_cleanup" and "NOT EXISTS" in upper_unprotected:
-        issues.append(
-            {
-                "code": "not_exists_in_generated_sp",
-                "severity": "error",
-                "message": "Do not introduce NOT EXISTS in migration SP generation by default.",
-            }
+    if effective_operation == "existing_sp_cleanup":
+        pb_sql_generation_policy = {
+            "policy_id": POLICY_ID,
+            "policy_version": POLICY_VERSION,
+            "status": "not_applicable",
+            "operation": effective_operation,
+            "reason": "existing_sp_cleanup_preserves_authenticated_existing_sql",
+            "issue_codes": [],
+            "issues": [],
+        }
+    else:
+        pb_sql_generation_policy = _evaluate_bound_pb_sql_generation_policy(
+            sql,
+            source_text_by_locator=bound_source_text_by_locator,
+            operation=effective_operation,
+            generation_construct_authorization=generation_construct_authorization,
         )
-    if effective_operation != "existing_sp_cleanup" and _pb_contract_contains_if_exists_where_subquery(upper_unprotected):
-        issues.append(
-            {
-                "code": "if_exists_where_subquery_in_generated_sp",
-                "severity": "error",
-                "message": (
-                    "Do not put a nested subquery under WHERE inside IF EXISTS guards in migration SP generation by default. "
-                    "Use direct JOIN/derived-table style or record explicit source evidence."
-                ),
-            }
-        )
+        issues.extend(pb_sql_generation_policy["issues"])
 
     save_field_result: HarnessResult | None = None
     generated_xml_save = bool(
@@ -13906,6 +16743,7 @@ def verify_pb_migration_sp_generation_contract(
         "external_caller_contract": external_contract,
         "declared_external_caller_contract": declared_external_contract,
         "body_traceability": body_traceability,
+        "pb_sql_generation_policy": pb_sql_generation_policy,
         "save_field_contract": (
             save_field_result.metadata
             if save_field_result is not None
@@ -13940,33 +16778,355 @@ def verify_pb_migration_sp_generation_contract(
     )
 
 
-def _pb_contract_contains_if_exists_where_subquery(upper_unprotected_sql: str) -> bool:
-    for block in _pb_contract_extract_if_exists_blocks(upper_unprotected_sql):
-        where_index = _pb_contract_find_top_level_keyword(block, "WHERE")
-        if where_index < 0:
-            continue
-        where_text = block[where_index:]
-        subquery_patterns = [
-            r"\b(?:NOT\s+)?EXISTS\s*\(\s*SELECT\b",
-            r"\b(?:NOT\s+)?IN\s*\(\s*SELECT\b",
-            r"(?:=|<>|!=|<=|>=|<|>)\s*\(\s*SELECT\b",
+def _evaluate_bound_pb_sql_generation_policy(
+    candidate_sql: str,
+    *,
+    source_text_by_locator: Mapping[str, str],
+    operation: str,
+    generation_construct_authorization: Any = None,
+) -> Dict[str, Any]:
+    """Apply the structural policy against already hash-bound source text."""
+
+    baseline = evaluate_pb_sql_generation_policy(candidate_sql)
+    matched_authorities: Dict[tuple[str, str], List[str]] = {}
+    matched_construct_authorities: Dict[tuple[str, str, str], List[str]] = {}
+    authorized_scalar_hashes: set[str] = set()
+    authorized_construct_fingerprints: set[str] = set()
+    authority_records: List[Dict[str, Any]] = []
+    construct_authorization_records: List[Dict[str, Any]] = []
+    integration_issues: List[Dict[str, Any]] = []
+    semi_predicate_kinds = {"exists", "not_exists", "in", "not_in"}
+
+    def normalized_hash(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        return text[7:] if text.startswith("sha256:") else text
+
+    if generation_construct_authorization is None:
+        construct_authorizations: List[Dict[str, Any]] = []
+    elif isinstance(generation_construct_authorization, Mapping):
+        construct_authorizations = [dict(generation_construct_authorization)]
+    elif isinstance(generation_construct_authorization, (list, tuple)):
+        construct_authorizations = [
+            dict(item)
+            for item in generation_construct_authorization
+            if isinstance(item, Mapping)
         ]
-        if any(re.search(pattern, where_text, flags=re.IGNORECASE | re.DOTALL) for pattern in subquery_patterns):
-            return True
-    return False
+        if len(construct_authorizations) != len(generation_construct_authorization):
+            integration_issues.append(
+                {
+                    "code": "generation_construct_authorization_invalid",
+                    "severity": "error",
+                    "message": "Generation construct authorization entries must be objects.",
+                    "policy_id": POLICY_ID,
+                    "policy_version": POLICY_VERSION,
+                    "operation": operation,
+                }
+            )
+    else:
+        construct_authorizations = []
+        integration_issues.append(
+            {
+                "code": "generation_construct_authorization_invalid",
+                "severity": "error",
+                "message": "Generation construct authorization must be an object or list of objects.",
+                "policy_id": POLICY_ID,
+                "policy_version": POLICY_VERSION,
+                "operation": operation,
+            }
+        )
 
+    for locator, source_text in source_text_by_locator.items():
+        source_result = evaluate_pb_sql_generation_policy(
+            candidate_sql,
+            source_sql=source_text,
+        )
+        matched_findings = [
+            dict(finding)
+            for finding in source_result.metadata["subqueries"]
+            if finding["source_backed"]
+        ]
+        for finding in matched_findings:
+            key = (
+                str(finding["predicate_kind"]),
+                str(finding["subquery_sha256"]),
+            )
+            authorities = matched_authorities.setdefault(key, [])
+            if locator not in authorities:
+                authorities.append(locator)
+        for finding in source_result.metadata["constructs"]:
+            if not finding["source_backed"]:
+                continue
+            key = (
+                str(finding["construct_kind"]),
+                str(finding["construct_variant"]),
+                str(finding["canonical_construct"]),
+            )
+            authorities = matched_construct_authorities.setdefault(key, [])
+            if locator not in authorities:
+                authorities.append(locator)
 
-def _pb_contract_extract_if_exists_blocks(upper_unprotected_sql: str) -> List[str]:
-    blocks: List[str] = []
-    pattern = re.compile(r"\bIF\s+EXISTS\s*\(", flags=re.IGNORECASE)
-    for match in pattern.finditer(upper_unprotected_sql):
-        open_index = upper_unprotected_sql.find("(", match.start())
-        if open_index < 0:
+        scalar_hashes = list(
+            dict.fromkeys(
+                str(finding["subquery_sha256"])
+                for finding in matched_findings
+                if finding["predicate_kind"] == "scalar"
+                and (
+                    finding["clause"] == "WHERE"
+                    or finding["ancestor_predicate_kind"] in semi_predicate_kinds
+                )
+            )
+        )
+        evidence_status: Dict[str, Any] = {
+            "supplied": False,
+            "valid": False,
+            "reason": "no_source_backed_scalar_subquery",
+        }
+        authorized_for_authority: List[str] = []
+        if scalar_hashes:
+            evidence = build_source_equivalence_evidence(
+                source_text,
+                candidate_sql,
+                equivalent=True,
+                authorized_subquery_sha256=scalar_hashes,
+                metadata={
+                    "authority_id": locator,
+                    "equivalence_method": "exact_structural_subquery_signature",
+                },
+            )
+            authorized_result = evaluate_pb_sql_generation_policy(
+                candidate_sql,
+                source_sql=source_text,
+                evidence=evidence,
+            )
+            evidence_status = dict(authorized_result.metadata["evidence"])
+            authorized_for_authority = list(
+                dict.fromkeys(
+                    str(finding["subquery_sha256"])
+                    for finding in authorized_result.metadata["subqueries"]
+                    if finding["predicate_kind"] == "scalar"
+                    and finding["source_backed"]
+                    and finding["evidence_authorized"]
+                )
+            )
+            authorized_scalar_hashes.update(authorized_for_authority)
+
+        authority_records.append(
+            {
+                "authority_id": locator,
+                "source_sha256": sha256_text(source_text),
+                "matched_subquery_sha256": list(
+                    dict.fromkeys(
+                        str(finding["subquery_sha256"])
+                        for finding in matched_findings
+                    )
+                ),
+                "authorized_scalar_subquery_sha256": authorized_for_authority,
+                "equivalence_evidence": evidence_status,
+            }
+        )
+
+    for index, authorization in enumerate(construct_authorizations):
+        locator = str(authorization.get("source_locator") or "").strip()
+        source_text = source_text_by_locator.get(locator)
+        if source_text is None:
+            integration_issues.append(
+                {
+                    "code": "generation_construct_authority_unknown",
+                    "severity": "error",
+                    "message": "Construct authorization must name one verified hash-bound source locator.",
+                    "authorization_index": index,
+                    "source_locator": locator,
+                    "policy_id": POLICY_ID,
+                    "policy_version": POLICY_VERSION,
+                    "operation": operation,
+                }
+            )
             continue
-        close_index = _pb_contract_find_matching_parenthesis(upper_unprotected_sql, open_index)
-        if close_index > open_index:
-            blocks.append(upper_unprotected_sql[open_index + 1 : close_index])
-    return blocks
+        evidence = dict(authorization)
+        evidence.pop("source_locator", None)
+        authorized_result = evaluate_pb_sql_generation_policy(
+            candidate_sql,
+            source_sql=source_text,
+            evidence=evidence,
+        )
+        evidence_status = dict(authorized_result.metadata["evidence"])
+        requested = {
+            normalized_hash(item)
+            for item in evidence.get("authorized_construct_fingerprints", ())
+        }
+        authorized = {
+            normalized_hash(finding["construct_fingerprint"])
+            for finding in authorized_result.metadata["constructs"]
+            if finding["evidence_authorized"]
+        }
+        if not evidence_status.get("valid"):
+            integration_issues.append(
+                {
+                    "code": "generation_construct_authorization_invalid",
+                    "severity": "error",
+                    "message": "Construct authorization must bind exact source and candidate SHA-256 values.",
+                    "authorization_index": index,
+                    "source_locator": locator,
+                    "reason": evidence_status.get("reason", "invalid"),
+                    "policy_id": POLICY_ID,
+                    "policy_version": POLICY_VERSION,
+                    "operation": operation,
+                }
+            )
+        unmatched = sorted(requested - authorized)
+        if evidence_status.get("valid") and unmatched:
+            integration_issues.append(
+                {
+                    "code": "generation_construct_fingerprint_unmatched",
+                    "severity": "error",
+                    "message": "Every authorized construct fingerprint must match the exact bound source and candidate construct.",
+                    "authorization_index": index,
+                    "source_locator": locator,
+                    "unmatched_construct_fingerprints": [
+                        f"sha256:{item}" for item in unmatched
+                    ],
+                    "policy_id": POLICY_ID,
+                    "policy_version": POLICY_VERSION,
+                    "operation": operation,
+                }
+            )
+        authorized_construct_fingerprints.update(authorized)
+        construct_authorization_records.append(
+            {
+                "source_locator": locator,
+                "source_sha256": sha256_text(source_text),
+                "candidate_sha256": sha256_text(candidate_sql),
+                "requested_construct_fingerprints": [
+                    f"sha256:{item}" for item in sorted(requested)
+                ],
+                "authorized_construct_fingerprints": [
+                    f"sha256:{item}" for item in sorted(authorized)
+                ],
+                "evidence": evidence_status,
+            }
+        )
+
+    merged_findings: List[Dict[str, Any]] = []
+    for finding_value in baseline.metadata["subqueries"]:
+        finding = dict(finding_value)
+        key = (
+            str(finding["predicate_kind"]),
+            str(finding["subquery_sha256"]),
+        )
+        authorities = list(matched_authorities.get(key, []))
+        finding["source_backed"] = bool(authorities)
+        finding["source_authorities"] = authorities
+        finding["evidence_authorized"] = (
+            finding["predicate_kind"] == "scalar"
+            and finding["subquery_sha256"] in authorized_scalar_hashes
+        )
+        merged_findings.append(finding)
+
+    merged_constructs: List[Dict[str, Any]] = []
+    for finding_value in baseline.metadata["constructs"]:
+        finding = dict(finding_value)
+        key = (
+            str(finding["construct_kind"]),
+            str(finding["construct_variant"]),
+            str(finding["canonical_construct"]),
+        )
+        authorities = list(matched_construct_authorities.get(key, []))
+        fingerprint = normalized_hash(finding["construct_fingerprint"])
+        finding["source_backed"] = bool(authorities)
+        finding["source_authorities"] = authorities
+        finding["evidence_authorized"] = (
+            fingerprint in authorized_construct_fingerprints
+        )
+        merged_constructs.append(finding)
+
+    for issue in baseline.issues:
+        issue_metadata = dict(issue.metadata)
+        subquery_hash = str(issue_metadata.get("subquery_sha256") or "")
+        if subquery_hash in authorized_scalar_hashes:
+            continue
+        construct_fingerprint = normalized_hash(
+            issue_metadata.get("construct_fingerprint")
+        )
+        if construct_fingerprint in authorized_construct_fingerprints:
+            continue
+        if construct_fingerprint:
+            construct_key = (
+                str(issue_metadata.get("construct_kind") or ""),
+                str(issue_metadata.get("construct_variant") or ""),
+                str(issue_metadata.get("canonical_construct") or ""),
+            )
+            authorities = list(matched_construct_authorities.get(construct_key, []))
+        else:
+            authorities = list(
+                matched_authorities.get(("scalar", subquery_hash), [])
+            )
+        stable_metadata = {
+            "policy_id": POLICY_ID,
+            "policy_version": POLICY_VERSION,
+            "operation": operation,
+            "source_backed": bool(authorities),
+            "source_authorities": authorities,
+            "source_authorities_checked": len(source_text_by_locator),
+            "evidence_authorized": False,
+        }
+        payload = issue.to_dict()
+        payload.update(stable_metadata)
+        payload["metadata"] = {
+            **dict(payload.get("metadata", {})),
+            **stable_metadata,
+        }
+        integration_issues.append(payload)
+
+    counts = dict(baseline.metadata["counts"])
+    counts["source_backed"] = sum(
+        1 for finding in merged_findings if finding["source_backed"]
+    )
+    counts["evidence_authorized"] = sum(
+        1 for finding in merged_findings if finding["evidence_authorized"]
+    )
+    construct_counts = dict(baseline.metadata["construct_counts"])
+    construct_counts["source_backed"] = sum(
+        1 for finding in merged_constructs if finding["source_backed"]
+    )
+    construct_counts["evidence_authorized"] = sum(
+        1 for finding in merged_constructs if finding["evidence_authorized"]
+    )
+    return {
+        "policy_id": POLICY_ID,
+        "policy_version": POLICY_VERSION,
+        "status": "passed" if not integration_issues else "blocked",
+        "operation": operation,
+        "candidate_sha256": baseline.metadata["candidate_sha256"],
+        "source_binding": "verified_hash_bound_artifacts",
+        "source_authority_count": len(authority_records),
+        "source_authorities": authority_records,
+        "authorized_scalar_subquery_sha256": sorted(
+            authorized_scalar_hashes
+        ),
+        "generation_construct_authorization": {
+            "status": (
+                "not_supplied"
+                if generation_construct_authorization is None
+                else "passed"
+                if not any(
+                    issue["code"].startswith("generation_construct_")
+                    for issue in integration_issues
+                )
+                else "blocked"
+            ),
+            "receipts": construct_authorization_records,
+            "authorized_construct_fingerprints": [
+                f"sha256:{item}"
+                for item in sorted(authorized_construct_fingerprints)
+            ],
+        },
+        "counts": counts,
+        "subqueries": merged_findings,
+        "construct_counts": construct_counts,
+        "constructs": merged_constructs,
+        "issue_codes": [issue["code"] for issue in integration_issues],
+        "issues": integration_issues,
+    }
 
 
 def _pb_contract_find_top_level_keyword(text: str, keyword: str) -> int:
@@ -13981,18 +17141,6 @@ def _pb_contract_find_top_level_keyword(text: str, keyword: str) -> int:
             return index
     return -1
 
-
-def _pb_contract_find_matching_parenthesis(text: str, open_index: int) -> int:
-    depth = 0
-    for index in range(open_index, len(text)):
-        char = text[index]
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-            if depth == 0:
-                return index
-    return -1
 
 def _execute_pb_sql_final_response_binding(
     original_sql_text: str,
@@ -14010,6 +17158,7 @@ def _execute_pb_sql_final_response_binding(
         SqlFinalResponseBindingError,
         SqlFormattingProviderPathError,
         guard_and_bind_verified_sql_final_response,
+        verify_sql_formatting_style,
     )
 
     if not str(draft_final_response or ""):
@@ -14046,7 +17195,29 @@ def _execute_pb_sql_final_response_binding(
             "message": "The PB final-response binder accepts only operation='formatting' and style_contract_path.",
             "unsupported_options": sorted(verifier_kwargs),
         }
+    verification_kwargs: Dict[str, Any] = {
+        "operation": "formatting",
+        "cte_temp_table_reason": cte_temp_table_reason,
+    }
+    if style_contract_path is not None:
+        verification_kwargs["style_contract_path"] = style_contract_path
+    if alias_role_plan is not None:
+        verification_kwargs["alias_role_plan"] = alias_role_plan
     try:
+        history_result = verify_sql_formatting_style(
+            original_sql_text,
+            formatted_sql_text,
+            **verification_kwargs,
+        )
+        if isinstance(history_result, HarnessResult):
+            verifier_history = [history_result.to_dict()]
+        elif isinstance(history_result, Mapping):
+            verifier_history = [dict(history_result)]
+        else:
+            raise SqlFinalResponseBindingError(
+                "sql_formatting_repair_history_invalid",
+                "The PB bridge did not receive a structured verifier-history receipt.",
+            )
         release = guard_and_bind_verified_sql_final_response(
             original_sql_text,
             formatted_sql_text,
@@ -14057,6 +17228,7 @@ def _execute_pb_sql_final_response_binding(
             style_contract_path=style_contract_path,
             cte_temp_table_reason=cte_temp_table_reason,
             alias_role_plan=alias_role_plan,
+            verifier_history=verifier_history,
         )
     except (SqlFinalResponseBindingError, SqlFormattingProviderPathError, OSError, ValueError) as exc:
         return False, {
@@ -14064,7 +17236,35 @@ def _execute_pb_sql_final_response_binding(
             "code": str(getattr(exc, "code", "sql_final_response_binding_failed")),
             "message": str(exc),
         }
-    return True, release.to_receipt_dict()
+    receipt = release.to_receipt_dict()
+    latest_metadata = dict(verifier_history[-1].get("metadata") or {})
+    binding = receipt.get("binding", {})
+    binding_verification_id = str(binding.get("verification_id") or "") if isinstance(binding, Mapping) else ""
+    history_verification_id = str(latest_metadata.get("verification_id") or "")
+    expected_original_sha256 = hashlib.sha256(str(original_sql_text).encode("utf-8")).hexdigest()
+    expected_formatted_sha256 = hashlib.sha256(str(formatted_sql_text).encode("utf-8")).hexdigest()
+    correlation_valid = bool(
+        verifier_history[-1].get("success") is True
+        and binding_verification_id
+        and binding_verification_id == history_verification_id
+        and latest_metadata.get("original_sha256") == expected_original_sha256
+        and latest_metadata.get("formatted_sha256") == expected_formatted_sha256
+    )
+    receipt["verifier_history"] = verifier_history
+    receipt["verifier_history_correlation"] = {
+        "status": "correlated" if correlation_valid else "blocked",
+        "attempt_count": len(verifier_history),
+        "original_sha256": latest_metadata.get("original_sha256", ""),
+        "formatted_sha256": latest_metadata.get("formatted_sha256", ""),
+        "binding_verification_id": binding_verification_id,
+        "history_verification_id": history_verification_id,
+    }
+    if not correlation_valid:
+        receipt["status"] = "blocked"
+        receipt["code"] = "sql_verifier_history_correlation_failed"
+        receipt["message"] = "Final SQL release must bind the exact successful verifier-history ID and SQL hashes."
+        return False, receipt
+    return True, receipt
 
 
 def _pb_sql_release_evidence_views(
@@ -14159,6 +17359,10 @@ def verify_pb_migration_sp_with_sql_formatting(
         "sp_generation_contract": contract_result.metadata,
         "sql_final_response_binding": binding_receipt,
         "sql_final_response_release": release_receipt,
+        "sql_verifier_history": list(release_receipt.get("verifier_history", [])),
+        "sql_verifier_history_correlation": dict(
+            release_receipt.get("verifier_history_correlation", {})
+        ),
         "sql_formatting_style": {
             "status": "passed" if binding_success else "blocked",
             "evidence_source": "sql_final_response_binding",
@@ -14184,6 +17388,1097 @@ def verify_pb_migration_sp_with_sql_formatting(
     )
 
 
+def _valid_timezone_timestamp(value: Any) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
+
+
+def _normalized_artifact_receipt_rows(value: Any) -> List[Dict[str, str]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    rows: List[Dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            return []
+        path = _absolute_path_key(item.get("path", ""))
+        digest = _normalized_sha256(item.get("sha256"))
+        if not path or not digest:
+            return []
+        rows.append({"path": path, "sha256": f"sha256:{digest}"})
+    return rows
+
+
+def _validate_completion_receipt(
+    name: str,
+    stage_evidence: Mapping[str, Any] | None,
+    *,
+    required: bool,
+    profile_identity: Mapping[str, Any],
+    program_key: str,
+    migration_artifacts: Sequence[Mapping[str, Any]],
+    expected_designer_path: str,
+    expected_form_class: str,
+) -> Dict[str, Any]:
+    supplied = isinstance(stage_evidence, Mapping)
+    receipt = dict(stage_evidence or {})
+    issues: List[Dict[str, Any]] = []
+    if not supplied:
+        return {
+            "name": name,
+            "required_for_claim": required,
+            "status": "blocked" if required else "not_claimed",
+            "evidence_supplied": False,
+            "evidence": {},
+            "issues": [
+                {
+                    "code": "completion_stage_receipt_required",
+                    "message": f"{name} requires an independently correlated execution receipt.",
+                }
+            ]
+            if required
+            else [],
+        }
+
+    def issue(code: str, message: str) -> None:
+        issues.append({"code": code, "message": message})
+
+    receipt_id = str(receipt.get("receipt_id") or "").strip()
+    run_id = str(receipt.get("run_id") or "").strip()
+    correlation_id = str(receipt.get("correlation_id") or "").strip()
+    if receipt.get("schema_version") != "kh.pb-completion-receipt.v1":
+        issue("completion_receipt_schema_invalid", "Completion receipt schema is invalid.")
+    if str(receipt.get("stage") or "").strip() != name:
+        issue("completion_receipt_stage_mismatch", "Completion receipt stage does not match its claim.")
+    if not all((receipt_id, run_id, correlation_id)):
+        issue("completion_receipt_identity_missing", "Receipt, run, and correlation IDs are required.")
+    if not _valid_timezone_timestamp(receipt.get("observed_at")):
+        issue("completion_receipt_timestamp_invalid", "A timezone-aware observation timestamp is required.")
+
+    producer = receipt.get("producer")
+    producer = dict(producer) if isinstance(producer, Mapping) else {}
+    executor = str(producer.get("executor") or "").strip().lower()
+    if executor == "command":
+        producer_valid = bool(
+            str(producer.get("command") or "").strip()
+            and str(producer.get("command_id") or "").strip()
+            and str(producer.get("result_id") or "").strip()
+        )
+    elif executor == "tool":
+        producer_valid = bool(
+            str(producer.get("tool_name") or "").strip()
+            and str(producer.get("tool_call_id") or "").strip()
+            and str(producer.get("result_id") or "").strip()
+        )
+    else:
+        producer_valid = False
+    if not producer_valid:
+        issue("completion_receipt_producer_invalid", "Actual command or tool identity and result IDs are required.")
+    if type(receipt.get("exit_code")) is not int or receipt.get("exit_code") != 0:
+        issue("completion_receipt_exit_result_invalid", "Completion execution must report integer exit_code=0.")
+
+    target_path = str(receipt.get("target_path") or "").strip()
+    expected_target_hash = _normalized_sha256(receipt.get("target_sha256"))
+    target_path_key = _absolute_path_key(target_path)
+    actual_target_hash = ""
+    target_size = 0
+    if not target_path_key or not expected_target_hash:
+        issue("completion_receipt_target_binding_invalid", "An absolute target path and SHA-256 are required.")
+    else:
+        try:
+            resolved, target_size, actual_target_hash, _ = _read_bounded_artifact(
+                target_path,
+                maximum_bytes=COMPLETION_EVIDENCE_ARTIFACT_MAX_BYTES,
+                collect_bytes=False,
+            )
+            target_path_key = os.path.normcase(str(resolved))
+        except _ArtifactReadError as exc:
+            issue(
+                "completion_receipt_target_readback_failed",
+                f"Target readback failed: {exc.code}: {exc}",
+            )
+        else:
+            if actual_target_hash != expected_target_hash:
+                issue("completion_receipt_target_sha256_mismatch", "Target SHA-256 is not current.")
+
+    declared_profile = receipt.get("profile_identity")
+    declared_profile = dict(declared_profile) if isinstance(declared_profile, Mapping) else {}
+    expected_profile = {
+        "profile_id": str(profile_identity.get("profile_id") or ""),
+        "profile_version": str(profile_identity.get("profile_version") or ""),
+        "profile_hash": str(profile_identity.get("profile_hash") or ""),
+    }
+    if declared_profile != expected_profile:
+        issue("completion_receipt_profile_mismatch", "Receipt profile identity is not the validated packaged profile.")
+    if str(receipt.get("program_key") or "").strip().upper() != str(program_key or "").strip().upper():
+        issue("completion_receipt_program_key_mismatch", "Receipt program key is not the validated program key.")
+
+    expected_migration_artifacts = sorted(
+        (
+            _absolute_path_key(item.get("path", "")),
+            f"sha256:{_normalized_sha256(item.get('sha256'))}",
+        )
+        for item in migration_artifacts
+        if _absolute_path_key(item.get("path", "")) and _normalized_sha256(item.get("sha256"))
+    )
+    receipt_migration_artifacts = _normalized_artifact_receipt_rows(
+        receipt.get("migration_artifacts")
+    )
+    actual_migration_artifacts = sorted(
+        (item["path"], item["sha256"]) for item in receipt_migration_artifacts
+    )
+    if not expected_migration_artifacts or actual_migration_artifacts != expected_migration_artifacts:
+        issue(
+            "completion_receipt_migration_artifact_mismatch",
+            "Receipt must bind the exact current code-behind and Designer artifacts.",
+        )
+
+    result = receipt.get("result")
+    result = dict(result) if isinstance(result, Mapping) else {}
+    if result.get("status") != "passed":
+        issue("completion_receipt_result_invalid", "Stage result facts must report status=passed.")
+
+    if name == "project-inclusion":
+        included = _normalized_artifact_receipt_rows(result.get("included_artifacts"))
+        if (
+            not target_path_key.lower().endswith(('.csproj', '.vbproj'))
+            or result.get("included") is not True
+            or _absolute_path_key(result.get("project_file", "")) != target_path_key
+            or sorted((item["path"], item["sha256"]) for item in included)
+            != expected_migration_artifacts
+        ):
+            issue("completion_project_inclusion_facts_invalid", "Project inclusion facts are incomplete or uncorrelated.")
+        else:
+            try:
+                _, _, _, project_text = _read_bounded_text_artifact(
+                    target_path_key,
+                    maximum_bytes=TARGET_CSHARP_ARTIFACT_MAX_BYTES,
+                )
+            except _ArtifactReadError:
+                issue("completion_project_file_unreadable", "Project file could not be read back.")
+            else:
+                try:
+                    project_root = ET.fromstring(project_text)
+                except ET.ParseError:
+                    issue("completion_project_file_invalid", "Project file is not valid XML.")
+                else:
+                    observed_includes: set[str] = set()
+                    project_directory = Path(target_path_key).parent
+                    for element in project_root.iter():
+                        include_value = str(element.attrib.get("Include") or "").strip()
+                        if not include_value or any(marker in include_value for marker in ("*", "?")):
+                            continue
+                        include_path = Path(include_value)
+                        if not include_path.is_absolute():
+                            include_path = project_directory / include_path
+                        include_key = _absolute_path_key(include_path)
+                        if include_key:
+                            observed_includes.add(include_key)
+                    expected_paths = {path for path, _ in expected_migration_artifacts}
+                    if not expected_paths.issubset(observed_includes):
+                        issue(
+                            "completion_project_inclusion_not_observed",
+                            "Project XML does not explicitly include every exact migration artifact path.",
+                        )
+    elif name == "project-build":
+        outputs = _normalized_artifact_receipt_rows(result.get("output_artifacts"))
+        outputs_valid = bool(outputs)
+        for output in outputs:
+            try:
+                _, _, digest, _ = _read_bounded_artifact(
+                    output["path"],
+                    maximum_bytes=COMPLETION_EVIDENCE_ARTIFACT_MAX_BYTES,
+                    collect_bytes=False,
+                )
+            except _ArtifactReadError:
+                outputs_valid = False
+                break
+            if digest != _normalized_sha256(output["sha256"]):
+                outputs_valid = False
+                break
+        if not (
+            executor == "command"
+            and target_path_key.lower().endswith(('.csproj', '.vbproj'))
+            and result.get("build_succeeded") is True
+            and result.get("errors") == 0
+            and str(result.get("configuration") or "").strip()
+            and outputs_valid
+        ):
+            issue("completion_project_build_facts_invalid", "Build facts and current output artifacts are required.")
+    elif name == "designer-layout-load":
+        if not (
+            expected_designer_path
+            and target_path_key == expected_designer_path
+            and result.get("layout_loaded") is True
+            and str(result.get("form_class") or "").strip() == expected_form_class
+            and _absolute_path_key(result.get("designer_path", "")) == expected_designer_path
+            and _normalized_sha256(result.get("designer_sha256")) == actual_target_hash
+        ):
+            issue("completion_designer_layout_facts_invalid", "Designer load facts must bind the exact paired Designer artifact.")
+    elif name == "database-equivalence":
+        if not (
+            result.get("equivalent") is True
+            and str(result.get("database_target") or "").strip()
+            and str(result.get("query_receipt_id") or "").strip()
+            and _normalized_sha256(result.get("baseline_result_sha256"))
+            and _normalized_sha256(result.get("candidate_result_sha256"))
+            and _normalized_sha256(result.get("baseline_result_sha256"))
+            == _normalized_sha256(result.get("candidate_result_sha256"))
+        ):
+            issue("completion_database_equivalence_facts_invalid", "Database equivalence facts are incomplete or unequal.")
+    elif name == "deployment":
+        deployed_path = str(result.get("deployed_artifact_path") or "").strip()
+        deployed_hash = _normalized_sha256(result.get("deployed_artifact_sha256"))
+        deployed_valid = False
+        if _absolute_path_key(deployed_path) and deployed_hash:
+            try:
+                _, _, current_hash, _ = _read_bounded_artifact(
+                    deployed_path,
+                    maximum_bytes=COMPLETION_EVIDENCE_ARTIFACT_MAX_BYTES,
+                    collect_bytes=False,
+                )
+                deployed_valid = current_hash == deployed_hash
+            except _ArtifactReadError:
+                deployed_valid = False
+        if not (
+            result.get("deployed") is True
+            and str(result.get("environment") or "").strip()
+            and str(result.get("deployment_id") or "").strip()
+            and deployed_valid
+        ):
+            issue("completion_deployment_facts_invalid", "Deployment facts must bind a current deployed artifact.")
+    elif name == "manual-workflow":
+        scenarios = result.get("scenarios")
+        scenarios = list(scenarios) if isinstance(scenarios, Sequence) and not isinstance(scenarios, (str, bytes)) else []
+        if not (
+            str(result.get("operator") or "").strip()
+            and str(result.get("workflow_run_id") or "").strip()
+            and scenarios
+            and all(
+                isinstance(item, Mapping)
+                and str(item.get("scenario_id") or "").strip()
+                and item.get("status") == "passed"
+                and str(item.get("observed_result") or "").strip()
+                for item in scenarios
+            )
+        ):
+            issue("completion_manual_workflow_facts_invalid", "Manual workflow receipt requires observed per-scenario facts.")
+
+    passed = not issues
+    return {
+        "name": name,
+        "required_for_claim": required,
+        "status": "passed" if passed else "blocked" if required else "not_claimed",
+        "evidence_supplied": True,
+        "receipt_id": receipt_id,
+        "run_id": run_id,
+        "correlation_id": correlation_id,
+        "target_path": target_path_key,
+        "target_sha256": f"sha256:{actual_target_hash}" if actual_target_hash else "",
+        "target_size_bytes": target_size,
+        "evidence": receipt,
+        "issues": issues,
+    }
+
+
+def _evaluate_pb_migration_orchestration_contracts(
+    *,
+    authority_contract: Any,
+    directive_ledger: Any,
+    observed_actions: Any,
+    writes: Any,
+    requested_intent: str,
+    completion_requested: bool,
+    csharp_source_text: str,
+    designer_source_text: str,
+    formatted_sql_text: str,
+    packaged_profile_id: str,
+) -> Dict[str, Any]:
+    """Evaluate optional governance inputs without upgrading absence into evidence."""
+
+    issues: List[Dict[str, Any]] = []
+    authority_supplied = authority_contract is not None
+    if authority_supplied and isinstance(authority_contract, Mapping):
+        authority_result = validate_pb_migration_authority_contract(
+            target_receipts=authority_contract.get("target_receipts", ()),
+            comparator=authority_contract.get("comparator"),
+            authority_requests=authority_contract.get("authority_requests", ()),
+            generated_texts={
+                "csharp": {"language": "csharp", "text": csharp_source_text},
+                "designer": {"language": "csharp", "text": designer_source_text},
+                "sql": {"language": "sql", "text": formatted_sql_text},
+            },
+            packaged_profile_id=packaged_profile_id,
+        )
+        authority_receipt = dict(authority_result.metadata)
+        authority_valid = authority_result.success
+        issues.extend(
+            {**dict(item), "contract": "authority"}
+            for item in authority_receipt.get("issues", [])
+        )
+    elif authority_supplied:
+        authority_valid = False
+        authority_receipt = {
+            "status": "blocked",
+            "issues": [
+                {
+                    "code": "pb_migration_authority_contract_invalid",
+                    "severity": "error",
+                    "message": "Authority contract must be an object.",
+                }
+            ],
+        }
+        issues.extend(
+            {**item, "contract": "authority"}
+            for item in authority_receipt["issues"]
+        )
+    else:
+        authority_valid = True
+        authority_receipt = {
+            "status": "not_supplied",
+            "required_for_completion": completion_requested,
+            "issues": [],
+        }
+
+    action_values: List[Any] = []
+    if observed_actions is not None:
+        if isinstance(observed_actions, Mapping):
+            action_values.append(dict(observed_actions))
+        elif isinstance(observed_actions, (list, tuple)):
+            action_values.extend(observed_actions)
+        else:
+            action_values.append(observed_actions)
+    if writes is not None:
+        write_values = (
+            [writes]
+            if isinstance(writes, (str, Mapping))
+            else list(writes)
+            if isinstance(writes, (list, tuple))
+            else [writes]
+        )
+        for index, value in enumerate(write_values):
+            if isinstance(value, Mapping):
+                action = dict(value)
+                action.setdefault("action_id", f"write-{index + 1}")
+                action["kind"] = ACTION_WRITE
+            else:
+                action = {
+                    "action_id": str(value or f"write-{index + 1}"),
+                    "kind": ACTION_WRITE,
+                }
+            action_values.append(action)
+
+    directive_supplied = directive_ledger is not None
+    directive_input_present = directive_supplied or bool(action_values)
+    if isinstance(directive_ledger, Mapping):
+        directives = directive_ledger.get("directives", ())
+        satisfied_ids = directive_ledger.get("satisfied_ids", ())
+    elif isinstance(directive_ledger, (list, tuple)):
+        directives = directive_ledger
+        satisfied_ids = ()
+    elif directive_ledger is None:
+        directives = ()
+        satisfied_ids = ()
+    else:
+        directives = getattr(directive_ledger, "directives", ())
+        satisfied_ids = ()
+
+    if directive_input_present:
+        try:
+            directive_result = evaluate_pb_migration_directives(
+                directives,
+                satisfied_ids=satisfied_ids,
+                write_intent=str(requested_intent or MODE_IMPLEMENTATION),
+                observed_actions=action_values,
+                completion_requested=completion_requested,
+            )
+            directive_receipt = dict(directive_result.metadata)
+            directive_valid = directive_result.completion_authorized
+            issues.extend(
+                {**dict(item), "contract": "directives"}
+                for item in directive_receipt.get("issues", [])
+            )
+        except (TypeError, ValueError) as exc:
+            directive_valid = False
+            directive_receipt = {
+                "status": "blocked",
+                "issues": [
+                    {
+                        "code": "pb_migration_directive_ledger_invalid",
+                        "severity": "error",
+                        "message": str(exc),
+                    }
+                ],
+            }
+            issues.extend(
+                {**item, "contract": "directives"}
+                for item in directive_receipt["issues"]
+            )
+    else:
+        directive_valid = True
+        directive_receipt = {
+            "status": "not_supplied",
+            "required_for_completion": completion_requested,
+            "issues": [],
+        }
+
+    if completion_requested and not authority_supplied:
+        issues.append(
+            {
+                "code": "pb_migration_authority_receipt_required",
+                "severity": "error",
+                "message": "A completion claim requires an evaluated authority contract receipt.",
+                "contract": "authority",
+            }
+        )
+    if completion_requested and not directive_supplied:
+        issues.append(
+            {
+                "code": "pb_migration_directive_receipt_required",
+                "severity": "error",
+                "message": "A completion claim requires an evaluated directive ledger receipt.",
+                "contract": "directives",
+            }
+        )
+
+    issues.sort(
+        key=lambda item: (
+            str(item.get("contract", "")),
+            str(item.get("code", "")),
+            str(item.get("field", "")),
+        )
+    )
+    validation_allowed = bool(authority_valid and directive_valid)
+    completion_authorized = bool(
+        completion_requested
+        and authority_supplied
+        and directive_supplied
+        and validation_allowed
+    )
+    return {
+        "status": "passed" if not issues else "blocked",
+        "authority_supplied": authority_supplied,
+        "directive_ledger_supplied": directive_supplied,
+        "requested_intent": str(requested_intent or MODE_IMPLEMENTATION),
+        "authority_receipt": authority_receipt,
+        "directive_receipt": directive_receipt,
+        "validation_allowed": validation_allowed,
+        "completion_authorized": completion_authorized,
+        "issues": issues,
+        "issue_codes": sorted({str(item.get("code", "")) for item in issues}),
+    }
+
+
+def _completion_contract_required(
+    claims: Mapping[str, Any],
+    names: Sequence[str],
+) -> bool:
+    required_contracts = claims.get("required_contracts")
+    if isinstance(required_contracts, Mapping):
+        if any(required_contracts.get(name) is True for name in names):
+            return True
+    elif isinstance(required_contracts, Sequence) and not isinstance(
+        required_contracts, (str, bytes)
+    ):
+        normalized = {str(item).strip().casefold() for item in required_contracts}
+        if any(name.casefold() in normalized for name in names):
+            return True
+    return any(
+        claims.get(prefix + name) is True
+        for name in names
+        for prefix in ("requires_", "require_", "")
+    )
+
+
+def _contract_inputs(value: Any) -> tuple[Dict[str, Any] | None, bool]:
+    if not isinstance(value, Mapping):
+        return None, False
+    required = bool(
+        value.get("required") is True or value.get("required_for_completion") is True
+    )
+    for key in ("inputs", "validator_kwargs", "contract"):
+        nested = value.get(key)
+        if isinstance(nested, Mapping):
+            return dict(nested), required
+    return {
+        key: nested
+        for key, nested in value.items()
+        if key not in {"required", "required_for_completion"}
+    }, required
+
+
+def _validate_pb_event_save_contract_compat(inputs: Mapping[str, Any]) -> HarnessResult:
+    """Keep empty approval evidence compatible with an older helper signature.
+
+    A helper that cannot accept host runtime provenance must never validate a
+    supplied approval receipt.  The compatibility path is therefore limited
+    to contracts with no approval or runtime evidence at all.
+    """
+    helper = getattr(_pb_event_save_contract_module, "_validate_approval_receipts", None)
+    helper_parameters = (
+        inspect.signature(helper).parameters if callable(helper) else {}
+    )
+    evidence_present = any(
+        inputs.get(key)
+        for key in (
+            "approved_csharp_events",
+            "approval_execution_receipts",
+            "approval_host_runtime_receipt",
+            "approval_runtime_receipt",
+            "approval_invocation_ledger",
+            "approval_runtime_receipt_factory",
+        )
+    )
+    if "host_runtime_receipt" not in helper_parameters and not evidence_present:
+        original = helper
+
+        def compat_helper(*args: Any, **kwargs: Any) -> Any:
+            kwargs.pop("host_runtime_receipt", None)
+            kwargs.pop("invocation_ledger", None)
+            return original(*args, **kwargs)
+
+        setattr(_pb_event_save_contract_module, "_validate_approval_receipts", compat_helper)
+        try:
+            return validate_pb_event_save_contract(**dict(inputs))
+        finally:
+            setattr(_pb_event_save_contract_module, "_validate_approval_receipts", original)
+    return validate_pb_event_save_contract(**dict(inputs))
+
+
+def _dependency_free_sdk_project(contract: Mapping[str, Any]) -> bool:
+    dependencies = contract.get("dependency_receipts")
+    if not isinstance(dependencies, Sequence) or isinstance(dependencies, (str, bytes)):
+        return False
+    if dependencies:
+        return False
+    project_path = Path(str(contract.get("expected_project_path") or ""))
+    try:
+        root = ET.fromstring(project_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, ET.ParseError):
+        return False
+    dependency_tags = {"ProjectReference", "PackageReference", "Reference"}
+    return not any(_xml_local_name(element.tag) in dependency_tags for element in root.iter())
+
+
+def _project_build_execution_correlation_issues(
+    contract: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    invocation = contract.get("build_invocation_receipt")
+    output = contract.get("build_output_receipt")
+    if not isinstance(invocation, Mapping) or not isinstance(output, Mapping):
+        return [
+            {
+                "code": "gm31_build_execution_correlation_invalid",
+                "severity": "error",
+                "field": "build_receipts",
+                "message": "Build invocation and output receipts must be execution-correlated objects.",
+            }
+        ]
+    invocation_execution_id = str(invocation.get("execution_id") or "").strip()
+    output_execution_id = str(output.get("execution_id") or "").strip()
+    result_id = str(output.get("result_id") or output.get("command_result_id") or "").strip()
+    producer = str(output.get("producer") or invocation.get("producer") or "").strip()
+    if (
+        invocation.get("executed") is not True
+        or output.get("executed") is not True
+        or not invocation_execution_id
+        or output_execution_id != invocation_execution_id
+        or not result_id
+        or not producer
+    ):
+        return [
+            {
+                "code": "gm31_build_execution_correlation_invalid",
+                "severity": "error",
+                "field": "build_output_receipt",
+                "message": "Build receipts require executed=true, one execution id, producer identity, and a correlated result id.",
+            }
+        ]
+    return []
+
+
+def _evaluate_project_build_preflight(contract: Mapping[str, Any]) -> Dict[str, Any]:
+    try:
+        result = verify_gm31_project_build_contract(**dict(contract))
+    except (TypeError, ValueError) as exc:
+        return {
+            "status": "blocked",
+            "success": False,
+            "validator_executed": False,
+            "validator": "src.skills.pb_migration_preflight.verify_gm31_project_build_contract",
+            "issue_codes": ["pb_project_preflight_contract_invalid"],
+            "issues": [
+                {
+                    "code": "pb_project_preflight_contract_invalid",
+                    "severity": "error",
+                    "message": str(exc),
+                }
+            ],
+            "metadata": {},
+        }
+    raw = result.to_dict()
+    issues = [dict(item) for item in result.issues]
+    if _dependency_free_sdk_project(contract):
+        issues = [
+            item
+            for item in issues
+            if str(item.get("code")) != "gm31_dependency_invalid"
+        ]
+    issues.extend(_project_build_execution_correlation_issues(contract))
+    issues.sort(key=lambda item: (str(item.get("code", "")), str(item.get("field", ""))))
+    metadata = dict(result.metadata)
+    metadata["dependency_free_project_allowed"] = _dependency_free_sdk_project(contract)
+    metadata["execution_correlated_build_receipt"] = not any(
+        item.get("code") == "gm31_build_execution_correlation_invalid"
+        for item in issues
+    )
+    metadata["status"] = "passed" if not issues else "blocked"
+    metadata["issue_codes"] = sorted({str(item.get("code", "")) for item in issues})
+    metadata["completion_authorized"] = bool(
+        contract.get("completion_requested") is True and not issues
+    )
+    return {
+        "status": metadata["status"],
+        "success": not issues,
+        "validator_executed": True,
+        "validator": "src.skills.pb_migration_preflight.verify_gm31_project_build_contract",
+        "issue_codes": list(metadata["issue_codes"]),
+        "issues": issues,
+        "metadata": metadata,
+        "raw_validator_result": raw,
+    }
+
+
+def _not_supplied_contract(required: bool) -> Dict[str, Any]:
+    return {
+        "status": "not_supplied",
+        "success": True,
+        "required_for_completion": required,
+        "validator_executed": False,
+        "issue_codes": [],
+        "issues": [],
+        "metadata": {},
+    }
+
+
+def _not_requested_contract() -> Dict[str, Any]:
+    return {
+        "status": "not_requested",
+        "success": True,
+        "required_for_completion": False,
+        "validator_executed": False,
+        "issue_codes": [],
+        "issues": [],
+        "metadata": {
+            "status": "not_requested",
+            "claim_requested": False,
+            "verification_scope": "claim_gated",
+        },
+    }
+
+
+def _claim_value_matches(value: Any, pattern: re.Pattern[str]) -> bool:
+    if isinstance(value, str):
+        return pattern.search(value) is not None
+    if isinstance(value, Mapping):
+        if value.get("claimed") is True:
+            return True
+        claim_fields = {
+            "claim",
+            "claims",
+            "request",
+            "operation",
+            "task",
+            "objective",
+            "description",
+            "intent",
+        }
+        return any(
+            _claim_value_matches(item, pattern)
+            for key, item in value.items()
+            if str(key).casefold() in claim_fields
+            or any(
+                marker in str(key).casefold()
+                for marker in ("claim", "parity", "timing", "equivalence")
+            )
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return any(_claim_value_matches(item, pattern) for item in value)
+    return False
+
+
+def _optional_contract_claimed(
+    claims: Mapping[str, Any],
+    contract: Any,
+    *,
+    keys: Sequence[str],
+    pattern: re.Pattern[str],
+) -> bool:
+    if any(claims.get(key) is True for key in keys):
+        return True
+    required_contracts = claims.get("required_contracts")
+    if isinstance(required_contracts, Mapping) and any(
+        required_contracts.get(key) is True for key in keys
+    ):
+        return True
+    return _claim_value_matches(claims, pattern) or _claim_value_matches(
+        contract, pattern
+    )
+
+
+_EVENT_STATE_CLAIM_PATTERN = re.compile(
+    r"\b(?:event[ _-]?state|event[ _-]?graph|state[ _-]?parity|timing[ _-]?parity|"
+    r"ordering[ _-]?parity|event[ _-]?timing)\b",
+    re.IGNORECASE,
+)
+_PERFORMANCE_CLAIM_PATTERN = re.compile(
+    r"\b(?:performance|tuning|equivalence|faster|speed|runtime|logical\s+reads|"
+    r"execution\s+plan)\b",
+    re.IGNORECASE,
+)
+
+
+def _evaluate_pb_event_preflight_integrations(
+    *,
+    event_save_contract: Any,
+    migration_preflight_contract: Any,
+    completion_claims: Mapping[str, Any] | None,
+    completion_requested: bool,
+    event_state_contract: Any = None,
+    performance_equivalence_contract: Any = None,
+) -> Dict[str, Any]:
+    claims = dict(completion_claims or {})
+    event_inputs, event_wrapper_required = _contract_inputs(event_save_contract)
+    event_required = bool(
+        event_wrapper_required
+        or _completion_contract_required(
+            claims,
+            ("event_save_contract", "event_save", "event-save"),
+        )
+    )
+    project_required = _completion_contract_required(
+        claims,
+        ("project_preflight", "project_build_preflight", "project_build"),
+    )
+    acquisition_required = _completion_contract_required(
+        claims,
+        ("acquisition_preflight", "migration_acquisition", "acquisition"),
+    )
+
+    migration_mapping = (
+        dict(migration_preflight_contract)
+        if isinstance(migration_preflight_contract, Mapping)
+        else {}
+    )
+    project_value = next(
+        (
+            migration_mapping[key]
+            for key in ("project_build", "project_preflight", "gm31")
+            if key in migration_mapping
+        ),
+        migration_mapping if "expected_project_path" in migration_mapping else None,
+    )
+    acquisition_value = next(
+        (
+            migration_mapping[key]
+            for key in ("acquisition", "acquisition_preflight", "gm32")
+            if key in migration_mapping
+        ),
+        migration_mapping
+        if any(
+            key in migration_mapping
+            for key in ("pblscripter", "orca_runtime", "exported_objects")
+        )
+        else None,
+    )
+    project_inputs, project_wrapper_required = _contract_inputs(project_value)
+    acquisition_inputs, acquisition_wrapper_required = _contract_inputs(acquisition_value)
+    project_required = bool(
+        project_required
+        or project_wrapper_required
+        or migration_mapping.get("project_required") is True
+        or migration_mapping.get("project_build_required") is True
+    )
+    acquisition_required = bool(
+        acquisition_required
+        or acquisition_wrapper_required
+        or migration_mapping.get("acquisition_required") is True
+    )
+    event_state_claimed = _optional_contract_claimed(
+        claims,
+        event_state_contract,
+        keys=(
+            "event_state_parity",
+            "event_state",
+            "event_graph",
+            "timing_parity",
+            "event_timing_parity",
+            "state_parity",
+        ),
+        pattern=_EVENT_STATE_CLAIM_PATTERN,
+    )
+    performance_claimed = _optional_contract_claimed(
+        claims,
+        performance_equivalence_contract,
+        keys=(
+            "performance",
+            "performance_claim",
+            "performance_equivalence",
+            "equivalence",
+            "tuning",
+        ),
+        pattern=_PERFORMANCE_CLAIM_PATTERN,
+    )
+
+    if event_inputs is None:
+        event_result = _not_supplied_contract(event_required)
+    else:
+        try:
+            validated_event = _validate_pb_event_save_contract_compat(event_inputs)
+            event_result = {
+                **validated_event.to_dict(),
+                "status": str(validated_event.metadata.get("status") or "blocked"),
+                "required_for_completion": event_required,
+                "validator_executed": True,
+                "validator": "src.skills.pb_event_save_contract.validate_pb_event_save_contract",
+            }
+        except (TypeError, ValueError) as exc:
+            event_result = {
+                "status": "blocked",
+                "success": False,
+                "required_for_completion": event_required,
+                "validator_executed": False,
+                "validator": "src.skills.pb_event_save_contract.validate_pb_event_save_contract",
+                "issue_codes": ["pb_event_save_contract_invalid"],
+                "issues": [
+                    {
+                        "code": "pb_event_save_contract_invalid",
+                        "severity": "error",
+                        "message": str(exc),
+                    }
+                ],
+                "metadata": {},
+            }
+
+    event_state_inputs, _event_state_wrapper_required = _contract_inputs(
+        event_state_contract
+    )
+    if not event_state_claimed:
+        event_state_result = _not_requested_contract()
+    elif event_state_inputs is None:
+        event_state_result = {
+            "status": "blocked",
+            "success": False,
+            "required_for_completion": True,
+            "validator_executed": False,
+            "validator": "src.skills.pb_event_state_contract.validate_pb_event_state_contract",
+            "issue_codes": ["pb_event_state_contract_required"],
+            "issues": [
+                {
+                    "code": "pb_event_state_contract_required",
+                    "severity": "error",
+                    "message": "An event-state/timing parity claim requires an artifact-bound event graph contract.",
+                }
+            ],
+            "metadata": {},
+        }
+    else:
+        try:
+            validated_event_state = validate_pb_event_state_contract(
+                **event_state_inputs
+            )
+            event_state_result = {
+                **validated_event_state.to_dict(),
+                "status": str(
+                    validated_event_state.metadata.get("status") or "blocked"
+                ),
+                "required_for_completion": True,
+                "validator_executed": True,
+                "validator": "src.skills.pb_event_state_contract.validate_pb_event_state_contract",
+                "issue_codes": [
+                    str(item.get("code", ""))
+                    for item in validated_event_state.metadata.get("issues", [])
+                ],
+                "issues": list(validated_event_state.metadata.get("issues", [])),
+            }
+        except (TypeError, ValueError) as exc:
+            event_state_result = {
+                "status": "blocked",
+                "success": False,
+                "required_for_completion": True,
+                "validator_executed": False,
+                "validator": "src.skills.pb_event_state_contract.validate_pb_event_state_contract",
+                "issue_codes": ["pb_event_state_contract_invalid"],
+                "issues": [
+                    {
+                        "code": "pb_event_state_contract_invalid",
+                        "severity": "error",
+                        "message": str(exc),
+                    }
+                ],
+                "metadata": {},
+            }
+
+    performance_inputs, _performance_wrapper_required = _contract_inputs(
+        performance_equivalence_contract
+    )
+    if not performance_claimed:
+        performance_result = _not_requested_contract()
+    else:
+        performance_kwargs = dict(performance_inputs or {})
+        performance_kwargs["performance_claimed"] = True
+        try:
+            validated_performance = validate_pb_performance_equivalence_contract(
+                **performance_kwargs
+            )
+            performance_result = {
+                **validated_performance.to_dict(),
+                "status": str(
+                    validated_performance.metadata.get("status") or "blocked"
+                ),
+                "required_for_completion": True,
+                "validator_executed": True,
+                "validator": "src.skills.pb_performance_equivalence_contract.validate_pb_performance_equivalence_contract",
+                "issue_codes": [
+                    str(item.get("code", ""))
+                    for item in validated_performance.metadata.get("issues", [])
+                ],
+                "issues": list(validated_performance.metadata.get("issues", [])),
+            }
+        except (TypeError, ValueError) as exc:
+            performance_result = {
+                "status": "blocked",
+                "success": False,
+                "required_for_completion": True,
+                "validator_executed": False,
+                "validator": "src.skills.pb_performance_equivalence_contract.validate_pb_performance_equivalence_contract",
+                "issue_codes": ["pb_performance_equivalence_contract_invalid"],
+                "issues": [
+                    {
+                        "code": "pb_performance_equivalence_contract_invalid",
+                        "severity": "error",
+                        "message": str(exc),
+                    }
+                ],
+                "metadata": {},
+            }
+
+    project_result = (
+        _evaluate_project_build_preflight(project_inputs)
+        if project_inputs is not None
+        else _not_supplied_contract(project_required)
+    )
+    project_result["required_for_completion"] = project_required
+    acquisition_result = (
+        _plan_explicit_gm32_acquisition(acquisition_inputs)
+        if acquisition_inputs is not None
+        else _not_supplied_contract(acquisition_required)
+    )
+    acquisition_result["required_for_completion"] = acquisition_required
+    if acquisition_inputs is not None:
+        acquisition_result["validator_executed"] = True
+        acquisition_result["validator"] = (
+            "src.skills.pb_migration_preflight.plan_gm32_acquisition"
+        )
+        acquisition_result["status"] = str(
+            acquisition_result.get("metadata", {}).get("status") or "blocked"
+        )
+
+    issues: List[Dict[str, Any]] = []
+    for contract_name, result in (
+        ("event_save", event_result),
+        ("event_state", event_state_result),
+        ("performance_equivalence", performance_result),
+        ("project_build", project_result),
+        ("acquisition", acquisition_result),
+    ):
+        issues.extend(
+            {**dict(item), "contract": contract_name}
+            for item in result.get("issues", [])
+        )
+
+    required_results = (
+        ("event_save", event_required, event_inputs, event_result),
+        ("event_state", event_state_claimed, event_state_inputs, event_state_result),
+        (
+            "performance_equivalence",
+            performance_claimed,
+            performance_inputs,
+            performance_result,
+        ),
+        ("project_build", project_required, project_inputs, project_result),
+        ("acquisition", acquisition_required, acquisition_inputs, acquisition_result),
+    )
+    missing_codes = {
+        "event_save": "pb_event_save_contract_required",
+        "event_state": "pb_event_state_contract_required",
+        "performance_equivalence": "pb_performance_equivalence_contract_required",
+        "project_build": "pb_project_preflight_contract_required",
+        "acquisition": "pb_acquisition_preflight_contract_required",
+    }
+    if completion_requested or event_state_claimed or performance_claimed:
+        for name, required, supplied, _result in required_results:
+            if required and supplied is None:
+                issues.append(
+                    {
+                        "code": missing_codes[name],
+                        "severity": "error",
+                        "message": "The explicitly required PB contract was not supplied for completion.",
+                        "contract": name,
+                    }
+                )
+    issues.sort(
+        key=lambda item: (
+            str(item.get("contract", "")),
+            str(item.get("code", "")),
+            str(item.get("field", "")),
+        )
+    )
+    supplied_results = [
+        result
+        for _name, _required, supplied, result in required_results
+        if supplied is not None or result.get("status") != "not_requested"
+    ]
+    validation_allowed = bool(
+        not issues and all(result.get("success") is True for result in supplied_results)
+    )
+    completion_authorized = bool(
+        validation_allowed
+        and all(
+            not required
+            or (supplied is not None and result.get("success") is True)
+            for _name, required, supplied, result in required_results
+        )
+        and not issues
+    )
+    return {
+        "status": "passed" if not issues else "blocked",
+        "event_save": event_result,
+        "event_state": event_state_result,
+        "performance_equivalence": performance_result,
+        "migration_preflight": {
+            "project_build": project_result,
+            "acquisition": acquisition_result,
+        },
+        "validation_allowed": validation_allowed,
+        "completion_authorized": completion_authorized,
+        "issues": issues,
+        "issue_codes": sorted({str(item.get("code", "")) for item in issues}),
+        "smoke_targets": [
+            "src.skills.pb_event_save_contract.validate_pb_event_save_contract",
+            "src.skills.pb_event_state_contract.validate_pb_event_state_contract",
+            "src.skills.pb_performance_equivalence_contract.validate_pb_performance_equivalence_contract",
+            "src.skills.pb_migration_preflight.verify_gm31_project_build_contract",
+            "src.skills.pb_migration_preflight.plan_gm32_acquisition",
+        ],
+    }
+
+
 def orchestrate_pb_migration_validation(
     *,
     csharp_source_text: str,
@@ -14198,6 +18493,7 @@ def orchestrate_pb_migration_validation(
     csharp_source_role: str = "code-behind",
     runtime_dynamic_ui_evidence: Any = None,
     result_fields: Iterable[str] | None = None,
+    designer_ui_contract: Mapping[str, Any] | None = None,
     expected_control_contracts: Iterable[Mapping[str, Any]] | None = None,
     no_control_contract_evidence: Any = None,
     evidence_registry: Any = None,
@@ -14207,6 +18503,11 @@ def orchestrate_pb_migration_validation(
     target_designer_sha256: str = "",
     baseline_designer_path: str | Path = "",
     baseline_designer_sha256: str = "",
+    target_project_baseline: Any = None,
+    current_project_path: str | Path = "",
+    current_project_sha256: str = "",
+    standalone_surface_kind: str = "",
+    field_lineage_contract: Mapping[str, Any] | None = None,
     expected_grid_role: str = "",
     expected_grid_suffix: str = "",
     expected_grid_prefix: str = "",
@@ -14228,6 +18529,23 @@ def orchestrate_pb_migration_validation(
     sql_provider_path: str | Path = "",
     selected_active_sql_provider_path: str | Path | None = None,
     sql_provider_selection: Mapping[str, Any] | None = None,
+    completion_claims: Mapping[str, Any] | None = None,
+    project_inclusion_evidence: Mapping[str, Any] | None = None,
+    build_evidence: Mapping[str, Any] | None = None,
+    designer_layout_evidence: Mapping[str, Any] | None = None,
+    database_equivalence_evidence: Mapping[str, Any] | None = None,
+    deployment_evidence: Mapping[str, Any] | None = None,
+    manual_workflow_evidence: Mapping[str, Any] | None = None,
+    authority_contract: Mapping[str, Any] | None = None,
+    directive_ledger: Any = None,
+    observed_actions: Any = None,
+    writes: Any = None,
+    requested_intent: str = MODE_IMPLEMENTATION,
+    generation_construct_authorization: Any = None,
+    event_save_contract: Mapping[str, Any] | None = None,
+    migration_preflight_contract: Mapping[str, Any] | None = None,
+    event_state_contract: Mapping[str, Any] | None = None,
+    performance_equivalence_contract: Mapping[str, Any] | None = None,
 ) -> HarnessResult:
     """Run the fail-closed offline profile, C#, SP, and formatting validation contract."""
     required_order = [
@@ -14239,7 +18557,35 @@ def orchestrate_pb_migration_validation(
     stages: List[Dict[str, Any]] = []
     evidence: Dict[str, Any] = {}
 
-    def finish(success: bool) -> HarnessResult:
+    def finish(core_success: bool) -> HarnessResult:
+        claims = dict(completion_claims or {})
+        completion_requested = bool(
+            claims.get("completion") is True
+            or claims.get("release") is True
+            or claims.get("implementation_complete") is True
+        )
+        governance = _evaluate_pb_migration_orchestration_contracts(
+            authority_contract=authority_contract,
+            directive_ledger=directive_ledger,
+            observed_actions=observed_actions,
+            writes=writes,
+            requested_intent=requested_intent,
+            completion_requested=completion_requested,
+            csharp_source_text=csharp_source_text,
+            designer_source_text=designer_source_text,
+            formatted_sql_text=formatted_sql_text,
+            packaged_profile_id=profile_id,
+        )
+        evidence["governance"] = governance
+        pb_contract_integrations = _evaluate_pb_event_preflight_integrations(
+            event_save_contract=event_save_contract,
+            migration_preflight_contract=migration_preflight_contract,
+            completion_claims=claims,
+            completion_requested=completion_requested,
+            event_state_contract=event_state_contract,
+            performance_equivalence_contract=performance_equivalence_contract,
+        )
+        evidence["pb_contract_integrations"] = pb_contract_integrations
         completed_order = [stage["name"] for stage in stages]
         profile_consumptions = [
             evidence.get("csharp", {}).get("profile_consumption", {}),
@@ -14260,20 +18606,183 @@ def orchestrate_pb_migration_validation(
         )
         sql_binding = evidence.get("sql_final_response_binding", {})
         sql_release = evidence.get("sql_final_response_release", {})
+        sql_history_correlation = evidence.get("sql_verifier_history_correlation", {})
         sql_release_correlated = bool(
             isinstance(sql_binding, Mapping)
             and sql_binding.get("status") == "bound"
             and isinstance(sql_release, Mapping)
             and sql_release.get("status") == "passed"
             and sql_release.get("binding") == sql_binding
+            and isinstance(sql_history_correlation, Mapping)
+            and sql_history_correlation.get("status") == "correlated"
+            and sql_history_correlation.get("binding_verification_id")
+            == sql_history_correlation.get("history_verification_id")
         )
-        completion_allowed = bool(
-            success
+        base_core_validation_passed = bool(
+            core_success
             and completed_order == required_order
             and identity_match
             and all(item.get("consumed") for item in profile_consumptions)
             and sql_release_correlated
         )
+        core_validation_passed = bool(
+            base_core_validation_passed
+            and governance["validation_allowed"]
+            and pb_contract_integrations["validation_allowed"]
+        )
+        designer_applicable = bool(str(designer_source_text or "").strip())
+        database_claimed = claims.get("database_equivalence") is True
+        deployment_claimed = claims.get("deployment") is True
+        profile_identity = {
+            "profile_id": str(evidence.get("profile", {}).get("profile_consumption", {}).get("profile_id") or ""),
+            "profile_version": str(evidence.get("profile", {}).get("profile_consumption", {}).get("profile_version") or ""),
+            "profile_hash": str(evidence.get("profile", {}).get("profile_consumption", {}).get("profile_hash") or ""),
+        }
+        target_bindings = evidence.get("csharp", {}).get("target_artifact_binding", {})
+        target_bindings = dict(target_bindings) if isinstance(target_bindings, Mapping) else {}
+        migration_artifacts = [
+            {
+                "path": binding.get("path", ""),
+                "sha256": binding.get("actual_sha256", ""),
+            }
+            for binding in (
+                target_bindings.get("source", {}),
+                target_bindings.get("designer", {}),
+            )
+            if isinstance(binding, Mapping) and binding.get("status") == "passed"
+        ]
+        expected_designer_path = _absolute_path_key(
+            target_bindings.get("designer", {}).get("path", "")
+            if isinstance(target_bindings.get("designer"), Mapping)
+            else ""
+        )
+        expected_form_class = str(
+            evidence.get("csharp", {}).get("program_form_contract", {}).get(
+                "expected_form_class", ""
+            )
+        )
+        validated_program_key = str(
+            evidence.get("csharp", {}).get("program_key") or program_key or ""
+        ).upper()
+        completion_stages = [
+            _validate_completion_receipt(
+                "project-inclusion",
+                project_inclusion_evidence,
+                required=completion_requested,
+                profile_identity=profile_identity,
+                program_key=validated_program_key,
+                migration_artifacts=migration_artifacts,
+                expected_designer_path=expected_designer_path,
+                expected_form_class=expected_form_class,
+            ),
+            _validate_completion_receipt(
+                "project-build",
+                build_evidence,
+                required=completion_requested,
+                profile_identity=profile_identity,
+                program_key=validated_program_key,
+                migration_artifacts=migration_artifacts,
+                expected_designer_path=expected_designer_path,
+                expected_form_class=expected_form_class,
+            ),
+            _validate_completion_receipt(
+                "designer-layout-load",
+                designer_layout_evidence,
+                required=bool(completion_requested and designer_applicable),
+                profile_identity=profile_identity,
+                program_key=validated_program_key,
+                migration_artifacts=migration_artifacts,
+                expected_designer_path=expected_designer_path,
+                expected_form_class=expected_form_class,
+            ),
+            _validate_completion_receipt(
+                "database-equivalence",
+                database_equivalence_evidence,
+                required=database_claimed,
+                profile_identity=profile_identity,
+                program_key=validated_program_key,
+                migration_artifacts=migration_artifacts,
+                expected_designer_path=expected_designer_path,
+                expected_form_class=expected_form_class,
+            ),
+            _validate_completion_receipt(
+                "deployment",
+                deployment_evidence,
+                required=deployment_claimed,
+                profile_identity=profile_identity,
+                program_key=validated_program_key,
+                migration_artifacts=migration_artifacts,
+                expected_designer_path=expected_designer_path,
+                expected_form_class=expected_form_class,
+            ),
+            _validate_completion_receipt(
+                "manual-workflow",
+                manual_workflow_evidence,
+                required=completion_requested,
+                profile_identity=profile_identity,
+                program_key=validated_program_key,
+                migration_artifacts=migration_artifacts,
+                expected_designer_path=expected_designer_path,
+                expected_form_class=expected_form_class,
+            ),
+        ]
+        required_completion_stages = [
+            item for item in completion_stages if item["required_for_claim"]
+        ]
+        receipt_correlation_valid = True
+        if required_completion_stages and all(
+            item["status"] == "passed" for item in required_completion_stages
+        ):
+            receipt_ids = [item.get("receipt_id", "") for item in required_completion_stages]
+            run_ids = {item.get("run_id", "") for item in required_completion_stages}
+            correlation_ids = {
+                item.get("correlation_id", "") for item in required_completion_stages
+            }
+            receipt_correlation_valid = bool(
+                len(receipt_ids) == len(set(receipt_ids))
+                and len(run_ids) == 1
+                and "" not in run_ids
+                and len(correlation_ids) == 1
+                and "" not in correlation_ids
+            )
+            project_targets = {
+                item.get("target_path", "")
+                for item in required_completion_stages
+                if item["name"] in {"project-inclusion", "project-build"}
+            }
+            if completion_requested and len(project_targets) != 1:
+                receipt_correlation_valid = False
+            if not receipt_correlation_valid:
+                for item in required_completion_stages:
+                    item["status"] = "blocked"
+                    item.setdefault("issues", []).append(
+                        {
+                            "code": "completion_receipt_correlation_failed",
+                            "message": "Required stage receipts need unique receipt IDs and one shared run/correlation identity.",
+                        }
+                    )
+        completion_allowed = bool(
+            core_validation_passed
+            and completion_requested
+            and governance["completion_authorized"]
+            and pb_contract_integrations["completion_authorized"]
+            and required_completion_stages
+            and receipt_correlation_valid
+            and all(item["status"] == "passed" for item in required_completion_stages)
+        )
+        draft_allowed = core_validation_passed and not completion_requested
+        result_success = bool(completion_allowed if completion_requested else core_validation_passed)
+        claim_status = {
+            "completion": "passed" if completion_allowed else "blocked" if completion_requested else "not_claimed",
+            "event_state": pb_contract_integrations["event_state"]["status"],
+            "performance_equivalence": pb_contract_integrations["performance_equivalence"]["status"],
+            "database_equivalence": next(
+                item["status"] for item in completion_stages if item["name"] == "database-equivalence"
+            ),
+            "deployment": next(
+                item["status"] for item in completion_stages if item["name"] == "deployment"
+            ),
+        }
         contract = {
             "contract_id": "offline-packaged-pb-migration-validation-v1",
             "required_stage_order": required_order,
@@ -14281,22 +18790,106 @@ def orchestrate_pb_migration_validation(
             "stages": stages,
             "profile_identity_match": identity_match,
             "sql_release_correlated": sql_release_correlated,
+            "base_core_validation_passed": base_core_validation_passed,
+            "core_validation_passed": core_validation_passed,
+            "governance": governance,
+            "pb_contract_integrations": pb_contract_integrations,
+            "offline_draft_allowed": draft_allowed,
+            "completion_requested": completion_requested,
+            "completion_claims": claims,
+            "claim_status": claim_status,
+            "completion_stages": completion_stages,
             "completion_allowed": completion_allowed,
+            "completion_receipt_correlation_valid": receipt_correlation_valid,
             "database_execution_attempted": False,
             "database_execution_allowed": False,
-            "failure_boundary": stages[-1]["name"] if stages and not completion_allowed else "",
+            "failure_boundary": (
+                "pb-contract-integrations"
+                if not pb_contract_integrations["validation_allowed"]
+                or (
+                    completion_requested
+                    and not pb_contract_integrations["completion_authorized"]
+                )
+                else "authority-contract"
+                if completion_requested and not governance["authority_supplied"]
+                else "directive-ledger"
+                if completion_requested and not governance["directive_ledger_supplied"]
+                else "governance"
+                if not governance["validation_allowed"]
+                else stages[-1]["name"]
+                if stages and not core_validation_passed
+                else next(
+                    (item["name"] for item in required_completion_stages if item["status"] != "passed"),
+                    "",
+                )
+                if required_completion_stages
+                and any(item["status"] != "passed" for item in required_completion_stages)
+                else ""
+            ),
         }
+        blocked_individual_claim = any(
+            claim_status[name] == "blocked"
+            for name in (
+                "event_state",
+                "performance_equivalence",
+                "database_equivalence",
+                "deployment",
+            )
+            if (
+                claims.get(name) is True
+                or (
+                    name == "event_state"
+                    and _optional_contract_claimed(
+                        claims,
+                        event_state_contract,
+                        keys=(
+                            "event_state_parity",
+                            "event_state",
+                            "event_graph",
+                            "timing_parity",
+                            "event_timing_parity",
+                            "state_parity",
+                        ),
+                        pattern=_EVENT_STATE_CLAIM_PATTERN,
+                    )
+                )
+                or (
+                    name == "performance_equivalence"
+                    and _optional_contract_claimed(
+                        claims,
+                        performance_equivalence_contract,
+                        keys=(
+                            "performance",
+                            "performance_claim",
+                            "performance_equivalence",
+                            "equivalence",
+                            "tuning",
+                        ),
+                        pattern=_PERFORMANCE_CLAIM_PATTERN,
+                    )
+                )
+            )
+        )
+        status = (
+            "passed"
+            if completion_allowed
+            else "draft_validated_with_blocked_claims"
+            if draft_allowed and blocked_individual_claim
+            else "draft_validated"
+            if draft_allowed
+            else "blocked"
+        )
         metadata = {
             "harness": "pb-to-csharp-migration-harness",
             "operation": "orchestrated_offline_validation",
-            "status": "passed" if completion_allowed else "blocked",
+            "status": status,
             "validation_contract": contract,
             "evidence": evidence,
             "token_optimizer_status": "passthrough",
             "token_optimizer_status_reason": "C#/SQL validation inputs remained exact.",
         }
         return HarnessResult(
-            success=completion_allowed,
+            success=result_success,
             stdout=json.dumps(
                 {
                     "status": metadata["status"],
@@ -14306,8 +18899,8 @@ def orchestrate_pb_migration_validation(
                 ensure_ascii=False,
                 sort_keys=True,
             ),
-            stderr="" if completion_allowed else "Offline PB migration validation contract failed closed.",
-            exit_code=0 if completion_allowed else 1,
+            stderr="" if result_success else "Offline PB migration validation contract failed closed.",
+            exit_code=0 if result_success else 1,
             metadata=metadata,
         )
 
@@ -14331,6 +18924,7 @@ def orchestrate_pb_migration_validation(
         source_role=csharp_source_role,
         runtime_dynamic_ui_evidence=runtime_dynamic_ui_evidence,
         result_fields=result_fields,
+        designer_ui_contract=designer_ui_contract,
         expected_control_contracts=expected_control_contracts,
         no_control_contract_evidence=no_control_contract_evidence,
         evidence_registry=evidence_registry,
@@ -14340,6 +18934,11 @@ def orchestrate_pb_migration_validation(
         target_designer_sha256=target_designer_sha256,
         baseline_designer_path=baseline_designer_path,
         baseline_designer_sha256=baseline_designer_sha256,
+        target_project_baseline=target_project_baseline,
+        current_project_path=current_project_path,
+        current_project_sha256=current_project_sha256,
+        standalone_surface_kind=standalone_surface_kind,
+        field_lineage_contract=field_lineage_contract,
         expected_grid_role=expected_grid_role,
         expected_grid_suffix=expected_grid_suffix,
         expected_grid_prefix=expected_grid_prefix,
@@ -14376,6 +18975,7 @@ def orchestrate_pb_migration_validation(
         external_caller_contract=external_caller_contract,
         save_field_contract=save_field_contract,
         save_csharp_source_text=csharp_source_text,
+        generation_construct_authorization=generation_construct_authorization,
     )
     stages.append(
         {
@@ -14410,6 +19010,10 @@ def orchestrate_pb_migration_validation(
     )
     evidence["sql_final_response_binding"] = binding_receipt
     evidence["sql_final_response_release"] = release_receipt
+    evidence["sql_verifier_history"] = list(release_receipt.get("verifier_history", []))
+    evidence["sql_verifier_history_correlation"] = dict(
+        release_receipt.get("verifier_history_correlation", {})
+    )
     evidence["formatting"] = {
         "status": "passed" if binding_success else "blocked",
         "evidence_source": "sql_final_response_binding",
@@ -14897,6 +19501,8 @@ def _normalize_control_inventory(available_controls: Dict[str, Any] | Iterable[s
     inventory: Dict[str, Any] = {
         "types": set(),
         "target_project_controls": {},
+        "konelib_controls": {},
+        "has_konelib": False,
         "has_devexpress": False,
         "has_winforms": True,
         "project_name": "",
@@ -14910,11 +19516,17 @@ def _normalize_control_inventory(available_controls: Dict[str, Any] | Iterable[s
         inventory["has_devexpress"] = bool(
             available_controls.get("has_devexpress", available_controls.get("devexpress", False))
         )
+        inventory["has_konelib"] = bool(
+            available_controls.get("has_konelib", available_controls.get("konelib", False))
+        )
         for key in ("control_types", "types", "available_types"):
             for type_name in available_controls.get(key, []) or []:
                 inventory["types"].add(str(type_name))
         for logical_name, type_name in (available_controls.get("target_project_controls") or {}).items():
             inventory["target_project_controls"][str(logical_name).lower()] = str(type_name)
+            inventory["types"].add(str(type_name))
+        for logical_name, type_name in (available_controls.get("konelib_controls") or {}).items():
+            inventory["konelib_controls"][str(logical_name).lower()] = str(type_name)
             inventory["types"].add(str(type_name))
         if available_controls.get("has_devexpress") or available_controls.get("devexpress"):
             inventory["types"].update(
@@ -14942,6 +19554,8 @@ def _normalize_control_inventory(available_controls: Dict[str, Any] | Iterable[s
 
     if any("devexpress." in item.lower() for item in inventory["types"]):
         inventory["has_devexpress"] = True
+    if any("konelib." in item.lower() for item in inventory["types"]):
+        inventory["has_konelib"] = True
     return inventory
 
 
@@ -14953,7 +19567,28 @@ def _find_project_control(logical_name: str, inventory: Dict[str, Any]) -> str:
     spec = CONTROL_FALLBACKS[logical_name]
     for type_name in sorted(inventory["types"]):
         lowered = type_name.lower()
-        if lowered.startswith("devexpress.") or lowered.startswith("system.windows.forms."):
+        if (
+            lowered.startswith("konelib.")
+            or lowered.startswith("devexpress.")
+            or lowered.startswith("system.windows.forms.")
+        ):
+            continue
+        tail = lowered.rsplit(".", 1)[-1]
+        if any(tail == suffix or tail.endswith(suffix) for suffix in spec["target_suffixes"]):
+            return type_name
+    return ""
+
+
+def _find_konelib_control(logical_name: str, inventory: Dict[str, Any]) -> str:
+    explicit = inventory["konelib_controls"].get(logical_name)
+    if explicit:
+        return explicit
+    if not inventory["has_konelib"]:
+        return ""
+    spec = CONTROL_FALLBACKS[logical_name]
+    for type_name in sorted(inventory["types"]):
+        lowered = type_name.lower()
+        if not lowered.startswith("konelib."):
             continue
         tail = lowered.rsplit(".", 1)[-1]
         if any(tail == suffix or tail.endswith(suffix) for suffix in spec["target_suffixes"]):

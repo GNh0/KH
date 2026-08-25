@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import inspect
 import json
 import re
 import runpy
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -19,7 +21,6 @@ from src.skills.pb_to_csharp_migration import (
     CompositeBusinessKeyDisplayObservation,
     CompositeBusinessKeyDisplaySpec,
     MigrationInputState,
-    build_author_tagged_style_profile_update,
     build_migration_profile_update,
     build_offline_pb_to_csharp_runtime_generation,
     build_pbl_export_strategy,
@@ -38,11 +39,11 @@ from src.skills.pb_to_csharp_migration import (
     generate_devexpress_grid_xml,
     verify_devexpress_grid_xml_contract,
     verify_composite_business_key_display_contract,
-    get_author_tagged_csharp_style_baseline,
+    get_packaged_csharp_style_contract,
     load_packaged_migration_profile,
-    normalize_author_tagged_program_key,
+    normalize_procedure_program_key,
     orchestrate_pb_migration_validation as _raw_orchestrate_pb_migration_validation,
-    resolve_author_tagged_style_evidence,
+    resolve_packaged_migration_profile,
     verify_migration_generated_csharp_style as _raw_verify_migration_generated_csharp_style,
     verify_pb_migration_analysis_document,
     verify_pb_migration_save_field_contract,
@@ -113,7 +114,14 @@ def write_test_artifact(name, text):
     root = Path(tempfile.gettempdir()) / "kh-uaf-pb-migration-tests"
     root.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", name)
-    path = root / f"{safe_name}-{digest[:12]}.txt"
+    if safe_name.lower().endswith(".designer.cs"):
+        stem = safe_name[: -len(".Designer.cs")]
+        suffix = ".Designer.cs"
+    else:
+        parsed = Path(safe_name)
+        stem = parsed.stem
+        suffix = parsed.suffix or ".txt"
+    path = root / f"{stem}-{digest[:12]}{suffix}"
     path.write_text(text, encoding="utf-8", newline="")
     return path, digest
 
@@ -129,16 +137,24 @@ def synthetic_save_evidence(locator, *, kind="pb_source"):
 
 
 def target_artifact_kwargs(source_text, designer_text="", *, prefix="generated"):
-    source_path, source_digest = write_test_artifact(f"{prefix}-source.cs", source_text)
+    pair_digest = hashlib.sha256(
+        f"{source_text}\0{designer_text}".encode("utf-8")
+    ).hexdigest()[:12]
+    root = Path(tempfile.gettempdir()) / "kh-uaf-pb-migration-tests"
+    root.mkdir(parents=True, exist_ok=True)
+    safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "-", prefix)
+    pair_stem = f"{safe_prefix}-{pair_digest}"
+    source_path = root / f"{pair_stem}.cs"
+    source_path.write_text(source_text, encoding="utf-8", newline="")
+    source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
     result = {
         "target_source_path": str(source_path),
         "target_source_sha256": f"sha256:{source_digest}",
     }
     if designer_text:
-        designer_path, designer_digest = write_test_artifact(
-            f"{prefix}-designer.cs",
-            designer_text,
-        )
+        designer_path = root / f"{pair_stem}.Designer.cs"
+        designer_path.write_text(designer_text, encoding="utf-8", newline="")
+        designer_digest = hashlib.sha256(designer_path.read_bytes()).hexdigest()
         result.update(
             {
                 "target_designer_path": str(designer_path),
@@ -702,13 +718,17 @@ def patch_runtime_profile_path(path):
 
 def _prepare_csharp_verifier_kwargs(source, kwargs):
     prepared = dict(kwargs)
+    prepared.setdefault(
+        "standalone_surface_kind",
+        "usercontrol"
+        if re.search(r"\b(?:System\.Windows\.Forms\.)?UserControl\b", source)
+        else "form",
+    )
     designer = str(prepared.get("designer_source_text") or "")
     for key, value in target_artifact_kwargs(source, designer).items():
         prepared.setdefault(key, value)
     if "expected_control_contracts" not in prepared:
-        contracts = inferred_test_control_contracts(
-            designer if designer else (source if prepared.get("source_role") == "designer" else "")
-        )
+        contracts = inferred_test_control_contracts(designer)
         prepared["expected_control_contracts"] = contracts
         if not contracts:
             prepared.setdefault(
@@ -732,6 +752,12 @@ def _orchestrate_pb_migration_validation(*args, **kwargs):
     prepared = dict(kwargs)
     source = str(prepared.get("csharp_source_text") or "")
     designer = str(prepared.get("designer_source_text") or "")
+    prepared.setdefault(
+        "standalone_surface_kind",
+        "usercontrol"
+        if re.search(r"\b(?:System\.Windows\.Forms\.)?UserControl\b", source)
+        else "form",
+    )
     for key, value in target_artifact_kwargs(source, designer, prefix="orchestrated").items():
         prepared.setdefault(key, value)
     if "expected_control_contracts" not in prepared:
@@ -751,6 +777,16 @@ def _orchestrate_pb_migration_validation(*args, **kwargs):
 
 def verify_migration_generated_csharp_style(*args, **kwargs):
     source = str(args[0] if args else kwargs.pop("source_text", ""))
+    designer = str(kwargs.get("designer_source_text") or "")
+    if "result_fields" not in kwargs:
+        kwargs["result_fields"] = sorted(
+            set(
+                re.findall(
+                    r'\.(?:BindingField|FieldName|DataPropertyName)\s*=\s*"([^"]+)"',
+                    f"{source}\n{designer}",
+                )
+            )
+        )
     requested_program = str(kwargs.get("program_key") or "TestBrowse")
     expected_form = requested_program if requested_program.lower().endswith("form") else requested_program + "Form"
     source = (
@@ -1596,7 +1632,7 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
 
         prose_only = _verify_migration_generated_csharp_style(
             '''
-            public partial class InventoryBrowseForm
+            public partial class InventoryBrowseForm : System.Windows.Forms.Form
             {
                 protected void SearchCommand()
                 {
@@ -1617,7 +1653,7 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         )
         runtime_state = _verify_migration_generated_csharp_style(
             '''
-            public partial class InventoryBrowseForm
+            public partial class InventoryBrowseForm : System.Windows.Forms.Form
             {
                 protected void SearchCommand()
                 {
@@ -1664,10 +1700,10 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
                 this.gvwRuntime.OptionsView.ShowGroupPanel = false;
                 this.colRuntime_VALUE.DisplayFormat.FormatString = "text";
                 this.colRuntime_VALUE.ColumnEdit = this.repRuntime;
-                this.pnlRuntime.Location = new System.Drawing.Point(1, 1);
-                this.pnlRuntime.Name = "pnlRuntime";
-                this.pnlRuntime.TabIndex = 1;
-                this.pnlRuntime.BindingField = "VALUE";
+                this.pnRuntime.Location = new System.Drawing.Point(1, 1);
+                this.pnRuntime.Name = "pnRuntime";
+                this.pnRuntime.TabIndex = 1;
+                this.pnRuntime.BindingField = "VALUE";
             }
         }
         '''
@@ -1751,7 +1787,7 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         }
         '''
         code_behind = r'''
-        public partial class RecordsBrowseForm
+        public partial class RecordsBrowseForm : System.Windows.Forms.Form
         {
             protected void SearchCommand()
             {
@@ -1795,10 +1831,14 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
             }
         }
         '''
+        grid_columns = [
+            {"field_name": "ENTITY_VALUE", "caption": "Entity value", "data_type": "string"}
+        ]
         _, designer = valid_devexpress_grid_designer(
             "RecordsBrowseForm",
-            columns=[{"field_name": "ENTITY_VALUE", "caption": "Entity value", "data_type": "string"}],
+            columns=grid_columns,
         )
+        layout_xml = generate_devexpress_grid_xml(grid_columns)
 
         blocked = _verify_migration_generated_csharp_style(
             code_behind_only,
@@ -1810,6 +1850,11 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
             designer_source_text=designer,
             profile_evidence=profile,
             program_key="RecordsBrowse",
+            result_fields=["ENTITY_VALUE"],
+            expected_grid_role="list",
+            expected_grid_suffix="List",
+            expected_grid_columns=grid_columns,
+            layout_load_artifact_text=layout_xml,
         )
 
         self.assertFalse(blocked.success)
@@ -1828,22 +1873,47 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
             0,
         )
 
-    def test_normal_plan_does_not_consult_legacy_private_style_constants(self):
-        with (
-            mock.patch.object(pb_migration, "AUTHOR_TAGGED_CSHARP_STYLE_BASELINE", None),
-            mock.patch.object(pb_migration, "AUTHOR_TAGGED_PROGRAM_CSHARP_MAPPINGS", None),
-            mock.patch.object(pb_migration, "_discover_author_tagged_csharp_paths") as discover,
-            mock.patch.object(pb_migration, "build_migration_profile_update") as profile_update,
-        ):
+    def test_normal_plan_uses_runtime_computed_packaged_style_identity(self):
+        with mock.patch.object(pb_migration, "build_migration_profile_update") as profile_update:
             result = build_pb_to_csharp_migration_plan(
                 "Plan a generalized inventory browse form.",
                 {"program_key": "InventoryBrowse"},
             )
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual("loaded", result.metadata["packaged_style_resolution"]["status"])
-        discover.assert_not_called()
+        resolution = result.metadata["packaged_style_resolution"]
+        self.assertEqual("loaded", resolution["status"])
+        expected_hash = "sha256:" + hashlib.sha256(
+            json.dumps(
+                resolution["canonical_style_profile"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(
+            expected_hash,
+            resolution["canonical_style_profile_hash"],
+        )
         profile_update.assert_not_called()
+
+    def test_target_source_style_hint_cannot_select_normal_generation_family(self):
+        result = build_pb_to_csharp_migration_plan(
+            "Plan a generalized inventory browse form.",
+            {
+                "program_key": "InventoryBrowse",
+                "has_target_csharp_samples": True,
+                "target_style": "CallViewQuery plus direct click events",
+            },
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+        style = result.metadata["packaged_style_resolution"]["canonical_style_profile"]
+        self.assertEqual("CallSelectProcedure", style["query_method"])
+        self.assertEqual("CallSaveProcedure", style["save_method"])
+        self.assertEqual("exactly_one_of_command_or_event", style["event_family"])
+        self.assertFalse(result.metadata["packaged_style_resolution"]["source_analysis_invoked"])
+        self.assertEqual([], result.metadata["packaged_style_resolution"]["external_sources_consulted"])
 
     def test_packaged_profile_load_requires_exact_sanitized_identity(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1874,25 +1944,26 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertFalse(wrong_hash.success)
         self.assertIn("packaged_profile_hash_mismatch", {issue["code"] for issue in wrong_hash.metadata["issues"]})
 
-    def test_runtime_generation_uses_only_packaged_profile_and_never_walks_csharp_roots(self):
+    def test_runtime_generation_uses_only_packaged_profile_and_has_no_root_input(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             profile_path, profile_hash = write_packaged_profile(temp_dir)
             with (
                 patch_runtime_profile_path(profile_path),
                 mock.patch.object(pb_migration.os, "walk") as walk,
-                mock.patch.object(pb_migration, "_discover_author_tagged_csharp_paths") as discover,
-                mock.patch.object(pb_migration, "build_author_tagged_style_profile_update") as profile_update,
-                mock.patch.object(pb_migration, "build_migration_profile_update") as generic_profile_update,
+                mock.patch.object(pb_migration, "build_migration_profile_update") as profile_update,
             ):
                 result = build_offline_pb_to_csharp_runtime_generation(
                     "Generate generalized C# and SQL.",
                     profile_id="pb-csharp-offline-generalized",
                     profile_version="1.0",
                     profile_hash=profile_hash,
-                    csharp_root=r"C:\private\source",
                 )
 
         self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn(
+            "csharp_" + "root",
+            inspect.signature(build_offline_pb_to_csharp_runtime_generation).parameters,
+        )
         self.assertEqual("offline_packaged_profile", result.metadata["runtime_mode"])
         self.assertEqual([], result.metadata["external_sources_consulted"])
         self.assertFalse(result.metadata["capabilities_invoked"]["db"])
@@ -1900,38 +1971,40 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
         self.assertFalse(result.metadata["capabilities_invoked"]["orca"])
         self.assertFalse(result.metadata["capabilities_invoked"]["pblscripter"])
         walk.assert_not_called()
-        discover.assert_not_called()
         profile_update.assert_not_called()
-        generic_profile_update.assert_not_called()
 
-    def test_live_csharp_relearning_is_explicit_profile_update_only(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            (root / "GENERALIZED.cs").write_text(
-                "public class GENERALIZED : GeneralizedScreenBase { private void SearchCommand() {} }",
-                encoding="utf-8",
-            )
-            (root / "GENERALIZED.Designer.cs").write_text(
-                'this.txtCODE.BindingField = "CODE";',
-                encoding="utf-8",
-            )
+    def test_profile_maintenance_requires_exact_artifacts_and_rejects_root_only_input(self):
+        contract = get_packaged_csharp_style_contract()
+        identity = contract["profile_identity"]
+        runtime = resolve_packaged_migration_profile(
+            "SP_GENERALIZED_SELECT",
+            profile_id=identity["profile_id"],
+            profile_version=identity["profile_version"],
+            profile_hash=identity["profile_hash"],
+        )
+        updated = build_migration_profile_update(
+            "SP_GENERALIZED_SELECT",
+            profile_id="generalized-pb-csharp",
+            profile_version="1.1.0",
+        )
 
-            runtime = resolve_author_tagged_style_evidence(
+        self.assertTrue(runtime.success, runtime.to_dict())
+        self.assertEqual("runtime_profile_resolution", runtime.metadata["operation"])
+        self.assertFalse(updated.success)
+        self.assertEqual("explicit_profile_maintenance", updated.metadata["operation"])
+        self.assertEqual("candidate_only", updated.metadata["write_status"])
+        self.assertFalse(updated.metadata["pre_read_contract"]["pre_read_checks_passed"])
+        self.assertNotIn(
+            "csharp_" + "root",
+            inspect.signature(build_migration_profile_update).parameters,
+        )
+        with self.assertRaises(TypeError):
+            build_migration_profile_update(
                 "SP_GENERALIZED_SELECT",
-                csharp_root=str(root),
-            )
-            updated = build_migration_profile_update(
-                "SP_GENERALIZED_SELECT",
-                csharp_root=str(root),
                 profile_id="generalized-pb-csharp",
                 profile_version="1.1.0",
+                **{"csharp_" + "root": r"C:\private\source"},
             )
-
-        self.assertFalse(runtime.success)
-        self.assertEqual("explicit_profile_update_required", runtime.metadata["status"])
-        self.assertTrue(updated.success, updated.to_dict())
-        self.assertEqual("explicit_profile_update", updated.metadata["operation"])
-        self.assertEqual("candidate_only", updated.metadata["write_status"])
 
     def test_csharp_validator_requires_and_applies_loaded_profile(self):
         without_profile = _verify_migration_generated_csharp_style(
@@ -1946,11 +2019,6 @@ class PbToCSharpMigrationHarnessTests(unittest.TestCase):
                 "public class Screen : GeneralizedScreenBase { AlienConvention bridge; }",
                 profile_evidence=loaded,
                 program_key="GENERALIZED",
-                primary_style_evidence_paths=[
-                    r"packaged\style\GENERALIZED.cs",
-                    r"packaged\style\GENERALIZED.Designer.cs",
-                ],
-                require_author_tagged_evidence=True,
             )
             matched = verify_migration_generated_csharp_style(
                 "public class Screen : GeneralizedScreenBase {}",
@@ -2009,8 +2077,7 @@ END
         self.assertIn("profile_unmapped_sp_output", {issue["code"] for issue in unmapped.metadata["issues"]})
         self.assertFalse(temporary.success)
         temporary_codes = {issue["code"] for issue in temporary.metadata["issues"]}
-        self.assertIn("profile_forbidden_sql_pattern", temporary_codes)
-        self.assertIn("temp_table_in_generated_sp", temporary_codes)
+        self.assertIn("invented_temp_table_in_generated_sp", temporary_codes)
         self.assertTrue(temporary.metadata["profile_consumption"]["consumed"])
 
     def test_sp_validator_derives_procedure_identity_after_comment_stripping(self):
@@ -2092,7 +2159,10 @@ END
             ["load-profile", "validate-csharp", "validate-sp", "final-sql-binding"],
             passed.metadata["validation_contract"]["completed_stage_order"],
         )
-        self.assertTrue(passed.metadata["validation_contract"]["completion_allowed"])
+        self.assertTrue(passed.metadata["validation_contract"]["core_validation_passed"])
+        self.assertTrue(passed.metadata["validation_contract"]["offline_draft_allowed"])
+        self.assertFalse(passed.metadata["validation_contract"]["completion_allowed"])
+        self.assertEqual("draft_validated", passed.metadata["status"])
         self.assertTrue(passed.metadata["validation_contract"]["sql_release_correlated"])
         self.assertFalse(passed.metadata["validation_contract"]["database_execution_attempted"])
         self.assertFalse(mismatched.success)
@@ -2140,10 +2210,44 @@ END
                 )
 
         self.assertTrue(result.success, result.to_dict())
-        formatting.assert_called_once()
-        self.assertIs(formatting.call_args.kwargs["alias_role_plan"], alias_plan)
-        self.assertEqual(formatting.call_args.kwargs["operation"], "formatting")
-        self.assertEqual(formatting.call_args.kwargs["cte_temp_table_reason"], "")
+        self.assertEqual(2, formatting.call_count)
+        for call in formatting.call_args_list:
+            self.assertIs(call.kwargs["alias_role_plan"], alias_plan)
+            self.assertEqual(call.kwargs["operation"], "formatting")
+            self.assertEqual(call.kwargs["cte_temp_table_reason"], "")
+
+    def test_sql_bridge_rejects_mismatched_verifier_history_receipt(self):
+        sql = "SELECT 1 AS VALUE;"
+        release = mock.Mock()
+        release.to_receipt_dict.return_value = {
+            "status": "passed",
+            "binding": {
+                "status": "bound",
+                "verification_id": "different-verification-id",
+            },
+        }
+        with (
+            mock.patch(
+                "src.skills.sql_formatting_provider.verify_sql_formatting_style",
+                return_value=passed_sql_formatting_result(sql, sql),
+            ),
+            mock.patch(
+                "src.skills.sql_formatting_provider.guard_and_bind_verified_sql_final_response",
+                return_value=release,
+            ),
+        ):
+            success, receipt = pb_migration._execute_pb_sql_final_response_binding(
+                sql,
+                sql,
+                sql_final_response(sql),
+                sql_provider_path=SQL_PROVIDER_PATH,
+                selected_active_sql_provider_path=SQL_PROVIDER_PATH,
+                sql_provider_selection=sql_provider_selection(),
+            )
+
+        self.assertFalse(success)
+        self.assertEqual("sql_verifier_history_correlation_failed", receipt["code"])
+        self.assertEqual("blocked", receipt["verifier_history_correlation"]["status"])
 
     def test_orchestrated_validation_rejects_non_code_csharp_evidence_and_accepts_real_code(self):
         sql = sp_metadata_header("Generalized screen") + """
@@ -2588,7 +2692,8 @@ END
 
         self.assertEqual(mode["mode"], "standalone")
         self.assertFalse(mode["runtime_lookup_required"])
-        self.assertIn("bundled references", mode["fallback_policy"])
+        self.assertIn("packaged fixed style contract", mode["fallback_policy"])
+        self.assertNotIn("matching", mode["fallback_policy"].lower())
 
     def test_described_behavior_mode_when_pb_source_is_absent(self):
         mode = classify_migration_mode(
@@ -2680,8 +2785,15 @@ END
         self.assertIn("PBL export provider and PB version strategy", payload["deliverables"])
         self.assertIn("target-project control fallback map", payload["deliverables"])
         self.assertEqual(payload["pbl_export_strategy"]["provider"], "pasted_source")
-        self.assertEqual(payload["control_stack"]["selection"]["grid"]["provider"], "target-project")
-        self.assertEqual(payload["control_stack"]["selection"]["grid"]["type"], "Acme.Controls.u_GridControl")
+        self.assertEqual(payload["control_stack"]["selection"]["grid"]["provider"], "devexpress")
+        self.assertEqual(
+            payload["control_stack"]["selection"]["grid"]["type"],
+            "DevExpress.XtraGrid.GridControl",
+        )
+        self.assertEqual(
+            payload["control_stack"]["unbound_target_project_controls_ignored"],
+            ["grid"],
+        )
 
     def test_plan_records_orca_version_strategy(self):
         result = build_pb_to_csharp_migration_plan(
@@ -2697,6 +2809,132 @@ END
         self.assertIn("PblScripter", payload["pbl_export_strategy"]["provider_priority"][0])
         self.assertIn("wrapper", payload["pbl_export_strategy"]["provider_priority"][0])
 
+    def test_unrelated_pb_csharp_plan_does_not_probe_orca_runtime(self):
+        with mock.patch("src.skills.pb_orca_runtime.PbOrcaRuntime") as runtime_type:
+            result = build_pb_to_csharp_migration_plan(
+                "Discuss a PB-to-C# field mapping without exporting a PBL.",
+                {"has_orca": True, "pb_version": "12.5"},
+            )
+
+        self.assertTrue(result.success, result.to_dict())
+        runtime_type.assert_not_called()
+        self.assertEqual("not_requested", result.metadata["capability_probe"]["status"])
+        self.assertEqual(0, result.metadata["capability_probe"]["executed_process_count"])
+        self.assertEqual({}, result.metadata["invocation_contract"])
+
+    def test_explicit_orca_export_intent_uses_typed_probe_contract_without_conversion(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pbl_path = root / "screen source.pbl"
+            output_path = root / "exports"
+            pbl_path.write_bytes(b"pbl")
+            decision = mock.Mock()
+            decision.ready = True
+            decision.reason_code = "capability_ready"
+            decision.fallback_order = ("exported_source", "pasted_source", "described_behavior")
+            decision.to_dict.return_value = {
+                "status": "ready",
+                "reason_code": "capability_ready",
+                "selected_version": "70",
+                "executed_process_count": 0,
+                "fallback_order": list(decision.fallback_order),
+            }
+            with mock.patch("src.skills.pb_orca_runtime.PbOrcaRuntime") as runtime_type:
+                runtime = runtime_type.return_value
+                runtime.probe.return_value = decision
+                result = build_pb_to_csharp_migration_plan(
+                    "Export the selected PB7 object and plan its C# migration.",
+                    {
+                        "has_orca": True,
+                        "pbl_export_requested": True,
+                        "orca_tool_root": str(root),
+                        "pb_version": "7.0",
+                        "pbl_path": str(pbl_path),
+                        "pbl_export_action": "export",
+                        "pbl_object_name": "w_screen",
+                        "pbl_output_directory": str(output_path),
+                    },
+                )
+
+        self.assertTrue(result.success, result.to_dict())
+        runtime.probe.assert_called_once()
+        runtime.convert.assert_not_called()
+        request = runtime.probe.call_args.args[0]
+        self.assertEqual("70", request.version)
+        self.assertEqual("export", request.action)
+        self.assertEqual("w_screen", request.object_name)
+        self.assertEqual(str(pbl_path), str(request.pbl_path))
+        self.assertEqual("70", result.metadata["selected_explicit_version"])
+        self.assertEqual(0, result.metadata["capability_probe"]["executed_process_count"])
+        invocation = result.metadata["invocation_contract"]
+        self.assertEqual("src.skills.pb_orca_runtime", invocation["contract_owner"])
+        self.assertEqual("PbOrcaRuntime.probe", invocation["probe_entrypoint"])
+        self.assertEqual("PbOrcaRuntime.convert", invocation["conversion_entrypoint"])
+        self.assertEqual("70", invocation["request"]["version"])
+        self.assertFalse(result.metadata["tool_execution_intent"]["conversion_executed"])
+
+    def test_unknown_orca_version_and_missing_tool_use_standalone_fallback(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pbl_path = root / "screen.pbl"
+            pbl_path.write_bytes(b"pbl")
+            unknown = build_pbl_export_strategy(
+                {
+                    "has_orca": True,
+                    "pbl_export_requested": True,
+                    "orca_tool_root": str(root),
+                    "pb_version": "99.9",
+                    "pbl_path": str(pbl_path),
+                    "pbl_export_action": "list",
+                }
+            )
+            missing_tool = build_pbl_export_strategy(
+                {
+                    "has_orca": True,
+                    "pbl_export_requested": True,
+                    "orca_tool_root": str(root / "missing-tool"),
+                    "pb_version": "12.5",
+                    "pbl_path": str(pbl_path),
+                    "pbl_export_action": "list",
+                }
+            )
+
+        self.assertEqual("version_not_selected_or_unsupported", unknown["capability_probe"]["reason_code"])
+        self.assertEqual("tool_not_found", missing_tool["capability_probe"]["reason_code"])
+        for strategy in (unknown, missing_tool):
+            self.assertEqual(0, strategy["capability_probe"]["executed_process_count"])
+            self.assertEqual("standalone_fallback", strategy["effective_provider"])
+            self.assertEqual("standalone_required", strategy["fallback"]["status"])
+            self.assertFalse(strategy["tool_execution_intent"]["conversion_executed"])
+
+    def test_offline_runtime_exposes_orca_probe_contract_without_invoking_conversion(self):
+        identity = get_packaged_csharp_style_contract()["profile_identity"]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pbl_path = root / "screen.pbl"
+            pbl_path.write_bytes(b"pbl")
+            result = build_offline_pb_to_csharp_runtime_generation(
+                "Prepare a bounded PBL source export before migration.",
+                profile_id=identity["profile_id"],
+                profile_version=identity["profile_version"],
+                profile_hash=identity["profile_hash"],
+                source_state={
+                    "has_orca": True,
+                    "pbl_export_requested": True,
+                    "orca_tool_root": str(root / "missing-tool"),
+                    "pb_version": "12.5",
+                    "pbl_path": str(pbl_path),
+                    "pbl_export_action": "list",
+                },
+            )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual("tool_not_found", result.metadata["capability_probe"]["reason_code"])
+        self.assertEqual("125", result.metadata["selected_explicit_version"])
+        self.assertEqual("standalone_required", result.metadata["fallback"]["status"])
+        self.assertFalse(result.metadata["capabilities_invoked"]["orca"])
+        self.assertFalse(result.metadata["tool_execution_intent"]["conversion_executed"])
+
     def test_plan_records_described_behavior_as_inferred_rebuild(self):
         result = build_pb_to_csharp_migration_plan(
             "Rebuild a described PB inventory screen in a new C# project.",
@@ -2709,7 +2947,7 @@ END
         self.assertIn("inferred behavior", " ".join(payload["steps"]))
         self.assertIn("confirmed vs inferred behavior map", payload["deliverables"])
 
-    def test_control_stack_prefers_target_project_controls(self):
+    def test_control_stack_rejects_unbound_target_project_control_types(self):
         result = resolve_csharp_control_stack(
             {
                 "project_name": "AnyProject",
@@ -2723,9 +2961,9 @@ END
         )
 
         self.assertEqual(result["status"], "passed")
-        self.assertEqual(result["selection"]["grid"]["provider"], "target-project")
-        self.assertEqual(result["selection"]["grid"]["type"], "Company.Ui.u_GridControl")
-        self.assertEqual(result["selection"]["text"]["provider"], "target-project")
+        self.assertEqual(result["selection"]["grid"]["provider"], "devexpress")
+        self.assertNotEqual(result["selection"]["grid"]["type"], "Company.Ui.u_GridControl")
+        self.assertEqual(result["selection"]["text"]["provider"], "devexpress")
         self.assertEqual(result["selection"]["group"]["provider"], "devexpress")
 
     def test_control_stack_falls_back_to_devexpress_then_winforms(self):
@@ -2737,7 +2975,7 @@ END
         self.assertEqual(winforms["selection"]["grid"]["provider"], "winforms")
         self.assertEqual(winforms["selection"]["grid"]["type"], "System.Windows.Forms.DataGridView")
 
-    def test_declared_wrapper_family_is_target_project_inventory_not_global_baseline(self):
+    def test_declared_wrapper_family_requires_bound_target_project_baseline(self):
         wrapper_types = {
             "grid": "Target.Ui.u_GridControl",
             "date": "Target.Ui.u_DateEdit",
@@ -2755,10 +2993,18 @@ END
             }
         )
 
-        self.assertEqual(result["selection"]["grid"]["provider"], "target-project")
+        self.assertEqual(result["selection"]["grid"]["provider"], "devexpress")
         for logical_name, type_name in wrapper_types.items():
             with self.subTest(logical_name=logical_name):
-                self.assertEqual(result["selection"][logical_name]["type"], type_name)
+                self.assertNotEqual(result["selection"][logical_name]["type"], type_name)
+                self.assertNotEqual(
+                    result["selection"][logical_name]["provider"],
+                    "target-project",
+                )
+        self.assertIn(
+            "unbound target-project control names were ignored",
+            result["notes"],
+        )
 
     def test_detail_form_layout_places_label_editor_pairs_with_binding_fields(self):
         result = build_detail_form_layout_plan(
@@ -2984,6 +3230,7 @@ column=(type=char(30) dbname="zx900t.record_code" name=record_code))
         self.assertTrue(plan.success, plan.to_dict())
         self.assertTrue(style.success, style.to_dict())
         self.assertIn("colSpecial_RATE_NUMBER", plan.stdout)
+        self.assertIn("rpsSpinCOST_DOLLAR", plan.stdout)
         self.assertFalse(blocked.success, blocked.to_dict())
         self.assertIn(
             "grid_column_csharp_name_mapping_required",
@@ -3421,6 +3668,8 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
             "designer_source_text": designer,
             "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
             "program_key": "TestBrowse",
+            "result_fields": ["LOOKUP_CODE"],
+            "standalone_surface_kind": "form",
             **target_artifact_kwargs(source, designer, prefix="raw-control"),
             **kwargs,
         }
@@ -4339,6 +4588,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
                     profile_evidence=profile,
                     program_key="TestBrowse",
                     expected_control_contracts=contracts,
+                    result_fields=["LOOKUP_CODE"],
                 )
 
         self.assertTrue(result.success, result.metadata["issues"])
@@ -4575,34 +4825,39 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         self.assertIn("numeric_grid_column_missing_spin_repository", issue_codes)
         self.assertIn("numeric_grid_column_displayformat_detected", issue_codes)
 
-    def test_generated_csharp_style_accepts_numeric_spin_repository_columnedit(self):
+    def test_generated_csharp_style_requires_paired_designer_for_numeric_spin_repository(self):
         columns = [{"field_name": "AMTTOT", "caption": "Amount", "data_type": "decimal(18, 2)"}]
-        generated = '''
-        private DevExpress.XtraGrid.Columns.GridColumn colList_AMTTOT;
-        private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit rpsSpinAmt;
-        this.colList_AMTTOT = new DevExpress.XtraGrid.Columns.GridColumn();
-        this.rpsSpinAmt = new DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit();
-        this.gvwList.Columns.AddRange(new DevExpress.XtraGrid.Columns.GridColumn[] {
-        this.colList_AMTTOT});
-        this.colList_AMTTOT.FieldName = "AMTTOT";
-        this.colList_AMTTOT.Name = "colList_AMTTOT";
-        this.colList_AMTTOT.ColumnEdit = this.rpsSpinAmt;
-        '''
-        _, generated = valid_devexpress_grid_designer(
+        source, _ = valid_csharp_contract_sources("RecordsBrowseForm", "AMTTOT")
+        _, designer = valid_devexpress_grid_designer(
             columns=columns,
         )
 
         result = _verify_migration_generated_csharp_style(
-            generated,
+            source,
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            form_class="RecordsBrowseForm",
+            expected_grid_role="list",
+            expected_grid_columns=columns,
+            result_fields=["AMTTOT"],
+            layout_load_artifact_text=generate_devexpress_grid_xml(columns),
+        )
+        bypass = _verify_migration_generated_csharp_style(
+            designer,
             profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
             source_role="designer",
             form_class="RecordsBrowseForm",
             expected_grid_role="list",
             expected_grid_columns=columns,
+            result_fields=["AMTTOT"],
             layout_load_artifact_text=generate_devexpress_grid_xml(columns),
         )
 
         self.assertTrue(result.success, result.metadata["issues"])
+        self.assertFalse(bypass.success)
+        bypass_codes = {issue["code"] for issue in bypass.metadata["issues"]}
+        self.assertIn("csharp_source_role_invalid", bypass_codes)
+        self.assertIn("designer_owned_ui_in_code_behind", bypass_codes)
 
     def test_generated_csharp_style_blocks_undeclared_spin_repository_reference(self):
         generated = '''
@@ -4760,28 +5015,18 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         self.assertIn("popcust_dialogresult_yes_or_ok_detected", issue_codes)
         self.assertIn("mojibake_korean_literal_detected", issue_codes)
 
-    def test_legacy_baseline_api_returns_a_detached_generalized_recipe_without_corpus_metrics(self):
-        baseline = get_author_tagged_csharp_style_baseline()
-        second = get_author_tagged_csharp_style_baseline()
+    def test_packaged_style_contract_returns_a_detached_canonical_profile(self):
+        contract = get_packaged_csharp_style_contract()
+        second = get_packaged_csharp_style_contract()
 
-        self.assertIsInstance(baseline, dict)
-        self.assertEqual("packaged_sanitized_profile", baseline["source"])
-        self.assertIn("positive_generation_recipe", baseline)
-        for removed_metric in (
-            "sp_count",
-            "normalized_program_key_count",
-            "primary_csharp_baseline_files_analyzed",
-            "designer_files_analyzed",
-            "primary_csharp_pattern_counts",
-            "designer_pattern_counts",
-            "zero_hit_generated_patterns",
-        ):
-            with self.subTest(removed_metric=removed_metric):
-                self.assertNotIn(removed_metric, baseline)
-        baseline["mutated_by_test"] = True
-        self.assertNotIn("mutated_by_test", second)
+        self.assertEqual("loaded", contract["status"])
+        self.assertEqual("CallSelectProcedure", contract["canonical_style_profile"]["query_method"])
+        self.assertEqual("CallSaveProcedure", contract["canonical_style_profile"]["save_method"])
+        self.assertRegex(contract["canonical_style_profile_hash"], r"^sha256:[0-9a-f]{64}$")
+        contract["canonical_style_profile"]["mutated_by_test"] = True
+        self.assertNotIn("mutated_by_test", second["canonical_style_profile"])
 
-    def test_author_tagged_program_style_profiles_are_packaged(self):
+    def test_program_style_profile_is_packaged_and_hash_bound(self):
         profile_path = Path("skills/pb_to_csharp_migration_harness/references/packaged-style-contract.json")
         payload = json.loads(profile_path.read_text(encoding="utf-8"))
 
@@ -4797,12 +5042,12 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         self.assertTrue(loaded.success, loaded.to_dict())
         self.assertEqual(profile_hash, loaded.metadata["profile_consumption"]["profile_hash"])
 
-    def test_author_tagged_style_evidence_resolves_sp_to_program_key(self):
-        self.assertEqual("GENERALIZED", normalize_author_tagged_program_key("DBO.SP_GENERALIZED_SELECT"))
+    def test_packaged_profile_resolution_normalizes_procedure_program_key(self):
+        self.assertEqual("GENERALIZED", normalize_procedure_program_key("DBO.SP_GENERALIZED_SELECT"))
         with tempfile.TemporaryDirectory() as temp_dir:
             profile_path, profile_hash = write_packaged_profile(temp_dir)
             with patch_runtime_profile_path(profile_path):
-                resolved = resolve_author_tagged_style_evidence(
+                resolved = resolve_packaged_migration_profile(
                     "SP_GENERALIZED_SELECT",
                     profile_id="pb-csharp-offline-generalized",
                     profile_version="1.0",
@@ -4811,31 +5056,41 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
 
         self.assertTrue(resolved.success, resolved.to_dict())
         self.assertEqual("GENERALIZED", resolved.metadata["program_key"])
-        self.assertEqual([], resolved.metadata["primary_style_evidence_paths"])
-        self.assertFalse(resolved.metadata["path_evidence_accepted"])
+        self.assertEqual([], resolved.metadata["external_sources_consulted"])
+        self.assertEqual("runtime_profile_resolution", resolved.metadata["operation"])
 
-    def test_runtime_style_resolution_does_not_discover_same_program_files_under_root(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            resolved = resolve_author_tagged_style_evidence(
-                "SP_GENERALIZED_SELECT",
-                csharp_root=temp_dir,
-            )
+    def test_normal_module_exposes_no_removed_discovery_symbols_or_root_parameters(self):
+        removed_symbols = (
+            "_discover_" + "author" + "_tagged_csharp_paths",
+            "resolve_" + "author" + "_tagged_style_evidence",
+            "build_" + "author" + "_tagged_style_profile_update",
+            "get_" + "author" + "_tagged_csharp_style_baseline",
+        )
+        for symbol in removed_symbols:
+            with self.subTest(symbol=symbol):
+                self.assertFalse(hasattr(pb_migration, symbol))
+        self.assertNotIn(
+            "csharp_" + "root",
+            inspect.signature(resolve_packaged_migration_profile).parameters,
+        )
 
-        self.assertFalse(resolved.success)
-        self.assertEqual("explicit_profile_update_required", resolved.metadata["status"])
+    def test_normal_module_source_has_no_person_or_path_discovery_labels(self):
+        implementation = Path(pb_migration.__file__).read_text(encoding="utf-8").casefold()
+        removed_labels = (
+            "author" + "_tagged",
+            "matching" + "_program",
+            "matching" + " program",
+            "csharp_" + "root",
+            "svn",
+        )
+        for label in removed_labels:
+            with self.subTest(label=label):
+                self.assertNotIn(label, implementation)
 
-    def test_author_tagged_style_evidence_blocks_stale_root_paths(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            resolved = resolve_author_tagged_style_evidence("SP_GENERALIZED_SELECT", csharp_root=temp_dir)
-
-        self.assertFalse(resolved.success)
-        self.assertEqual("explicit_profile_update_required", resolved.metadata["status"])
-
-    def test_author_tagged_style_evidence_uses_bundled_program_profile_without_live_root(self):
-        missing_identity = resolve_author_tagged_style_evidence("SP_GENERALIZED_SELECT")
+    def test_packaged_profile_resolver_requires_exact_profile_identity(self):
+        missing_identity = resolve_packaged_migration_profile("SP_GENERALIZED_SELECT")
 
         self.assertFalse(missing_identity.success)
-        self.assertEqual("blocked", missing_identity.metadata["status"])
         self.assertIn(
             "packaged_profile_identity_required",
             {issue["code"] for issue in missing_identity.metadata["issues"]},
@@ -4878,22 +5133,10 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
 
         self.assertFalse(result.success)
         issue_codes = {issue["code"] for issue in result.metadata["issues"]}
-        self.assertNotIn("migration_analysis_document_too_short", issue_codes)
-        self.assertNotIn("migration_analysis_heading_count_too_low", issue_codes)
-        self.assertNotIn("migration_analysis_code_evidence_too_low", issue_codes)
-        self.assertIn("migration_analysis_evidence_anchor_missing", issue_codes)
-        self.assertIn("migration_analysis_readiness_missing", issue_codes)
-        self.assertIn("migration_analysis_development_spec_missing", issue_codes)
-        self.assertIn(
-            "source_evidence",
-            {
-                issue.get("section")
-                for issue in result.metadata["issues"]
-                if issue["code"] == "migration_analysis_required_section_missing"
-            },
-        )
+        self.assertIn("migration_handoff_structured_contract_required", issue_codes)
+        self.assertEqual("none", result.metadata["handoff_format"])
 
-    def test_migration_analysis_document_quality_accepts_minimum_handoff_depth(self):
+    def test_migration_analysis_document_quality_rejects_unbound_fake_artifacts(self):
         document = """
         # ZX234567 PB-to-C# migration analysis
 
@@ -5024,17 +5267,46 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         ### Confirmed / inferred / blocked split
         confirmed: PB clicked event and DataWindow columns. inferred: popup captions when SRD text is absent.
         blocked: source parity remains blocked if the PBL export or SP schema conflicts with this document.
+
+        ```json
+        {
+          "schema_version": "kh.pb-migration-handoff.v1",
+          "artifacts": [
+            {"kind": "sru", "path": "C:/evidence/synthetic_source_a.sru", "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+          ],
+          "event_mappings": [
+            {"pb_event": "clicked", "csharp_method": "btnOpenDetail_Click"}
+          ],
+          "field_mappings": [
+            {"dw_field": "RECORD_ID", "control": "btnRECORD_ID", "binding_field": "RECORD_ID", "grid_column": "colList_RECORD_ID", "result_field": "RECORD_ID"}
+          ],
+          "sp_mappings": [
+            {"procedure": "SP_ZX234567_SAVE", "caller": "CallSaveProcedure", "branch": "SAVE", "result": "RECORD_ID"}
+          ],
+          "evidence_status": {
+            "confirmed": ["clicked event"],
+            "inferred": ["popup caption"],
+            "blocked": ["deployment not run"]
+          },
+          "unresolved": ["target DB equivalence"],
+          "manual_tests": [
+            {"workflow": "save one valid row", "expected": "grid refresh and target insert"}
+          ]
+        }
+        ```
         """
 
         result = verify_pb_migration_analysis_document(document)
 
-        self.assertTrue(result.success, result.to_dict())
+        self.assertFalse(result.success)
         self.assertLess(result.metadata["line_count"], 350)
-        self.assertTrue(all(result.metadata["section_coverage"].values()))
-        self.assertTrue(all(result.metadata["evidence_anchor_coverage"].values()))
-        self.assertTrue(all(result.metadata["development_spec_coverage"].values()))
-        self.assertTrue(all(result.metadata["readiness"].values()))
-        self.assertTrue(result.metadata["cross_agent_contract"]["developer_agent_handoff_ready"])
+        self.assertEqual("json", result.metadata["handoff_format"])
+        self.assertFalse(result.metadata["readiness"]["developer_agent_handoff_ready"])
+        self.assertFalse(result.metadata["readiness"]["hidden_session_context_required"])
+        self.assertIn(
+            "migration_handoff_artifact_binding_invalid",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
 
     def test_migration_analysis_document_quality_blocks_missing_user_scope_contract(self):
         document = """
@@ -5079,14 +5351,9 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         result = verify_pb_migration_analysis_document(document)
 
         self.assertFalse(result.success)
-        self.assertFalse(result.metadata["development_spec_coverage"]["user_directive_scope_contract"])
         self.assertIn(
-            "user_directive_scope_contract",
-            {
-                issue.get("spec_item")
-                for issue in result.metadata["issues"]
-                if issue["code"] == "migration_analysis_development_spec_missing"
-            },
+            "migration_handoff_structured_contract_required",
+            {issue["code"] for issue in result.metadata["issues"]},
         )
 
     def test_migration_analysis_document_quality_blocks_thin_user_scope_keyword(self):
@@ -5133,115 +5400,95 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         result = verify_pb_migration_analysis_document(document)
 
         self.assertFalse(result.success)
-        details = result.metadata["development_spec_detail_coverage"]["user_directive_scope_contract"]
-        self.assertTrue(details["approved_scope_boundary"])
-        self.assertFalse(details["user_instruction_authority"])
-        self.assertFalse(details["proposal_only_boundary"])
-
-    def test_generated_csharp_style_requires_author_tagged_evidence_when_enabled(self):
-        missing = _verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT");',
-            program_key="ReferenceScreen",
-            require_author_tagged_evidence=True,
+        self.assertIn(
+            "migration_handoff_structured_contract_required",
+            {issue["code"] for issue in result.metadata["issues"]},
         )
-        self.assertFalse(missing.success)
-        self.assertIn("author_tagged_style_evidence_required", {issue["code"] for issue in missing.metadata["issues"]})
 
-        present = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+    def test_csharp_verifier_signature_has_no_removed_style_evidence_inputs(self):
+        parameter_names = inspect.signature(
+            pb_migration.verify_migration_generated_csharp_style
+        ).parameters
+        removed_inputs = (
+            "primary_" + "style_evidence_paths",
+            "require_" + "author" + "_tagged_evidence",
+            "fallback_" + "program_key",
+        )
+        for parameter_name in removed_inputs:
+            with self.subTest(parameter_name=parameter_name):
+                self.assertNotIn(parameter_name, parameter_names)
+
+    def test_generated_csharp_style_blocks_single_call_view_query_family(self):
+        source, designer = valid_csharp_contract_sources("ReferenceScreenForm")
+        source = source.replace("CallSelectProcedure", "CallViewQuery")
+        result = _verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
             profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
             program_key="ReferenceScreen",
-            primary_style_evidence_paths=[
-                r"packaged\style\ReferenceScreen.cs",
-                r"packaged\style\ReferenceScreen.Designer.cs",
-            ],
-            require_author_tagged_evidence=True,
-        )
-        self.assertTrue(present.success, present.to_dict())
-        self.assertEqual("REFERENCESCREEN", present.metadata["expected_style_program_key"])
-        self.assertIn("author_tagged_generation_recipe", present.metadata)
-
-    def test_generated_csharp_style_blocks_wrong_author_tagged_evidence_path(self):
-        result = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
-            program_key="ReferenceScreen",
-            primary_style_evidence_paths=[
-                r"packaged\other\UNRELATED_SCREEN.cs",
-                r"packaged\other\UNRELATED_SCREEN.Designer.cs",
-            ],
-            require_author_tagged_evidence=True,
+            result_fields=["ENTITY_ID"],
         )
 
         self.assertFalse(result.success)
-        self.assertIn("author_tagged_style_evidence_path_mismatch", {issue["code"] for issue in result.metadata["issues"]})
+        self.assertIn("noncanonical_query_method", {issue["code"] for issue in result.metadata["issues"]})
 
-    def test_generated_csharp_style_rejects_same_filename_without_module_tail(self):
-        result = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
-            program_key="ReferenceScreen",
-            primary_style_evidence_paths=[
-                r"C:\tmp\ReferenceScreen.cs",
-                r"C:\tmp\ReferenceScreen.Designer.cs",
-            ],
-            require_author_tagged_evidence=True,
-        )
-
-        self.assertFalse(result.success)
-        self.assertIn("author_tagged_style_evidence_path_mismatch", {issue["code"] for issue in result.metadata["issues"]})
-
-    def test_generated_csharp_style_requires_fallback_for_excluded_author_target(self):
-        missing_fallback = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("SP_MIGRATION_TARGET_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
-            program_key="MigrationTarget",
-            primary_style_evidence_paths=[
-                r"packaged\style\ReferenceScreen.cs",
-                r"packaged\style\ReferenceScreen.Designer.cs",
-            ],
-            require_author_tagged_evidence=True,
-        )
-        self.assertFalse(missing_fallback.success)
-        self.assertIn("author_tagged_fallback_program_key_required", {issue["code"] for issue in missing_fallback.metadata["issues"]})
-
-        with_fallback = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("SP_MIGRATION_TARGET_SELECT", new DbParameter("@WORKTYPE", "LIST"));',
+    def test_generated_csharp_style_blocks_single_detail_query_family(self):
+        source, designer = valid_csharp_contract_sources("ReferenceScreenForm")
+        source = source.replace("CallSelectProcedure", "CallDetailQuery")
+        result = _verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
             profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
-            program_key="MigrationTarget",
-            fallback_program_key="ReferenceScreen",
-            primary_style_evidence_paths=[
-                r"packaged\style\ReferenceScreen.cs",
-                r"packaged\style\ReferenceScreen.Designer.cs",
-            ],
-            require_author_tagged_evidence=True,
-        )
-        self.assertTrue(with_fallback.success, with_fallback.to_dict())
-
-    def test_generated_csharp_style_blocks_bare_sp_call_under_author_tagged_mode(self):
-        result = verify_migration_generated_csharp_style(
-            'return dbClient.GetDataSetFromSP("SP_REFERENCE_SCREEN_SELECT");',
             program_key="ReferenceScreen",
-            primary_style_evidence_paths=[
-                r"packaged\style\ReferenceScreen.cs",
-                r"packaged\style\ReferenceScreen.Designer.cs",
-            ],
-            require_author_tagged_evidence=True,
+            result_fields=["ENTITY_ID"],
         )
 
         self.assertFalse(result.success)
-        self.assertIn("author_tagged_sp_call_missing_explicit_dbparameters", {issue["code"] for issue in result.metadata["issues"]})
+        self.assertIn("noncanonical_query_method", {issue["code"] for issue in result.metadata["issues"]})
 
-    def test_generated_csharp_style_blocks_bare_exec_sp_calls_under_author_tagged_mode(self):
-        result = verify_migration_generated_csharp_style(
-            'dbClient.ExecSP("SP_REFERENCE_SCREEN_SAVE");',
+    def test_generated_csharp_style_blocks_single_call_proc_save_family(self):
+        source, designer = valid_csharp_contract_sources("ReferenceScreenForm")
+        source += "protected void SaveCommand() { CallProc(); } private void CallProc() { }"
+        result = _verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
             program_key="ReferenceScreen",
-            primary_style_evidence_paths=[
-                r"packaged\style\ReferenceScreen.cs",
-                r"packaged\style\ReferenceScreen.Designer.cs",
-            ],
-            require_author_tagged_evidence=True,
+            result_fields=["ENTITY_ID"],
         )
 
         self.assertFalse(result.success)
-        self.assertIn("author_tagged_sp_call_missing_explicit_dbparameters", {issue["code"] for issue in result.metadata["issues"]})
+        self.assertIn("noncanonical_save_method", {issue["code"] for issue in result.metadata["issues"]})
+
+    def test_generated_csharp_style_blocks_single_persist_save_family(self):
+        source, designer = valid_csharp_contract_sources("ReferenceScreenForm")
+        source += "protected void SaveCommand() { CallPersistProcedure(); } private void CallPersistProcedure() { }"
+        result = _verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="ReferenceScreen",
+            result_fields=["ENTITY_ID"],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn("noncanonical_save_method", {issue["code"] for issue in result.metadata["issues"]})
+
+    def test_generated_csharp_style_blocks_mixed_query_family(self):
+        source, designer = valid_csharp_contract_sources("ReferenceScreenForm")
+        source += "private void CallViewQuery() { CallSelectProcedure(); }"
+        result = _verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="ReferenceScreen",
+            result_fields=["ENTITY_ID"],
+        )
+
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+        self.assertFalse(result.success)
+        self.assertIn("mixed_query_method_family", issue_codes)
+        self.assertIn("noncanonical_query_method", issue_codes)
 
     def test_generated_csharp_style_blocks_unverified_devexpress_package_or_version(self):
         generated = '''
@@ -5490,10 +5737,11 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         self.assertIn("this.gvwList.Columns.AddRange", result.stdout)
         self.assertIn('this.colList_DISPLAY_NAME.FieldName = "DISPLAY_NAME";', result.stdout)
         self.assertIn('this.colList_DISPLAY_NAME.Name = "colList_DISPLAY_NAME";', result.stdout)
-        self.assertIn("private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit rpsSpinAmt;", result.stdout)
+        self.assertIn("private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit rpsSpinAMTTOT;", result.stdout)
+        self.assertIn("private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit rpsSpinPRICE;", result.stdout)
         self.assertIn("this.grdList.RepositoryItems.AddRange", result.stdout)
-        self.assertIn("this.colList_AMTTOT.ColumnEdit = this.rpsSpinAmt;", result.stdout)
-        self.assertIn("this.colList_PRICE.ColumnEdit = this.rpsSpinAmt;", result.stdout)
+        self.assertIn("this.colList_AMTTOT.ColumnEdit = this.rpsSpinAMTTOT;", result.stdout)
+        self.assertIn("this.colList_PRICE.ColumnEdit = this.rpsSpinPRICE;", result.stdout)
         self.assertIn("this.gvwList.BestFitMaxRowCount = -1;", result.stdout)
         self.assertIn("this.gvwList.FocusRectStyle = DevExpress.XtraGrid.Views.Grid.DrawFocusRectStyle.CellFocus;", result.stdout)
         self.assertIn("this.gvwList.OptionsView.ShowAutoFilterRow = true;", result.stdout)
@@ -5504,7 +5752,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         self.assertNotIn("ColumnEditName", result.stdout)
         self.assertLess(
             result.stdout.index("this.grdList.RepositoryItems.AddRange"),
-            result.stdout.index("this.colList_PRICE.ColumnEdit = this.rpsSpinAmt;"),
+            result.stdout.index("this.colList_PRICE.ColumnEdit = this.rpsSpinPRICE;"),
         )
         self.assertNotIn("AddGridColumn", result.stdout)
         self.assertNotIn("Columns.AddField", result.stdout)
@@ -5556,7 +5804,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         self.assertIn("this.colList_FIRST_ID.VisibleIndex = 1;", valid.stdout)
         self.assertIn("this.colList_SECOND_ID.VisibleIndex = 2;", valid.stdout)
         self.assertFalse(invalid.success, invalid.to_dict())
-        self.assertIn("grid_column_csharp_prefix_mismatch", {item["code"] for item in invalid.metadata["issues"]})
+        self.assertIn("grid_column_csharp_name_mismatch", {item["code"] for item in invalid.metadata["issues"]})
 
     def test_explicit_grid_expectations_require_real_designer_not_comments_strings_raw_or_if_false(self):
         code_behind = '''
@@ -5818,9 +6066,11 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
             private void CallSelectProcedure() { this.grdList.DataSource = result; }
         }
         '''
-        missing_spin = designer.replace("this.colList_QUANTITY.ColumnEdit = this.rpsSpinAmt;", "", 1)
+        missing_spin = designer.replace(
+            "this.colList_QUANTITY.ColumnEdit = this.rpsSpinQUANTITY;", "", 1
+        )
         display_only = designer.replace(
-            "this.colList_QUANTITY.ColumnEdit = this.rpsSpinAmt;",
+            "this.colList_QUANTITY.ColumnEdit = this.rpsSpinQUANTITY;",
             'this.colList_QUANTITY.DisplayFormat.FormatString = "#,##0.000";',
             1,
         )
@@ -5896,7 +6146,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         mutations = {
             "wrong_names": valid_designer.replace("grdList", "grdWrong").replace("gvwList", "gvwWrong").replace("colList_PRICE", "colArbitrary_PRICE"),
             "displayformat_only": valid_designer.replace(
-                "this.colList_PRICE.ColumnEdit = this.rpsSpinAmt;",
+                "this.colList_PRICE.ColumnEdit = this.rpsSpinPRICE;",
                 'this.colList_PRICE.DisplayFormat.FormatString = "{0:#,##0.00}";',
             ),
             "missing_appearance": valid_designer.replace(
@@ -7458,10 +7708,21 @@ END
                     source_evidence=pb_srd_sql_evidence(),
                 )
                 self.assertFalse(if_exists_where_subquery.success)
-                self.assertIn(
-                    "if_exists_where_subquery_in_generated_sp",
-                    {issue["code"] for issue in if_exists_where_subquery.metadata["issues"]},
-                )
+                issue_codes = {
+                    issue["code"]
+                    for issue in if_exists_where_subquery.metadata["issues"]
+                }
+                self.assertNotIn("if_exists_where_subquery_in_generated_sp", issue_codes)
+                if label == "SCALAR":
+                    self.assertIn(
+                        "invented_scalar_where_subquery_in_generated_sp",
+                        issue_codes,
+                    )
+                else:
+                    self.assertNotIn(
+                        "invented_scalar_where_subquery_in_generated_sp",
+                        issue_codes,
+                    )
 
         if_exists_simple_where = verify_pb_migration_sp_generation_contract(
             sp_metadata_header()
@@ -7487,6 +7748,10 @@ END
         self.assertNotIn(
             "if_exists_where_subquery_in_generated_sp",
             {issue["code"] for issue in if_exists_simple_where.metadata["issues"]},
+        )
+        self.assertEqual(
+            "passed",
+            if_exists_simple_where.metadata["pb_sql_generation_policy"]["status"],
         )
 
         schema_fallback = verify_pb_migration_sp_generation_contract(
@@ -7999,7 +8264,7 @@ END
         )
         with tempfile.TemporaryDirectory() as tmp:
             source_path = Path(tmp) / "SP_ZX123456_SELECT.sql"
-            source_path.write_text(original, encoding="utf-8")
+            source_path.write_text(original, encoding="utf-8", newline="")
             authenticated = verify_pb_migration_sp_generation_contract(
                 original,
                 operation="existing_sp_cleanup",
@@ -8009,7 +8274,7 @@ END
                     "verified": True,
                     "object": "SP_ZX123456_SELECT",
                     "definition_path": str(source_path),
-                    "sha256": hashlib.sha256(original.encode("utf-8")).hexdigest(),
+                    "sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
                 },
             )
 
@@ -10639,6 +10904,13 @@ WHERE A.SCOPE_CODE = @SCOPE_CODE;"""
             result.metadata["sql_final_response_binding"],
             result.metadata["sql_final_response_release"]["binding"],
         )
+        self.assertEqual(1, len(result.metadata["sql_verifier_history"]))
+        correlation = result.metadata["sql_verifier_history_correlation"]
+        self.assertEqual("correlated", correlation["status"])
+        self.assertEqual(
+            correlation["binding_verification_id"],
+            correlation["history_verification_id"],
+        )
 
     def test_composed_sp_and_sql_formatting_verifier_passes_alias_plan_kwargs(self):
         sql = sp_metadata_header() + """CREATE OR ALTER PROCEDURE [DBO].[SP_ZX123456_SELECT]
@@ -10678,10 +10950,788 @@ WHERE A.SCOPE_CODE = @SCOPE_CODE;"""
             )
 
         self.assertTrue(result.success, result.to_dict())
-        formatting.assert_called_once()
-        self.assertIs(formatting.call_args.kwargs["alias_role_plan"], alias_plan)
-        self.assertEqual(formatting.call_args.kwargs["operation"], "formatting")
-        self.assertEqual(formatting.call_args.kwargs["cte_temp_table_reason"], "")
+        self.assertEqual(2, formatting.call_count)
+        for call in formatting.call_args_list:
+            self.assertIs(call.kwargs["alias_role_plan"], alias_plan)
+            self.assertEqual(call.kwargs["operation"], "formatting")
+            self.assertEqual(call.kwargs["cte_temp_table_reason"], "")
+
+    def test_canonical_profile_reports_exact_document_fields_that_must_change(self):
+        profile = loaded_test_profile(csharp_required_patterns=[])
+
+        self.assertTrue(profile.success, profile.to_dict())
+        canonical = profile.metadata["canonical_style_profile"]
+        self.assertEqual("kone-pb-csharp-single-family-v1", canonical["style_family_id"])
+        self.assertEqual("Spin<Field>", canonical["control_names"]["numeric"])
+        self.assertEqual("ymd<Field>", canonical["control_names"]["date"])
+        self.assertEqual("pn<Role>", canonical["control_names"]["panel"])
+        self.assertEqual("grd<Role>", canonical["control_names"]["grid"])
+        self.assertEqual("gvw<Role>", canonical["control_names"]["view"])
+        self.assertEqual("col<Role>_<FIELD>", canonical["control_names"]["grid_column"])
+        self.assertEqual("rpsSpin<Field>", canonical["control_names"]["numeric_repository"])
+        self.assertRegex(profile.metadata["canonical_style_profile_hash"], r"^sha256:[0-9a-f]{64}$")
+        alignment = profile.metadata["packaged_document_alignment"]
+        self.assertEqual("matched", alignment["status"])
+        self.assertEqual([], alignment["mismatches"])
+
+    def test_csharp_verifier_rejects_mixed_method_event_and_save_families(self):
+        profile = loaded_test_profile(csharp_required_patterns=[])
+        cases = {
+            "mixed_query_method_family": """
+                public partial class InventoryBrowseForm {
+                    protected void SearchCommand() { CallSelectProcedure(); }
+                    private void CallSelectProcedure() { }
+                    private void CallViewQuery() { }
+                }
+            """,
+            "mixed_save_method_family": """
+                public partial class InventoryBrowseForm {
+                    protected void SaveCommand() { CallSaveProcedure(); CallProc(); }
+                    private void CallSaveProcedure() { }
+                    private void CallProc() { }
+                }
+            """,
+            "mixed_command_event_family": """
+                public partial class InventoryBrowseForm {
+                    protected void SearchCommand() { CallSelectProcedure(); }
+                    private void btnSave_Click(object sender, System.EventArgs e) { }
+                    private void CallSelectProcedure() { }
+                }
+            """,
+        }
+        for expected_code, source in cases.items():
+            with self.subTest(expected_code=expected_code):
+                result = _verify_migration_generated_csharp_style(
+                    source,
+                    profile_evidence=profile,
+                    program_key="InventoryBrowse",
+                    result_fields=[],
+                )
+                self.assertFalse(result.success)
+                self.assertIn(expected_code, {issue["code"] for issue in result.metadata["issues"]})
+                expected_profile_hash = "sha256:" + hashlib.sha256(
+                    json.dumps(
+                        result.metadata["canonical_style_profile"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                self.assertEqual(
+                    expected_profile_hash,
+                    result.metadata["canonical_style_profile_hash"],
+                )
+
+    def test_csharp_verifier_rejects_generic_json_naming_family(self):
+        result = _verify_migration_generated_csharp_style(
+            """
+            public partial class InventoryBrowseForm {
+                private object spnAMT;
+                private object dtWORKDT;
+                private object pnlSearch;
+                private object repSpinAmt;
+            }
+            """,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="InventoryBrowse",
+            result_fields=[],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "noncanonical_control_naming_family",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+        self.assertEqual(
+            {
+                "numeric": ["spnAMT"],
+                "date": ["dtWORKDT"],
+                "panel": ["pnlSearch"],
+                "numeric_repository": ["repSpinAmt"],
+            },
+            result.metadata["canonical_style_contract"]["legacy_names"],
+        )
+
+    def test_csharp_verifier_rejects_noncanonical_names_even_when_control_types_are_known(self):
+        result = _verify_migration_generated_csharp_style(
+            "public partial class InventoryBrowseForm { }",
+            designer_source_text="""
+                partial class InventoryBrowseForm {
+                    private DevExpress.XtraEditors.SpinEdit numAmount;
+                    private DevExpress.XtraEditors.DateEdit dateWork;
+                    private DevExpress.XtraEditors.PanelControl panelSearch;
+                    private DevExpress.XtraGrid.GridControl gridMain;
+                    private DevExpress.XtraGrid.Views.Grid.GridView viewMain;
+                    private DevExpress.XtraGrid.Columns.GridColumn amountColumn;
+                    private DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit spinRepository;
+                }
+            """,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="InventoryBrowse",
+            result_fields=[],
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "noncanonical_typed_control_name",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+        self.assertEqual(
+            {"numeric", "date", "panel", "grid", "view", "grid_column", "numeric_repository"},
+            set(result.metadata["canonical_style_contract"]["typed_name_mismatches"]),
+        )
+
+    def test_detail_layout_rejects_caller_names_and_emits_canonical_names(self):
+        result = build_detail_form_layout_plan(
+            [
+                {
+                    "field_name": "AMT",
+                    "editor_type": "SpinEdit",
+                    "csharp_editor_name": "spnAMT",
+                    "csharp_label_name": "labelAmount",
+                }
+            ],
+            result_fields=["AMT"],
+        )
+
+        self.assertFalse(result.success)
+        issue_codes = {issue["code"] for issue in result.metadata["issues"]}
+        self.assertIn("noncanonical_detail_editor_name", issue_codes)
+        self.assertIn("noncanonical_detail_label_name", issue_codes)
+        self.assertEqual("SpinAMT", result.metadata["fields"][0]["csharp_editor_name"])
+        self.assertEqual("lblAMT", result.metadata["fields"][0]["csharp_label_name"])
+
+    def test_analysis_handoff_rejects_one_line_keyword_soup(self):
+        result = verify_pb_migration_analysis_document(
+            "artifact path sha256 PB event C# method DataWindow BindingField grid result "
+            "SP caller branch confirmed inferred blocked unresolved manual tests"
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "migration_handoff_structured_contract_required",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_analysis_handoff_validates_each_structured_row_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            artifacts = {
+                "pb": (
+                    root / "screen.srw",
+                    'event clicked; string RECORD_ID; dataobject="dw_screen";\n',
+                    "pb_source",
+                ),
+                "code": (
+                    root / "Screen.cs",
+                    "public partial class ScreenForm { private void btnOpen_Click() { CallSelectProcedure(); } private void CallSelectProcedure() { } }\n",
+                    "csharp_code",
+                ),
+                "designer": (
+                    root / "Screen.Designer.cs",
+                    'public partial class ScreenForm { private KoneLib.Controls.u_TextEdit txtRECORD_ID; private DevExpress.XtraGrid.Columns.GridColumn colList_RECORD_ID; private void InitializeComponent() { this.txtRECORD_ID = new KoneLib.Controls.u_TextEdit(); this.txtRECORD_ID.BindingField = "RECORD_ID"; this.colList_RECORD_ID = new DevExpress.XtraGrid.Columns.GridColumn(); } }\n',
+                    "csharp_designer",
+                ),
+                "sql": (
+                    root / "SP_SCREEN_SELECT.sql",
+                    "CREATE PROCEDURE dbo.SP_SCREEN_SELECT @WORKTYPE VARCHAR(20) AS BEGIN IF @WORKTYPE = 'LIST' SELECT RECORD_ID FROM SCREEN_DATA; END\n",
+                    "sql_procedure",
+                ),
+            }
+            artifact_rows = []
+            for artifact_id, (path, text, role) in artifacts.items():
+                path.write_text(text, encoding="utf-8")
+                artifact_rows.append(
+                    {
+                        "artifact_id": artifact_id,
+                        "object_id": "screen",
+                        "role": role,
+                        "path": str(path.resolve()),
+                        "sha256": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+                    }
+                )
+            contract = {
+                "schema_version": "kh.pb-migration-handoff.v1",
+                "artifacts": artifact_rows,
+                "objects": [
+                    {
+                        "object_id": "screen",
+                        "program_key": "SCREEN",
+                        "artifact_ids": ["pb", "code", "designer", "sql"],
+                    }
+                ],
+                "event_mappings": [
+                    {
+                        "object_id": "screen",
+                        "pb_artifact_id": "pb",
+                        "csharp_artifact_id": "code",
+                        "pb_event": "clicked",
+                        "csharp_method": "btnOpen_Click",
+                    }
+                ],
+                "field_mappings": [
+                    {
+                        "object_id": "screen",
+                        "pb_artifact_id": "pb",
+                        "designer_artifact_id": "designer",
+                        "result_artifact_id": "sql",
+                        "dw_field": "RECORD_ID",
+                        "control": "txtRECORD_ID",
+                        "binding_field": "RECORD_ID",
+                        "grid_column": "colList_RECORD_ID",
+                        "result_field": "RECORD_ID",
+                    }
+                ],
+                "sp_mappings": [
+                    {
+                        "object_id": "screen",
+                        "caller_artifact_id": "code",
+                        "procedure_artifact_id": "sql",
+                        "procedure": "SP_SCREEN_SELECT",
+                        "caller": "CallSelectProcedure",
+                        "branch": "LIST",
+                        "result": "RECORD_ID",
+                    }
+                ],
+                "evidence_status": {
+                    "confirmed": ["PB click event"],
+                    "inferred": ["caption"],
+                    "blocked": ["deployment"],
+                },
+                "unresolved": ["DB equivalence"],
+                "manual_tests": [{"workflow": "search", "expected": "one bound row"}],
+            }
+            valid = verify_pb_migration_analysis_document(json.dumps(contract))
+            self.assertTrue(valid.success, valid.to_dict())
+
+            cases = {
+                "migration_handoff_artifact_binding_invalid": lambda value: value["artifacts"][0].pop("sha256"),
+                "migration_handoff_artifact_readback_failed": lambda value: value["artifacts"][0].update(path=str(root / "missing.srw")),
+                "migration_handoff_event_mapping_invalid": lambda value: value["event_mappings"][0].update(csharp_method="invented_handler"),
+                "migration_handoff_field_mapping_invalid": lambda value: value["field_mappings"][0].update(result_field="INVENTED_FIELD"),
+                "migration_handoff_sp_mapping_invalid": lambda value: value["sp_mappings"][0].update(branch="INVENTED_BRANCH"),
+                "migration_handoff_evidence_status_missing": lambda value: value["evidence_status"].update(inferred=[]),
+                "migration_handoff_unresolved_required": lambda value: value.update(unresolved=[]),
+                "migration_handoff_manual_test_invalid": lambda value: value["manual_tests"][0].pop("expected"),
+            }
+            for expected_code, mutate in cases.items():
+                with self.subTest(expected_code=expected_code):
+                    invalid = copy.deepcopy(contract)
+                    mutate(invalid)
+                    result = verify_pb_migration_analysis_document(json.dumps(invalid))
+                    self.assertFalse(result.success)
+                    self.assertIn(expected_code, {issue["code"] for issue in result.metadata["issues"]})
+
+    def test_pbl_parity_requires_correlated_receipt_export_hashes_and_linked_dw_graph(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            pbl_path = root / "screen.pbl"
+            srw_path = root / "screen.srw"
+            srd_path = root / "dw_screen.srd"
+            pbl_path.write_bytes(b"synthetic-current-pbl")
+            srw_path.write_text('forward prototypes; string RECORD_ID; dataobject="dw_screen";\n', encoding="utf-8")
+            srd_path.write_text('datawindow(table(column=(name=RECORD_ID dbname="RECORD_ID")))\n', encoding="utf-8")
+
+            def current_hash(path):
+                return "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+            pbl_hash = current_hash(pbl_path)
+            srw_hash = current_hash(srw_path)
+            srd_hash = current_hash(srd_path)
+            object_list_path = root / "object-list.json"
+            object_list = {
+                "schema_version": "kh.pb-object-list-receipt.v1",
+                "pbl_path": str(pbl_path.resolve()),
+                "pbl_sha256": pbl_hash,
+                "runtime": "PBVM",
+                "runtime_version": "12.5",
+                "receipt_id": "object-list-receipt-1",
+                "run_id": "pb-export-run-1",
+                "objects": [
+                    {
+                        "artifact_id": "screen-window",
+                        "path": str(srw_path.resolve()),
+                        "sha256": srw_hash,
+                        "object_name": "screen",
+                        "object_type": "window",
+                    },
+                    {
+                        "artifact_id": "screen-datawindow",
+                        "path": str(srd_path.resolve()),
+                        "sha256": srd_hash,
+                        "object_name": "dw_screen",
+                        "object_type": "datawindow",
+                    },
+                ],
+            }
+            object_list_path.write_text(json.dumps(object_list), encoding="utf-8")
+            object_list_hash = current_hash(object_list_path)
+
+            graph_path = root / "datawindow-graph.json"
+            graph = {
+                "schema_version": "kh.pb-datawindow-graph.v1",
+                "status": "complete",
+                "pbl_sha256": pbl_hash,
+                "object_list_sha256": object_list_hash,
+                "nodes": object_list["objects"],
+                "edges": [
+                    {
+                        "source_artifact_id": "screen-window",
+                        "datawindow_artifact_id": "screen-datawindow",
+                        "evidence_token": "dw_screen",
+                    }
+                ],
+            }
+            graph_path.write_text(json.dumps(graph), encoding="utf-8")
+            graph_hash = current_hash(graph_path)
+            complete = MigrationInputState(
+                has_exported_pb_sources=True,
+                pb_runtime="PBVM",
+                pb_version="12.5",
+                pbl_path=str(pbl_path.resolve()),
+                pbl_sha256=pbl_hash,
+                pbl_object_list_receipt={
+                    "path": str(object_list_path.resolve()),
+                    "sha256": object_list_hash,
+                },
+                exported_pb_artifacts=[
+                    {"artifact_id": "screen-window", "path": str(srw_path.resolve()), "sha256": srw_hash},
+                    {"artifact_id": "screen-datawindow", "path": str(srd_path.resolve()), "sha256": srd_hash},
+                ],
+                linked_datawindow_graph={
+                    "path": str(graph_path.resolve()),
+                    "sha256": graph_hash,
+                },
+            )
+            ready = classify_migration_mode(complete)
+            self.assertTrue(ready["parity_readiness"]["parity_ready"], ready)
+            self.assertEqual("pbl-source-parity", ready["claim_scope"])
+
+            bad_hash = complete.to_dict()
+            bad_hash["pbl_sha256"] = "sha256:" + "9" * 64
+            bad_hash_readiness = classify_migration_mode(bad_hash)["parity_readiness"]
+            self.assertFalse(bad_hash_readiness["parity_ready"])
+            self.assertIn("pbl_sha256_readback_mismatch", bad_hash_readiness["missing"])
+
+            missing_graph = complete.to_dict()
+            missing_graph["linked_datawindow_graph"] = {}
+            missing_graph_readiness = classify_migration_mode(missing_graph)["parity_readiness"]
+            self.assertFalse(missing_graph_readiness["parity_ready"])
+            self.assertIn("linked_datawindow_graph", missing_graph_readiness["missing"])
+
+        nonexistent = classify_migration_mode(
+            MigrationInputState(
+                pbl_path=str(Path(tempfile.gettempdir()) / "kh-missing-evidence.pbl"),
+                pbl_sha256="sha256:" + "a" * 64,
+                pb_runtime="PBVM",
+                pb_version="12.5",
+            )
+        )["parity_readiness"]
+        described = classify_migration_mode(MigrationInputState(has_behavior_description=True))
+        self.assertFalse(nonexistent["parity_ready"])
+        self.assertIn("pbl_artifact_readback", nonexistent["missing"])
+        self.assertEqual("proposal_only", described["parity_readiness"]["status"])
+        self.assertEqual("proposal-only", described["claim_scope"])
+
+    def test_no_save_pb_inventory_blocks_invented_save_procedure(self):
+        sql = sp_metadata_header("Invented save") + """
+CREATE OR ALTER PROCEDURE [dbo].[SP_ZX123456_SAVE]
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    INSERT INTO SYNTHETIC_TARGET (RECORD_ID) VALUES ('invented');
+END
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            event_path = Path(temp_dir) / "screen-events.srw"
+            event_text = "event clicked; // complete event inventory contains no save event\n"
+            event_path.write_text(event_text, encoding="utf-8")
+            result = verify_pb_migration_sp_generation_contract(
+                sql,
+                source_evidence=[
+                    {
+                        "kind": "pb_event_inventory",
+                        "verified": True,
+                        "definition_path": str(event_path),
+                        "sha256": hashlib.sha256(event_path.read_bytes()).hexdigest(),
+                        "complete_event_inventory": True,
+                        "save_event_present": False,
+                    }
+                ],
+            )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "invented_save_without_pb_event_authority",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_control_stack_includes_konelib_before_devexpress_fallback(self):
+        result = resolve_csharp_control_stack(
+            {
+                "has_konelib": True,
+                "has_devexpress": True,
+                "konelib_controls": {"text": "KoneLib.Controls.u_TextEdit"},
+            },
+            required_controls=["text", "label"],
+        )
+
+        self.assertTrue(result["status"] == "passed", result)
+        self.assertEqual("konelib", result["selection"]["text"]["provider"])
+        self.assertEqual(1, result["selection"]["text"]["fallback_level"])
+        self.assertEqual("devexpress", result["selection"]["label"]["provider"])
+        self.assertEqual(2, result["selection"]["label"]["fallback_level"])
+        self.assertEqual("declared KoneLib controls", result["fallback_order"][1])
+
+    def test_csharp_verifier_blocks_observed_binding_when_result_metadata_is_omitted(self):
+        result = _verify_migration_generated_csharp_style(
+            "public partial class InventoryBrowseForm { }",
+            designer_source_text='''
+                partial class InventoryBrowseForm {
+                    private KoneLib.Controls.u_TextEdit txtENTITY_ID;
+                    private void InitializeComponent() {
+                        this.txtENTITY_ID = new KoneLib.Controls.u_TextEdit();
+                        this.txtENTITY_ID.BindingField = "ENTITY_ID";
+                    }
+                }
+            ''',
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="InventoryBrowse",
+            result_fields=None,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "csharp_expected_result_fields_required",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_csharp_verifier_blocks_devexpress_grid_without_expected_grid_metadata(self):
+        _, designer = valid_devexpress_grid_designer(
+            "InventoryBrowseForm",
+            columns=[{"field_name": "ENTITY_ID", "caption": "Entity", "data_type": "string"}],
+        )
+        source = """
+            public partial class InventoryBrowseForm {
+                protected void SearchCommand() { CallSelectProcedure(); }
+                private void CallSelectProcedure() { this.grdList.DataSource = result; }
+            }
+        """
+        result = _verify_migration_generated_csharp_style(
+            source,
+            designer_source_text=designer,
+            profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+            program_key="InventoryBrowse",
+            result_fields=["ENTITY_ID"],
+            expected_control_contracts=inferred_test_control_contracts(designer),
+            require_designer_companion=True,
+        )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "expected_grid_contract_metadata_missing",
+            {issue["code"] for issue in result.metadata["issues"]},
+        )
+
+    def test_completion_claim_requires_independent_stage_receipts(self):
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        csharp, designer = valid_csharp_contract_sources()
+        evidence = [
+            pasted_sql_evidence(
+                "SELECT @WORKTYPE AS WORKTYPE;",
+                evidence_role="body_fragment",
+            )
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            profile_path, profile_hash = write_packaged_profile(root)
+            targets = target_artifact_kwargs(csharp, designer, prefix="completion-screen")
+            source_path = Path(targets["target_source_path"])
+            designer_path = Path(targets["target_designer_path"])
+            migration_artifacts = [
+                {"path": str(source_path), "sha256": targets["target_source_sha256"]},
+                {"path": str(designer_path), "sha256": targets["target_designer_sha256"]},
+            ]
+            authority_contract = {
+                "target_receipts": [
+                    {
+                        "role": "code",
+                        "authority": "current_target",
+                        "path": str(source_path),
+                        "sha256": targets["target_source_sha256"],
+                        "identifiers": ["InventoryBrowseForm"],
+                    },
+                    {
+                        "role": "designer",
+                        "authority": "current_target",
+                        "path": str(designer_path),
+                        "sha256": targets["target_designer_sha256"],
+                        "identifiers": ["InventoryBrowseForm"],
+                    },
+                ]
+            }
+            directive_ledger = {
+                "directives": [
+                    {
+                        "directive_id": "preserve-source-contract",
+                        "text": "Preserve the verified PB and SQL source contract.",
+                    }
+                ],
+                "satisfied_ids": ["preserve-source-contract"],
+            }
+            project_path = root / "CompletionScreen.csproj"
+            project_path.write_text(
+                "<Project><ItemGroup>"
+                f'<Compile Include="{source_path}" />'
+                f'<Compile Include="{designer_path}" />'
+                "</ItemGroup></Project>",
+                encoding="utf-8",
+            )
+            build_output = root / "CompletionScreen.dll"
+            build_output.write_bytes(b"current-build-output")
+            manual_record = root / "manual-workflow.json"
+            manual_record.write_text('{"workflow":"search","status":"passed"}', encoding="utf-8")
+
+            def artifact_sha(path):
+                return "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+            profile_identity = {
+                "profile_id": "pb-csharp-offline-generalized",
+                "profile_version": "1.0",
+                "profile_hash": profile_hash,
+            }
+            observed_at = datetime.now(timezone.utc).isoformat()
+
+            def receipt(stage, target_path, result, *, receipt_id):
+                return {
+                    "schema_version": "kh.pb-completion-receipt.v1",
+                    "stage": stage,
+                    "receipt_id": receipt_id,
+                    "run_id": "completion-run-1",
+                    "correlation_id": "completion-correlation-1",
+                    "observed_at": observed_at,
+                    "producer": {
+                        "executor": "command",
+                        "command": f"verify-{stage} {target_path}",
+                        "command_id": f"command-{receipt_id}",
+                        "result_id": f"result-{receipt_id}",
+                    },
+                    "exit_code": 0,
+                    "target_path": str(Path(target_path).resolve()),
+                    "target_sha256": artifact_sha(target_path),
+                    "profile_identity": profile_identity,
+                    "program_key": "INVENTORYBROWSE",
+                    "migration_artifacts": migration_artifacts,
+                    "result": {"status": "passed", **result},
+                }
+
+            project_receipt = receipt(
+                "project-inclusion",
+                project_path,
+                {
+                    "included": True,
+                    "project_file": str(project_path.resolve()),
+                    "included_artifacts": migration_artifacts,
+                },
+                receipt_id="project-inclusion-1",
+            )
+            build_receipt = receipt(
+                "project-build",
+                project_path,
+                {
+                    "build_succeeded": True,
+                    "errors": 0,
+                    "configuration": "Release",
+                    "output_artifacts": [
+                        {"path": str(build_output.resolve()), "sha256": artifact_sha(build_output)}
+                    ],
+                },
+                receipt_id="project-build-1",
+            )
+            designer_receipt = receipt(
+                "designer-layout-load",
+                designer_path,
+                {
+                    "layout_loaded": True,
+                    "form_class": "InventoryBrowseForm",
+                    "designer_path": str(designer_path.resolve()),
+                    "designer_sha256": artifact_sha(designer_path),
+                },
+                receipt_id="designer-layout-1",
+            )
+            manual_receipt = receipt(
+                "manual-workflow",
+                manual_record,
+                {
+                    "operator": "independent-test-operator",
+                    "workflow_run_id": "manual-run-1",
+                    "scenarios": [
+                        {
+                            "scenario_id": "search-current-data",
+                            "status": "passed",
+                            "observed_result": "one bound row displayed",
+                        }
+                    ],
+                },
+                receipt_id="manual-workflow-1",
+            )
+            with patch_runtime_profile_path(profile_path):
+                blocked = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=evidence,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                    completion_claims={"completion": True},
+                    project_inclusion_evidence=project_receipt,
+                    **targets,
+                )
+                status_only = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=evidence,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                    completion_claims={"completion": True},
+                    project_inclusion_evidence={"status": "passed", "receipt_id": "project-inclusion"},
+                    build_evidence={"status": "passed", "command": "msbuild Screen.csproj", "exit_code": 0},
+                    designer_layout_evidence={"status": "verified", "artifact_path": "layout-load.xml"},
+                    manual_workflow_evidence={"status": "passed", "scenarios": ["search"]},
+                    **targets,
+                )
+                completed = orchestrate_pb_migration_validation(
+                    csharp_source_text=csharp,
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=evidence,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                    completion_claims={"completion": True},
+                    project_inclusion_evidence=project_receipt,
+                    build_evidence=build_receipt,
+                    designer_layout_evidence=designer_receipt,
+                    manual_workflow_evidence=manual_receipt,
+                    authority_contract=authority_contract,
+                    directive_ledger=directive_ledger,
+                    **targets,
+                )
+
+        self.assertFalse(blocked.success)
+        self.assertTrue(blocked.metadata["validation_contract"]["core_validation_passed"])
+        self.assertFalse(blocked.metadata["validation_contract"]["completion_allowed"])
+        self.assertEqual("authority-contract", blocked.metadata["validation_contract"]["failure_boundary"])
+        blocked_governance_codes = blocked.metadata["validation_contract"]["governance"]["issue_codes"]
+        self.assertIn("pb_migration_authority_receipt_required", blocked_governance_codes)
+        self.assertIn("pb_migration_directive_receipt_required", blocked_governance_codes)
+        blocked_completion_stages = {
+            stage["name"]: stage
+            for stage in blocked.metadata["validation_contract"]["completion_stages"]
+        }
+        self.assertEqual("passed", blocked_completion_stages["project-inclusion"]["status"])
+        self.assertFalse(status_only.success)
+        self.assertFalse(status_only.metadata["validation_contract"]["completion_allowed"])
+        self.assertTrue(completed.success, completed.to_dict())
+        self.assertTrue(completed.metadata["validation_contract"]["completion_allowed"])
+        self.assertEqual("passed", completed.metadata["status"])
+        self.assertTrue(
+            all(
+                stage["status"] == "passed"
+                for stage in completed.metadata["validation_contract"]["completion_stages"]
+                if stage["required_for_claim"]
+            )
+        )
+        claim_status = completed.metadata["validation_contract"]["claim_status"]
+        self.assertEqual("not_claimed", claim_status["database_equivalence"])
+        self.assertEqual("not_claimed", claim_status["deployment"])
+
+    def test_delete_only_xml_save_contract_is_supported(self):
+        sql = """
+DECLARE @DOC INT;
+EXEC SP_XML_PREPAREDOCUMENT @DOC OUTPUT, @ROWS_XML;
+DECLARE @ROWS TABLE (RECORD_ID VARCHAR(20), ROWSTATE VARCHAR(1));
+INSERT INTO @ROWS (RECORD_ID, ROWSTATE)
+SELECT RECORD_ID, ROWSTATE
+FROM OPENXML(@DOC, '/ROOT/ROW', 2)
+WITH (RECORD_ID VARCHAR(20), ROWSTATE VARCHAR(1));
+
+DELETE T
+FROM SYNTHETIC_TARGET T
+    INNER JOIN @ROWS A
+            ON T.RECORD_ID = A.RECORD_ID
+WHERE A.ROWSTATE = 'D';
+
+EXEC SP_XML_REMOVEDOCUMENT @DOC;
+"""
+        contract = {
+            "target_table": "SYNTHETIC_TARGET",
+            "field_contracts": [
+                {"field": "RECORD_ID", "classification": "technical_key", "evidence_refs": ["field:key"], "type_contract": {"sql_type": "VARCHAR(20)", "evidence_refs": ["type:key"]}},
+                {"field": "ROWSTATE", "classification": "technical_key", "evidence_refs": ["field:state"], "type_contract": {"sql_type": "VARCHAR(1)", "evidence_refs": ["type:state"]}},
+            ],
+            "csharp_payload_contract": {
+                "table_variable": "saveRows",
+                "serialized_fields": ["RECORD_ID", "ROWSTATE"],
+                "row_state_field": "ROWSTATE",
+                "row_state_mapping": {"deleted": "D"},
+                "evidence_refs": ["csharp:payload"],
+            },
+            "staging_table_variable": "@ROWS",
+            "openxml_fields": ["RECORD_ID", "ROWSTATE"],
+            "insert_projection": [],
+            "update_projection": [],
+            "xml_handle_variable": "@DOC",
+            "evidence_registry": {
+                key: synthetic_save_evidence(key, kind=kind)
+                for key, kind in {
+                    "field:key": "pb_source",
+                    "field:state": "pb_source",
+                    "type:key": "schema_source",
+                    "type:state": "schema_source",
+                    "csharp:payload": "csharp_source",
+                }.items()
+            },
+        }
+        csharp = """
+DataTable saveRows = new DataTable();
+saveRows.Columns.Add("RECORD_ID", typeof(string));
+saveRows.Columns.Add("ROWSTATE", typeof(string));
+DataRow saveRow = saveRows.NewRow();
+saveRow["RECORD_ID"] = sourceRow["RECORD_ID"];
+if (sourceRow.RowState == DataRowState.Deleted)
+{
+    saveRow["ROWSTATE"] = "D";
+}
+saveRows.Rows.Add(saveRow);
+string xml = DataTableToXml(saveRows);
+"""
+
+        result = verify_pb_migration_save_field_contract(sql, contract, csharp_source_text=csharp)
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertEqual({"deleted": "D"}, result.metadata["actual_row_state_mapping"])
+        self.assertEqual([], result.metadata["actual_insert_projection"])
+        self.assertEqual([], result.metadata["actual_update_projection"])
 
     def test_datawindow_layout_blocks_when_no_columns_exist(self):
         result = build_datawindow_grid_layout("datawindow(units=0)")
@@ -10714,6 +11764,861 @@ WHERE A.SCOPE_CODE = @SCOPE_CODE;"""
 
         self.assertNotIn("pb-to-csharp-migration-harness", summary["recommended_skills"])
         self.assertNotIn("pb-to-csharp-migration-harness", summary["immediate_next_skills"])
+
+    @staticmethod
+    def _artifact_sha256(path):
+        return "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    def _write_target_project_baseline_fixture(self, root):
+        root = Path(root)
+        lib = root / "lib"
+        lib.mkdir(parents=True, exist_ok=True)
+        devexpress = lib / "DevExpress.XtraGrid.v20.1.dll"
+        konelib = lib / "KoneLib.dll"
+        devexpress.write_bytes(b"synthetic-devexpress-20.1")
+        konelib.write_bytes(b"synthetic-konelib")
+        controls = root / "TargetControls.cs"
+        controls.write_text(
+            """namespace Target.App
+{
+    public class TargetScreenBase : System.Windows.Forms.UserControl
+    {
+        public string ScreenCode { get; set; }
+        protected void ApplyBaseDefaults() { this.TabStop = true; }
+    }
+
+    public class u_TextEdit : DevExpress.XtraEditors.TextEdit
+    {
+        public string BindingField { get; set; }
+        public string Code { get; set; }
+        public void BindCode() { }
+        protected void ApplyDefaults() { this.TabStop = true; }
+    }
+}
+""",
+            encoding="utf-8",
+            newline="",
+        )
+        project = root / "Target.App.csproj"
+        project.write_text(
+            """<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <AssemblyName>Target.App</AssemblyName>
+    <RootNamespace>Target.App</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="DevExpress.XtraGrid.v20.1, Version=20.1.7.0">
+      <HintPath>lib\\DevExpress.XtraGrid.v20.1.dll</HintPath>
+    </Reference>
+    <Reference Include="KoneLib, Version=1.0.0.0">
+      <HintPath>lib\\KoneLib.dll</HintPath>
+    </Reference>
+    <Compile Include="TargetControls.cs" />
+  </ItemGroup>
+</Project>
+""",
+            encoding="utf-8",
+            newline="",
+        )
+        baseline = pb_migration.build_target_project_baseline(
+            project,
+            self._artifact_sha256(project),
+            source_artifacts=[
+                {"path": str(controls.resolve()), "sha256": self._artifact_sha256(controls)}
+            ],
+            assembly_artifacts=[
+                {
+                    "path": str(devexpress.resolve()),
+                    "sha256": self._artifact_sha256(devexpress),
+                    "reference_name": "DevExpress.XtraGrid.v20.1",
+                },
+                {
+                    "path": str(konelib.resolve()),
+                    "sha256": self._artifact_sha256(konelib),
+                    "reference_name": "KoneLib",
+                },
+            ],
+            generated_surface_base_type="Target.App.TargetScreenBase",
+            target_project_controls={"text": "Target.App.u_TextEdit"},
+        )
+        return {
+            "root": root,
+            "project": project,
+            "controls": controls,
+            "devexpress": devexpress,
+            "konelib": konelib,
+            "baseline": baseline,
+        }
+
+    def _rebuild_target_project_baseline(
+        self,
+        fixture,
+        *,
+        source_path=None,
+        generated_surface_base_type="Target.App.TargetScreenBase",
+        target_project_controls=None,
+    ):
+        source_path = Path(source_path or fixture["controls"])
+        controls = (
+            {"text": "Target.App.u_TextEdit"}
+            if target_project_controls is None
+            else target_project_controls
+        )
+        return pb_migration.build_target_project_baseline(
+            fixture["project"],
+            self._artifact_sha256(fixture["project"]),
+            source_artifacts=[
+                {
+                    "path": str(source_path.resolve()),
+                    "sha256": self._artifact_sha256(source_path),
+                }
+            ],
+            assembly_artifacts=[
+                {
+                    "path": str(fixture["devexpress"].resolve()),
+                    "sha256": self._artifact_sha256(fixture["devexpress"]),
+                    "reference_name": "DevExpress.XtraGrid.v20.1",
+                },
+                {
+                    "path": str(fixture["konelib"].resolve()),
+                    "sha256": self._artifact_sha256(fixture["konelib"]),
+                    "reference_name": "KoneLib",
+                },
+            ],
+            generated_surface_base_type=generated_surface_base_type,
+            target_project_controls=controls,
+        )
+
+    def _write_field_lineage_fixture(self, root, source_path, designer_path, sql_path):
+        root = Path(root)
+        pb_path = root / "screen.srd"
+        pb_path.write_text(
+            'datawindow(table(column=(type=char(20) name=ITEMCD dbname="ITEMCD")))',
+            encoding="utf-8",
+            newline="",
+        )
+        artifacts = [
+            ("pb", "pb_source", pb_path),
+            ("code", "csharp_code", Path(source_path)),
+            ("designer", "csharp_designer", Path(designer_path)),
+            ("sql", "sql_procedure", Path(sql_path)),
+        ]
+        handoff = {
+            "schema_version": "kh.pb-migration-handoff.v1",
+            "artifacts": [
+                {
+                    "artifact_id": artifact_id,
+                    "object_id": "screen",
+                    "role": role,
+                    "path": str(path.resolve()),
+                    "sha256": self._artifact_sha256(path),
+                }
+                for artifact_id, role, path in artifacts
+            ],
+            "objects": [
+                {
+                    "object_id": "screen",
+                    "program_key": "TARGETBROWSE",
+                    "artifact_ids": [item[0] for item in artifacts],
+                }
+            ],
+            "event_mappings": [
+                {
+                    "object_id": "screen",
+                    "pb_artifact_id": "pb",
+                    "csharp_artifact_id": "code",
+                    "pb_event": "retrieve",
+                    "csharp_method": "CallSelectProcedure",
+                }
+            ],
+            "field_mappings": [
+                {
+                    "mapping_id": "field:itemcd",
+                    "object_id": "screen",
+                    "pb_artifact_id": "pb",
+                    "designer_artifact_id": "designer",
+                    "result_artifact_id": "sql",
+                    "dw_field": "ITEMCD",
+                    "control": "txtITEMCD",
+                    "binding_field": "ITEMCD",
+                    "grid_column": "colList_ITEMCD",
+                    "result_field": "ITEMCD",
+                }
+            ],
+            "sp_mappings": [
+                {
+                    "object_id": "screen",
+                    "caller_artifact_id": "code",
+                    "procedure_artifact_id": "sql",
+                    "procedure": "SP_TARGETBROWSE_SELECT",
+                    "caller": "CallSelectProcedure",
+                    "branch": "LIST",
+                    "result": "ITEMCD",
+                }
+            ],
+            "evidence_status": {
+                "confirmed": ["ITEMCD mapping"],
+                "inferred": ["caption"],
+                "blocked": ["deployment"],
+            },
+            "unresolved": ["live DB equivalence"],
+            "manual_tests": [{"workflow": "retrieve", "expected": "ITEMCD is displayed"}],
+        }
+        handoff_path = root / "handoff.json"
+        handoff_path.write_text(json.dumps(handoff), encoding="utf-8", newline="")
+        return {
+            "schema_version": "kh.pb-field-lineage.v1",
+            "handoff_artifact": {
+                "path": str(handoff_path.resolve()),
+                "sha256": self._artifact_sha256(handoff_path),
+            },
+            "mappings": [
+                {
+                    "mapping_id": "field:itemcd",
+                    "handoff_mapping_id": "field:itemcd",
+                    "pb_field": "ITEMCD",
+                    "editor": "txtITEMCD",
+                    "editor_binding_property": "BindingField",
+                    "binding_field": "ITEMCD",
+                    "grid_column": "colList_ITEMCD",
+                    "grid_field_name": "ITEMCD",
+                    "select_field": "ITEMCD",
+                    "result_field": "ITEMCD",
+                    "datatable_field": "ITEMCD",
+                    "repository": "",
+                    "display_field": "ITEMCD",
+                }
+            ],
+        }
+
+    def test_target_project_baseline_binds_real_project_source_assembly_and_control_facts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            baseline = fixture["baseline"]
+            self.assertTrue(baseline.success, baseline.to_dict())
+
+            selected = resolve_csharp_control_stack(
+                {"target_project_controls": {"text": "Fake.Ui.u_TextEdit"}},
+                required_controls=["text"],
+                target_project_baseline=baseline,
+                current_project_path=fixture["project"],
+                current_project_sha256=self._artifact_sha256(fixture["project"]),
+            )
+            unbound = resolve_csharp_control_stack(
+                {"target_project_controls": {"text": "Fake.Ui.u_TextEdit"}},
+                required_controls=["text"],
+            )
+
+        self.assertEqual("target-project", selected["selection"]["text"]["provider"])
+        self.assertEqual("Target.App.u_TextEdit", selected["selection"]["text"]["type"])
+        self.assertNotEqual("target-project", unbound["selection"]["text"]["provider"])
+        facts = baseline.metadata["target_project_baseline"]["target_project_control_facts"]["text"]
+        self.assertIn("BindingField", facts["properties"])
+        self.assertIn("BindCode", facts["methods"])
+        self.assertEqual("true", facts["default_property_facts"]["this.TabStop"])
+
+    def test_target_project_baseline_rejects_changed_framework_references_and_source(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            baseline = fixture["baseline"]
+            self.assertTrue(baseline.success, baseline.to_dict())
+            original_project = fixture["project"].read_text(encoding="utf-8")
+            fixture["project"].write_text(
+                original_project.replace("v4.8", "v4.7.2").replace("20.1.7.0", "24.2.1.0"),
+                encoding="utf-8",
+                newline="",
+            )
+            changed_project = pb_migration.verify_target_project_baseline(
+                baseline,
+                current_project_path=fixture["project"],
+                current_project_sha256=self._artifact_sha256(fixture["project"]),
+            )
+            fixture["project"].write_text(original_project, encoding="utf-8", newline="")
+            fixture["controls"].write_text(
+                fixture["controls"].read_text(encoding="utf-8") + "\n// changed\n",
+                encoding="utf-8",
+                newline="",
+            )
+            changed_source = pb_migration.verify_target_project_baseline(
+                baseline,
+                current_project_path=fixture["project"],
+                current_project_sha256=self._artifact_sha256(fixture["project"]),
+            )
+
+        project_codes = {item["code"] for item in changed_project.metadata["issues"]}
+        self.assertIn("target_project_framework_changed", project_codes)
+        self.assertIn("target_project_reference_set_changed", project_codes)
+        self.assertIn(
+            "target_project_source_artifact_hash_mismatch",
+            {item["code"] for item in changed_source.metadata["issues"]},
+        )
+
+    def test_target_project_adversarial_framework_only_drift_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            baseline = fixture["baseline"]
+            self.assertTrue(baseline.success, baseline.to_dict())
+            fixture["project"].write_text(
+                fixture["project"].read_text(encoding="utf-8").replace(
+                    "<TargetFrameworkVersion>v4.8</TargetFrameworkVersion>",
+                    "<TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>",
+                ),
+                encoding="utf-8",
+                newline="",
+            )
+            result = pb_migration.verify_target_project_baseline(
+                baseline,
+                current_project_path=fixture["project"],
+                current_project_sha256=self._artifact_sha256(fixture["project"]),
+            )
+
+        codes = {item["code"] for item in result.metadata["issues"]}
+        self.assertIn("target_project_framework_changed", codes)
+        self.assertIn("target_project_project_artifact_changed", codes)
+
+    def test_target_project_adversarial_reference_version_only_drift_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            baseline = fixture["baseline"]
+            self.assertTrue(baseline.success, baseline.to_dict())
+            fixture["project"].write_text(
+                fixture["project"].read_text(encoding="utf-8").replace(
+                    "Version=20.1.7.0",
+                    "Version=20.1.8.0",
+                ),
+                encoding="utf-8",
+                newline="",
+            )
+            result = pb_migration.verify_target_project_baseline(
+                baseline,
+                current_project_path=fixture["project"],
+                current_project_sha256=self._artifact_sha256(fixture["project"]),
+            )
+
+        codes = {item["code"] for item in result.metadata["issues"]}
+        self.assertIn("target_project_reference_set_changed", codes)
+        self.assertIn("target_project_project_artifact_changed", codes)
+        references = result.metadata["current_project"]["references"]
+        self.assertEqual(
+            "20.1.8.0",
+            next(
+                item["version"]
+                for item in references
+                if item["name"] == "DevExpress.XtraGrid.v20.1"
+            ),
+        )
+
+    def test_target_project_adversarial_compile_inclusion_drift_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            baseline = fixture["baseline"]
+            self.assertTrue(baseline.success, baseline.to_dict())
+            fixture["project"].write_text(
+                fixture["project"].read_text(encoding="utf-8").replace(
+                    '<Compile Include="TargetControls.cs" />',
+                    '<Compile Include="OtherControls.cs" />',
+                ),
+                encoding="utf-8",
+                newline="",
+            )
+            result = pb_migration.verify_target_project_baseline(
+                baseline,
+                current_project_path=fixture["project"],
+                current_project_sha256=self._artifact_sha256(fixture["project"]),
+            )
+
+        codes = {item["code"] for item in result.metadata["issues"]}
+        self.assertIn("target_project_compile_includes_changed", codes)
+        self.assertIn("target_project_source_inclusion_changed", codes)
+        self.assertIn("target_project_project_artifact_changed", codes)
+
+    def test_target_project_adversarial_unlisted_control_source_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            fixture["project"].write_text(
+                fixture["project"].read_text(encoding="utf-8").replace(
+                    '<Compile Include="TargetControls.cs" />',
+                    '<Compile Include="OtherControls.cs" />',
+                ),
+                encoding="utf-8",
+                newline="",
+            )
+            result = self._rebuild_target_project_baseline(fixture)
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "target_project_source_not_in_project",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_target_project_adversarial_caller_only_fake_control_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            for requested_type in (
+                "Caller.Only.FakeTextEdit",
+                "DevExpress.XtraEditors.XtraForm",
+            ):
+                with self.subTest(requested_type=requested_type):
+                    result = self._rebuild_target_project_baseline(
+                        fixture,
+                        target_project_controls={"text": requested_type},
+                    )
+                    self.assertFalse(result.success)
+                    self.assertIn(
+                        "target_project_control_type_unproven",
+                        {item["code"] for item in result.metadata["issues"]},
+                    )
+
+    def test_target_project_adversarial_non_surface_base_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            fixture["controls"].write_text(
+                fixture["controls"].read_text(encoding="utf-8").replace(
+                    "TargetScreenBase : System.Windows.Forms.UserControl",
+                    "TargetScreenBase : System.Object",
+                ),
+                encoding="utf-8",
+                newline="",
+            )
+            result = self._rebuild_target_project_baseline(fixture)
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "target_project_surface_base_type_not_form_or_usercontrol",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_target_project_adversarial_transitive_surface_base_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            fixture["controls"].write_text(
+                fixture["controls"].read_text(encoding="utf-8").replace(
+                    "public class TargetScreenBase : System.Windows.Forms.UserControl",
+                    "public class TargetScreenRoot : System.Windows.Forms.UserControl { }\n\n"
+                    "    public class TargetScreenBase : TargetScreenRoot",
+                ),
+                encoding="utf-8",
+                newline="",
+            )
+            result = self._rebuild_target_project_baseline(fixture)
+
+        self.assertTrue(result.success, result.to_dict())
+        baseline = result.metadata["target_project_baseline"]
+        self.assertEqual("usercontrol", baseline["generated_surface_kind"])
+
+    def test_target_project_adversarial_sdk_default_compile_inclusion_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            controls = root / "SdkControls.cs"
+            controls.write_text(
+                """namespace Sdk.Target
+{
+    public class ScreenBase : System.Windows.Forms.Form { }
+    public class TargetTextEdit : System.Windows.Forms.TextBox { }
+}
+""",
+                encoding="utf-8",
+                newline="",
+            )
+            project = root / "Sdk.Target.csproj"
+            project.write_text(
+                """<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>Sdk.Target</AssemblyName>
+  </PropertyGroup>
+</Project>
+""",
+                encoding="utf-8",
+                newline="",
+            )
+            result = pb_migration.build_target_project_baseline(
+                project,
+                self._artifact_sha256(project),
+                source_artifacts=[
+                    {
+                        "path": str(controls.resolve()),
+                        "sha256": self._artifact_sha256(controls),
+                    }
+                ],
+                generated_surface_base_type="Sdk.Target.ScreenBase",
+                target_project_controls={"text": "Sdk.Target.TargetTextEdit"},
+            )
+
+        self.assertTrue(result.success, result.to_dict())
+        source = result.metadata["target_project_baseline"]["source_artifacts"][0]
+        self.assertEqual("sdk-default", source["project_inclusion"])
+
+    def test_target_project_adversarial_exact_project_hash_drift_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fixture = self._write_target_project_baseline_fixture(temp_dir)
+            baseline = fixture["baseline"]
+            self.assertTrue(baseline.success, baseline.to_dict())
+            fixture["project"].write_text(
+                fixture["project"].read_text(encoding="utf-8") + "\n<!-- drift -->\n",
+                encoding="utf-8",
+                newline="",
+            )
+            result = pb_migration.verify_target_project_baseline(
+                baseline,
+                current_project_path=fixture["project"],
+                current_project_sha256=self._artifact_sha256(fixture["project"]),
+            )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "target_project_project_artifact_changed",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_final_csharp_validator_requires_proven_base_or_explicit_standalone_fallback(self):
+        source = """public partial class TargetBrowseForm : System.Windows.Forms.UserControl
+{
+    public TargetBrowseForm() { InitializeComponent(); }
+    protected void SearchCommand() { CallSelectProcedure(); }
+    private void CallSelectProcedure() { }
+}
+"""
+        artifact_args = target_artifact_kwargs(source, prefix="surface-authority")
+        common = {
+            "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
+            "program_key": "TargetBrowse",
+            "result_fields": [],
+            "expected_control_contracts": [],
+            "no_control_contract_evidence": {
+                "reason": "No generated controls in this bounded surface test.",
+                "evidence_refs": ["user:no-generated-controls"],
+            },
+            "evidence_registry": test_evidence_registry(),
+            **artifact_args,
+        }
+        missing = _raw_verify_migration_generated_csharp_style(source, **common)
+        standalone = _raw_verify_migration_generated_csharp_style(
+            source,
+            standalone_surface_kind="usercontrol",
+            **common,
+        )
+        wrong = _raw_verify_migration_generated_csharp_style(
+            source.replace("UserControl", "Form"),
+            standalone_surface_kind="usercontrol",
+            **target_artifact_kwargs(source.replace("UserControl", "Form"), prefix="surface-wrong"),
+            **{key: value for key, value in common.items() if not key.startswith("target_")},
+        )
+
+        self.assertFalse(missing.success)
+        self.assertIn(
+            "target_project_baseline_or_standalone_fallback_required",
+            {item["code"] for item in missing.metadata["issues"]},
+        )
+        self.assertTrue(standalone.success, standalone.metadata["issues"])
+        self.assertFalse(wrong.success)
+        self.assertIn(
+            "generated_csharp_surface_base_type_mismatch",
+            {item["code"] for item in wrong.metadata["issues"]},
+        )
+
+    def test_artifact_bound_field_lineage_accepts_exact_chain_and_rejects_crosswire(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fixture = self._write_target_project_baseline_fixture(root)
+            source = """using Target.App;
+public partial class TargetBrowseForm : TargetScreenBase
+{
+    public TargetBrowseForm() { InitializeComponent(); }
+    protected void SearchCommand() { CallSelectProcedure(); }
+    private void CallSelectProcedure()
+    {
+        object itemcd = result.Tables[0].Rows[0]["ITEMCD"];
+        this.grdList.DataSource = result.Tables[0];
+    }
+}
+"""
+            columns = [{"field_name": "ITEMCD", "caption": "Item", "data_type": "string"}]
+            plan, designer = valid_devexpress_grid_designer(
+                "TargetBrowseForm", columns=columns
+            )
+            designer = extend_designer_initialize_component(
+                designer,
+                """private Target.App.u_TextEdit txtITEMCD;
+this.txtITEMCD = new Target.App.u_TextEdit();
+this.txtITEMCD.BindingField = "ITEMCD";
+""",
+            )
+            source_path = root / "TargetBrowse.cs"
+            designer_path = root / "TargetBrowse.Designer.cs"
+            sql_path = root / "SP_TARGETBROWSE_SELECT.sql"
+            source_path.write_text(source, encoding="utf-8", newline="")
+            designer_path.write_text(designer, encoding="utf-8", newline="")
+            sql_path.write_text(
+                "CREATE PROCEDURE dbo.SP_TARGETBROWSE_SELECT AS BEGIN IF @WORKTYPE = 'LIST' SELECT ITEMCD FROM ITEM; END",
+                encoding="utf-8",
+                newline="",
+            )
+            lineage = self._write_field_lineage_fixture(
+                root, source_path, designer_path, sql_path
+            )
+            common = {
+                "designer_source_text": designer,
+                "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
+                "program_key": "TargetBrowse",
+                "result_fields": ["ITEMCD"],
+                "expected_control_contracts": inferred_test_control_contracts(designer),
+                "target_source_path": str(source_path),
+                "target_source_sha256": self._artifact_sha256(source_path),
+                "target_designer_path": str(designer_path),
+                "target_designer_sha256": self._artifact_sha256(designer_path),
+                "expected_grid_role": "list",
+                "expected_grid_columns": columns,
+                "layout_load_artifact_text": generate_devexpress_grid_xml(columns),
+                "target_project_baseline": fixture["baseline"],
+                "current_project_path": fixture["project"],
+                "current_project_sha256": self._artifact_sha256(fixture["project"]),
+                "field_lineage_contract": lineage,
+            }
+            valid = _raw_verify_migration_generated_csharp_style(source, **common)
+            crossed = copy.deepcopy(lineage)
+            crossed["mappings"][0]["binding_field"] = "CUSTCD"
+            invalid = _raw_verify_migration_generated_csharp_style(
+                source,
+                **{**common, "field_lineage_contract": crossed},
+            )
+
+        self.assertTrue(valid.success, valid.metadata["issues"])
+        self.assertEqual("passed", valid.metadata["field_lineage_contract"]["status"])
+        self.assertFalse(invalid.success)
+        self.assertIn(
+            "field_lineage_crosswired",
+            {item["code"] for item in invalid.metadata["issues"]},
+        )
+
+    def test_numeric_grid_repositories_are_per_field_and_shared_repository_is_rejected(self):
+        columns = [
+            {"field_name": "QTY", "caption": "Qty", "data_type": "decimal(18, 2)"},
+            {"field_name": "AMT", "caption": "Amount", "data_type": "decimal(18, 0)"},
+        ]
+        plan, designer = valid_devexpress_grid_designer(
+            "NumericBrowseForm", columns=columns
+        )
+        source, _ = valid_csharp_contract_sources("NumericBrowseForm", "QTY")
+        common = {
+            "designer_source_text": designer,
+            "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
+            "program_key": "NumericBrowse",
+            "result_fields": ["QTY", "AMT"],
+            "expected_control_contracts": inferred_test_control_contracts(designer),
+            "expected_grid_role": "list",
+            "expected_grid_columns": columns,
+            "layout_load_artifact_text": generate_devexpress_grid_xml(columns),
+            "standalone_surface_kind": "form",
+            **target_artifact_kwargs(source, designer, prefix="per-field-repository"),
+        }
+        valid = _raw_verify_migration_generated_csharp_style(source, **common)
+        shared_designer = designer.replace(
+            "this.colList_AMT.ColumnEdit = this.rpsSpinAMT;",
+            "this.colList_AMT.ColumnEdit = this.rpsSpinQTY;",
+        )
+        invalid = _raw_verify_migration_generated_csharp_style(
+            source,
+            **{
+                **common,
+                "designer_source_text": shared_designer,
+                **target_artifact_kwargs(source, shared_designer, prefix="shared-repository"),
+            },
+        )
+
+        self.assertIn("rpsSpinQTY", plan.stdout)
+        self.assertIn("rpsSpinAMT", plan.stdout)
+        self.assertTrue(valid.success, valid.metadata["issues"])
+        self.assertFalse(invalid.success)
+        self.assertIn(
+            "numeric_grid_repository_field_mismatch",
+            {item["code"] for item in invalid.metadata["issues"]},
+        )
+
+    def test_pb_sp_policy_allows_source_backed_set_subqueries_and_blocks_invented_scalar_where(self):
+        set_predicates = [
+            "EXISTS (SELECT 1 FROM CHILD B WHERE B.ID = A.ID)",
+            "NOT EXISTS (SELECT 1 FROM CHILD B WHERE B.ID = A.ID)",
+            "A.ID IN (SELECT B.ID FROM CHILD B)",
+            "A.ID NOT IN (SELECT B.ID FROM CHILD B)",
+        ]
+        for index, predicate in enumerate(set_predicates):
+            with self.subTest(predicate=predicate):
+                source_query = f"SELECT A.ID FROM PARENT A WHERE {predicate};"
+                candidate = sp_metadata_header("Source-backed set predicate") + f"""
+CREATE PROCEDURE dbo.SP_SET_{index}_SELECT @WORKTYPE VARCHAR(20) AS
+BEGIN
+    SELECT A.ID FROM PARENT A WHERE {predicate};
+END
+"""
+                result = verify_pb_migration_sp_generation_contract(
+                    candidate,
+                    source_evidence=pb_srd_sql_evidence(source_query),
+                )
+                codes = {item["code"] for item in result.metadata["issues"]}
+                self.assertNotIn("not_exists_in_generated_sp", codes)
+                self.assertNotIn("if_exists_where_subquery_in_generated_sp", codes)
+                self.assertNotIn("invented_scalar_where_subquery_in_generated_sp", codes)
+                self.assertFalse(
+                    any(
+                        item["code"] == "profile_forbidden_sql_pattern"
+                        and item.get("rule_id") == "not_exists"
+                        for item in result.metadata["issues"]
+                    )
+                )
+                policy = result.metadata["pb_sql_generation_policy"]
+                self.assertEqual("passed", policy["status"])
+                self.assertEqual(1, policy["counts"]["source_backed"])
+                self.assertTrue(policy["subqueries"][0]["source_backed"])
+
+        invented = sp_metadata_header("Invented scalar predicate") + """
+CREATE PROCEDURE dbo.SP_SCALAR_SELECT @WORKTYPE VARCHAR(20) AS
+BEGIN
+    SELECT A.ID
+    FROM PARENT A
+    WHERE A.VALUE = (SELECT MAX(B.VALUE) FROM CHILD B WHERE B.ID = A.ID);
+END
+"""
+        blocked = verify_pb_migration_sp_generation_contract(
+            invented,
+            source_evidence=pb_srd_sql_evidence(
+                "SELECT A.ID FROM PARENT A WHERE A.ID = @ID;"
+            ),
+        )
+        self.assertFalse(blocked.success)
+        policy = blocked.metadata["pb_sql_generation_policy"]
+        issue = next(
+            item
+            for item in policy["issues"]
+            if item["code"]
+            == "invented_scalar_where_subquery_in_generated_sp"
+        )
+        self.assertEqual("blocked", policy["status"])
+        self.assertEqual("scalar", issue["predicate_kind"])
+        self.assertEqual("WHERE", issue["clause"])
+        self.assertFalse(issue["source_backed"])
+        self.assertFalse(issue["evidence_authorized"])
+        self.assertEqual(0, issue["source_authorities_checked"])
+        self.assertRegex(issue["subquery_sha256"], r"^sha256:[0-9a-f]{64}$")
+        self.assertIn(issue, blocked.metadata["issues"])
+
+    def test_pb_sp_policy_preserves_exact_hash_bound_scalar_subquery(self):
+        source_query = """
+SELECT A.ID
+FROM PARENT A
+WHERE A.VALUE = (SELECT MAX(B.VALUE) FROM CHILD B WHERE B.ID = A.ID);
+"""
+        candidate = sp_metadata_header("Preserved scalar predicate") + """
+CREATE PROCEDURE dbo.SP_SCALAR_SOURCE_SELECT @WORKTYPE VARCHAR(20) AS
+BEGIN
+    SELECT A.ID
+    FROM PARENT A
+    WHERE A.VALUE = (SELECT MAX(B.VALUE) FROM CHILD B WHERE B.ID = A.ID);
+END
+"""
+
+        result = verify_pb_migration_sp_generation_contract(
+            candidate,
+            source_evidence=pb_srd_sql_evidence(source_query),
+        )
+        policy = result.metadata["pb_sql_generation_policy"]
+
+        self.assertEqual("passed", policy["status"])
+        self.assertEqual([], policy["issues"])
+        self.assertEqual(1, policy["counts"]["source_backed"])
+        self.assertEqual(1, policy["counts"]["evidence_authorized"])
+        self.assertEqual(
+            "exact_hash_equivalence_authorized",
+            policy["source_authorities"][0]["equivalence_evidence"]["reason"],
+        )
+
+    def test_pb_sp_policy_allows_direct_if_exists_join_and_blocks_nested_scalar(self):
+        direct = sp_metadata_header("Direct IF EXISTS join") + """
+CREATE PROCEDURE dbo.SP_DIRECT_EXISTS_SELECT @WORKTYPE VARCHAR(20) AS
+BEGIN
+    IF EXISTS
+    (
+        SELECT 1
+        FROM PARENT A
+        JOIN CHILD B ON B.ID = A.ID
+        WHERE A.ID = @WORKTYPE
+    )
+        SELECT 1;
+END
+"""
+        direct_result = verify_pb_migration_sp_generation_contract(
+            direct,
+            source_evidence=pb_srd_sql_evidence(
+                "SELECT A.ID FROM PARENT A JOIN CHILD B ON B.ID = A.ID WHERE A.ID = @WORKTYPE;"
+            ),
+        )
+
+        self.assertEqual(
+            "passed",
+            direct_result.metadata["pb_sql_generation_policy"]["status"],
+        )
+        direct_finding = direct_result.metadata["pb_sql_generation_policy"][
+            "subqueries"
+        ][0]
+        self.assertEqual("exists", direct_finding["predicate_kind"])
+        self.assertTrue(direct_finding["direct_if"])
+
+        nested = direct.replace(
+            "WHERE A.ID = @WORKTYPE",
+            "WHERE A.ID = (SELECT MAX(C.ID) FROM CHILD C)",
+        )
+        nested_result = verify_pb_migration_sp_generation_contract(
+            nested,
+            source_evidence=pb_srd_sql_evidence(
+                "SELECT A.ID FROM PARENT A JOIN CHILD B ON B.ID = A.ID WHERE A.ID = @WORKTYPE;"
+            ),
+        )
+        nested_issue = next(
+            item
+            for item in nested_result.metadata["pb_sql_generation_policy"]["issues"]
+            if item["code"]
+            == "invented_scalar_where_subquery_in_generated_sp"
+        )
+
+        self.assertFalse(nested_result.success)
+        self.assertEqual("exists", nested_issue["ancestor_predicate_kind"])
+        self.assertEqual("scalar_where_subquery", nested_issue["reason"])
+
+    def test_existing_sp_cleanup_bypasses_generation_subquery_policy(self):
+        original = sp_metadata_header("Existing subqueries") + """
+ALTER PROCEDURE dbo.SP_ZX123456_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT A.ID
+    FROM PARENT A
+    WHERE NOT EXISTS (SELECT 1 FROM CHILD B WHERE B.ID = A.ID)
+      AND A.VALUE = (SELECT MAX(B.VALUE) FROM CHILD B WHERE B.ID = A.ID);
+END
+"""
+
+        result = verify_pb_migration_sp_generation_contract(
+            original,
+            operation="existing_sp_cleanup",
+            original_sp_text=original,
+            source_evidence=existing_sp_evidence(original),
+        )
+        codes = {item["code"] for item in result.metadata["issues"]}
+
+        self.assertTrue(result.success, result.metadata["issues"])
+        self.assertNotIn("not_exists_in_generated_sp", codes)
+        self.assertNotIn("if_exists_where_subquery_in_generated_sp", codes)
+        self.assertNotIn("invented_scalar_where_subquery_in_generated_sp", codes)
+        self.assertEqual(
+            "not_applicable",
+            result.metadata["pb_sql_generation_policy"]["status"],
+        )
+        self.assertEqual(
+            "existing_sp_cleanup_preserves_authenticated_existing_sql",
+            result.metadata["pb_sql_generation_policy"]["reason"],
+        )
 
 
 if __name__ == "__main__":

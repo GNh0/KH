@@ -5,6 +5,11 @@ from src.orchestration.skill_application import (
     LargeWorkOrchestrationBundle,
     SkillApplicationStatus,
 )
+from src.orchestration.artifact_style_gate import (
+    VISUAL_STYLE_SKILL,
+    validate_artifact_style_gate_snapshot,
+)
+from src.orchestration.goal_evidence import RuntimeProducerBoundary
 
 
 TERMINAL_COMPOUND_STATUSES = {
@@ -73,6 +78,8 @@ class SkillTransitionHandoff:
 def build_skill_transition_handoff(
     bundle: LargeWorkOrchestrationBundle,
     phase: str = "final",
+    *,
+    artifact_style_producer_boundary: RuntimeProducerBoundary | None = None,
 ) -> SkillTransitionHandoff:
     issues: List[SkillTransitionIssue] = []
     required_next_skills: List[str] = []
@@ -83,6 +90,14 @@ def build_skill_transition_handoff(
     _require_memory_skill_for_candidates(bundle, statuses, issues, required_next_skills)
     _require_parallel_skill_for_parallel_decision(bundle, statuses, issues, required_next_skills)
     _require_role_audit_after_subagent_or_role_claim(statuses, issues, required_next_skills)
+    _require_artifact_style_gate(
+        bundle,
+        statuses,
+        phase,
+        issues,
+        required_next_skills,
+        producer_boundary=artifact_style_producer_boundary,
+    )
     _require_verification_before_completion(bundle, statuses, phase, issues, required_next_skills)
     if not issues:
         _require_compound_transition(bundle, statuses, phase, issues, required_next_skills)
@@ -106,8 +121,14 @@ def build_skill_transition_handoff(
 def validate_skill_transitions(
     bundle: LargeWorkOrchestrationBundle,
     phase: str = "final",
+    *,
+    artifact_style_producer_boundary: RuntimeProducerBoundary | None = None,
 ) -> Dict[str, Any]:
-    handoff = build_skill_transition_handoff(bundle, phase=phase)
+    handoff = build_skill_transition_handoff(
+        bundle,
+        phase=phase,
+        artifact_style_producer_boundary=artifact_style_producer_boundary,
+    )
     return handoff.to_dict()
 
 
@@ -260,6 +281,102 @@ def _require_verification_before_completion(
             reason="verification-before-completion cannot pass on generic status keys; attach command/result/report evidence",
         ))
         required_next_skills.append("verification-before-completion-harness")
+
+
+def _require_artifact_style_gate(
+    bundle: LargeWorkOrchestrationBundle,
+    statuses: Dict[str, SkillApplicationStatus],
+    phase: str,
+    issues: List[SkillTransitionIssue],
+    required_next_skills: List[str],
+    *,
+    producer_boundary: RuntimeProducerBoundary | None = None,
+) -> None:
+    raw_gate = bundle.metadata.get("artifact_style_gate")
+    if not isinstance(raw_gate, dict):
+        return
+    if not (
+        raw_gate.get("required_skills")
+        or raw_gate.get("changed_artifacts")
+        or raw_gate.get("completion_claimed")
+        or raw_gate.get("deployment_claimed")
+    ):
+        return
+    validation = validate_artifact_style_gate_snapshot(
+        raw_gate,
+        producer_boundary=producer_boundary,
+    )
+    if not validation["valid"]:
+        issues.append(SkillTransitionIssue(
+            rule="artifact_style_gate_requires_authenticated_runtime_snapshot",
+            source_skill="development-lifecycle-harness",
+            required_skill="verification-before-completion-harness",
+            reason=(
+                "caller-computed artifact style metadata is not evidence; "
+                "run the post-write verifier executor and validate its signed snapshot"
+            ),
+        ))
+        required_next_skills.append(
+            "verification-before-completion-harness"
+        )
+        return
+    gate = validation["gate"]
+    required = [str(item) for item in gate.get("required_skills", []) or []]
+    if not required:
+        return
+    completion_claimed = phase == "final" or bool(
+        gate.get("completion_claimed") or gate.get("deployment_claimed")
+    )
+    if not completion_claimed:
+        return
+    for skill in required:
+        status = statuses.get(skill)
+        if status is None or status.status != "applied":
+            issues.append(SkillTransitionIssue(
+                rule="artifact_style_gate_requires_application",
+                source_skill="development-lifecycle-harness",
+                required_skill=skill,
+                reason="generated or deployed artifacts require the applicable style verifier status before completion",
+            ))
+            required_next_skills.append(skill)
+    if not gate.get("exact_receipts"):
+        issues.append(SkillTransitionIssue(
+            rule="artifact_style_gate_requires_exact_receipts",
+            source_skill="development-lifecycle-harness",
+            required_skill=required[0],
+            reason="style verification must bind every changed artifact to an exact path and current sha256 receipt",
+        ))
+        required_next_skills.append(required[0])
+    if gate.get("missing_receipts") or gate.get("stale_receipts"):
+        issues.append(SkillTransitionIssue(
+            rule="artifact_style_gate_invalidates_stale_hash_receipts",
+            source_skill="development-lifecycle-harness",
+            required_skill=required[0],
+            reason="a correction or new write changed the artifact hash, so prior style receipts are stale",
+        ))
+        required_next_skills.append(required[0])
+    if not gate.get("style_passed"):
+        issues.append(SkillTransitionIssue(
+            rule="artifact_style_gate_requires_passed_evidence",
+            source_skill="development-lifecycle-harness",
+            required_skill=required[0],
+            reason="build or DB success cannot close the task while an applicable C# or SQL style verifier is missing or blocked",
+        ))
+        required_next_skills.append(required[0])
+    if gate.get("visual_required"):
+        visual = statuses.get(VISUAL_STYLE_SKILL)
+        if (
+            visual is None
+            or visual.status != "applied"
+            or not gate.get("visual_passed")
+        ):
+            issues.append(SkillTransitionIssue(
+                rule="ui_completion_requires_visual_gate",
+                source_skill="development-lifecycle-harness",
+                required_skill=VISUAL_STYLE_SKILL,
+                reason="visual QA is required only because structured UI behavior or appearance completion was claimed",
+            ))
+            required_next_skills.append(VISUAL_STYLE_SKILL)
 
 
 def _has_fresh_verification_evidence(status: SkillApplicationStatus) -> bool:

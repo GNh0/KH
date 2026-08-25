@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
@@ -239,6 +240,8 @@ def verify_sql_formatting_style(
     *,
     style_contract_path: str | os.PathLike[str] | None = None,
     cte_temp_table_reason: str | None = None,
+    cte_temp_table_provenance: Mapping[str, Any] | None = None,
+    where_subquery_source_contract: Mapping[str, Any] | None = None,
     alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     scalar_function_refactor: Mapping[str, Any] | None = None,
     runtime_receipt_authenticator: Callable[[bytes, str], bool] | None = None,
@@ -385,18 +388,43 @@ def verify_sql_formatting_style(
             }
         )
 
-    style_issues = (
-        _style_lint(
+    cte_temp_table_policy: Dict[str, Any] = {
+        "status": "not_evaluated",
+        "reason": "source_or_output_integrity_blocked",
+    }
+    where_subquery_policy: Dict[str, Any] = {
+        "status": "not_evaluated",
+        "reason": "source_or_output_integrity_blocked",
+    }
+    style_issues: List[SqlFormattingIssue] = []
+    if source_valid and output_valid:
+        style_issues.extend(
+            _style_lint(
+                original,
+                formatted,
+                original_tokens,
+                formatted_tokens,
+                operation=operation_name,
+            )
+        )
+        cte_temp_table_policy, cte_temp_table_issues = _validate_cte_temp_table_policy(
             original,
             formatted,
+            operation=operation_name,
+            provenance=cte_temp_table_provenance,
+            legacy_reason=cte_temp_table_reason,
+            formatted_sha256=formatted_sha256,
+            runtime_receipt_authenticator=runtime_receipt_authenticator,
+        )
+        style_issues.extend(cte_temp_table_issues)
+        where_subquery_policy, where_subquery_issues = _validate_where_subquery_policy(
             original_tokens,
             formatted_tokens,
             operation=operation_name,
-            cte_temp_table_reason=cte_temp_table_reason,
+            formatted_sha256=formatted_sha256,
+            source_contract=where_subquery_source_contract,
         )
-        if source_valid and output_valid
-        else []
-    )
+        style_issues.extend(where_subquery_issues)
     style_metadata = {
         "status": "blocked" if _has_errors(style_issues) else "passed",
         "issues": [item.to_dict() for item in style_issues],
@@ -404,6 +432,8 @@ def verify_sql_formatting_style(
         "insert_select_layout_contract": dict(_INSERT_SELECT_LAYOUT_CONTRACT),
         "query_list_layout_contract": dict(_QUERY_LIST_LAYOUT_CONTRACT),
         "join_layout_contract": dict(_JOIN_LAYOUT_CONTRACT),
+        "cte_temp_table_policy": cte_temp_table_policy,
+        "where_subquery_policy": where_subquery_policy,
     }
 
     refactor_metadata, refactor_issues = _validate_scalar_function_refactor(
@@ -447,6 +477,8 @@ def verify_sql_formatting_style(
         alias_role_plan=alias_role_plan,
         scalar_function_refactor=scalar_function_refactor,
         cte_temp_table_reason=cte_temp_table_reason,
+        cte_temp_table_provenance=cte_temp_table_provenance,
+        where_subquery_source_contract=where_subquery_source_contract,
     )
 
     metadata = {
@@ -549,6 +581,8 @@ def verify_sql_formatting_style(
         ),
         "not_used_reason": "Contract-sensitive SQL evidence requires passthrough.",
         "cte_temp_table_reason": cte_temp_table_reason or "",
+        "cte_temp_table_provenance": cte_temp_table_policy,
+        "where_subquery_source_contract": where_subquery_policy,
     }
     return HarnessResult(
         success=release_ready,
@@ -3214,7 +3248,6 @@ def _style_lint(
     formatted_tokens: Sequence[_SqlToken],
     *,
     operation: str,
-    cte_temp_table_reason: str | None,
 ) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
     issues.extend(_check_tab_indentation(formatted))
@@ -3233,14 +3266,6 @@ def _style_lint(
     issues.extend(_check_procedure_parameter_layout(formatted))
     issues.extend(_check_select_leading_commas(formatted))
     issues.extend(_check_insert_select_layout(formatted))
-    issues.extend(
-        _check_cte_temp_table_introduction(
-            original,
-            formatted,
-            cte_temp_table_reason=cte_temp_table_reason,
-        )
-    )
-    issues.extend(_check_if_exists_where_subquery(formatted_tokens))
     issues.extend(
         _check_join_layout(formatted, formatted_tokens)
     )
@@ -4574,47 +4599,92 @@ def _find_matching_parenthesis(sql: str, open_index: int) -> int:
     return -1
 
 
-def _check_cte_temp_table_introduction(
+def _validate_cte_temp_table_policy(
     original: str,
     formatted: str,
     *,
-    cte_temp_table_reason: str | None,
-) -> List[SqlFormattingIssue]:
+    operation: str,
+    provenance: Mapping[str, Any] | None,
+    legacy_reason: str | None,
+    formatted_sha256: str,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None,
+) -> Tuple[Dict[str, Any], List[SqlFormattingIssue]]:
     original_masked = _masked_sql(original)
     formatted_masked = _masked_sql(formatted)
-    reason_allowed = _has_cte_temp_table_exception_reason(cte_temp_table_reason)
-    issues: List[SqlFormattingIssue] = []
     introduced_ctes = sorted(
         _extract_statement_cte_names(formatted_masked) - _extract_statement_cte_names(original_masked)
     )
-    if introduced_ctes:
-        issues.append(
-            SqlFormattingIssue(
-                code="cte_exception_reason_recorded" if reason_allowed else "cte_introduced_without_reason",
-                severity="warning" if reason_allowed else "error",
-                message="CTE introduction requires a concrete recorded reason and remains a token-stream change.",
-                evidence=[cte_temp_table_reason or "", *introduced_ctes[:8]],
-                check_kind="style",
-            )
-        )
     introduced_temp = sorted(
         _extract_temp_table_names(formatted_masked) - _extract_temp_table_names(original_masked)
     )
+    required_constructs: List[str] = []
+    if introduced_ctes:
+        required_constructs.append("cte")
+    if introduced_temp:
+        required_constructs.append("temp_table")
+    base = {
+        "operation": operation,
+        "introduced_ctes": introduced_ctes,
+        "introduced_temp_tables": introduced_temp,
+        "required_constructs": required_constructs,
+        "legacy_reason_provided": bool(str(legacy_reason or "").strip()),
+        "legacy_reason_authoritative": False,
+    }
+    if not required_constructs:
+        return ({**base, "status": "not_required", "reason": "no_construct_introduced"}, [])
+
+    provenance_metadata, errors = _validate_cte_temp_table_provenance(
+        provenance,
+        required_constructs=required_constructs,
+        introduced_ctes=introduced_ctes,
+        introduced_temp_tables=introduced_temp,
+        formatted_sql=formatted,
+        formatted_sha256=formatted_sha256,
+        runtime_receipt_authenticator=runtime_receipt_authenticator,
+    )
+    if not errors:
+        return (
+            {
+                **base,
+                **provenance_metadata,
+                "status": "verified",
+                "reason": "structured_provenance_verified",
+            },
+            [],
+        )
+
+    issues: List[SqlFormattingIssue] = []
+    evidence = [*errors[:12], *(introduced_ctes + introduced_temp)[:8]]
+    if introduced_ctes:
+        issues.append(
+            SqlFormattingIssue(
+                code="cte_exception_provenance_invalid",
+                severity="error",
+                message="A generated CTE requires structured, SQL-bound provenance; free-form reason text is not authority.",
+                evidence=evidence,
+                check_kind="style_provenance",
+            )
+        )
     if introduced_temp:
         issues.append(
             SqlFormattingIssue(
-                code=(
-                    "temp_table_exception_reason_recorded"
-                    if reason_allowed
-                    else "temp_table_introduced_without_reason"
-                ),
-                severity="warning" if reason_allowed else "error",
-                message="Temporary-table introduction requires a concrete reason and remains a token-stream change.",
-                evidence=[cte_temp_table_reason or "", *introduced_temp[:8]],
-                check_kind="style",
+                code="temp_table_exception_provenance_invalid",
+                severity="error",
+                message="A generated temporary table requires structured, SQL-bound provenance; free-form reason text is not authority.",
+                evidence=evidence,
+                check_kind="style_provenance",
             )
         )
-    return issues
+    return (
+        {
+            **base,
+            **provenance_metadata,
+            "status": "blocked",
+            "reason": "structured_provenance_invalid",
+            "errors": errors[:16],
+        },
+        issues,
+    )
 
 
 def _extract_statement_cte_names(masked_sql: str) -> set[str]:
@@ -4643,77 +4713,418 @@ def _extract_temp_table_names(masked_sql: str) -> set[str]:
     }
 
 
-def _has_cte_temp_table_exception_reason(reason: str | None) -> bool:
-    normalized = re.sub(r"\s+", " ", str(reason or "").strip()).lower()
-    if len(normalized) < 12:
-        return False
-    if re.search(
-        r"\b(?:not|no|without)\s+(?:explicit|user\s+request|reason|evidence|recursive|recursion|reuse|"
-        r"index(?:ing|es)?|statistics|large\s+intermediate|measured\s+performance|performance\s+evidence)\b",
-        normalized,
-    ):
-        return False
-    patterns = [
-        r"\bexplicit\s+user\s+request\b",
-        r"\buser\s+(?:asked|requested|requires?)\b",
-        r"\brecurs(?:ive|ion)\b",
-        r"\brepeated\s+reuse\b",
-        r"\bmultiple\s+statements?\b",
-        r"\bneeds?\s+index(?:ing|es)?\b",
-        r"\bstatistics\b",
-        r"\blarge\s+intermediate\b",
-        r"\bprocedural\s+staging\b",
-        r"\bmeasured\s+performance\b",
-        r"\bperformance\s+evidence\b",
-    ]
-    return any(re.search(pattern, normalized) for pattern in patterns)
+def _validate_cte_temp_table_provenance(
+    provenance: Mapping[str, Any] | None,
+    *,
+    required_constructs: Sequence[str],
+    introduced_ctes: Sequence[str],
+    introduced_temp_tables: Sequence[str],
+    formatted_sql: str,
+    formatted_sha256: str,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None,
+) -> Tuple[Dict[str, Any], List[str]]:
+    if not isinstance(provenance, Mapping):
+        return ({"provenance_kind": "none"}, ["structured provenance is required"])
 
+    kind = _evidence_text(provenance.get("kind")).lower()
+    metadata: Dict[str, Any] = {"provenance_kind": kind or "invalid"}
+    errors: List[str] = []
+    authorized_raw = provenance.get("authorized_constructs")
+    authorized = {
+        str(value).strip().lower()
+        for value in authorized_raw
+        if isinstance(value, str) and value.strip()
+    } if isinstance(authorized_raw, Sequence) and not isinstance(authorized_raw, (str, bytes, bytearray)) else set()
+    if not set(required_constructs).issubset(authorized):
+        errors.append("authorized_constructs do not cover every introduced construct")
+    if _evidence_text(provenance.get("formatted_sha256")).lower() != formatted_sha256.lower():
+        errors.append("formatted_sha256 does not bind the candidate SQL")
 
-def _check_if_exists_where_subquery(tokens: Sequence[_SqlToken]) -> List[SqlFormattingIssue]:
-    code_tokens = [item for item in tokens if item.kind not in {"line_comment", "block_comment"}]
-    issues = []
-    for position, token in enumerate(code_tokens):
-        if token.normalized != "IF":
-            continue
-        exists = position + 1
-        if exists >= len(code_tokens) or code_tokens[exists].normalized != "EXISTS":
-            continue
-        open_position = exists + 1
-        if open_position >= len(code_tokens) or code_tokens[open_position].text != "(":
-            continue
-        outer_depth = code_tokens[open_position].depth + 1
-        close_position = next(
-            (
-                index
-                for index in range(open_position + 1, len(code_tokens))
-                if code_tokens[index].text == ")" and code_tokens[index].depth == outer_depth - 1
-            ),
-            len(code_tokens),
+    if kind == "source_artifact":
+        artifact_text, artifact_metadata, artifact_errors = _read_bound_utf8_artifact(
+            provenance.get("artifact_path"),
+            provenance.get("artifact_sha256"),
         )
-        where_position = next(
-            (
-                index
-                for index in range(open_position + 1, close_position)
-                if code_tokens[index].normalized == "WHERE" and code_tokens[index].depth == outer_depth
-            ),
-            None,
-        )
-        if where_position is None:
-            continue
-        if any(
-            item.normalized == "SELECT" and item.depth > outer_depth
-            for item in code_tokens[where_position + 1 : close_position]
-        ):
-            issues.append(
-                SqlFormattingIssue(
-                    code="if_exists_where_subquery",
-                    severity="error",
-                    message="Do not nest a subquery under the top-level WHERE of an IF EXISTS guard.",
-                    evidence=[f"offset={code_tokens[where_position].start}"],
-                    check_kind="style",
-                )
+        metadata.update(artifact_metadata)
+        errors.extend(artifact_errors)
+        if not artifact_errors:
+            masked = _masked_sql(artifact_text)
+            source_ctes = _extract_statement_cte_names(masked)
+            source_temp = _extract_temp_table_names(masked)
+            if not set(introduced_ctes).issubset(source_ctes):
+                errors.append("source artifact does not contain every introduced CTE")
+            if not set(introduced_temp_tables).issubset(source_temp):
+                errors.append("source artifact does not contain every introduced temporary table")
+    elif kind == "user_directive":
+        directive = provenance.get("directive")
+        receipt = provenance.get("receipt")
+        if not isinstance(directive, Mapping):
+            errors.append("directive receipt payload is missing")
+        else:
+            directive_text = _evidence_text(directive.get("text"))
+            directive_sha256 = _evidence_text(directive.get("sha256")).lower()
+            if not directive_text:
+                errors.append("directive.text is required")
+            if directive_sha256 != _sha256_text(directive_text):
+                errors.append("directive.sha256 does not match exact directive text")
+        errors.extend(
+            _structured_receipt_errors(
+                receipt,
+                runtime_receipt_authenticator=runtime_receipt_authenticator,
+                required_fields={
+                    "directive_sha256": (
+                        _evidence_text(directive.get("sha256")).lower()
+                        if isinstance(directive, Mapping)
+                        else ""
+                    ),
+                    "formatted_sha256": formatted_sha256.lower(),
+                },
+                required_constructs=required_constructs,
             )
-    return issues
+        )
+    elif kind == "verified_necessity":
+        measurement_text, measurement_metadata, measurement_errors = _read_bound_utf8_artifact(
+            provenance.get("measurement_artifact_path"),
+            provenance.get("measurement_artifact_sha256"),
+        )
+        metadata.update({f"measurement_{key}": value for key, value in measurement_metadata.items()})
+        errors.extend(measurement_errors)
+        if not measurement_errors and not measurement_text.strip():
+            errors.append("measurement artifact is empty")
+        receipt = provenance.get("receipt")
+        if not isinstance(receipt, Mapping):
+            errors.append("verified necessity receipt is missing")
+        else:
+            if receipt.get("necessity_verified") is not True:
+                errors.append("receipt.necessity_verified must be true")
+            if receipt.get("equivalence_verified") is not True:
+                errors.append("receipt.equivalence_verified must be true")
+            comparison_count = receipt.get("comparison_count")
+            if isinstance(comparison_count, bool) or not isinstance(comparison_count, int) or comparison_count < 1:
+                errors.append("receipt.comparison_count must be a positive integer")
+        errors.extend(
+            _structured_receipt_errors(
+                receipt,
+                runtime_receipt_authenticator=runtime_receipt_authenticator,
+                required_fields={
+                    "measurement_artifact_sha256": _evidence_text(
+                        provenance.get("measurement_artifact_sha256")
+                    ).lower(),
+                    "formatted_sha256": formatted_sha256.lower(),
+                },
+                required_constructs=required_constructs,
+            )
+        )
+    else:
+        errors.append("kind must be source_artifact, user_directive, or verified_necessity")
+
+    metadata["authorized_constructs"] = sorted(authorized)
+    metadata["candidate_sql_sha256"] = formatted_sha256
+    metadata["candidate_sql_length"] = len(formatted_sql)
+    return metadata, errors
+
+
+def _read_bound_utf8_artifact(path_value: Any, digest_value: Any) -> Tuple[str, Dict[str, Any], List[str]]:
+    path_text = _evidence_text(path_value)
+    expected_digest = _evidence_text(digest_value).lower()
+    metadata = {"artifact_path": path_text, "artifact_sha256": expected_digest}
+    errors: List[str] = []
+    if not path_text:
+        return "", metadata, ["artifact path is required"]
+    path = Path(path_text)
+    if not path.is_absolute():
+        errors.append("artifact path must be absolute")
+    if not _HASH_PATTERN.fullmatch(expected_digest):
+        errors.append("artifact_sha256 must be a 64-character hexadecimal digest")
+    if errors:
+        return "", metadata, errors
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        return "", metadata, [f"artifact read failed: {type(exc).__name__}"]
+    actual_digest = hashlib.sha256(raw).hexdigest()
+    metadata["artifact_readback_sha256"] = actual_digest
+    if actual_digest != expected_digest:
+        errors.append("artifact SHA-256 does not match readback")
+    try:
+        text = raw.decode("utf-8-sig", errors="strict")
+    except UnicodeDecodeError:
+        return "", metadata, [*errors, "artifact is not valid UTF-8"]
+    return text, metadata, errors
+
+
+def _structured_receipt_errors(
+    receipt: Any,
+    *,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None,
+    required_fields: Mapping[str, str],
+    required_constructs: Sequence[str],
+) -> List[str]:
+    if not isinstance(receipt, Mapping):
+        return ["authenticated runtime receipt is required"]
+    errors: List[str] = []
+    if not _is_nonempty_text(receipt.get("receipt_id")):
+        errors.append("receipt.receipt_id is required")
+    for field_name, expected in required_fields.items():
+        if _evidence_text(receipt.get(field_name)).lower() != expected:
+            errors.append(f"receipt.{field_name} is not correlated")
+    receipt_constructs = receipt.get("authorized_constructs")
+    normalized_constructs = {
+        str(value).strip().lower()
+        for value in receipt_constructs
+        if isinstance(value, str) and value.strip()
+    } if isinstance(receipt_constructs, Sequence) and not isinstance(receipt_constructs, (str, bytes, bytearray)) else set()
+    if not set(required_constructs).issubset(normalized_constructs):
+        errors.append("receipt.authorized_constructs is not correlated")
+    signature = _evidence_text(receipt.get("signature"))
+    if not signature:
+        errors.append("receipt.signature is required")
+    if runtime_receipt_authenticator is None:
+        errors.append("runtime receipt authenticator is required")
+    elif signature:
+        try:
+            authenticated = runtime_receipt_authenticator(_runtime_receipt_payload(receipt), signature)
+        except Exception as exc:
+            errors.append(f"runtime receipt authenticator raised {type(exc).__name__}")
+        else:
+            if authenticated is not True:
+                errors.append("runtime receipt signature was not authenticated")
+    return errors
+
+
+def _validate_where_subquery_policy(
+    original_tokens: Sequence[_SqlToken],
+    formatted_tokens: Sequence[_SqlToken],
+    *,
+    operation: str,
+    formatted_sha256: str,
+    source_contract: Mapping[str, Any] | None,
+) -> Tuple[Dict[str, Any], List[SqlFormattingIssue]]:
+    original_records = _collect_where_subqueries(original_tokens)
+    formatted_records = _collect_where_subqueries(formatted_tokens)
+    original_scalars = Counter(
+        item["signature_sha256"] for item in original_records if item["kind"] == "scalar"
+    )
+    remaining = original_scalars.copy()
+    introduced: List[Dict[str, Any]] = []
+    for record in formatted_records:
+        if record["kind"] != "scalar":
+            continue
+        signature = record["signature_sha256"]
+        if remaining[signature] > 0:
+            remaining[signature] -= 1
+        else:
+            introduced.append(record)
+
+    base = {
+        "operation": operation,
+        "original_scalar_count": sum(original_scalars.values()),
+        "formatted_scalar_count": sum(
+            item["kind"] == "scalar" for item in formatted_records
+        ),
+        "introduced_scalar_count": len(introduced),
+        "exists_not_exists_count": sum(
+            item["kind"] == "semi_join" for item in formatted_records
+        ),
+        "set_subquery_count": sum(
+            item["kind"] == "set_predicate" for item in formatted_records
+        ),
+    }
+    if operation == "formatting":
+        return (
+            {
+                **base,
+                "status": "preservation_only",
+                "reason": "formatting_mode_relies_on_complete_token_stream_preservation",
+            },
+            [],
+        )
+    if not introduced:
+        return ({**base, "status": "passed", "reason": "no_scalar_where_subquery_introduced"}, [])
+
+    contract_metadata, contract_errors = _validate_where_subquery_source_contract(
+        source_contract,
+        introduced=introduced,
+        formatted_sha256=formatted_sha256,
+    )
+    if not contract_errors:
+        return (
+            {
+                **base,
+                **contract_metadata,
+                "status": "verified_source_preservation",
+                "reason": "artifact_bound_source_contract",
+            },
+            [],
+        )
+
+    issues: List[SqlFormattingIssue] = []
+    for record in introduced:
+        issues.append(
+            SqlFormattingIssue(
+                code=(
+                    "if_exists_where_scalar_subquery"
+                    if record["inside_if_exists"]
+                    else "where_scalar_subquery_introduced"
+                ),
+                severity="error",
+                message=(
+                    "Do not introduce a scalar subquery in a WHERE predicate. Preserve an artifact-bound source "
+                    "requirement, or perform a separately requested JOIN/APPLY refactor with equivalence evidence."
+                ),
+                evidence=[f"offset={record['offset']}", *contract_errors[:8]],
+                check_kind="generation_structure",
+            )
+        )
+    return (
+        {
+            **base,
+            **contract_metadata,
+            "status": "blocked",
+            "reason": "scalar_where_subquery_introduced_without_artifact_contract",
+            "errors": contract_errors[:16],
+        },
+        issues,
+    )
+
+
+def _collect_where_subqueries(tokens: Sequence[_SqlToken]) -> List[Dict[str, Any]]:
+    scopes = _build_sql_scopes(tokens)
+    records: List[Dict[str, Any]] = []
+    for child in scopes:
+        if tokens[child.start].normalized != "SELECT":
+            continue
+        parents = [
+            scope
+            for scope in scopes
+            if scope.start < child.start < scope.end and scope.depth < child.depth
+        ]
+        if not parents:
+            continue
+        parent = max(parents, key=lambda item: (item.depth, item.start))
+        where_positions = [
+            index
+            for index in range(parent.start + 1, child.start)
+            if tokens[index].depth == parent.depth and tokens[index].normalized == "WHERE"
+        ]
+        if not where_positions:
+            continue
+        where_position = where_positions[-1]
+        if any(
+            tokens[index].depth == parent.depth
+            and tokens[index].normalized in {
+                "EXCEPT", "FOR", "GROUP", "HAVING", "INTERSECT", "OPTION", "ORDER", "UNION"
+            }
+            for index in range(where_position + 1, child.start)
+        ):
+            continue
+        open_position = _subquery_open_position(tokens, child.start, child.depth)
+        if open_position is None:
+            continue
+        close_position = _matching_close_token(tokens, open_position)
+        if close_position is None:
+            continue
+        wrapper_position = _previous_code_position(tokens, open_position - 1)
+        wrapper = tokens[wrapper_position].normalized if wrapper_position is not None else ""
+        if wrapper == "EXISTS":
+            kind = "semi_join"
+        elif wrapper in {"IN", "ANY", "ALL", "SOME"}:
+            kind = "set_predicate"
+        else:
+            kind = "scalar"
+        normalized = [
+            token.normalized
+            for token in tokens[open_position : close_position + 1]
+            if token.kind not in {"line_comment", "block_comment"}
+        ]
+        records.append(
+            {
+                "kind": kind,
+                "offset": tokens[open_position].start,
+                "signature_sha256": _sha256_text("\x1f".join(normalized)),
+                "inside_if_exists": _scope_is_exists_wrapped(tokens, parent),
+            }
+        )
+    return records
+
+
+def _subquery_open_position(
+    tokens: Sequence[_SqlToken],
+    select_position: int,
+    select_depth: int,
+) -> int | None:
+    position = _previous_code_position(tokens, select_position - 1)
+    if position is None:
+        return None
+    token = tokens[position]
+    if token.text != "(" or token.depth != select_depth - 1:
+        return None
+    return position
+
+
+def _matching_close_token(tokens: Sequence[_SqlToken], open_position: int) -> int | None:
+    open_depth = tokens[open_position].depth
+    for position in range(open_position + 1, len(tokens)):
+        if tokens[position].text == ")" and tokens[position].depth == open_depth:
+            return position
+    return None
+
+
+def _previous_code_position(tokens: Sequence[_SqlToken], position: int) -> int | None:
+    while position >= 0:
+        if tokens[position].kind not in {"line_comment", "block_comment"}:
+            return position
+        position -= 1
+    return None
+
+
+def _scope_is_exists_wrapped(tokens: Sequence[_SqlToken], scope: _SqlScope) -> bool:
+    open_position = _subquery_open_position(tokens, scope.start, scope.depth)
+    if open_position is None:
+        return False
+    wrapper_position = _previous_code_position(tokens, open_position - 1)
+    return wrapper_position is not None and tokens[wrapper_position].normalized == "EXISTS"
+
+
+def _validate_where_subquery_source_contract(
+    source_contract: Mapping[str, Any] | None,
+    *,
+    introduced: Sequence[Mapping[str, Any]],
+    formatted_sha256: str,
+) -> Tuple[Dict[str, Any], List[str]]:
+    if not isinstance(source_contract, Mapping):
+        return ({"source_contract_kind": "none"}, ["artifact-bound source contract is required"])
+    metadata = {"source_contract_kind": _evidence_text(source_contract.get("kind")).lower()}
+    errors: List[str] = []
+    if metadata["source_contract_kind"] != "source_artifact":
+        errors.append("source contract kind must be source_artifact")
+    if _evidence_text(source_contract.get("requirement")) != "preserve_where_scalar_subquery":
+        errors.append("source contract requirement must be preserve_where_scalar_subquery")
+    if _evidence_text(source_contract.get("formatted_sha256")).lower() != formatted_sha256.lower():
+        errors.append("source contract formatted_sha256 is not correlated")
+    artifact_text, artifact_metadata, artifact_errors = _read_bound_utf8_artifact(
+        source_contract.get("artifact_path"),
+        source_contract.get("artifact_sha256"),
+    )
+    metadata.update(artifact_metadata)
+    errors.extend(artifact_errors)
+    if not artifact_errors:
+        artifact_tokens, artifact_integrity = _analyze_sql_integrity(
+            artifact_text,
+            check_kind="where_subquery_source_contract",
+        )
+        if _has_errors(artifact_integrity):
+            errors.append("source artifact SQL integrity is invalid")
+        else:
+            artifact_signatures = Counter(
+                item["signature_sha256"]
+                for item in _collect_where_subqueries(artifact_tokens)
+                if item["kind"] == "scalar"
+            )
+            required_signatures = Counter(item["signature_sha256"] for item in introduced)
+            if any(artifact_signatures[key] < count for key, count in required_signatures.items()):
+                errors.append("source artifact does not contain every introduced scalar WHERE subquery")
+    return metadata, errors
 
 
 def _check_query_list_layout(

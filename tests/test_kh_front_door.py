@@ -1820,7 +1820,7 @@ class KhFrontDoorTests(unittest.TestCase):
                 self.assertIn("skill-catalog", payload["immediate_next_skills"])
                 self.assertIn("large_work_orchestration_bundle", payload["execution_gate"]["required_before_execution"])
 
-    def test_front_door_pb_migration_request_keeps_full_skill_lifecycle_audit_gate(self):
+    def test_front_door_pb_harness_mention_keeps_audit_gate_without_execution_route(self):
         result = build_kh_front_door(
             "PB to C# migration harness 포함해서 스킬,하네스 동작을 1부터 끝까지 "
             "전체 모두 세세하게 하나씩 다 뜯어보고 점검해줘",
@@ -1832,11 +1832,13 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["classification"]["complexity"], "heavy")
         self.assertEqual(payload["classification"]["recommended_execution"], "role_dag")
         self.assertIn("full_skill_lifecycle_audit_request", payload["classification"]["reasons"])
-        self.assertIn("pb_to_csharp_migration_request", payload["classification"]["reasons"])
+        self.assertNotIn("pb_to_csharp_migration_request", payload["classification"]["reasons"])
         self.assertIn("skill-catalog", payload["recommended_skills"])
-        self.assertIn("pb-to-csharp-migration-harness", payload["recommended_skills"])
+        self.assertNotIn("pb-to-csharp-migration-harness", payload["recommended_skills"])
         self.assertIn("skill-catalog", payload["immediate_next_skills"])
-        self.assertIn("pb-to-csharp-migration-harness", payload["immediate_next_skills"])
+        self.assertNotIn("pb-to-csharp-migration-harness", payload["immediate_next_skills"])
+        self.assertIs(payload["classification"]["intent"]["migration_intent"], False)
+        self.assertIs(payload["classification"]["intent"]["capability_probe_allowed"], False)
         self.assertEqual(payload["execution_gate"]["status"], "blocked_until_large_work_preflight")
         self.assertIn("skill_execution_evidence_matrix", payload["execution_gate"]["required_before_execution"])
 
@@ -1949,6 +1951,42 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["immediate_next_skills"], [])
         self.assertEqual(payload["execution_authorization"]["status"], "allowed")
         self.assertIn("file_writes", payload["execution_gate"]["blocked_actions"])
+
+    def test_front_door_pb_tool_error_discussion_does_not_probe_or_route_migration(self):
+        result = build_kh_front_door(
+            "ORCA 7.0 and 12.5 fail on the first fresh-session call while PB and C# are discussed. "
+            "Analyze the cause only; do not migrate or run PblScripter.",
+            project=Path.cwd(),
+            host="codex",
+            request_context={"domain": "software"},
+        )
+        payload = result.to_dict()
+        intent = payload["classification"]["intent"]
+
+        self.assertIs(intent["migration_intent"], False)
+        self.assertIs(intent["tool_execution_intent"], False)
+        self.assertIs(intent["capability_probe_allowed"], False)
+        self.assertNotIn("pb_to_csharp_migration_request", payload["classification"]["reasons"])
+        self.assertNotIn("pb-to-csharp-migration-harness", payload["immediate_next_skills"])
+
+    def test_front_door_real_pb_conversion_exposes_tool_probe_boundary(self):
+        direct_source = build_kh_front_door(
+            "Convert the pasted PB DataWindow source into a new C# WinForms project.",
+            project=Path.cwd(),
+            host="codex",
+        ).to_dict()
+        binary_source = build_kh_front_door(
+            "Migrate sale_006.pbl to a new C# WinForms project.",
+            project=Path.cwd(),
+            host="codex",
+        ).to_dict()
+
+        self.assertIs(direct_source["classification"]["intent"]["migration_intent"], True)
+        self.assertIs(direct_source["classification"]["intent"]["capability_probe_allowed"], False)
+        self.assertIn("pb-to-csharp-migration-harness", direct_source["immediate_next_skills"])
+        self.assertIs(binary_source["classification"]["intent"]["migration_intent"], True)
+        self.assertIs(binary_source["classification"]["intent"]["capability_probe_allowed"], True)
+        self.assertIn("pb-to-csharp-migration-harness", binary_source["immediate_next_skills"])
 
     def test_list_double_click_update_condition_question_does_not_trigger_large_preflight(self):
         result = build_kh_front_door(

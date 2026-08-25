@@ -331,7 +331,7 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
             "evidence_refs": ["demo:generated-designer"],
         },
         {
-            "instance_name": "rpsSpinAmt",
+            "instance_name": "rpsSpinQUANTITY",
             "expected_type": (
                 "DevExpress.XtraEditors.Repository.RepositoryItemSpinEdit"
             ),
@@ -354,6 +354,7 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     )
     runtime_mapped = verify_migration_generated_csharp_style(
         csharp,
+        standalone_surface_kind="form",
         designer_source_text=designer,
         profile_evidence=profile,
         form_class="CatalogBrowseForm",
@@ -374,6 +375,7 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     )
     runtime_unrelated = verify_migration_generated_csharp_style(
         unrelated_csharp,
+        standalone_surface_kind="form",
         profile_evidence=profile,
         form_class="CatalogBrowseForm",
         source_role="code-behind",
@@ -388,6 +390,7 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     )
     runtime_misplaced = verify_migration_generated_csharp_style(
         misplaced_csharp,
+        standalone_surface_kind="form",
         designer_source_text=designer,
         profile_evidence=profile,
         form_class="CatalogBrowseForm",
@@ -427,8 +430,8 @@ END;
     source_artifact_path = output_dir / "catalog-pb-source-fragment.sql"
     caller_artifact_path = output_dir / "catalog-csharp-caller.txt"
     branch_contract_path = output_dir / "catalog-branch-contract.json"
-    source_artifact_path.write_text(source_sql, encoding="utf-8")
-    caller_artifact_path.write_text(caller_artifact, encoding="utf-8")
+    _write_utf8_artifact(source_artifact_path, source_sql)
+    _write_utf8_artifact(caller_artifact_path, caller_artifact)
     branch_sql = """IF @WORKTYPE = 'LIST'
 BEGIN
     SELECT A.ENTITY_ID
@@ -444,10 +447,11 @@ END;"""
         ensure_ascii=False,
         sort_keys=True,
     )
-    branch_contract_path.write_text(branch_contract_text, encoding="utf-8")
+    _write_utf8_artifact(branch_contract_path, branch_contract_text)
     sql_provider_path = output_dir / "host-skills" / "sql-formatting" / "SKILL.md"
     sql_provider_path.parent.mkdir(parents=True, exist_ok=True)
-    sql_provider_path.write_text(
+    _write_utf8_artifact(
+        sql_provider_path,
         """---
 name: sql-formatting
 description: Format SQL/T-SQL while preserving query behavior and semantics.
@@ -459,7 +463,6 @@ Do not change query behavior. Preserve table names, predicates, expressions, and
 Convert a scalar lookup to a JOIN only when its implementation and relational equivalence are verified.
 Run the packaged `sql-formatting-style-harness` deterministic verifier and accept output only when it passes.
 """,
-        encoding="utf-8",
     )
     sql_provider_path = sql_provider_path.resolve()
     provider_selection = attach_sql_provider_selection_runtime_receipt({
@@ -696,7 +699,7 @@ BEGIN
         "        WHERE DISPLAY_NAME = @FILTER_TEXT;",
     )
     branch_position_source_path = output_dir / "catalog-branch-position-source.sql"
-    branch_position_source_path.write_text(branch_position_source_sql, encoding="utf-8")
+    _write_utf8_artifact(branch_position_source_path, branch_position_source_sql)
     branch_position_evidence = {
         "kind": "pasted_sql",
         "verified": True,
@@ -754,7 +757,7 @@ BEGIN
     sibling_moved_sql = sibling_candidate_template.format(body=sibling_order_moved_sql)
     sibling_source_path = output_dir / "catalog-sibling-order-source.sql"
     sibling_contract_path = output_dir / "catalog-sibling-order-contract.json"
-    sibling_source_path.write_text(sibling_order_source_sql, encoding="utf-8")
+    _write_utf8_artifact(sibling_source_path, sibling_order_source_sql)
     sibling_contract_text = json.dumps(
         {
             "target_procedure": "SP_CATALOG_SELECT",
@@ -763,7 +766,7 @@ BEGIN
         ensure_ascii=False,
         sort_keys=True,
     )
-    sibling_contract_path.write_text(sibling_contract_text, encoding="utf-8")
+    _write_utf8_artifact(sibling_contract_path, sibling_contract_text)
     sibling_source_evidence = {
         "kind": "pasted_sql",
         "verified": True,
@@ -828,7 +831,7 @@ END;
     splice_source_evidence = []
     for suffix, source_text in (("a", splice_source_a), ("b", splice_source_b)):
         source_path = output_dir / f"catalog-splice-source-{suffix}.sql"
-        source_path.write_text(source_text, encoding="utf-8")
+        _write_utf8_artifact(source_path, source_text)
         splice_source_evidence.append(
             {
                 "kind": "pb_srd_sql",
@@ -847,7 +850,7 @@ END;
         ensure_ascii=False,
         sort_keys=True,
     )
-    splice_branch_contract_path.write_text(splice_branch_contract_text, encoding="utf-8")
+    _write_utf8_artifact(splice_branch_contract_path, splice_branch_contract_text)
     splice_branch_evidence = {
         "kind": "branch_contract",
         "verified": True,
@@ -975,7 +978,7 @@ UPDATE [DBO].[ENTITY_RECORD] SET DISPLAY_NAME = @FILTER_TEXT;""",
     structural_source_evidence = {}
     for case_name, (source_text, candidate_body) in structural_cases.items():
         source_path = output_dir / f"catalog-{case_name.replace('_', '-')}-source.sql"
-        source_path.write_text(source_text, encoding="utf-8")
+        _write_utf8_artifact(source_path, source_text)
         evidence_item = {
             "kind": "pb_srd_sql",
             "verified": True,
@@ -999,7 +1002,7 @@ UPDATE [DBO].[ENTITY_RECORD] SET DISPLAY_NAME = @FILTER_TEXT;""",
         body=structure_select
     ).replace("AS\nBEGIN\n", "AS\n", 1).rsplit("\nEND;", 1)[0] + "\n"
     complete_root_source_path = output_dir / "catalog-complete-root-source.sql"
-    complete_root_source_path.write_text(complete_root_source, encoding="utf-8")
+    _write_utf8_artifact(complete_root_source_path, complete_root_source)
     complete_root_evidence = {
         "kind": "existing_sp",
         "verified": True,
@@ -1037,7 +1040,7 @@ UPDATE [DBO].[ENTITY_RECORD] SET DISPLAY_NAME = @FILTER_TEXT;""",
             sort_keys=True,
         )
         composite_path = output_dir / f"catalog-{case_name.replace('_', '-')}.json"
-        composite_path.write_text(composite_text, encoding="utf-8")
+        _write_utf8_artifact(composite_path, composite_text)
         composite_evidence = {
             "kind": "composite_contract",
             "verified": True,
@@ -1079,7 +1082,7 @@ UPDATE [DBO].[ENTITY_RECORD] SET DISPLAY_NAME = @FILTER_TEXT;""",
         sort_keys=True,
     )
     omitted_try_path = output_dir / "catalog-composite-omits-try-catch.json"
-    omitted_try_path.write_text(omitted_try_text, encoding="utf-8")
+    _write_utf8_artifact(omitted_try_path, omitted_try_text)
     composite_negative_results["composite_omits_try_catch"] = (
         verify_pb_migration_sp_generation_contract(
             structural_candidate_template.format(body=structure_try),
@@ -1120,7 +1123,7 @@ UPDATE [DBO].[ENTITY_RECORD] SET DISPLAY_NAME = @FILTER_TEXT;""",
         sort_keys=True,
     )
     exhaustive_path = output_dir / "catalog-composite-source-subset.json"
-    exhaustive_path.write_text(exhaustive_text, encoding="utf-8")
+    _write_utf8_artifact(exhaustive_path, exhaustive_text)
     composite_negative_results["composite_source_subset"] = (
         verify_pb_migration_sp_generation_contract(
             exhaustive_candidate,
@@ -1149,7 +1152,7 @@ UPDATE [DBO].[ENTITY_RECORD] SET DISPLAY_NAME = @FILTER_TEXT;""",
 );'''
     )
     raw_parameter_path = output_dir / "catalog-raw-string-parameter-forgery.cs"
-    raw_parameter_path.write_text(raw_parameter_artifact, encoding="utf-8")
+    _write_utf8_artifact(raw_parameter_path, raw_parameter_artifact)
     raw_parameter_evidence = dict(caller_evidence)
     raw_parameter_evidence.update(
         {
@@ -1265,7 +1268,7 @@ return dbClient.GetDataSetFromSP("SP_CATALOG_SELECT"
         if case_name not in prewrapped_or_incomplete_caller_artifacts:
             artifact_text = _complete_csharp_caller_artifact(artifact_text)
         artifact_path = output_dir / f"catalog-{case_name.replace('_', '-')}.cs"
-        artifact_path.write_text(artifact_text, encoding="utf-8")
+        _write_utf8_artifact(artifact_path, artifact_text)
         evidence_item = dict(caller_evidence)
         evidence_item.update(
             {
@@ -1287,7 +1290,7 @@ return dbClient.GetDataSetFromSP("SP_CATALOG_SELECT"
         "SP_OTHER_SELECT",
     )
     wrong_caller_path = output_dir / "catalog-wrong-csharp-caller.txt"
-    wrong_caller_path.write_text(wrong_caller_artifact, encoding="utf-8")
+    _write_utf8_artifact(wrong_caller_path, wrong_caller_artifact)
     wrong_caller_evidence = dict(caller_evidence)
     wrong_caller_evidence.update(
         {
@@ -1325,7 +1328,7 @@ return dbClient.GetDataSetFromSP("SP_CATALOG_SELECT"
             payload["target_procedure"] = artifact_target
         artifact_text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         artifact_path = output_dir / f"catalog-external-{case_name}-target.json"
-        artifact_path.write_text(artifact_text, encoding="utf-8")
+        _write_utf8_artifact(artifact_path, artifact_text)
         evidence_item = {
             "kind": "external_caller",
             "verified": True,
@@ -1358,7 +1361,7 @@ END;
         "    SELECT @WORKTYPE AS WORKTYPE;\n    -- Keep this comment adjacent to the read.",
     )
     cleanup_source_path = output_dir / "existing-comment-binding.sql"
-    cleanup_source_path.write_text(cleanup_original, encoding="utf-8")
+    _write_utf8_artifact(cleanup_source_path, cleanup_original)
     cleanup_evidence = {
         "kind": "existing_sp",
         "verified": True,
@@ -1618,7 +1621,10 @@ END;
         },
         "semantic_equivalence": "not_proven",
     }
-    evidence_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_utf8_artifact(
+        evidence_path,
+        json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+    )
 
     success_result = HarnessResult(
         success=True,
