@@ -474,6 +474,16 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
             ["artifact", "valid"],
         ),
         _skill_turn(
+            "verification-ops",
+            4,
+            "Verify this exact C# WinForms code-behind and Designer pair without modifying either file.",
+            "Run the C# Designer style harness against the exact hash-bound code-behind and .Designer.cs receipts in no-write analysis mode, return a structured HarnessResult with artifact hashes and issue codes, and do not claim build or PB parity.",
+            "csharp-designer-style-harness",
+            ["source_sha256", "designer_sha256", "verification_binding", "issue_codes"],
+            "skill_call",
+            ["hash-bound", "HarnessResult", "issue codes", "no-write"],
+        ),
+        _skill_turn(
             "routing-evaluation",
             1,
             "Build a small HTML todo tool and verify it, without naming any KH internals.",

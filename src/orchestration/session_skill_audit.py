@@ -23,6 +23,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Sequence, Set
 
 from src.orchestration.goal_ledger import GoalLedger
 from src.orchestration.plugin_composition import looks_like_sql_output_request
+from src.orchestration.request_act_parser import parse_request_act
 from src.orchestration.request_classifier import classify_request
 from src.orchestration.session_postmortem import (
     PostmortemEventFeatures,
@@ -1460,7 +1461,7 @@ class DiskBackedSessionEvents(SequenceABC[Dict[str, Any]]):
         )
         trusted_host_native_fast_path = bool(
             payload_type in {"host_front_door", "host_native_front_door"}
-            and _is_trusted_host_native_fast_path_receipt(payload, text, "", False)
+            and _has_trusted_host_native_fast_path_provenance(payload, text)
         )
         timestamp_json = _canonical_json(record.get("timestamp")) if "timestamp" in record else "null"
         source = _front_door_provenance_value(payload, "source", "host", "origin")
@@ -2134,6 +2135,11 @@ class DiskBackedSessionEvents(SequenceABC[Dict[str, Any]]):
             analysis_record,
             lowered=clean_lowered,
         )
+        if record.payload_type in {"host_front_door", "host_native_front_door"}:
+            self._db.execute(
+                "UPDATE events SET trusted_host_native_fast_path = ? WHERE seq = ?",
+                (int(record.trusted_host_native_fast_path), int(event_seq)),
+            )
         self._db.execute(
             """
             INSERT INTO text_records (
@@ -4187,6 +4193,7 @@ def _analyze_session_skills_impl(session_path: str | Path) -> SessionSkillAudit:
             "token-optimizer",
             "KH front-door runtime receipt recorded an auditable token-optimizer decision",
         )
+    front_door_issues, front_door_evidence = _kh_front_door_audit(path)
     skill_rows = []
     issues = []
 
@@ -4195,6 +4202,19 @@ def _analyze_session_skills_impl(session_path: str | Path) -> SessionSkillAudit:
         observations = dict(observations_by_skill.get(name, _empty_observations()))
         status = observations["status"]
         is_required = name in required
+        if (
+            name == "always-on-front-door"
+            and is_required
+            and front_door_evidence["all_requests_satisfied"]
+            and status != "claimed_unverified"
+            and STATUS_RANK.get(status, 0) < STATUS_RANK["considered"]
+        ):
+            status = "considered"
+            observations["inspections"] = max(1, int(observations["inspections"]))
+            observations["evidence"] = list(observations["evidence"])
+            observations["evidence"].append(
+                "All audited requests recorded a direct, specialist, or governed selection path."
+            )
         if name == "sql-formatting-style-harness" and sql_formatting_audit["required"]:
             if sql_formatting_audit["verifier_executed"]:
                 status = "applied"
@@ -4223,6 +4243,11 @@ def _analyze_session_skills_impl(session_path: str | Path) -> SessionSkillAudit:
             observations=observations,
             postmortem=postmortem_data,
         )
+        if name == "always-on-front-door" and status == "considered":
+            acceptance = _front_door_route_acceptance(
+                front_door_evidence,
+                default=acceptance,
+            )
         if name == "sql-formatting-style-harness":
             acceptance = _sql_style_harness_acceptance(
                 sql_formatting_audit,
@@ -4290,7 +4315,7 @@ def _analyze_session_skills_impl(session_path: str | Path) -> SessionSkillAudit:
     issues.extend(supersession_issues)
     issues.extend(_authoritative_reference_order_issues(path))
     issues.extend(_forbidden_residual_completion_issues(path))
-    issues.extend(_kh_front_door_issues(path))
+    issues.extend(front_door_issues)
     issues.extend(_immediate_next_skill_issues(path, skill_rows))
     issues.extend(_front_door_execution_gate_bypass_issues(path))
     issues.extend(_front_door_latency_issues(path))
@@ -4816,9 +4841,14 @@ def _dedupe_text(values: Iterable[str]) -> List[str]:
     return result
 
 
-def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
+def _kh_front_door_audit(
+    path: Path,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     issues: List[Dict[str, Any]] = []
     events = _session_payload_events(path)
+    request_count = 0
+    satisfied_request_count = 0
+    selection_modes: List[str] = []
     waiting_for_front_door = False
     front_door_seen = False
     trigger_sample = ""
@@ -4831,6 +4861,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
     latest_assistant_text = ""
     trigger_text = ""
     work_activity_since_trigger = False
+    runtime_attempted_for_request = False
     if not isinstance(events, DiskBackedSessionEvents):
         raise RuntimeError("front-door audit requires indexed event facts")
     relevant_types = (
@@ -4842,6 +4873,8 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         "custom_tool_call",
         "function_call_output",
         "custom_tool_call_output",
+        "host_front_door",
+        "host_native_front_door",
     )
     for (
         event_index,
@@ -4878,6 +4911,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
             ):
                 task_unfinished = True
                 continue
+            request_count += 1
             active_directive = _is_kh_active_directive(text)
             if active_directive:
                 kh_active_directive_seen = True
@@ -4890,6 +4924,7 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
             trigger_sample = _short(text)
             trigger_text = text
             work_activity_since_trigger = False
+            runtime_attempted_for_request = False
             if _is_kh_front_door_request(lowered):
                 trigger_kind = "explicit_kh"
             elif is_sql_output_request:
@@ -4902,12 +4937,26 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                 trigger_kind = "deferred_kh_active"
             else:
                 trigger_kind = "deferred_automatic_intake"
+            if _host_native_fast_path_trigger_is_eligible(trigger_text):
+                trigger_kind = "host_semantic_direct"
+                front_door_seen = True
+                task_route_checked = True
+                waiting_for_front_door = False
+                satisfied_request_count += 1
+                selection_modes.append("direct")
             continue
 
-        if waiting_for_front_door and trusted_host_native_fast_path:
+        if (
+            waiting_for_front_door
+            and trusted_host_native_fast_path
+            and not work_activity_since_trigger
+            and _host_native_fast_path_trigger_is_eligible(trigger_text)
+        ):
             front_door_seen = True
             task_route_checked = True
             waiting_for_front_door = False
+            satisfied_request_count += 1
+            selection_modes.append("host_receipt")
             continue
 
         if not waiting_for_front_door:
@@ -4919,6 +4968,26 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
         if is_front_door_receipt:
             front_door_seen = True
             task_route_checked = True
+            waiting_for_front_door = False
+            satisfied_request_count += 1
+            selection_modes.append("runtime")
+            continue
+
+        if (
+            payload_type in {"function_call", "custom_tool_call"}
+            and any(marker in lowered for marker in ("kh_front_door", "front_door.py"))
+        ):
+            runtime_attempted_for_request = True
+
+        if (
+            not runtime_attempted_for_request
+            and _is_host_semantic_specialist_skill_read(payload_type, lowered)
+        ):
+            front_door_seen = True
+            task_route_checked = True
+            waiting_for_front_door = False
+            satisfied_request_count += 1
+            selection_modes.append("specialist")
             continue
 
         if is_non_kh_work_start and not front_door_seen:
@@ -4942,16 +5011,13 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
                     "status": "missing_front_door",
                     "severity": "P1",
                     "reason": (
-                        "A KH-capable session started another skill, work command, or final answer before "
-                        "always-on front-door runtime intake for the current user request."
+                        "A KH-capable session started governed work before recording either a matching "
+                        "specialist skill selection or a deterministic front-door receipt."
                     ),
                     "action": (
-                        "For every new user request or task, the first standalone skill/runtime call must run "
-                        "KH front-door via `always_on_front_door/scripts/front_door.py` or "
-                        "`python -m src.orchestration.kh_front_door ... --summary`, or record a blocked runtime result. "
-                        "Reading SKILL.md, listing the catalog, mentioning always-on-front-door, or running target-folder checks in the "
-                        "same pre-intake batch does not satisfy the entry contract. Users should not need to name KH, skills, or harnesses. "
-                        "If an earlier user message requested active KH skill/harness use, carry that kh_active_directive into later work-bearing turns."
+                        "For clear requests, select and read only the matching specialist SKILL.md before governed work. "
+                        "Use the Python front door only when deterministic audit evidence, provider conflict resolution, "
+                        "or governed high-risk/large-workflow routing is required. Direct self-contained answers need neither."
                     ),
                     "trigger_kind": trigger_kind,
                     "trigger": trigger_sample,
@@ -4965,7 +5031,20 @@ def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
             waiting_for_front_door = False
             task_unfinished = False
             active_goal = False
-    return issues
+    return issues, {
+        "request_count": request_count,
+        "satisfied_request_count": satisfied_request_count,
+        "selection_modes": selection_modes,
+        "all_requests_satisfied": bool(
+            request_count > 0
+            and satisfied_request_count == request_count
+            and not any(issue.get("status") == "missing_front_door" for issue in issues)
+        ),
+    }
+
+
+def _kh_front_door_issues(path: Path) -> List[Dict[str, Any]]:
+    return _kh_front_door_audit(path)[0]
 
 
 @dataclass
@@ -5664,6 +5743,30 @@ def _is_gate_allowed_skill_doc_read(lowered: str) -> bool:
             "/scripts/demo.py",
         ]
     )
+
+
+def _is_host_semantic_specialist_skill_read(payload_type: str, lowered: str) -> bool:
+    """Treat an observed specialist skill read as the host's semantic route receipt."""
+    if payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    if not _is_gate_allowed_skill_doc_read(lowered):
+        return False
+    if "always_on_front_door" in lowered:
+        return False
+    if any(
+        marker in lowered
+        for marker in [
+            "*** begin patch",
+            "apply_patch",
+            "set-content",
+            "add-content",
+            "remove-item",
+            "move-item",
+            "copy-item",
+        ]
+    ):
+        return False
+    return True
 
 
 def _immediate_skill_event_status(
@@ -16770,6 +16873,17 @@ def _is_trusted_host_native_fast_path_receipt(
     trigger_text: str,
     work_activity_since_trigger: bool,
 ) -> bool:
+    return bool(
+        _has_trusted_host_native_fast_path_provenance(payload, text)
+        and not work_activity_since_trigger
+        and _host_native_fast_path_trigger_is_eligible(trigger_text)
+    )
+
+
+def _has_trusted_host_native_fast_path_provenance(
+    payload: Mapping[str, Any],
+    text: str,
+) -> bool:
     if not _is_valid_host_native_front_door_packet(text):
         return False
     payload_type = str(payload.get("type", ""))
@@ -16784,6 +16898,27 @@ def _is_trusted_host_native_fast_path_receipt(
 def _host_native_fast_path_trigger_is_eligible(trigger_text: str) -> bool:
     if not str(trigger_text or "").strip():
         return False
+    if _is_bounded_same_task_continuation(trigger_text):
+        return False
+    try:
+        request_act = parse_request_act(trigger_text)
+    except Exception:
+        return False
+    if _host_native_explicit_noop_lookup(trigger_text, request_act):
+        return True
+    lowered = str(trigger_text).lower()
+    if _is_kh_front_door_request(lowered) or _is_kh_active_directive(trigger_text):
+        return False
+    if _host_native_fast_path_trigger_requires_runtime(trigger_text, request_act):
+        return False
+    if (
+        _host_native_visible_context_only_question(trigger_text)
+        or _host_native_stable_word_definition(trigger_text, request_act)
+        or _host_native_stable_concept_question(trigger_text)
+        or _host_native_technology_concept_question(trigger_text)
+        or _host_native_dynamic_domain_concept_question(trigger_text)
+    ):
+        return True
     try:
         classification = classify_request(
             trigger_text,
@@ -16796,6 +16931,329 @@ def _host_native_fast_path_trigger_is_eligible(trigger_text: str) -> bool:
         and classification.recommended_execution == "direct_answer"
         and not classification.evidence_required
     )
+
+
+_HOST_NATIVE_NAMED_RESOURCE_RE = re.compile(
+    r"(?:[a-z]:[\\/]|(?:^|[\s`\"'])(?:\.{0,2}[\\/]|[a-z0-9_.-]+[\\/])[a-z0-9_.\\/-]+)"
+    r"|\b[a-z0-9_.-]+\.(?:cs|css|csv|html?|ini|java|js|json|md|py|sql|toml|ts|tsx|xml|ya?ml)\b",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_ACCESS_ACTION_RE = re.compile(
+    r"\b(?:check|count|enumerate|find|inspect|list|load|look\s+up|open|read|report|scan|search|show|summarize|verify)\b"
+    r"|\b(?:tell\s+me|update\s+me\s+on)\b"
+    r"|(?:\ud655\uc778|\uc810\uac80|\uac80\uc99d|\ucc3e|\uac80\uc0c9|\uc870\ud68c|\uc77d|\uc5f4|\ubaa9\ub85d|\ubcf4\uc5ec|\ub85c\ub4dc|\uc694\uc57d|"
+    r"\uc54c\ub824\s*(?:\uc918|\uc8fc\uc138\uc694|\uc8fc\uc2ed\uc2dc\uc624)|"
+    r"\ubcf4\uc5ec\s*(?:\uc918|\uc8fc\uc138\uc694)|\uc815\ub9ac\ud574\s*(?:\uc918|\uc8fc\uc138\uc694)|"
+    r"\uc694\uc57d\ud574\s*(?:\uc918|\uc8fc\uc138\uc694))",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_DYNAMIC_STATE_QUERY_RE = re.compile(
+    r"\b(?:active|available|current(?:ly)?|exists?|installed|latest|loaded|running|status)\b"
+    r"|(?:\ud604\uc7ac|\ucd5c\uc2e0|\uc124\uce58|\ub85c\ub4dc|\uc2e4\ud589\s*\uc911|\ud65c\uc131|\uc0c1\ud0dc|\uc874\uc7ac|\ubc84\uc804)",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_STABLE_CURRENT_CONCEPT_RE = re.compile(
+    r"\b(?:electric(?:al)?\s+)?current\b[^.!?]{0,64}"
+    r"\b(?:amperage|circuit|electricity|resistance|voltage)\b"
+    r"|\b(?:amperage|circuit|electricity|resistance|voltage)\b[^.!?]{0,64}"
+    r"\b(?:electric(?:al)?\s+)?current\b",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_VERSION_QUERY_RE = re.compile(r"\bversions?\b", re.IGNORECASE)
+_HOST_NATIVE_CONCEPTUAL_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:can|could|would)\s+you\s+(?:please\s+)?(?:define|describe|explain)|"
+    r"(?:please\s+)?(?:define|describe|explain)(?:\s+how|\s+what|\s+why)?|"
+    r"(?:please\s+)?(?:outline|summarize)\s+(?:how|what|why)|"
+    r"how\s+(?:can|do|does)|what\s+(?:are|does|is)(?!\s+in\b)|why\s+(?:do|does|is))\b"
+    r"|^\s*[\w.+#-]{1,40}(?:\uc774|\uac00|\uc740|\ub294)\s*"
+    r"(?:\ubb50\uc57c|\ubb50\uc608\uc694|\ubb34\uc5c7\uc774\uc57c|\ubb34\uc2a8\s*\ub73b\uc774\uc57c)"
+    r"|^\s*.+(?:\ub77c\ub294|\uc774\ub77c\ub294)\s*(?:\ub9d0|\ub2e8\uc5b4|\uc6a9\uc5b4).*(?:\ubb50\uc57c|\ubb34\uc2a8\s*\ub73b)"
+    r"|^\s*.+(?:\uac1c\ub150|\ub73b|\uc758\ubbf8|\ucc28\uc774|\ube44\uad50).*(?:\uc124\uba85|\uc54c\ub824)",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_WORKSPACE_TARGET_RE = re.compile(
+    r"\b(?:branch(?:es)?|checkouts?|codebases?|cwd|repositories|repository|repos?|source\s+trees?|"
+    r"working\s+director(?:y|ies)|working\s+trees?|workspaces?|worktrees?)\b"
+    r"|(?:\ube0c\ub79c\uce58|\uc800\uc7a5\uc18c|\ub808\ud3ec\uc9c0\ud1a0\ub9ac|\uccb4\ud06c\uc544\uc6c3|"
+    r"\uc791\uc5c5\s*\uacf5\uac04|\uc6cc\ud06c\s*\uc2a4\ud398\uc774\uc2a4|\uc791\uc5c5\s*\ud2b8\ub9ac|\uc6cc\ud06c\s*\ud2b8\ub9ac|"
+    r"(?:\ud604\uc7ac|\uc791\uc5c5)\s*(?:\uacbd\ub85c|\ub514\ub809\ud130\ub9ac))",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_SOURCE_ARTIFACT_RE = re.compile(
+    r"\b(?:changelogs?|change\s+logs?|commit\s+histor(?:y|ies)|git\s+status|release\s+histor(?:y|ies)|"
+    r"release\s+notes?|revision\s+histor(?:y|ies)|update\s+(?:histor(?:y|ies)|logs?))\b"
+    r"|(?:\ubcc0\uacbd\s*(?:\ub0b4\uc5ed|\uc774\ub825|\uae30\ub85d|\ub85c\uadf8|\uc0ac\ud56d)|"
+    r"(?:\uac31\uc2e0|\uc5c5\ub370\uc774\ud2b8)\s*(?:\ub0b4\uc5ed|\uc774\ub825|\uae30\ub85d|\ub85c\uadf8|\uc0ac\ud56d)|"
+    r"\ub9b4\ub9ac\uc2a4\s*(?:\ub178\ud2b8|\ub0b4\uc5ed|\uc774\ub825|\uae30\ub85d)|"
+    r"\ucee4\ubc0b\s*(?:\ub0b4\uc5ed|\uc774\ub825)|\uae43\s*\uc0c1\ud0dc)",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_FILESYSTEM_COLLECTION_RE = re.compile(
+    r"\b(?:directories|directory|files?|folders?|paths?)\b"
+    r"|(?:\ud30c\uc77c|\ud3f4\ub354|\ub514\ub809\ud130\ub9ac|\uacbd\ub85c)",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_INFORMATION_REQUEST_RE = re.compile(
+    r"\?|\b(?:how\s+many|what|which|where)\b|"
+    r"^\s*(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?|please\s+)?"
+    r"(?:check|count|enumerate|find|give\s+me|identify|inspect|list|locate|name|read|report|scan|search|show|state|summarize|"
+    r"tell\s+me|update\s+me\s+on|verify)\b|"
+    r"(?:\uc54c\ub824\s*(?:\uc918|\uc8fc\uc138\uc694|\uc8fc\uc2ed\uc2dc\uc624)|"
+    r"\ubcf4\uc5ec\s*(?:\uc918|\uc8fc\uc138\uc694)|\uc815\ub9ac\ud574\s*(?:\uc918|\uc8fc\uc138\uc694)|"
+    r"\uc694\uc57d\ud574\s*(?:\uc918|\uc8fc\uc138\uc694)|\uba87\s*\uac1c(?:\uc57c|\uc608\uc694|\uc778\uc9c0)?|"
+    r"\uac1c\uc218|\ubaa9\ub85d|"
+    r"(?:\ubb50|\ubb34\uc5c7)(?:\uc774|\uac00)?\s*.*(?:\ub4e4\uc5b4|\ub2f4\uaca8|\uc788|\uc801\ud600)|"
+    r"\ubb50\uc57c|\ubb50\uc608\uc694|\ubb50\uc9c0|\uc5b4\ub514\uc57c|\uc5b4\ub514\uc608\uc694|\uc5b4\ub514\uc9c0|"
+    r"\uc5b4\ub290\b.*\uc778\uc9c0|\uc5b4\ub5bb\uac8c\s*\ub3fc)",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_CONTEXT_BOUND_RE = re.compile(
+    r"\b(?:active|checked\s+out|current(?:ly)?|here|latest|local|my|our|this|these|those|your)\b"
+    r"|\b(?:are|do)\s+we\b|\bwe\s+(?:are|have|use)\b|"
+    r"(?:\ud604\uc7ac|\ud65c\uc131|\uc5ec\uae30|\uc6b0\ub9ac|\ub0b4)\b|"
+    r"(?:\uc774|\uadf8|\uc800|\uc704|\uc55e\uc758)\s*(?:\ud504\ub85c\uc81d\ud2b8|\ube0c\ub79c\uce58|\uc800\uc7a5\uc18c|"
+    r"\ub808\ud3ec\uc9c0\ud1a0\ub9ac|\uccb4\ud06c\uc544\uc6c3|\uc791\uc5c5\s*\uacf5\uac04|\uc6cc\ud06c\s*\uc2a4\ud398\uc774\uc2a4|"
+    r"\uc791\uc5c5\s*\ud2b8\ub9ac|\uc6cc\ud06c\s*\ud2b8\ub9ac|\ud30c\uc77c|\ud3f4\ub354|\ub514\ub809\ud130\ub9ac|\uacbd\ub85c)",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_COLLECTION_SCOPE_RE = re.compile(
+    r"\b(?:in|inside|under|within|from)\s+(?:the\s+)?(?:current\s+)?"
+    r"(?:checkout|codebase|cwd|project|repo|repository|source|src|tests?|workspace|worktree)\b|"
+    r"(?:\ud504\ub85c\uc81d\ud2b8|\uc800\uc7a5\uc18c|\ub808\ud3ec\uc9c0\ud1a0\ub9ac|\uc791\uc5c5\s*\uacf5\uac04|"
+    r"\uc6cc\ud06c\s*\uc2a4\ud398\uc774\uc2a4|src|tests?)\s*(?:\uc548|\uc544\ub798|\ub0b4\ubd80|\uc5d0|\uc5d0\uc11c|\uc758)",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_DEFINITE_WORKSPACE_RE = re.compile(
+    r"\bthe\s+(?:active\s+|current\s+|local\s+)?"
+    r"(?:branch|checkout|codebase|repository|repo|workspace|worktree)\b",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_VISIBLE_CONTEXT_RE = re.compile(
+    r"\bwhat\s+did\s+(?:i|you)\s+just\s+(?:ask|say|write)\b|"
+    r"\b(?:answer|message|paragraph|question|request|sentence|text|wording)\s+"
+    r"(?:that\s+)?(?:i|you)\s+just\s+(?:asked|said|wrote)\b|"
+    r"\b(?:my|the|your)\s+(?:last|previous)\s+"
+    r"(?:answer|message|paragraph|question|request|sentence|text|wording)\b|"
+    r"\b(?:answer|message|paragraph|question|request|sentence|text|wording)\s+above\b|"
+    r"(?:\ubc29\uae08|\uc9c1\uc804|\uc774\uc804|(?:\ubc14\ub85c\s*)?\uc704(?:\uc5d0)?|(?:\ubc14\ub85c\s*)?\uc55e(?:\uc5d0|\uc5d0\uc11c)?)\s*"
+    r"(?:\ub0b4\uac00|\ub124\uac00|\uc0ac\uc6a9\uc790\uac00)?\s*"
+    r"(?:\uc4f4|\uc791\uc131\ud55c|\ub9d0\ud55c|\ubb3c\uc740|\ubcf4\ub0b8)?\s*"
+    r"(?:\ubb38\uc7a5|\uba54\uc2dc\uc9c0|\uc9c8\ubb38|\uc694\uccad|\ub2f5\ubcc0|\uae00|\ud14d\uc2a4\ud2b8|\ub0b4\uc6a9)|"
+    r"(?:\ub0b4\uac00|\ub124\uac00|\uc0ac\uc6a9\uc790\uac00)\s*\ubc29\uae08\s*"
+    r"(?:\uc4f4|\uc791\uc131\ud55c|\ub9d0\ud55c|\ubb3c\uc740|\ubcf4\ub0b8)\s*"
+    r"(?:\ubb38\uc7a5|\uba54\uc2dc\uc9c0|\uc9c8\ubb38|\uc694\uccad|\ub2f5\ubcc0|\uae00|\ud14d\uc2a4\ud2b8|\ub0b4\uc6a9)",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_VISIBLE_CONTEXT_ACTION_RE = re.compile(
+    r"^\s*(?:what\s+did\s+(?:i|you)\s+just\s+(?:ask|say|write)|"
+    r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?|please\s+)?"
+    r"(?:paraphrase|quote|repeat|restate|summarize|translate)\b|"
+    r".*(?:\uc694\uc57d|\uc815\ub9ac|\ub2e4\uc2dc\s*\ub9d0|\ubc14\uafd4\s*\ub9d0|\ubc18\ubcf5|\ubc88\uc5ed|\uc778\uc6a9)"
+    r"(?:\ud574\s*)?(?:\uc918|\uc8fc\uc138\uc694))",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_WORD_DEFINITION_FORM_RE = re.compile(
+    r"^\s*(?:define\b|explain\s+(?:the\s+)?(?:concept|meaning|term)\b|what\s+(?:does\b.*\bmean|is|are)\b)|"
+    r"^\s*[\w.+#-]{1,40}(?:\uc774|\uac00|\uc740|\ub294)\s*"
+    r"(?:\ubb50\uc57c|\ubb50\uc608\uc694|\ubb34\uc5c7\uc774\uc57c|\ubb34\uc2a8\s*\ub73b\uc774\uc57c)|"
+    r"(?:\ub77c\ub294|\uc774\ub77c\ub294)\s*(?:\ub9d0|\ub2e8\uc5b4|\uc6a9\uc5b4).*(?:\ubb50\uc57c|\ubb34\uc2a8\s*\ub73b)|"
+    r"(?:\uac1c\ub150|\ub73b|\uc758\ubbf8).*(?:\uc124\uba85|\uc54c\ub824)",
+    re.IGNORECASE,
+)
+_HOST_NATIVE_PROPER_TECHNOLOGY_RE = re.compile(
+    r"\b[A-Z][A-Za-z0-9+_-]*\.[A-Za-z][A-Za-z0-9]*\b"
+)
+_HOST_NATIVE_STATE_SUBJECT_RE = re.compile(
+    r"\b(?:app|application|branch|checkout|deployment|environment|installation|package|plugin|process|"
+    r"release|repo|repository|runtime|service|session|status|version|workspace|worktree)\b|"
+    r"(?:\uc571|\uc560\ud50c\ub9ac\ucf00\uc774\uc158|\ube0c\ub79c\uce58|\uccb4\ud06c\uc544\uc6c3|\ubc30\ud3ec|\ud658\uacbd|\uc124\uce58|"
+    r"\ud328\ud0a4\uc9c0|\ud50c\ub7ec\uadf8\uc778|\ud504\ub85c\uc138\uc2a4|\ub9b4\ub9ac\uc2a4|\ub7f0\ud0c0\uc784|\uc11c\ube44\uc2a4|"
+    r"\uc138\uc158|\uc0c1\ud0dc|\ubc84\uc804|\uc800\uc7a5\uc18c|\uc791\uc5c5\s*\uacf5\uac04|\uc6cc\ud06c\s*\ud2b8\ub9ac)",
+    re.IGNORECASE,
+)
+
+
+def _host_native_visible_context_only_question(text: str) -> bool:
+    return bool(
+        _HOST_NATIVE_VISIBLE_CONTEXT_RE.search(text)
+        and _HOST_NATIVE_VISIBLE_CONTEXT_ACTION_RE.search(text)
+    )
+
+
+def _host_native_stable_word_definition(text: str, request_act: Any) -> bool:
+    if not _HOST_NATIVE_WORD_DEFINITION_FORM_RE.search(text):
+        return False
+    clauses = tuple(getattr(request_act, "clauses", ()) or ())
+    if any(
+        clause.authorized or (clause.mutating and not clause.negated)
+        for clause in clauses
+    ):
+        return False
+    return not bool(
+        _HOST_NATIVE_CONTEXT_BOUND_RE.search(text)
+        or _HOST_NATIVE_COLLECTION_SCOPE_RE.search(text)
+        or _HOST_NATIVE_DEFINITE_WORKSPACE_RE.search(text)
+        or _HOST_NATIVE_NAMED_RESOURCE_RE.search(text)
+        or _HOST_NATIVE_STATE_SUBJECT_RE.search(text)
+    )
+
+
+_HOST_NATIVE_GENERIC_MECHANISM_RE = re.compile(
+    r"^\s*(?:(?:can|could|would)\s+you\s+(?:please\s+)?|please\s+)?"
+    r"(?:describe|explain|outline|summarize)\s+how\b.*\b(?:behaves?|functions?|works?)\b",
+    re.IGNORECASE,
+)
+
+
+def _host_native_stable_concept_question(text: str) -> bool:
+    if (
+        _HOST_NATIVE_CONTEXT_BOUND_RE.search(text)
+        or _HOST_NATIVE_COLLECTION_SCOPE_RE.search(text)
+        or _HOST_NATIVE_DEFINITE_WORKSPACE_RE.search(text)
+        or _HOST_NATIVE_NAMED_RESOURCE_RE.search(text)
+    ):
+        return False
+    if _HOST_NATIVE_GENERIC_MECHANISM_RE.search(text):
+        return True
+    return bool(
+        _HOST_NATIVE_CONCEPTUAL_PREFIX_RE.search(text)
+        and not _HOST_NATIVE_ACCESS_ACTION_RE.search(text)
+    )
+
+
+def _host_native_technology_concept_question(text: str) -> bool:
+    return bool(
+        _HOST_NATIVE_PROPER_TECHNOLOGY_RE.search(text)
+        and _HOST_NATIVE_CONCEPTUAL_PREFIX_RE.search(text)
+        and not _HOST_NATIVE_ACCESS_ACTION_RE.search(text)
+        and not _HOST_NATIVE_CONTEXT_BOUND_RE.search(text)
+        and not _HOST_NATIVE_STATE_SUBJECT_RE.search(text)
+    )
+
+
+def _host_native_dynamic_domain_concept_question(text: str) -> bool:
+    return bool(
+        _HOST_NATIVE_STABLE_CURRENT_CONCEPT_RE.search(text)
+        and _HOST_NATIVE_CONCEPTUAL_PREFIX_RE.search(text)
+        and not _HOST_NATIVE_ACCESS_ACTION_RE.search(text)
+        and not _HOST_NATIVE_STATE_SUBJECT_RE.search(text)
+    )
+
+
+def _host_native_named_resource_requires_runtime(text: str) -> bool:
+    if not _HOST_NATIVE_NAMED_RESOURCE_RE.search(text):
+        return False
+    return not _host_native_technology_concept_question(text)
+
+
+def _host_native_dynamic_state_requires_runtime(text: str) -> bool:
+    if not _HOST_NATIVE_DYNAMIC_STATE_QUERY_RE.search(text):
+        return False
+    return not _host_native_dynamic_domain_concept_question(text)
+
+
+def _host_native_clause_requests_authorized_mutation(clause: Any) -> bool:
+    return bool(
+        clause.authorized
+        and (clause.mutating or "execute" in clause.action_classes)
+    )
+
+
+def _host_native_explicit_noop_lookup(text: str, request_act: Any) -> bool:
+    clauses = tuple(getattr(request_act, "clauses", ()) or ())
+    return bool(
+        clauses
+        and _HOST_NATIVE_ACCESS_ACTION_RE.search(text)
+        and any("inspect" in clause.action_classes for clause in clauses)
+        and not any(clause.authorized for clause in clauses)
+        and all(clause.negated or clause.explicit_nonexecution for clause in clauses)
+    )
+
+
+def _host_native_source_or_workspace_query_requires_runtime(text: str) -> bool:
+    workspace_target = bool(_HOST_NATIVE_WORKSPACE_TARGET_RE.search(text))
+    source_artifact = bool(_HOST_NATIVE_SOURCE_ARTIFACT_RE.search(text))
+    collection_target = bool(_HOST_NATIVE_FILESYSTEM_COLLECTION_RE.search(text))
+    if not (workspace_target or source_artifact or collection_target):
+        return False
+    if not _HOST_NATIVE_INFORMATION_REQUEST_RE.search(text):
+        return False
+
+    context_bound = bool(
+        _HOST_NATIVE_CONTEXT_BOUND_RE.search(text)
+        or _HOST_NATIVE_COLLECTION_SCOPE_RE.search(text)
+        or _HOST_NATIVE_DEFINITE_WORKSPACE_RE.search(text)
+    )
+    stable_conceptual = bool(
+        not context_bound and _host_native_stable_concept_question(text)
+    )
+    if stable_conceptual:
+        return False
+
+    if workspace_target or source_artifact:
+        return True
+    return bool(
+        context_bound
+        or _HOST_NATIVE_ACCESS_ACTION_RE.search(text)
+        or re.search(r"\bhow\s+many\b", text, re.IGNORECASE)
+        or re.search(r"(?:\uba87\s*\uac1c|\uac1c\uc218)", text)
+    )
+
+
+def _host_native_fast_path_trigger_requires_runtime(
+    trigger_text: str,
+    request_act: Any = None,
+) -> bool:
+    text = str(trigger_text or "").strip()
+    if not text:
+        return True
+    if request_act is None:
+        try:
+            request_act = parse_request_act(text)
+        except Exception:
+            return True
+
+    if _host_native_explicit_noop_lookup(text, request_act):
+        return False
+
+    if any(
+        _host_native_clause_requests_authorized_mutation(clause)
+        for clause in request_act.clauses
+    ):
+        return True
+    if _host_native_named_resource_requires_runtime(text):
+        return True
+    if _host_native_source_or_workspace_query_requires_runtime(text):
+        return True
+
+    action_requires_access = bool(_HOST_NATIVE_ACCESS_ACTION_RE.search(text))
+    dynamic_state_lookup = _host_native_dynamic_state_requires_runtime(text)
+    version_lookup = bool(
+        action_requires_access and _HOST_NATIVE_VERSION_QUERY_RE.search(text)
+    )
+    if dynamic_state_lookup or version_lookup:
+        return True
+
+    conceptual = bool(_HOST_NATIVE_CONCEPTUAL_PREFIX_RE.search(text))
+    if conceptual:
+        return False
+
+    stateful_targets = {
+        "cloud_resource",
+        "credential",
+        "database",
+        "filesystem",
+        "orchestrated_resource",
+        "protection",
+        "source",
+        "storage_device",
+    }
+    target_classes = {
+        target
+        for clause in request_act.clauses
+        for target in clause.target_classes
+    }
+    return bool(action_requires_access and target_classes & stateful_targets)
 
 
 def _is_valid_micro_front_door_packet(data: Dict[str, Any]) -> bool:
@@ -17304,6 +17762,31 @@ def _acceptance_for_skill(
         "required_outputs": required_outputs,
         "satisfied_outputs": satisfied_outputs,
         "missing_outputs": missing_outputs,
+    }
+
+
+def _front_door_route_acceptance(
+    evidence: Mapping[str, Any],
+    *,
+    default: Dict[str, Any],
+) -> Dict[str, Any]:
+    request_count = int(evidence.get("request_count", 0) or 0)
+    satisfied_count = int(evidence.get("satisfied_request_count", 0) or 0)
+    selection_modes = list(evidence.get("selection_modes", []) or [])
+    valid_modes = {"direct", "host_receipt", "runtime", "specialist"}
+    if not (
+        evidence.get("all_requests_satisfied") is True
+        and request_count > 0
+        and satisfied_count == request_count
+        and len(selection_modes) == request_count
+        and all(mode in valid_modes for mode in selection_modes)
+    ):
+        return default
+    return {
+        "status": "passed",
+        "required_outputs": ["routing_evidence", "selection_evidence"],
+        "satisfied_outputs": ["routing_evidence", "selection_evidence"],
+        "missing_outputs": [],
     }
 
 

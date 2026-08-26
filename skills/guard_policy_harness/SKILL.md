@@ -44,6 +44,8 @@ If the exact path is outside the current writable workspace or requires sandbox 
 
 This also forbids creating workspace-root project files, stack-specific generated files, documents, images, drawings, or generated data files before exact-path permission is available. Execution approval is not permission to stage elsewhere. Permission or write-boundary approval must happen before content generation, not before copy-back.
 
+Generate only approved project-appropriate deliverables inside the approved target boundary.
+
 ## External Benchmark Recipe
 
 Use this harness before any risky command or file write:

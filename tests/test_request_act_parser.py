@@ -182,6 +182,240 @@ class RequestActParserTests(unittest.TestCase):
         self.assertIn("named_file", analysis.clauses[0].scopes)
         self.assertFalse(analysis.authorized_high_impact_destructive)
 
+    def test_runtime_mutation_verb_families_are_centrally_authorized(self):
+        cases = {
+            "Set the KH plugin to 2.9.145.": "set",
+            "Switch the KH plugin to 2.9.145.": "switch",
+            "Downgrade the KH plugin to 2.9.143.": "downgrade",
+            "Sync the KH plugin.": "sync",
+            "Pin the KH plugin to 2.9.145.": "pin",
+            "Upgrade the KH plugin.": "upgrade",
+            "Install the KH plugin.": "install",
+        }
+
+        for prompt, expected_verb in cases.items():
+            with self.subTest(prompt=prompt):
+                analysis = parse_request_act(prompt)
+                clause = analysis.clauses[0]
+                self.assertIn(expected_verb, clause.action_verbs)
+                self.assertTrue(clause.mutating)
+                self.assertTrue(clause.authorized)
+                self.assertTrue(analysis.has_mutation_authorization)
+
+    def test_bring_up_to_date_distinguishes_mutation_from_status_report(self):
+        mutation = parse_request_act("Bring the KH plugin up to date.")
+        report = parse_request_act("Bring me up to date on the KH plugin.")
+
+        self.assertEqual(mutation.clauses[0].action_verbs, ("update",))
+        self.assertTrue(mutation.has_mutation_authorization)
+        self.assertEqual(report.clauses[0].action_verbs, ("report",))
+        self.assertFalse(report.has_mutation_authorization)
+
+    def test_runtime_mutation_negation_and_advice_are_not_authorization(self):
+        prompts = (
+            "Do not downgrade the KH plugin.",
+            "Never switch the KH plugin version.",
+            "How do I sync the KH plugin?",
+            "Should we pin the KH plugin to 2.9.145?",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                analysis = parse_request_act(prompt)
+                self.assertTrue(any(clause.mutating for clause in analysis.clauses))
+                self.assertFalse(analysis.has_mutation_authorization)
+
+    def test_korean_completed_runtime_action_is_state_not_authorization(self):
+        status = parse_request_act(
+            "\uc5c5\ub370\uc774\ud2b8 \ub410\ub294\uc9c0 \ud655\uc778 \uc880"
+        )
+        command = parse_request_act("\uc5c5\ub370\uc774\ud2b8\ud574\uc918")
+
+        self.assertTrue(status.clauses[0].mutating)
+        self.assertFalse(status.has_mutation_authorization)
+        self.assertTrue(command.has_mutation_authorization)
+
+    def test_semantic_versions_are_not_misread_as_named_files(self):
+        semantic_version = parse_request_act("Set the KH plugin to 2.9.145.")
+        source_file = parse_request_act("Check the version in package.json.")
+
+        self.assertNotIn("named_file", semantic_version.clauses[0].scopes)
+        self.assertIn("named_file", source_file.clauses[0].scopes)
+
+    def test_explicit_kh_target_is_inherited_only_by_runtime_sequence(self):
+        downgrade = parse_request_act(
+            "KH가 최신인지 확인한 뒤 2.9.143으로 내려줘."
+        )
+        readonly = parse_request_act(
+            "KH는 업데이트하지 말고 설치된 버전만 알려줘."
+        )
+        unrelated = parse_request_act(
+            "Check KH plugin version, then update the inventory dashboard."
+        )
+
+        self.assertEqual(downgrade.clauses[-1].semantic_target, "kh")
+        self.assertTrue(downgrade.clauses[-1].runtime_related)
+        self.assertEqual(readonly.clauses[-1].semantic_target, "kh")
+        self.assertTrue(readonly.clauses[-1].runtime_related)
+        self.assertEqual(unrelated.clauses[-1].semantic_target, "other")
+        self.assertFalse(unrelated.clauses[-1].runtime_related)
+
+    def test_version_mutation_back_binds_to_explicit_kh_clarification(self):
+        analysis = parse_request_act(
+            "2.9.145로 바꿔줘. 내가 말한 대상은 KH 플러그인이야."
+        )
+
+        self.assertEqual(analysis.clauses[0].semantic_target, "kh")
+        self.assertTrue(analysis.clauses[0].runtime_related)
+
+    def test_runtime_mutation_phrase_and_korean_command_families(self):
+        cases = (
+            ("Roll back the KH plugin to 2.9.143.", "rollback"),
+            ("Roll the KH plugin back to 2.9.143.", "rollback"),
+            ("KH \ud50c\ub7ec\uadf8\uc778\uc744 2.9.145\ub85c \uc124\uc815\ud574\uc918.", "\uc124\uc815"),
+            ("KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 2.9.145\ub85c \ub9de\ucdb0\uc918.", "\ub9de\ucdb0"),
+            ("KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 \ubc14\uafd4\uc918.", "\ubc14\uafd4"),
+            ("KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 2.9.143\uc73c\ub85c \ub0b4\ub824\uc918.", "\ub0b4\ub824"),
+            ("KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 \uc62c\ub824\uc918.", "\uc62c\ub824"),
+            ("KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 \uace0\uc815\ud574\uc918.", "\uace0\uc815"),
+            ("KH \ud50c\ub7ec\uadf8\uc778\uc744 \ub3d9\uae30\ud654\ud574\uc918.", "\ub3d9\uae30\ud654"),
+        )
+
+        for prompt, expected_verb in cases:
+            with self.subTest(prompt=prompt):
+                analysis = parse_request_act(prompt)
+                self.assertIn(expected_verb, analysis.clauses[0].action_verbs)
+                self.assertTrue(analysis.has_mutation_authorization)
+
+    def test_conditional_and_sequenced_mutation_is_authorized_by_parser(self):
+        prompts = (
+            "Check the KH plugin version and if stale, upgrade it.",
+            "Check the KH plugin version; afterward upgrade it.",
+            "Check the KH plugin version. Upgrade it later.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                analysis = parse_request_act(prompt)
+                self.assertTrue(analysis.has_mutation_authorization)
+                self.assertTrue(
+                    any(clause.authorized and clause.mutating for clause in analysis.clauses)
+                )
+
+    def test_modal_negation_and_nominal_action_words_do_not_authorize(self):
+        prompts = (
+            "Could you not upgrade the KH plugin?",
+            "Commit messages should be clear.",
+            "Upgrade notes are missing.",
+            "What is a set?",
+            "\uc5c5\ub370\uc774\ud2b8\ub77c\ub294 \ub2e8\uc5b4 \ub73b\uc744 \uc124\uba85\ud574\uc918.",
+            "\uc124\uce58 \ubbf8\uc220\uc774\ub780 \ubb34\uc5c7\uc778\uac00?",
+            "\ucc98\ub9ac \uc131\ub2a5\uc774 \ub290\ub9ac\ub2e4.",
+            "\uc124\uc815 \uac12\uc774 \uc774\uc0c1\ud558\ub2e4.",
+            "\uc5c5\ub370\uc774\ud2b8 \ub0b4\uc6a9\uc774 \ub204\ub77d\ub410\ub2e4.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                analysis = parse_request_act(prompt)
+                self.assertFalse(analysis.has_mutation_authorization)
+
+        for prompt in prompts[1:]:
+            with self.subTest(contract="nominal", prompt=prompt):
+                analysis = parse_request_act(prompt)
+                self.assertFalse(any(clause.mutating for clause in analysis.clauses))
+
+    def test_referential_korean_polite_mutation_remains_unresolved_without_context(self):
+        analysis = parse_request_act(
+            "\uadf8 \uc5c5\ub370\uc774\ud2b8 \ucc98\ub9ac\ud574\uc8fc\uc2e4 \uc218 \uc788\uc744\uae4c\uc694?"
+        )
+
+        self.assertTrue(analysis.has_mutation_authorization)
+        self.assertTrue(analysis.clauses[0].referential_target)
+        self.assertTrue(analysis.unresolved_referential_mutation)
+
+    def test_parenthesized_conditional_connectors_preserve_mutation_authorization(self):
+        prompts = (
+            "Check the KH plugin version and, if stale, upgrade it.",
+            "Check the KH plugin version and (if stale) upgrade it.",
+            "Check the KH plugin version and, only if stale, upgrade it.",
+            "Check the KH plugin version and (only if stale) upgrade it.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                analysis = parse_request_act(prompt)
+                self.assertTrue(analysis.has_mutation_authorization)
+                self.assertEqual(len(analysis.clauses), 2)
+
+    def test_stable_domain_concepts_and_negated_lookups_are_non_mutating(self):
+        conceptual = (
+            "Explain installation art.",
+            "Explain the concept of installation art.",
+            "\uc124\uce58 \ubbf8\uc220\uc758 \uac1c\ub150\uc744 \uc124\uba85\ud574\uc918.",
+        )
+        for prompt in conceptual:
+            with self.subTest(contract="conceptual", prompt=prompt):
+                analysis = parse_request_act(prompt)
+                self.assertFalse(analysis.has_mutation_authorization)
+
+        for prompt in (
+            "Do not check the KH plugin version.",
+            "Do not verify whether Git is installed.",
+            "Do not read the version from package.json.",
+        ):
+            with self.subTest(contract="negative-lookup", prompt=prompt):
+                analysis = parse_request_act(prompt)
+                self.assertFalse(analysis.has_mutation_authorization)
+                self.assertTrue(all(clause.negated for clause in analysis.clauses))
+
+    def test_runtime_and_source_mutation_inflections_are_authorized(self):
+        prompts = (
+            "Synchronize the installed KH plugin with codex-runtime.",
+            "Revert KH UAF to 2.9.143 and keep it there.",
+            "Make the KH marketplace package current.",
+            "KH \ud50c\ub7ec\uadf8\uc778\uc744 2.9.145 \ubc84\uc804\uc73c\ub85c \uc804\ud658\ud574\uc918.",
+            "\uc124\uce58\ub41c KH\ub97c 2.9.145 \ub9b4\ub9ac\uc2a4\ub85c \ub9de\ucdb0 \ub194.",
+            "KH\ub97c 2.9.143\uc73c\ub85c \ub0b4\ub824\ub194.",
+            "Revise the KH README installation paragraph.",
+            "Extend the KH classifier test file with a negation case.",
+            "KH README\uc758 \uc624\ud504\ub77c\uc778 \uc124\uce58 \uc608\uc2dc\ub97c \ubc14\ub85c\uc7a1\uc544\uc918.",
+            "KH \ubd84\ub958\uae30 \ud14c\uc2a4\ud2b8 \ud30c\uc77c\uc5d0 \ubd80\uc815\ubb38 \ucf00\uc774\uc2a4\ub97c \ub123\uc5b4\uc918.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                self.assertTrue(parse_request_act(prompt).has_mutation_authorization)
+
+    def test_passive_installed_status_is_not_mutation_authorization(self):
+        analysis = parse_request_act(
+            "Can you verify whether the installed KH package is already at 2.9.145?"
+        )
+
+        self.assertFalse(analysis.has_mutation_authorization)
+
+    def test_decimal_values_do_not_become_runtime_versions(self):
+        cases = (
+            "Should I update my portfolio target to 60.0% equities?",
+            "Upgrade Kubernetes to 1.30.",
+            "Change this SQL constant to 2.0.",
+        )
+
+        for prompt in cases:
+            with self.subTest(prompt=prompt):
+                analysis = parse_request_act(prompt)
+                self.assertFalse(any(clause.runtime_related for clause in analysis.clauses))
+
+    def test_unrelated_following_mutation_does_not_inherit_prior_runtime_target(self):
+        analysis = parse_request_act(
+            "Check the Python runtime version. Then update the invoice total to 2.0."
+        )
+
+        self.assertEqual(len(analysis.clauses), 2)
+        self.assertTrue(analysis.clauses[0].runtime_related)
+        self.assertFalse(analysis.clauses[1].runtime_related)
+        self.assertEqual(analysis.clauses[1].semantic_target, "other")
+
 
 if __name__ == "__main__":
     unittest.main()

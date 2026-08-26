@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.144",
-  "description": "KH UAF provides an auditable front-door runtime, packaged workflow skills, development progress state, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows. The packaged always-on-front-door skill directly requests KH intake for every new conversation and user task but cannot guarantee host auto-selection; runtime receipts and session audits prove actual use.",
+  "version": "2.9.145",
+  "description": "KH UAF provides semantically selected workflow skills, optional governed runtime audits, scoped state, development progress state, role-based orchestration, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -25,8 +25,8 @@
   },
   "interface": {
     "displayName": "KH UAF",
-    "shortDescription": "Personal UAF skillbook with auditable front-door intake.",
-    "longDescription": "KH UAF packages host-readable workflow skills, runtime gates, scoped memory, token telemetry, role orchestration, GoalState, progress state, and quality checks. Its packaged always-on-front-door skill directly requests routing for every new conversation and user task but cannot guarantee host auto-selection or plugin injection; prove actual use with runtime receipts, session audits, and installed cache paths.",
+    "shortDescription": "Personal skillbook with lightweight semantic routing.",
+    "longDescription": "KH UAF packages host-readable workflow skills, optional runtime gates, scoped memory, token telemetry, role orchestration, GoalState, progress state, and quality checks. Its front door uses host semantic selection for ordinary work and reserves Python routing for explicit audits, unresolved provider conflicts, and governed high-risk or large workflows. Before any Git executable, KH runs a filesystem-only workspace gate against the exact target. Non-Git targets run no Git/GitHub commands or retries.",
     "developerName": "KH UAF",
     "category": "Productivity",
     "capabilities": [

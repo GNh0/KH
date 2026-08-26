@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.144",
-  "description": "KH UAF provides an auditable front-door runtime, packaged workflow skills, development progress state, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows. The packaged always-on-front-door skill directly requests KH intake for every new conversation and user task but cannot guarantee host auto-selection; runtime receipts and session audits prove actual use.",
+  "version": "2.9.145",
+  "description": "KH UAF provides semantically selected workflow skills, optional governed runtime audits, scoped state, development progress state, role-based orchestration, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "artifact_layout": {
@@ -31,12 +31,12 @@
     },
     {
       "name": "always-on-front-door",
-      "description": "Host-visible bootstrap skill that must run KH front-door intake before MEMORY.md lookup, target or sibling folder inspection, source exploration, other skills/plugins, subagent dispatch, or verification work.",
-      "usage": "python skills/always_on_front_door/scripts/front_door.py --prompt-file \"<utf8 prompt file>\" --project \"<target project>\" --host codex --summary --strict-execution-gate"
+      "description": "Host-visible bootstrap skill that semantically selects the smallest matching direct, specialist, or governed workflow without requiring Python for clear requests.",
+      "usage": "Read skills/always_on_front_door/SKILL.md; run scripts/front_door.py only for deterministic audit or governed routing."
     },
     {
       "name": "automatic-intake-harness",
-      "description": "Run KH intake for every new user request or task even when the user did not name KH, UAF, a skill, or a harness; let the runtime choose direct or governed execution.",
+      "description": "Support semantic intake without requiring KH names; use deterministic runtime classification only when its evidence is needed.",
       "usage": "python skills/always_on_front_door/scripts/front_door.py --prompt-file \"<utf8 prompt file>\" --project \"<target project>\" --host codex --summary --strict-execution-gate"
     },
     {
@@ -51,7 +51,7 @@
     },
     {
       "name": "kh-front-door",
-      "description": "Executable KH intake router that resolves the current skill source, rejects stale plugin cache paths, classifies the request, composes the provider route, and returns selected skill evidence before source work starts.",
+      "description": "Optional executable audit router that resolves the current skill source, rejects stale plugin cache paths, classifies governed requests, and returns reproducible selection evidence.",
       "usage": "python skills/always_on_front_door/scripts/front_door.py --prompt-file \"<utf8 prompt file>\" --project \"<target project>\" --host codex --summary --strict-execution-gate"
     },
     {

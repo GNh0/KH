@@ -135,6 +135,48 @@ REQUEST_ACT_MATRIX = [
         "role_dag",
     ),
     (
+        "runtime-rollback-en",
+        "Roll the KH plugin back to 2.9.143.",
+        {},
+        "heavy",
+        "role_dag",
+    ),
+    (
+        "runtime-conditional-en",
+        "Check the KH plugin version and if stale, upgrade it.",
+        {},
+        "heavy",
+        "role_dag",
+    ),
+    (
+        "runtime-excluded-target-en",
+        "Upgrade it, but not the KH plugin.",
+        {},
+        "ambiguous",
+        "clarify",
+    ),
+    (
+        "runtime-state-ko",
+        "Datadog Agent\uac00 \uc5b4\ub290 \ubc84\uc804\uc73c\ub85c \uc2e4\ud589 \uc911\uc778\uc9c0 \uc54c\ub824\uc918.",
+        {},
+        "medium",
+        "skill_read",
+    ),
+    (
+        "source-version-ko",
+        "package.json\uc5d0 \uc120\uc5b8\ub41c \ubc84\uc804\uc744 \ud655\uc778\ud574\uc918.",
+        {},
+        "medium",
+        "skill_read",
+    ),
+    (
+        "nominal-action-en",
+        "Commit messages should be clear.",
+        {},
+        "light",
+        "direct_answer",
+    ),
+    (
         "multi-file-project",
         "Implement the API, UI, database migration, and end-to-end tests across the project.",
         {},
@@ -212,6 +254,79 @@ class FrontDoorRequestActBenchmarkTests(unittest.TestCase):
                     result.execution_gate["status"],
                     "blocked_until_large_work_preflight",
                 )
+
+    def test_runtime_boundary_parser_classifier_and_gate_agree(self):
+        cases = (
+            (
+                "Roll the KH plugin back to 2.9.143.",
+                True,
+                "heavy",
+                "role_dag",
+                "blocked_until_large_work_preflight",
+            ),
+            (
+                "Check the KH plugin version and if stale, upgrade it.",
+                True,
+                "heavy",
+                "role_dag",
+                "blocked_until_large_work_preflight",
+            ),
+            (
+                "Could you please not upgrade the KH plugin?",
+                False,
+                "light",
+                "direct_answer",
+                "execution_allowed_after_selected_skill_setup",
+            ),
+            (
+                "Upgrade it, but not the KH plugin.",
+                True,
+                "ambiguous",
+                "clarify",
+                "blocked_until_clarification",
+            ),
+            (
+                "Datadog Agent\uac00 \uc5b4\ub290 \ubc84\uc804\uc73c\ub85c \uc2e4\ud589 \uc911\uc778\uc9c0 \uc54c\ub824\uc918.",
+                False,
+                "medium",
+                "skill_read",
+                "execution_allowed_after_selected_skill_setup",
+            ),
+            (
+                "package.json\uc5d0 \uc120\uc5b8\ub41c \ubc84\uc804\uc744 \ud655\uc778\ud574\uc918.",
+                False,
+                "medium",
+                "skill_read",
+                "execution_allowed_after_selected_skill_setup",
+            ),
+            (
+                "\uadf8 \uc5c5\ub370\uc774\ud2b8 \ucc98\ub9ac\ud574\uc8fc\uc2e4 \uc218 \uc788\uc744\uae4c\uc694?",
+                True,
+                "ambiguous",
+                "clarify",
+                "blocked_until_clarification",
+            ),
+        )
+
+        for prompt, authorized, complexity, execution, gate_status in cases:
+            with self.subTest(prompt=prompt):
+                analysis = parse_request_act(prompt)
+                classification = classify_request(prompt, request_analysis=analysis)
+                front_door = build_kh_front_door(
+                    prompt,
+                    project=".",
+                    host="codex",
+                    micro=True,
+                )
+                self.assertEqual(analysis.has_mutation_authorization, authorized)
+                self.assertEqual(classification.complexity, complexity)
+                self.assertEqual(classification.recommended_execution, execution)
+                self.assertEqual(front_door.classification["complexity"], complexity)
+                self.assertEqual(
+                    front_door.classification["recommended_execution"],
+                    execution,
+                )
+                self.assertEqual(front_door.execution_gate["status"], gate_status)
 
     def test_direct_kh_latency_and_meta_questions_stay_direct(self):
         cases = [

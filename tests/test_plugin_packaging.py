@@ -425,9 +425,9 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
 
         self.assertIn("sql-formatting", catalog_names)
         self.assertIn("sql-formatting", root_skill_names)
-        self.assertEqual(root_manifest["version"], "2.9.144")
-        self.assertEqual(codex_manifest["version"], "2.9.144")
-        self.assertEqual(agent_manifest["version"], "2.9.144")
+        self.assertEqual(root_manifest["version"], "2.9.145")
+        self.assertEqual(codex_manifest["version"], "2.9.145")
+        self.assertEqual(agent_manifest["version"], "2.9.145")
         for manifest in [root_manifest, codex_manifest]:
             with self.subTest(manifest=manifest["description"]):
                 layout = manifest["artifact_layout"]
@@ -479,7 +479,7 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
             {manifest["description"] for manifest in manifests},
             {root_manifest["description"]},
         )
-        self.assertIn("cannot guarantee host auto-selection", root_manifest["description"])
+        self.assertIn("semantically selected workflow skills", root_manifest["description"])
 
         self.assertGreaterEqual(_version_tuple(root_manifest["version"]), (2, 9, 10))
 
@@ -528,9 +528,9 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
         )
 
         for marker in (
-            "cannot guarantee host auto-selection",
-            "Audit compliance",
-            "normal machine bootstrap",
+            "Automatic discovery still depends on the host",
+            "no manifest or skill can guarantee host invocation",
+            "host-native semantic selection",
             "current unfinished task",
             "task completion",
             "new task",

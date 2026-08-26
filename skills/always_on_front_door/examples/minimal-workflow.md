@@ -2,59 +2,69 @@
 
 ## Scenario
 
-User says:
+The host must distinguish three requests without loading the whole catalog.
 
-```text
-Create the approved project-appropriate deliverables in this folder and verify them.
-```
+### Direct request
 
-The user did not name KH, UAF, skills, or harnesses.
+User: `What does idempotent mean?`
 
-The same semantic intake applies to short requests. `1+1?` and a context-free `Translate hello` may use the host-native fast path. `Format this SQL: SELECT ...` requires the SQL specialist runtime route.
+Expected path: answer directly. Do not run Python, open another skill, or emit routing telemetry.
 
-It also applies before a clarification such as `Which folder should I use?`; asking a question is still a response to a new user task.
+### Specialist request
+
+User: `Format this SQL without changing its behavior.`
+
+Expected path:
+
+1. Select `sql-formatting` from its description.
+2. Read only that skill and any support file it explicitly requires.
+3. Preserve the SQL contract and run its packaged verifier.
+4. Return the formatted SQL and concise verification result.
+
+The front-door Python runtime is not required merely to select the SQL skill.
+
+### Governed request
+
+User: `Review this production migration, coordinate independent reviewers, and give me auditable release evidence.`
 
 ## Expected steps
 
-1. Recognize this as work-bearing because it edits project files and needs verification.
-2. Because this request requires files, an artifact, and verification, reject the host-native fast path and run governed front-door intake before reading source files, doing a memory quick pass, checking the target folder, or writing output:
-
-```bash
-python "<this skill folder>/scripts/front_door.py" --prompt-file "<utf8 prompt file>" --project "<cwd>" --host codex --summary --strict-execution-gate
-```
-
-3. Record the returned classification and plugin route.
-4. Treat `always-on-front-door`, `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`, and `skill-catalog` as runtime-applied only if the command ran.
-5. Keep implementation, QA, review, and completion skills as selected-not-executed until their own evidence exists.
-6. Continue with the implementation plan and fresh verification.
-
-For a high-confidence direct/meta, non-specialist, non-stateful request with no read-only tool/source need, mutation, persistence, credentials, risk, artifact, verification, or governed work, use the host-native semantic fast path. Do not launch Python or open another skill. Record `governed_runtime_executed=false`, `runtime_applied_skills=[]`, and Token Optimizer `considered_not_needed` or `passthrough`. For SQL formatting, invoke runtime; the ordered next skills must be `sql-formatting` followed by `sql-formatting-style-harness`.
-
-A bounded confirmation may reuse the current receipt only while this same task remains unfinished and unchanged. After completion, for a new task, or when the user adds work, run front-door again.
+1. Answer the direct request without Python or another skill read.
+2. Read only `sql-formatting` for the specialist request and run its verifier.
+3. For the governed request, select the relevant safety, orchestration, review, and verification skills.
+4. Run the deterministic front door only when a reproducible routing and authorization packet is useful.
+5. Keep applied skills distinct from skills selected for later execution and preserve role outputs and gate evidence.
 
 ## Expected evidence
 
-- `front_door_status: ok`
-- `runtime_applied_skills` contains front-door runtime skills
-- `selected_not_executed_skills` is not empty for follow-up skills
-- verification output includes command, exit code, and result
-- `actual_runtime_path`: `src.orchestration.kh_front_door.build_kh_front_door` or `scripts/front_door.py`
-- `execution_level`: `python-module`
-- `implementation_targets`: `src.orchestration.kh_front_door.build_kh_front_door`, `src.orchestration.request_classifier.classify_request`, `src.orchestration.plugin_composition.compose_plugin_route`, `src.skills.uaf_skill_catalog.collect_packaged_skills`, `src.orchestration.session_skill_audit.analyze_session_skills`, `skills/always_on_front_door/SKILL.md`, `skills/automatic_intake_harness/SKILL.md`, `tests.test_kh_front_door_always_on`, `tests.test_session_skill_audit`
+- Direct: `execution_level = host-native-semantic`; no runtime receipt is claimed.
+- Specialist: the selected skill path and verifier result are observable.
+- Governed: `execution_level = python-module` and `actual_runtime_path = src.orchestration.kh_front_door.build_kh_front_door`.
+- Applied, selected-not-executed, blocked, and skipped states remain distinct.
+
+## Implementation targets
+
+- `src.orchestration.kh_front_door.build_kh_front_door`
+- `src.orchestration.request_classifier.classify_request`
+- `src.orchestration.session_skill_audit.analyze_session_skills`
+- `src.orchestration.git_workspace_gate`
+- `tests.test_kh_front_door_always_on`
 
 ## Failure cases
 
-- The assistant starts with `ls`, source reads, memory quick pass, image generation, browser testing, or file writes before intake.
-- The assistant reads this `SKILL.md` and searches `MEMORY.md` in the same first parallel batch before the front-door command.
-- The host uses the fast path for a current lookup, ambiguous rewrite/translation, SQL specialist request, source read, mutation, state, artifact, or verification.
-- The manifest is treated as proof that the host auto-selected KH; compliance was not audited from runtime evidence.
-- The assistant reads `SKILL.md` but never runs front-door intake.
-- The assistant waits for `/KH`, a KH/UAF mention, or a plugin manifest prompt before invoking this skill.
-- The assistant claims all selected skills were used.
-- The assistant suppresses a failed verification command in the final report.
+- Running Python for a clear direct or single-skill request.
+- Reading every skill before choosing one.
+- Selecting a skill from one example word while ignoring the request's actual objective.
+- Claiming a listed skill ran when its behavior or executable target was never used.
+- Hiding a better matching host/plugin skill behind KH routing.
+- Writing raw routing JSON into the ordinary final answer.
 
 ## Done criteria
 
-The task is done when the requested artifact is created, fresh verification is reported, and the session audit shows front-door runtime evidence.
+The user receives the smallest adequate workflow, observable evidence for work that needs it, and no routing overhead that does not improve the result.
 
-A direct response is allowed after either a valid host-native eligibility decision with no tool/skill boundary, or valid runtime output reporting a direct classification and execution authorization.
+## Runtime binding
+
+- execution_level: `host-native-semantic` or `python-module`
+- implementation_targets: the five targets listed above
+- actual_runtime_path: `src.orchestration.kh_front_door.build_kh_front_door` only when governed runtime mode executes

@@ -1862,6 +1862,95 @@ class KhFrontDoorTests(unittest.TestCase):
         )
         self.assertNotIn("goal-state-harness", payload["immediate_next_skills"])
 
+    def test_front_door_runtime_intent_contract_matrix(self):
+        cases = [
+            ("Verify whether the just-clicked KH marketplace upgrade installed version 2.9.144.", "medium", "skill_read", "kh_runtime_status_question", "runtime_configuration_mutation_request", False),
+            ("Check the Datadog plugin version.", "medium", "skill_read", "generic_environment_status_request", "kh_runtime_status_question", False),
+            ("What app version is installed?", "ambiguous", "clarify", "targetless_runtime_status_request", "kh_runtime_status_question", False),
+            ("Validate KH manifest JSON, no edits.", "medium", "skill_read", "readonly_runtime_inspection_request", "runtime_configuration_mutation_request", False),
+            ("Validate KH manifest JSON, no edits, then upgrade it.", "heavy", "role_dag", "runtime_configuration_mutation_request", "kh_runtime_status_question", True),
+            ("What app version is installed? Then update it.", "heavy", "role_dag", "runtime_configuration_mutation_request", "kh_runtime_status_question", True),
+            ("Validate KH manifest JSON read-only; then push the existing commit.", "heavy", "role_dag", "mixed_runtime_status_and_unrelated_mutation", "runtime_configuration_mutation_request", True),
+            ("Check KH plugin version, then update the inventory dashboard.", "heavy", "role_dag", "mixed_runtime_status_and_unrelated_mutation", "runtime_configuration_mutation_request", True),
+            ("Check KH plugin version, then summarize the release version history.", "medium", "skill_read", "mixed_runtime_and_nonruntime_inspection", "kh_runtime_status_question", False),
+            ("Could you please upgrade it? The KH plugin is stale.", "heavy", "role_dag", "runtime_configuration_mutation_request", "kh_runtime_status_question", True),
+            ("Update the KH plugin documentation in README.", "heavy", "role_dag", "implementation_or_design_work", "runtime_configuration_mutation_request", True),
+        ]
+
+        for prompt, complexity, execution, included, excluded, blocked in cases:
+            with self.subTest(prompt=prompt):
+                payload = build_kh_front_door(prompt, project=Path.cwd(), host="codex").to_dict()
+                classification = payload["classification"]
+                self.assertEqual((classification["complexity"], classification["recommended_execution"]), (complexity, execution))
+                self.assertIn(included, classification["reasons"])
+                self.assertNotIn(excluded, classification["reasons"])
+                self.assertEqual(payload["execution_gate"]["status"] == "blocked_until_large_work_preflight", blocked)
+
+    def test_front_door_adversarial_mutation_authorization_agrees_with_classifier(self):
+        conditional = build_kh_front_door(
+            "Check the KH plugin version and if stale, upgrade it.",
+            project=Path.cwd(),
+            host="codex",
+        ).to_dict()
+        self.assertIn(
+            "runtime_configuration_mutation_request",
+            conditional["classification"]["reasons"],
+        )
+        self.assertEqual(
+            conditional["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+
+        backward_target = build_kh_front_door(
+            "Switch it to 2.9.145; the package I mean is KH UAF.",
+            project=Path.cwd(),
+            host="codex",
+        ).to_dict()
+        self.assertIn(
+            "runtime_configuration_mutation_request",
+            backward_target["classification"]["reasons"],
+        )
+        self.assertEqual(
+            backward_target["execution_gate"]["status"],
+            "blocked_until_large_work_preflight",
+        )
+
+        for prompt in (
+            "Could you not upgrade the KH plugin?",
+            "Upgrade it, but not the KH plugin.",
+            "Update it. The KH plugin should remain unchanged.",
+        ):
+            with self.subTest(prompt=prompt):
+                payload = build_kh_front_door(
+                    prompt,
+                    project=Path.cwd(),
+                    host="codex",
+                ).to_dict()
+                self.assertNotIn(
+                    "runtime_configuration_mutation_request",
+                    payload["classification"]["reasons"],
+                )
+                self.assertNotEqual(
+                    payload["execution_gate"]["status"],
+                    "blocked_until_large_work_preflight",
+                )
+
+        for prompt in (
+            "Upgrade it, but not the KH plugin.",
+            "Update it. The KH plugin should remain unchanged.",
+        ):
+            with self.subTest(contract="clarify-excluded-target", prompt=prompt):
+                payload = build_kh_front_door(
+                    prompt,
+                    project=Path.cwd(),
+                    host="codex",
+                ).to_dict()
+                self.assertEqual(
+                    payload["execution_gate"]["status"],
+                    "blocked_until_clarification",
+                )
+                self.assertFalse(payload["execution_gate"]["can_execute"])
+
     def test_front_door_light_kh_status_has_no_immediate_workflow_gate(self):
         result = build_kh_front_door("KH UAF status?", project=Path.cwd(), host="codex")
         payload = result.to_summary_dict()

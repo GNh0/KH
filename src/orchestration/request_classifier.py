@@ -2628,6 +2628,201 @@ STRUCTURED_MEDIUM_WORK_TERMS = {
     "\uc624\ub298 \ud560 \uc77c \uc6b0\uc120\uc21c\uc704",
 }
 
+_RUNTIME_ACTION_WORDS = (
+    r"align|bring|bump|change|clear|commit|disable|downgrade|edit|enable|extend|"
+    r"install|modify|pin|push|refresh|reinstall|remove|revert|revise|roll\s+back|"
+    r"rollback|set|switch|sync|synchronize|uninstall|update|upgrade"
+)
+_RUNTIME_STATE_RE = re.compile(
+    r"\b(?:active|available|build|current|installed|installation|loaded|newer|outdated|"
+    r"release|running|stale|status|updated|upgraded|version|working|works)\b"
+    r"|(?:\uc0c1\ud0dc|\ubc84\uc804|\uc124\uce58|\ub85c\ub4dc|\ucd5c\uc2e0|\uad6c\ubc84\uc804|"
+    r"\uc5c5\ub370\uc774\ud2b8|\uc5c5\uadf8\ub808\uc774\ub4dc)",
+    re.IGNORECASE,
+)
+_RUNTIME_PROBE_RE = re.compile(
+    r"\b(?:check|confirm|inspect|report|summarize|validate|verify|what|which)\b"
+    r"|(?:\ud655\uc778|\uac80\uc99d|\uc810\uac80|\uac80\ud1a0|\uc54c\ub824|\uc815\ub9ac)",
+    re.IGNORECASE,
+)
+_RUNTIME_ADVICE_RE = re.compile(
+    r"\b(?:can|should)\s+(?:i|we)\b|\bhow\s+(?:do|can|should)\s+(?:i|we)\b|"
+    r"\bhow\s+to\b|\bdo\s+(?:i|we)\s+need\s+to\b|\bis\s+it\s+worth\b|"
+    r"\b(?:is|would)\s+it\s+(?:wise|advisable|better)\b|\badvise\b|\bwarranted\b"
+    r"|(?:\uc5b4\ub5bb\uac8c|\ud574\uc57c|\ud560\uae4c|\ud558\ub294\s+\ubc29\ubc95|"
+    r"(?:\uc5c5\uadf8\ub808\uc774\ub4dc|\uc5c5\ub370\uc774\ud2b8|\uc124\uce58)\s*\ubc29\ubc95|\ud544\uc694\ud574|\ud544\uc694\ud55c\uac00|"
+    r"\uc88b\uc740\uc9c0|\ub098\uc740\uc9c0|\uad1c\ucc2e\uc740\uc9c0|\ud310\ub2e8\ud574|\uc870\uc5b8\ud574)",
+    re.IGNORECASE,
+)
+_RUNTIME_REPORT_RE = re.compile(
+    r"\b(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?"
+    r"(?:brief|refresh|update)\s+(?:me|us)\s+(?:on|about)\b"
+    r"|\b(?:can|could|would|will)?\s*(?:you\s+)?(?:please\s+)?"
+    r"bring\s+(?:me|us)\s+up\s+to\s+date\s+(?:on|about)\b",
+    re.IGNORECASE,
+)
+_RUNTIME_PAST_STATUS_RE = re.compile(
+    rf"\b(?:did|does|has|have|is|was|were)\b[^?.;]{{0,60}}\b(?:{_RUNTIME_ACTION_WORDS}|working|work)\b"
+    r"|(?:\uc5c5\uadf8\ub808\uc774\ub4dc|\uc5c5\ub370\uc774\ud2b8|\uc218\uc815|\uc124\uce58|\uc801\uc6a9|\ub3d9\uc791)"
+    r"[\uac00-\ud7a3\s]{0,16}(?:\ub410|\ub418\uc5c8|\ud588|\ub418\ub294\uc9c0|\ub410\ub294\uc9c0)",
+    re.IGNORECASE,
+)
+_RUNTIME_READONLY_RE = re.compile(
+    r"\b(?:do\s+not|don't)\s+(?:change|edit|modify|update|upgrade)\b|"
+    r"\b(?:no\s+edits?|read[- ]only|without\s+(?:changes?|edits?))\b"
+    r"|(?:\uc218\uc815\s*\uc5c6\uc774|\uc218\uc815\ud558\uc9c0\s*\ub9d0|\uc77d\uae30\s*\uc804\uc6a9)",
+    re.IGNORECASE,
+)
+_RUNTIME_CONFIRM_RE = re.compile(
+    r"^(?:please\s+)?(?:do\s+it|go\s+ahead|proceed)\b|(?:\uadf8\ub807\uac8c\s*\ud574|\uadf8\uac70\s*\ud574)",
+    re.IGNORECASE,
+)
+_RUNTIME_STRONG_CONTINUATION_RE = re.compile(
+    r"\b(?:after|already|just|now)\b[^?.;]{0,48}\b(?:fixed|installed|loaded|patched|updated|upgraded|working)\b"
+    r"|(?:\uadf8\ub798\uc11c|\uadf8\ub7fc|\uc774\uc81c|\ubc29\uae08|\uc544\uae4c)[\uac00-\ud7a3\s]{0,48}"
+    r"(?:\ub3d9\uc791|\uc218\uc815|\ud328\uce58|\uc5c5\ub370\uc774\ud2b8|\uc5c5\uadf8\ub808\uc774\ub4dc|\uc124\uce58|\uc801\uc6a9|\ub410|\ub418\uc5c8)"
+    r"|(?:\ub410\ub294\uc9c0|\ub418\uc5c8\ub294\uc9c0)",
+    re.IGNORECASE,
+)
+@dataclass(frozen=True)
+class RuntimeClauseIntent:
+    text: str
+    target: str
+    act: str
+    polarity: str
+    readonly: bool
+    anaphoric: bool
+    explicit_target: bool
+    runtime_related: bool
+    source_status_read: bool
+
+    @property
+    def active_mutation(self) -> bool:
+        return self.act == "mutate" and self.polarity == "positive" and not self.readonly
+
+
+@dataclass(frozen=True)
+class RuntimeIntentAnalysis:
+    clauses: tuple[RuntimeClauseIntent, ...]
+    parser_has_mutation: bool
+
+    @property
+    def has_any_mutation(self) -> bool:
+        return self.parser_has_mutation or any(clause.active_mutation for clause in self.clauses)
+
+    @property
+    def has_runtime_mutation(self) -> bool:
+        return any(
+            clause.active_mutation
+            and clause.runtime_related
+            and clause.target in {"generic", "kh"}
+            for clause in self.clauses
+        )
+
+    @property
+    def has_targetless_mutation(self) -> bool:
+        return any(
+            clause.active_mutation
+            and clause.runtime_related
+            and clause.target == "missing"
+            for clause in self.clauses
+        )
+
+    @property
+    def has_readonly_runtime_inspection(self) -> bool:
+        return any(
+            clause.runtime_related
+            and clause.readonly
+            and clause.act in {"inspect", "status"}
+            and clause.polarity == "positive"
+            for clause in self.clauses
+        )
+
+    @property
+    def has_readonly_kh_status(self) -> bool:
+        has_positive_status = any(
+            clause.target == "kh"
+            and clause.act in {"inspect", "status"}
+            and clause.polarity == "positive"
+            for clause in self.clauses
+        )
+        has_mutation_boundary = any(
+            clause.target == "kh"
+            and clause.polarity == "negative"
+            for clause in self.clauses
+        )
+        return has_positive_status and has_mutation_boundary
+
+    @property
+    def has_kh_status(self) -> bool:
+        return any(
+            clause.target == "kh"
+            and clause.act in {"inspect", "status"}
+            and clause.polarity == "positive"
+            for clause in self.clauses
+        )
+
+    @property
+    def has_generic_status(self) -> bool:
+        return any(
+            clause.target == "generic"
+            and clause.act in {"inspect", "status"}
+            and clause.polarity == "positive"
+            for clause in self.clauses
+        )
+
+    @property
+    def has_targetless_status(self) -> bool:
+        return any(
+            clause.target == "missing"
+            and clause.act == "status"
+            and clause.polarity == "positive"
+            for clause in self.clauses
+        )
+
+    @property
+    def has_runtime_advice(self) -> bool:
+        has_runtime_context = any(
+            clause.runtime_related and clause.target in {"generic", "kh"}
+            for clause in self.clauses
+        )
+        return any(
+            clause.act == "advice"
+            and clause.polarity == "positive"
+            and (clause.runtime_related or has_runtime_context)
+            for clause in self.clauses
+        )
+
+    @property
+    def has_source_inspection(self) -> bool:
+        return any(
+            clause.target == "source"
+            and clause.explicit_target
+            and clause.source_status_read
+            and clause.act in {"inspect", "status"}
+            and clause.polarity == "positive"
+            for clause in self.clauses
+        )
+
+    @property
+    def has_mixed_runtime_inspection(self) -> bool:
+        kh_indexes = {
+            index
+            for index, clause in enumerate(self.clauses)
+            if clause.target == "kh"
+            and clause.act in {"inspect", "status"}
+            and clause.polarity == "positive"
+        }
+        if not kh_indexes:
+            return False
+        return any(
+            index not in kh_indexes
+            and clause.act in {"inspect", "status"}
+            and clause.target != "kh"
+            and clause.polarity == "positive"
+            for index, clause in enumerate(self.clauses)
+        )
+
 
 @dataclass(frozen=True)
 class RequestClassification:
@@ -2851,6 +3046,7 @@ def _classify_request(
             reasons.append("credential_access_gate_priority")
 
     request_intent = request_intent or resolve_request_intent(text, context)
+    runtime_intent = _analyze_runtime_intent(request_analysis, context)
     if _is_structured_active_goal_resume(context, request_intent):
         return _heavy_classification(
             domain,
@@ -2913,8 +3109,53 @@ def _classify_request(
     if memory_requested:
         return _memory_state_classification(domain, cross_cutting, evidence_required, reasons)
 
+    if _is_high_risk(request_act, domain, context, request_analysis):
+        high_risk_reasons = list(reasons)
+        if request_analysis.outer_database_execution:
+            high_risk_reasons.append("outer_database_execution_authorized")
+        if request_analysis.authorized_high_impact_destructive:
+            high_risk_reasons.append("authorized_high_impact_change_obligation")
+        return _high_risk_classification(
+            domain,
+            cross_cutting,
+            evidence_required,
+            high_risk_reasons,
+        )
+
+    runtime_classification = _classify_runtime_intent(
+        runtime_intent,
+        request_act,
+        domain,
+        cross_cutting,
+        evidence_required,
+        reasons,
+        request_analysis,
+    )
+    if runtime_classification is not None:
+        return runtime_classification
+
+    if _is_nonexecuting_destructive_discussion(
+        request_act,
+        normalized,
+        domain,
+        request_analysis,
+    ):
+        return _classification(
+            complexity="light",
+            domain=domain,
+            recommended_execution="direct_answer",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=evidence_required,
+            reasons=[*reasons, "nonexecuting_destructive_discussion"],
+            confidence=0.86,
+        )
+
     pb_migration_requested = bool(request_intent.get("migration_intent"))
-    if _is_readonly_source_audit_request(normalized, domain, request_analysis):
+    if (
+        not runtime_intent.has_any_mutation
+        and _is_readonly_source_audit_request(normalized, domain, request_analysis)
+    ):
         readonly_skills = ["request-complexity-router"]
         readonly_reasons = [*reasons, "readonly_source_audit_request"]
         if pb_migration_requested and _has_concrete_pb_migration_subject(normalized):
@@ -2931,7 +3172,10 @@ def _classify_request(
             confidence=0.84 if request_analysis.readonly_inspection else 0.8,
         )
 
-    if _is_current_source_security_question(normalized, request_analysis):
+    if (
+        not runtime_intent.has_any_mutation
+        and _is_current_source_security_question(normalized, request_analysis)
+    ):
         return _classification(
             complexity="medium",
             domain="security",
@@ -2961,19 +3205,6 @@ def _classify_request(
             confidence=0.86,
         )
 
-    if _is_high_risk(request_act, domain, context, request_analysis):
-        high_risk_reasons = list(reasons)
-        if request_analysis.outer_database_execution:
-            high_risk_reasons.append("outer_database_execution_authorized")
-        if request_analysis.authorized_high_impact_destructive:
-            high_risk_reasons.append("authorized_high_impact_change_obligation")
-        return _high_risk_classification(
-            domain,
-            cross_cutting,
-            evidence_required,
-            high_risk_reasons,
-        )
-
     if request_analysis.outer_database_execution:
         return _heavy_classification(
             domain,
@@ -2982,24 +3213,7 @@ def _classify_request(
             [*reasons, "outer_database_execution_authorized"],
         )
 
-    if _is_nonexecuting_destructive_discussion(
-        request_act,
-        normalized,
-        domain,
-        request_analysis,
-    ):
-        return _classification(
-            complexity="light",
-            domain=domain,
-            recommended_execution="direct_answer",
-            cross_cutting=cross_cutting,
-            recommended_skills=["request-complexity-router"],
-            evidence_required=evidence_required,
-            reasons=[*reasons, "nonexecuting_destructive_discussion"],
-            confidence=0.86,
-        )
-
-    if _is_repository_mutation_command(request_act):
+    if _is_repository_mutation_command(request_act, request_analysis):
         return _heavy_classification(
             "software",
             cross_cutting,
@@ -3013,18 +3227,6 @@ def _classify_request(
             cross_cutting,
             evidence_required,
             [*reasons, "contextual_audit_repair_request"],
-        )
-
-    if _is_direct_runtime_latency_meta_question(request_act, domain, request_analysis):
-        return _classification(
-            complexity="light",
-            domain="software" if domain in {"general", "security", "education"} else domain,
-            recommended_execution="direct_answer",
-            cross_cutting=cross_cutting,
-            recommended_skills=["request-complexity-router"],
-            evidence_required=evidence_required,
-            reasons=[*reasons, "routing_meta_question_without_mutation_authorization"],
-            confidence=0.86,
         )
 
     if _is_routing_meta_question(request_act, domain, request_analysis):
@@ -3174,18 +3376,6 @@ def _classify_request(
             evidence_required=evidence_required,
             reasons=[*reasons, "routing_meta_question_without_mutation_authorization"],
             confidence=0.86,
-        )
-
-    if _is_kh_runtime_status_question(normalized, context):
-        return _classification(
-            complexity="medium",
-            domain="software",
-            recommended_execution="skill_read",
-            cross_cutting=cross_cutting,
-            recommended_skills=["request-complexity-router", "workflow-usability-harness"],
-            evidence_required=_dedupe([*evidence_required, "runtime_status_evidence"]),
-            reasons=[*reasons, "kh_runtime_status_question"],
-            confidence=0.76,
         )
 
     if _is_compound_handoff_request(normalized):
@@ -4643,61 +4833,256 @@ def _is_full_skill_lifecycle_audit_request(normalized: str) -> bool:
     )
 
 
-def _is_kh_runtime_status_question(normalized: str, context: dict) -> bool:
-    if _has_mutation_command(normalized) or _has_conditional_mutation_command(normalized):
-        return False
-    has_kh_context = _has_audit_repair_context(context) or _contains_any(
-        normalized,
-        {
-            "kh",
-            "uaf",
-            "skill",
-            "skills",
-            "harness",
-            "harnesses",
-            "front-door",
-            "front door",
-            "\uc2a4\ud0ac",
-            "\ud558\ub124\uc2a4",
-            "\ud504\ub7f0\ud2b8\ub3c4\uc5b4",
-        },
+def _runtime_clause_act(
+    text: str,
+    source_clause,
+) -> str:
+    direct_mutation = bool(
+        (source_clause.authorized and source_clause.mutating)
+        or _RUNTIME_CONFIRM_RE.search(text)
     )
-    if not has_kh_context:
-        return False
-    status_terms = {
-        "does it work",
-        "is it working",
-        "now works",
-        "working now",
-        "fixed now",
-        "after the fix",
-        "after upgrade",
-        "\ub3d9\uc791",
-        "\ub418\ub0d0",
-        "\ub418\ub294\uac70",
-        "\ub418\ub294\uc9c0",
-        "\ub410\ub0d0",
-        "\ub410\ub2e4",
-        "\uc548\ud55c\uac70",
-        "\uc548 \ud55c\uac70",
-        "\uc548\ub418",
-        "\uc548 \ub418",
-    }
-    repair_context_terms = {
-        "now",
-        "after",
-        "fixed",
-        "patched",
-        "upgrade",
-        "upgraded",
-        "\uc774\uc81c",
-        "\uc9c0\uae08",
-        "\uc218\uc815",
-        "\ud328\uce58",
-        "\uc5c5\uadf8\ub808\uc774\ub4dc",
-        "\uc9c0\uae08\uae4c\uc9c0",
-    }
-    return _contains_any(normalized, status_terms) and _contains_any(normalized, repair_context_terms)
+    if direct_mutation:
+        return "mutate"
+    if _RUNTIME_ADVICE_RE.search(text):
+        return "advice"
+    if _RUNTIME_REPORT_RE.search(text) or _RUNTIME_PAST_STATUS_RE.search(text):
+        return "status"
+    if (
+        source_clause.runtime_related
+        and source_clause.question
+        and _RUNTIME_STRONG_CONTINUATION_RE.search(text)
+    ):
+        return "status"
+
+    if (
+        source_clause.semantic_target == "source"
+        and source_clause.explicit_semantic_target
+        and not source_clause.mutating
+    ):
+        return "inspect"
+
+    if "inspect" in source_clause.action_classes:
+        if source_clause.runtime_related and _RUNTIME_STATE_RE.search(text):
+            return "status"
+        return "inspect"
+
+    if source_clause.semantic_target in {"generic", "kh", "missing"} and _RUNTIME_STATE_RE.search(text):
+        return "status"
+    if source_clause.runtime_related and _RUNTIME_PROBE_RE.search(text):
+        return "inspect"
+    return "other"
+
+
+def _analyze_runtime_intent(
+    analysis: RequestActAnalysis,
+    context: dict,
+) -> RuntimeIntentAnalysis:
+    resolved = []
+    for clause in analysis.clauses:
+        target = clause.semantic_target
+        runtime_related = clause.runtime_related
+        if (
+            target in {"missing", "other"}
+            and _has_audit_repair_context(context)
+            and _RUNTIME_STRONG_CONTINUATION_RE.search(clause.normalized)
+        ):
+            target = "kh"
+            runtime_related = True
+        resolved.append(
+            RuntimeClauseIntent(
+                text=clause.normalized,
+                target=target,
+                act=_runtime_clause_act(clause.normalized, clause),
+                polarity=(
+                    "negative"
+                    if clause.negated
+                    or clause.explicit_nonexecution
+                    or clause.semantic_target_excluded
+                    else "positive"
+                ),
+                readonly=bool(
+                    _RUNTIME_READONLY_RE.search(clause.normalized)
+                    or clause.readonly_boundary
+                ),
+                anaphoric=clause.referential_target,
+                explicit_target=clause.explicit_semantic_target,
+                runtime_related=runtime_related,
+                source_status_read=clause.source_status_read,
+            )
+        )
+    return RuntimeIntentAnalysis(
+        clauses=tuple(resolved),
+        parser_has_mutation=analysis.has_mutation_authorization,
+    )
+
+
+def _classify_runtime_intent(
+    runtime_intent: RuntimeIntentAnalysis,
+    request_act: str,
+    domain: str,
+    cross_cutting: List[str],
+    evidence_required: List[str],
+    reasons: List[str],
+    request_analysis: RequestActAnalysis,
+) -> RequestClassification | None:
+    if request_analysis.pure_negated_action and all(
+        clause.explicit_nonexecution
+        or clause.readonly_boundary
+        or re.match(r"^\s*(?:do\s+not|don't|dont|never)\b", clause.normalized)
+        for clause in request_analysis.clauses
+        if clause.normalized
+    ):
+        return _classification(
+            complexity="light",
+            domain="software" if domain in {"general", "software"} else domain,
+            recommended_execution="direct_answer",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=evidence_required,
+            reasons=[*reasons, "negated_action_noop"],
+            confidence=0.9,
+        )
+    if runtime_intent.has_runtime_mutation:
+        return _heavy_classification(
+            "software",
+            cross_cutting,
+            evidence_required,
+            [*reasons, "runtime_configuration_mutation_request"],
+        )
+    if runtime_intent.has_targetless_mutation:
+        return _classification(
+            complexity="ambiguous",
+            domain="software",
+            recommended_execution="clarify",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "runtime_mutation_target"]),
+            reasons=[*reasons, "targetless_runtime_mutation_request"],
+            confidence=0.5,
+        )
+    if runtime_intent.has_any_mutation:
+        if any(
+            clause.target == "kh" and clause.act in {"inspect", "status"}
+            for clause in runtime_intent.clauses
+        ):
+            return _heavy_classification(
+                "software",
+                cross_cutting,
+                evidence_required,
+                [*reasons, "mixed_runtime_status_and_unrelated_mutation"],
+            )
+        return None
+
+    if runtime_intent.has_source_inspection:
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "source_summary"]),
+            reasons=[*reasons, "readonly_source_inspection_request"],
+            confidence=0.84,
+        )
+
+    if runtime_intent.has_readonly_kh_status:
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router", "workflow-usability-harness"],
+            evidence_required=_dedupe([*evidence_required, "runtime_status_evidence"]),
+            reasons=[
+                *reasons,
+                "kh_runtime_status_question",
+                "readonly_kh_runtime_status",
+            ],
+            confidence=0.88,
+        )
+
+    if _is_direct_runtime_latency_meta_question(request_act, domain, request_analysis):
+        return _classification(
+            complexity="light",
+            domain="software" if domain in {"general", "security", "education"} else domain,
+            recommended_execution="direct_answer",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=evidence_required,
+            reasons=[*reasons, "routing_meta_question_without_mutation_authorization"],
+            confidence=0.86,
+        )
+    if runtime_intent.has_mixed_runtime_inspection:
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router", "workflow-usability-harness"],
+            evidence_required=_dedupe(
+                [*evidence_required, "runtime_status_evidence", "source_summary"]
+            ),
+            reasons=[*reasons, "mixed_runtime_and_nonruntime_inspection"],
+            confidence=0.8,
+        )
+    if runtime_intent.has_readonly_runtime_inspection:
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe(
+                [*evidence_required, "source_summary", "runtime_status_evidence"]
+            ),
+            reasons=[*reasons, "readonly_runtime_inspection_request"],
+            confidence=0.86,
+        )
+    if runtime_intent.has_runtime_advice:
+        return _classification(
+            complexity="light",
+            domain="software",
+            recommended_execution="direct_answer",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=evidence_required,
+            reasons=[*reasons, "routing_meta_question_without_mutation_authorization"],
+            confidence=0.86,
+        )
+    if runtime_intent.has_targetless_status:
+        return _classification(
+            complexity="ambiguous",
+            domain="software",
+            recommended_execution="clarify",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "runtime_status_target"]),
+            reasons=[*reasons, "targetless_runtime_status_request"],
+            confidence=0.52,
+        )
+    if runtime_intent.has_generic_status:
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=_dedupe([*evidence_required, "runtime_status_evidence"]),
+            reasons=[*reasons, "generic_environment_status_request"],
+            confidence=0.84,
+        )
+    if runtime_intent.has_kh_status:
+        return _classification(
+            complexity="medium",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router", "workflow-usability-harness"],
+            evidence_required=_dedupe([*evidence_required, "runtime_status_evidence"]),
+            reasons=[*reasons, "kh_runtime_status_question"],
+            confidence=0.84,
+        )
+    return None
 
 
 def _is_compound_handoff_request(normalized: str) -> bool:
@@ -4999,11 +5384,18 @@ def _is_high_risk(
         MEDICAL_ADVICE_TERMS | PERSONAL_MEDICAL_ADVICE_TERMS,
     ) and not (_is_conceptual_request(normalized) and not _contains_any(normalized, PERSONAL_MEDICAL_ADVICE_TERMS)):
         return True
-    if domain in {"devops", "cloud"} and _contains_any(
-        normalized,
-        {"roll back", "rollback", "production now", "failover", "publish it to pagerduty"},
-    ):
-        return True
+    if domain in {"devops", "cloud"}:
+        production_rollback = any(
+            clause.authorized
+            and "rollback" in clause.action_verbs
+            and clause.scopes & {"production", "live"}
+            for clause in analysis.clauses
+        )
+        if production_rollback or _contains_any(
+            normalized,
+            {"failover", "publish it to pagerduty"},
+        ):
+            return True
     if domain == "security" and not _is_defensive_security_work(normalized) and (
         _contains_any(normalized, SECURITY_HIGH_RISK_TERMS | EXTRA_SECURITY_HIGH_RISK_TERMS)
         or _has_authorized_high_impact_destructive_act(normalized)
@@ -5529,7 +5921,16 @@ def _is_readonly_source_audit_request(
     return not _has_unnegated_readonly_audit_mutation(normalized)
 
 
-def _is_repository_mutation_command(normalized: str) -> bool:
+def _is_repository_mutation_command(
+    normalized: str,
+    analysis: RequestActAnalysis | None = None,
+) -> bool:
+    analysis = analysis or parse_request_act(normalized)
+    if not any(
+        clause.authorized and set(clause.action_verbs) & {"commit", "push"}
+        for clause in analysis.clauses
+    ):
+        return False
     candidate = _without_negated_or_advisory_repository_mutations(normalized)
     if not _contains_any(candidate, REPOSITORY_MUTATION_TERMS):
         return False
@@ -5891,6 +6292,11 @@ def _is_governed_mutation_request(
     analysis = analysis or parse_request_act(normalized, context)
     if not _has_structural_mutation_authorization(normalized, analysis):
         return False
+    if any(
+        clause.authorized and clause.semantic_target == "source"
+        for clause in analysis.clauses
+    ):
+        return True
     if _is_named_local_file_removal(normalized):
         return True
     if _has_software_mutation_scope(normalized, domain, context, analysis):

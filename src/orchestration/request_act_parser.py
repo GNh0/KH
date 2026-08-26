@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 import unicodedata
 from bisect import bisect_left
-from dataclasses import dataclass
-from typing import FrozenSet, Mapping, Tuple
+from dataclasses import dataclass, replace
+from typing import FrozenSet, Mapping, Sequence, Tuple
 
 
 MUTATING_ACTION_CLASSES = frozenset({"mutate", "execute", "destructive"})
@@ -45,6 +45,11 @@ class RequestClause:
     authorized: bool
     apparent_change_obligation: bool
     referential_target: bool
+    semantic_target: str
+    explicit_semantic_target: bool
+    runtime_related: bool
+    semantic_target_excluded: bool
+    source_status_read: bool
 
     @property
     def mutating(self) -> bool:
@@ -92,6 +97,14 @@ class RequestActAnalysis:
     @property
     def has_inspection(self) -> bool:
         return any("inspect" in clause.action_classes for clause in self.clauses)
+
+    @property
+    def pure_negated_action(self) -> bool:
+        substantive = tuple(clause for clause in self.clauses if clause.normalized)
+        return bool(substantive) and all(
+            clause.negated and bool(clause.action_classes)
+            for clause in substantive
+        )
 
     @property
     def has_readonly_boundary(self) -> bool:
@@ -245,9 +258,11 @@ class RequestActAnalysis:
             return False
         if self.has_sql_payload and self.bounded_sql_request:
             return False
-        destructive_language = bool(
-            _DESTRUCTIVE_LANGUAGE_RE.search(self.text)
-            or _has_high_impact_surface(self.text)
+        readonly_source_inspection = any(
+            "source" in clause.target_classes
+            and "inspect" in clause.action_classes
+            and not clause.mutating
+            for clause in self.clauses
         )
         quoted_destructive = any(
             span.kind == "quote"
@@ -256,6 +271,14 @@ class RequestActAnalysis:
                 or _has_high_impact_surface(span.text)
             )
             for span in self.payload_spans
+        )
+        destructive_language = bool(
+            _DESTRUCTIVE_LANGUAGE_RE.search(self.text)
+            or quoted_destructive
+            or (
+                _has_high_impact_surface(self.text)
+                and not readonly_source_inspection
+            )
         )
         nonexecution = any(
             clause.explicit_nonexecution
@@ -291,15 +314,18 @@ _ENGLISH_ACTION_CLASSES = {
     "annihilate": {"destructive", "mutate"},
     "apply": {"execute", "mutate"},
     "build": {"constructive", "mutate"},
+    "bump": {"mutate"},
     "carry": {"execute", "mutate"},
     "change": {"mutate"},
     "clear": {"destructive", "mutate"},
+    "commit": {"execute", "mutate"},
     "continue": {"continue"},
     "correct": {"mutate"},
     "create": {"constructive", "mutate"},
     "recreate": {"constructive", "mutate"},
     "delete": {"destructive", "mutate"},
     "deploy": {"execute", "mutate"},
+    "downgrade": {"mutate"},
     "eradicate": {"destructive", "mutate"},
     "destroy": {"destructive", "mutate"},
     "disable": {"destructive", "mutate"},
@@ -307,28 +333,48 @@ _ENGLISH_ACTION_CLASSES = {
     "edit": {"mutate"},
     "eliminate": {"destructive", "mutate"},
     "empty": {"destructive", "mutate"},
+    "enable": {"mutate"},
     "erase": {"destructive", "mutate"},
     "expunge": {"destructive", "mutate"},
     "exterminate": {"destructive", "mutate"},
     "execute": {"execute", "mutate"},
+    "extend": {"constructive", "mutate"},
     "fix": {"mutate"},
+    "hide": {"mutate"},
     "implement": {"constructive", "mutate"},
+    "install": {"constructive", "execute", "mutate"},
     "modify": {"mutate"},
+    "move": {"mutate"},
     "patch": {"mutate"},
+    "pin": {"mutate"},
     "proceed": {"execute", "mutate"},
     "publish": {"execute", "mutate"},
     "purge": {"destructive", "mutate"},
+    "push": {"execute", "mutate"},
+    "refresh": {"mutate"},
     "remove": {"destructive", "mutate"},
+    "reinstall": {"constructive", "execute", "mutate"},
     "repair": {"mutate"},
+    "rename": {"mutate"},
+    "replace": {"mutate"},
+    "revert": {"mutate"},
+    "revise": {"mutate"},
+    "rollback": {"mutate"},
     "refactor": {"transform"},
     "reset": {"destructive", "mutate"},
     "resume": {"continue"},
     "run": {"execute", "mutate"},
+    "set": {"mutate"},
     "shred": {"destructive", "mutate"},
     "style": {"transform"},
+    "switch": {"mutate"},
+    "sync": {"mutate"},
+    "synchronize": {"mutate"},
     "truncate": {"destructive", "mutate"},
+    "uninstall": {"destructive", "mutate"},
     "vaporize": {"destructive", "mutate"},
     "update": {"mutate"},
+    "upgrade": {"mutate"},
     "wipe": {"destructive", "mutate"},
     "write": {"constructive", "mutate"},
     "align": {"transform"},
@@ -338,21 +384,49 @@ _ENGLISH_ACTION_CLASSES = {
     "explain": {"inspect"},
     "format": {"transform"},
     "inspect": {"inspect"},
+    "confirm": {"inspect"},
     "normalize": {"transform"},
     "nuke": {"destructive", "mutate"},
     "obliterate": {"destructive", "mutate"},
     "read": {"inspect"},
+    "open": {"inspect"},
     "report": {"inspect"},
+    "return": {"inspect"},
     "review": {"inspect"},
     "rewrite": {"transform"},
     "summarize": {"inspect"},
     "trace": {"inspect"},
+    "validate": {"inspect"},
+    "verify": {"inspect"},
 }
 
 _KOREAN_ACTION_CLASSES = {
     "\ucd94\uac00": {"constructive", "mutate"},
     "\uc801\uc6a9": {"execute", "mutate"},
     "\ubc18\uc601": {"execute", "mutate"},
+    "\uc7ac\uc124\uce58": {"constructive", "execute", "mutate"},
+    "\uc124\uce58": {"constructive", "execute", "mutate"},
+    "\uc5c5\uadf8\ub808\uc774\ub4dc": {"mutate"},
+    "\uc5c5\ub370\uc774\ud2b8": {"mutate"},
+    "\ub2e4\uc6b4\uadf8\ub808\uc774\ub4dc": {"mutate"},
+    "\uac31\uc2e0": {"mutate"},
+    "\ub3d9\uae30\ud654": {"mutate"},
+    "\uc804\ud658": {"mutate"},
+    "\ubcf5\uc6d0": {"mutate"},
+    "\ub418\ub3cc\ub824": {"mutate"},
+    "\ub418\ub3cc\ub9ac": {"mutate"},
+    "\uace0\uc815": {"mutate"},
+    "\uc124\uc815": {"mutate"},
+    "\ub9de\ucdb0": {"mutate"},
+    "\ub9de\ucd94": {"mutate"},
+    "\ubc14\uafd4": {"mutate"},
+    "\ubc14\uafb8": {"mutate"},
+    "\ub0b4\ub824": {"mutate"},
+    "\ub0b4\ub9ac": {"mutate"},
+    "\uc62c\ub9ac": {"mutate"},
+    "\uc62c\ub824": {"mutate"},
+    "\ucee4\ubc0b": {"execute", "mutate"},
+    "\ud478\uc2dc": {"execute", "mutate"},
     "\uc0dd\uc131": {"constructive", "mutate"},
     "\uc0ad\uc81c": {"destructive", "mutate"},
     "\uc81c\uac70": {"destructive", "mutate"},
@@ -374,13 +448,18 @@ _KOREAN_ACTION_CLASSES = {
     "\uc9c4\ud589": {"execute", "mutate"},
     "\ucc29\uc218": {"execute", "mutate"},
     "\uace0\uce58": {"mutate"},
+    "\uace0\uccd0": {"mutate"},
+    "\uace0\ucdb0": {"mutate"},
+    "\ubc14\ub85c\uc7a1": {"mutate"},
     "\uc218\uc815": {"mutate"},
     "\ubcf4\uc644": {"mutate"},
     "\ud328\uce58": {"mutate"},
     "\uad6c\ud604": {"constructive", "mutate"},
     "\ubcc0\uacbd": {"mutate"},
+    "\ucc98\ub9ac": {"execute", "mutate"},
     "\uc791\uc131": {"constructive", "mutate"},
     "\ub9cc\ub4e4": {"constructive", "mutate"},
+    "\ub123": {"constructive", "mutate"},
     "\ud655\uc778": {"inspect"},
     "\uac80\ud1a0": {"inspect"},
     "\ub9ac\ubdf0": {"inspect"},
@@ -390,6 +469,12 @@ _KOREAN_ACTION_CLASSES = {
     "\uc124\uba85": {"inspect"},
     "\ubcf4\uace0": {"inspect"},
     "\uc870\uc5b8": {"inspect"},
+    "\uc54c\ub824": {"inspect"},
+    "\uc694\uc57d": {"inspect"},
+    "\uc870\uc815": {"mutate"},
+    "\uc190\ub300": {"mutate"},
+    "\uc228\uae30": {"mutate"},
+    "\uc228\uaca8": {"mutate"},
     "\ud3ec\ub9f7": {"transform"},
     "\uc815\ub9ac": {"transform"},
     "\uc815\ub82c": {"transform"},
@@ -435,11 +520,168 @@ _TARGET_PATTERNS = {
         re.IGNORECASE,
     ),
     "source": re.compile(
-        r"(?<![a-z0-9_])(?:code|source|router|classifier|repository|repo|tests?|provider|implementation|module|runtime)(?![a-z0-9_])"
-        r"|(?:\ucf54\ub4dc|\uc18c\uc2a4|\ub77c\uc6b0\ud130|\ubd84\ub958\uae30|\uc800\uc7a5\uc18c|\ud14c\uc2a4\ud2b8|\ud504\ub85c\ubc14\uc774\ub354|\uad6c\ud604|\ubaa8\ub4c8|\ub7f0\ud0c0\uc784)",
+        r"(?<![a-z0-9_])(?:changelog|code|docs?|documentation|guide|readme|source|router|classifier|repository|repo|tests?|provider|implementation|module|runtime)(?![a-z0-9_])"
+        r"|(?:\ubb38\uc11c|\uc124\uba85\uc11c|\ubb38\uad6c|\ucf54\ub4dc|\uc18c\uc2a4|\ub77c\uc6b0\ud130|\ubd84\ub958\uae30|\uc800\uc7a5\uc18c|\ud14c\uc2a4\ud2b8|\ud504\ub85c\ubc14\uc774\ub354|\uad6c\ud604|\ubaa8\ub4c8|\ub7f0\ud0c0\uc784)",
         re.IGNORECASE,
     ),
 }
+
+_SEMANTIC_KH_TARGET_RE = re.compile(
+    r"(?<![a-z0-9_])(?:kh(?:[- ]?uaf)?|uaf)(?![a-z0-9_])",
+    re.IGNORECASE,
+)
+_SEMANTIC_RUNTIME_COMPONENT_RE = re.compile(
+    r"\b(?:binary|cache|cli|executable|front[- ]door|manifest|marketplace|package|plugin|runtime)\b"
+    r"|(?:\ud50c\ub7ec\uadf8\uc778|\ub9c8\ucf13\ud50c\ub808\uc774\uc2a4|\ud328\ud0a4\uc9c0|\ub7f0\ud0c0\uc784|\uc2e4\ud589\uae30|\uc81c\ud488)",
+    re.IGNORECASE,
+)
+_SEMANTIC_RUNTIME_STATE_RE = re.compile(
+    r"\b(?:active|available|current|installed|loaded|newer|old|older|outdated|"
+    r"release|running|stale|status|up[- ]to[- ]date|version)\b"
+    r"|(?:\uc0c1\ud0dc|\ubc84\uc804|\ub9b4\ub9ac\uc2a4|\uc124\uce58\ubcf8?|\ub85c\ub4dc|\ucd5c\uc2e0|\uad6c\ubc84\uc804|\uc624\ub798\ub410|\uc2e4\ud589\s*\uc911)",
+    re.IGNORECASE,
+)
+_SEMANTIC_VERSION_LITERAL_RE = re.compile(
+    r"(?<![0-9.])\d+(?:\.\d+){1,3}(?![0-9]|\.[0-9])"
+)
+_SEMANTIC_SOURCE_ARTIFACT_RE = re.compile(
+    r"(?<![a-z0-9_])(?:changelog|documentation|docs?|guide|readme|reference|release\s+notes?)(?![a-z0-9_])"
+    r"|\b(?:classifier|router)\s+(?:fixtures?|tests?)\b"
+    r"|\b(?:test|fixture)\s+(?:case|file|suite)\b"
+    r"|(?:\ubb38\uc11c|\uc124\uba85\uc11c|\ubcc0\uacbd\s*(?:\ub0b4\uc5ed|\uae30\ub85d)|\ub9b4\ub9ac\uc2a4\s*\ub178\ud2b8|"
+    r"\ubd84\ub958\uae30\s*\ud14c\uc2a4\ud2b8|\ub77c\uc6b0\ud130\s*\ud14c\uc2a4\ud2b8|\ud14c\uc2a4\ud2b8\s*\ud30c\uc77c)",
+    re.IGNORECASE,
+)
+_SEMANTIC_CONCEPTUAL_RE = re.compile(
+    r"\b(?:meaning|definition)\s+of\b"
+    r"|\bwhat\s+(?:does|is)\s+(?:the\s+)?(?:word\s+)?"
+    r"(?:commit|install|installation|set|switch|sync|update|upgrade)\b"
+    r"|\b(?:explain|define|describe)\b[^.!?]{0,80}\b"
+    r"(?:art|concept|definition|meaning|term|theory|discipline|movement|style)\b"
+    r"|(?:\uc774\ub77c\ub294|\ub77c\ub294)\s*(?:\ub2e8\uc5b4|\ub9d0|\ud45c\ud604)?.{0,24}(?:\ub73b|\uc124\uba85)"
+    r"|[\uac00-\ud7a3]{1,20}(?:\uc774\ub780|\ub780)\s*(?:\ubb34\uc5c7|\ubb50|\ub73b)"
+    r"|(?:\uac1c\ub150|\uc758\ubbf8|\ub73b|\uc6a9\uc5b4|\ubbf8\uc220|\uc774\ub860|\ud559\ubb38|\uc0ac\uc870|\uc591\uc2dd)"
+    r"[^.!?]{0,40}(?:\uc124\uba85|\ubb34\uc5c7|\ubb50|\uc54c\ub824)",
+    re.IGNORECASE,
+)
+_SEMANTIC_TARGET_EXCLUSION_RE = re.compile(
+    r"(?:^|[,;]\s*|\bbut\s+)not\s+(?:the\s+)?(?:installed\s+)?"
+    r"(?:kh(?:[- ]?uaf)?|uaf|plugins?|runtime)\b"
+    r"|\b(?:kh(?:[- ]?uaf)?|uaf|the\s+kh\s+plugins?|plugins?|runtime)\b"
+    r"[^.!?]{0,36}\b(?:must|should)\s+(?:remain|stay)\s+unchanged\b"
+    r"|(?:kh|uaf|\ud50c\ub7ec\uadf8\uc778|\ub7f0\ud0c0\uc784).{0,24}(?:\uac74\ub4dc\ub9ac\uc9c0\s*(?:\ub9d0|\ub9c8)|\ubc14\uafb8\uc9c0\s*\ub9d0|\uc720\uc9c0)",
+    re.IGNORECASE,
+)
+_SEMANTIC_TARGET_CLARIFICATION_RE = re.compile(
+    r"\b(?:the\s+)?(?:package|plugin|runtime)\s+(?:i\s+mean|meant)\s+(?:is\s+)?"
+    r"(?:kh(?:[- ]?uaf)?|uaf)\b"
+    r"|\b(?:here\s*,?\s*)?(?:it|that|this)\s+(?:refers\s+to|means)\s+"
+    r"(?:the\s+)?(?:kh(?:[- ]?uaf)?|uaf)\b"
+    r"|(?:kh(?:[- ]?uaf)?|uaf)\s*(?:\ud50c\ub7ec\uadf8\uc778|\ub7f0\ud0c0\uc784)?\s*\ub9d0\uc774\uc57c"
+    r"|(?:\uc5ec\uae30\uc11c\s*)?(?:(?:\ub0b4\uac00\s*\ub9d0\ud55c\s*)?\ub300\uc0c1|\uadf8\uac74|\uadf8\uac70|\uadf8\uac83)\uc740?\s*"
+    r"(?:kh(?:[- ]?uaf)?|uaf)\s*(?:\ud50c\ub7ec\uadf8\uc778|\ub7f0\ud0c0\uc784)?(?:\uc774\uc57c|\uc785\ub2c8\ub2e4)",
+    re.IGNORECASE,
+)
+_SEMANTIC_KNOWN_EXECUTABLE_RE = re.compile(
+    r"(?<![a-z0-9_])(?:chrome|datadog|dotnet|git|java|node(?:\.js)?|npm|pnpm|python|react|yarn)(?![a-z0-9_])",
+    re.IGNORECASE,
+)
+_SEMANTIC_NAMED_RUNTIME_RE = re.compile(
+    r"\b(?P<english>[a-z][a-z0-9_.+-]*(?:\s+agent)?)\s*(?:\d+(?:\.\d+){0,3}\s*)?"
+    r"(?:(?:binary|build|cli|executable|package|product|runtime)\s+)?"
+    r"(?:version|installation|install|is\s+(?:installed|available|running))\b"
+    r"|\b(?P<korean>[a-z][a-z0-9_.+-]*(?:\s+agent)?)\s*(?:\uc774|\uac00|\uc740|\ub294)?\s*"
+    r"(?:(?:\uc2e4\ud589\uae30|\ud328\ud0a4\uc9c0|\uc81c\ud488|cli)\uc758?\s*)?\ubc84\uc804",
+    re.IGNORECASE,
+)
+_SEMANTIC_TARGETLESS_STATUS_RE = re.compile(
+    r"^(?:(?:check|confirm|verify|what|which)\s+)?(?:the\s+)?"
+    r"(?:(?:app|application|program|software)\s+)?"
+    r"(?:current\s+|installed\s+)?(?:version|status)"
+    r"(?:\s+is\s+(?:currently\s+)?installed)?[?.]?\s*$"
+    r"|^(?:(?:\ud604\uc7ac|\uc9c0\uae08)\s*)?(?:\uc124\uce58\ub41c\s*)?(?:\ubc84\uc804|\uc0c1\ud0dc)"
+    r"[\uac00-\ud7a3\s]{0,18}(?:\uba87(?:\uc774\uc57c|\uc778\uac00|\uc785\ub2c8\uae4c)?|\ubb50|\ubb34\uc5c7|\ud655\uc778|\uc54c\ub824)?[?.]?\s*$",
+    re.IGNORECASE,
+)
+_SEMANTIC_RUNTIME_MUTATION_ACTIONS = frozenset(
+    {
+        "align",
+        "bring",
+        "bump",
+        "change",
+        "downgrade",
+        "install",
+        "move",
+        "pin",
+        "refresh",
+        "reinstall",
+        "revert",
+        "rollback",
+        "set",
+        "switch",
+        "sync",
+        "synchronize",
+        "uninstall",
+        "update",
+        "upgrade",
+        "\uac31\uc2e0",
+        "\ubcc0\uacbd",
+        "\uace0\uc815",
+        "\ub0b4\ub9ac",
+        "\ub0b4\ub824",
+        "\ub2e4\uc6b4\uadf8\ub808\uc774\ub4dc",
+        "\ub3d9\uae30\ud654",
+        "\ub9de\ucd94",
+        "\ub9de\ucdb0",
+        "\ubc14\uafb8",
+        "\ubc14\uafd4",
+        "\ubcf5\uc6d0",
+        "\ub418\ub3cc\ub9ac",
+        "\ub418\ub3cc\ub824",
+        "\uc124\uc815",
+        "\uc5c5\uadf8\ub808\uc774\ub4dc",
+        "\uc5c5\ub370\uc774\ud2b8",
+        "\uc62c\ub9ac",
+        "\uc62c\ub824",
+        "\uc804\ud658",
+        "\uc190\ub300",
+    }
+)
+_SEMANTIC_INTRINSIC_RUNTIME_MUTATION_ACTIONS = frozenset(
+    {
+        "bump",
+        "downgrade",
+        "install",
+        "pin",
+        "reinstall",
+        "rollback",
+        "uninstall",
+        "upgrade",
+        "\ub2e4\uc6b4\uadf8\ub808\uc774\ub4dc",
+        "\uc124\uce58",
+        "\uc5c5\uadf8\ub808\uc774\ub4dc",
+        "\uc7ac\uc124\uce58",
+    }
+)
+_SEMANTIC_VERSION_TARGET_CARRY_ACTIONS = frozenset(
+    {
+        "bump",
+        "downgrade",
+        "pin",
+        "rollback",
+        "switch",
+        "\uace0\uc815",
+        "\ub0b4\ub824",
+        "\uc62c\ub824",
+    }
+)
+_KOREAN_VERSION_SETTING_REQUEST_RE = re.compile(
+    r"(?:"
+    r"(?<![0-9.])\d+(?:\.\d+){1,3}(?![0-9.])"
+    r"|\ucd5c\uc2e0(?:\s*\ubc84\uc804|\s*\ub9b4\ub9ac\uc2a4|\s*\uc0c1\ud0dc)?"
+    r")\s*(?:\uc73c)?\ub85c\s*\ud574\s*"
+    r"(?:\uc8fc\uc2dc\uaca0|\uc8fc\uc2e4\s+\uc218\s+\uc788|\uc904\ub798|\uc918|\uc8fc\uc138\uc694)",
+)
 
 _SCOPE_PATTERNS = {
     "all": re.compile(
@@ -483,7 +725,7 @@ _SQL_DESTRUCTIVE_RE = re.compile(
 _DESTRUCTIVE_LANGUAGE_RE = re.compile(
     r"\b(?:annihilate|clear|delete|destroy|disable|drop|eliminate|empty|eradicate|erase|"
     r"expunge|exterminate|nuke|obliterate|purge|remove|reset|shred|truncate|vaporize|wipe)\b"
-    r"|(?:\uc0ad\uc81c|\uc81c\uac70|\ube44\ud65c\uc131\ud654|\ube44\uc6b0|\ube44\uc6cc|\ub0a0\ub9ac|\ub0a0\ub824|\uc9c0\uc6b0|\uc9c0\uc6cc|\ucd08\uae30\ud654|\ud30c\uae30|\ub9d0\uc18c)",
+    r"|(?:\uc0ad\uc81c|\uc81c\uac70|\ube44\ud65c\uc131\ud654|\ube44\uc6b0|\ube44\uc6cc|\ub0a0\ub9ac|\ub0a0\ub824|\uc9c0\uc6b0|\uc9c0\uc6cc|\ucd08\uae30\ud654|\ud30c\uae30|\ub9d0\uc18c|\ud3d0\uae30|\ucca0\uac70|\uc18c\uac01|\ucd08\ud1a0\ud654)",
     re.IGNORECASE,
 )
 _CREDENTIAL_STORE_RE = re.compile(
@@ -515,22 +757,34 @@ _OUTER_EXECUTION_START_RE = re.compile(
 
 _CLAUSE_BOUNDARY_RE = re.compile(
     r"(?P<punct>[!?;\u2014\u2013]+|\.(?=\s|$))\s*"
-    r"|(?:,\s*)?(?P<connector>\b(?:but|however|yet|then|next|after\s+(?:review|that|this))\b|"
+    r"|(?:,\s*)?(?P<connector>\b(?:but|however|yet|then|next|afterward|subsequently|"
+    r"after\s+(?:review|that|this))\b|"
+    r"\band(?:\s*,\s*|\s+)\(?(?=(?:only\s+)?if\b)|"
+    r"\band\s+(?=(?:please\s+)?(?:do\s+not\s+)?(?:align|bring|bump|downgrade|install|"
+    r"move|pin|refresh|reinstall|revert|roll\s+back|rollback|set|switch|sync|synchronize|"
+    r"uninstall|update|upgrade)\b)|"
     r"(?<![\uac00-\ud7a3])(?:\ud558\uc9c0\ub9cc|\uadf8\ub7ec\ub098|\uadf8\ub7f0\ub370)|"
-    r"\uadf8\s*\ub4a4|\uc774\ud6c4|\ub2e4\uc74c(?:\uc73c\ub85c)?|\uac80\ud1a0\s*\ud6c4|\ub9d0\uace0)(?:\s*,\s*)?",
+    r"\uadf8\s*\ub4a4|\uc774\ud6c4|\ub2e4\uc74c(?:\uc73c\ub85c)?|\ud55c\s*(?:\ub4a4|\ud6c4|\ub2e4\uc74c)|\uac80\ud1a0\s*\ud6c4|\ub9d0\uace0)(?:\s*,\s*)?",
     re.IGNORECASE,
 )
 _INTERRUPTIVE_DASH_PAIR_RE = re.compile(r"[\u2014\u2013][^\u2014\u2013\r\n]{1,160}[\u2014\u2013]")
 _TOKEN_RE = re.compile(r"[a-z][a-z0-9_-]*|[\uac00-\ud7a3]+", re.IGNORECASE)
 _ENGLISH_ACTION_PHRASE_RE = re.compile(
-    r"\b(?P<phrase>carry\s+out|go\s+ahead|turn\s+off|shut\s+off)\b",
+    r"\b(?P<phrase>"
+    r"carry\s+out|go\s+ahead|do\s+it|turn\s+off|shut\s+off|roll\s+back|"
+    r"roll(?:\s+(?!back\b)[a-z0-9_.+-]+){1,8}\s+back|"
+    r"bring(?:\s+[a-z0-9_.+-]+){1,8}\s+up\s+to\s+date|"
+    r"make(?:\s+(?!current\b)[a-z0-9_.+-]+){1,8}\s+current"
+    r")\b",
     re.IGNORECASE,
 )
 _ENGLISH_ACTION_PHRASE_CANONICAL = {
     "carry out": "proceed",
     "go ahead": "proceed",
+    "do it": "proceed",
     "turn off": "disable",
     "shut off": "disable",
+    "roll back": "rollback",
 }
 
 
@@ -538,7 +792,10 @@ def parse_request_act(text: str, context: Mapping[str, object] | None = None) ->
     source = _canonicalize_text(text)
     payloads = _payload_spans(source)
     outer_text = _outer_text(source, payloads)
-    clauses = tuple(_split_clauses(outer_text))
+    clauses = resolve_semantic_targets(
+        tuple(_split_clauses(outer_text)),
+        context or {},
+    )
     return RequestActAnalysis(
         text=source,
         outer_text=outer_text,
@@ -750,7 +1007,12 @@ def _build_clause(text: str, connector: str) -> RequestClause:
     scopes = {
         name for name, pattern in _SCOPE_PATTERNS.items() if pattern.search(normalized)
     }
-    if re.search(r"(?:[a-z]:\\|\.?[a-z0-9_/-]*[a-z0-9_-])\.[a-z0-9]{1,12}\b", normalized):
+    if re.search(
+        r"(?:[a-z]:\\|\.?[a-z0-9_/-]*[a-z0-9_-])\."
+        r"(?=[a-z0-9]{1,12}(?![a-z0-9_]))(?=[a-z0-9]*[a-z])"
+        r"[a-z0-9]{1,12}(?![a-z0-9_])",
+        normalized,
+    ):
         scopes.add("named_file")
         target_classes.add("filesystem")
     if "format" in action_verbs and "filesystem" in target_classes:
@@ -783,7 +1045,7 @@ def _build_clause(text: str, connector: str) -> RequestClause:
         explicit_nonexecution=explicit_nonexecution,
         readonly_boundary=readonly_boundary,
     )
-    return RequestClause(
+    clause = RequestClause(
         text=text.strip(),
         normalized=normalized,
         connector=connector,
@@ -800,7 +1062,254 @@ def _build_clause(text: str, connector: str) -> RequestClause:
         authorized=authorized,
         apparent_change_obligation=apparent_change_obligation,
         referential_target=_has_referential_target(normalized),
+        semantic_target="other",
+        explicit_semantic_target=False,
+        runtime_related=False,
+        semantic_target_excluded=False,
+        source_status_read=False,
     )
+    target, explicit, runtime_related, excluded = _semantic_target_for_clause(clause)
+    clause = replace(
+        clause,
+        semantic_target=target,
+        explicit_semantic_target=explicit,
+        runtime_related=runtime_related,
+        semantic_target_excluded=excluded,
+    )
+    return replace(clause, source_status_read=_is_source_status_read(clause))
+
+
+def resolve_semantic_targets(
+    clauses: Sequence[RequestClause],
+    context: Mapping[str, object] | None = None,
+) -> Tuple[RequestClause, ...]:
+    """Resolve explicit, anaphoric, and backward targets once for all consumers."""
+    context = context or {}
+    resolved = list(clauses)
+    for index, clause in enumerate(resolved):
+        version_bound_mutation = bool(
+            clause.semantic_target == "other"
+            and clause.authorized
+            and clause.mutating
+            and _SEMANTIC_VERSION_LITERAL_RE.search(clause.normalized)
+        )
+        if (
+            clause.semantic_target != "missing" and not version_bound_mutation
+        ) or clause.semantic_target_excluded:
+            continue
+
+        implicit_sequence_target = bool(
+            clause.connector in {"adversative", "sequence"}
+            and (
+                clause.runtime_related
+                or (
+                    version_bound_mutation
+                    and set(clause.action_verbs)
+                    & _SEMANTIC_VERSION_TARGET_CARRY_ACTIONS
+                )
+            )
+        )
+        prior_candidates = (
+            reversed(resolved[:index])
+            if clause.referential_target
+            else reversed(resolved[max(0, index - 1) : index])
+            if implicit_sequence_target
+            else ()
+        )
+        prior = next(
+            (
+                candidate
+                for candidate in prior_candidates
+                if (
+                    candidate.semantic_target in {"generic", "kh", "source"}
+                    or (
+                        candidate.semantic_target == "missing"
+                        and candidate.runtime_related
+                    )
+                )
+                and not candidate.semantic_target_excluded
+            ),
+            None,
+        )
+        following = next(
+            (
+                candidate
+                for candidate in resolved[index + 1 :]
+                if candidate.semantic_target in {"generic", "kh", "source"}
+                and candidate.explicit_semantic_target
+                and not candidate.semantic_target_excluded
+                and (
+                    clause.referential_target
+                    or version_bound_mutation
+                    or _SEMANTIC_TARGET_CLARIFICATION_RE.search(candidate.normalized)
+                )
+            ),
+            None,
+        )
+        target = prior or following
+        if target is not None:
+            semantic_target = (
+                "generic"
+                if target.semantic_target == "missing" and target.runtime_related
+                else target.semantic_target
+            )
+            resolved[index] = replace(
+                clause,
+                semantic_target=semantic_target,
+                runtime_related=target.runtime_related or semantic_target in {"generic", "kh"},
+            )
+
+    context_target = str(context.get("runtime_target") or "").strip().lower()
+    if context_target in {"generic", "kh"}:
+        resolved = [
+            replace(
+                clause,
+                semantic_target=context_target,
+                runtime_related=True,
+            )
+            if clause.semantic_target == "missing" and not clause.semantic_target_excluded
+            else clause
+            for clause in resolved
+        ]
+    return tuple(resolved)
+
+
+def _semantic_target_for_clause(
+    clause: RequestClause,
+) -> tuple[str, bool, bool, bool]:
+    text = clause.normalized
+    excluded = _SEMANTIC_TARGET_EXCLUSION_RE.search(text) is not None
+
+    if _SEMANTIC_CONCEPTUAL_RE.search(text):
+        return "other", False, False, excluded
+
+    explicit_source = bool(
+        "named_file" in clause.scopes
+        or _SEMANTIC_SOURCE_ARTIFACT_RE.search(text)
+    )
+    if explicit_source:
+        return "source", True, False, excluded
+
+    if _SEMANTIC_TARGET_CLARIFICATION_RE.search(text):
+        return "kh", True, True, excluded
+
+    has_kh = _SEMANTIC_KH_TARGET_RE.search(text) is not None
+    has_component = _SEMANTIC_RUNTIME_COMPONENT_RE.search(text) is not None
+    has_state = _SEMANTIC_RUNTIME_STATE_RE.search(text) is not None
+    has_known_executable = _SEMANTIC_KNOWN_EXECUTABLE_RE.search(text) is not None
+    has_named_runtime = _has_named_runtime_target(text)
+    has_version_literal = _SEMANTIC_VERSION_LITERAL_RE.search(text) is not None
+    action_verbs = set(clause.action_verbs)
+    runtime_hint = bool(
+        has_kh
+        or has_component
+        or has_state
+        or has_known_executable
+        or has_named_runtime
+    )
+    runtime_action = bool(
+        action_verbs & _SEMANTIC_INTRINSIC_RUNTIME_MUTATION_ACTIONS
+        or (
+            runtime_hint
+            and action_verbs & _SEMANTIC_RUNTIME_MUTATION_ACTIONS
+        )
+    )
+    if has_kh and (has_component or has_state or runtime_action):
+        return "kh", True, True, excluded
+
+    if (has_known_executable or has_named_runtime) and (
+        has_state or runtime_action or "inspect" in clause.action_classes
+    ):
+        return "generic", True, True, excluded
+    if has_component and (has_state or runtime_action or clause.question):
+        return "generic", True, True, excluded
+
+    if _SEMANTIC_TARGETLESS_STATUS_RE.search(text):
+        return "missing", False, True, excluded
+    if clause.question and runtime_action and not clause.authorized:
+        return "missing", False, True, excluded
+    if has_state and clause.connector != "start" and (
+        "inspect" in clause.action_classes or clause.question
+    ):
+        return "missing", False, True, excluded
+    if clause.authorized and runtime_action and (
+        clause.referential_target
+        or has_state
+    ):
+        return "missing", False, True, excluded
+    if (
+        clause.authorized
+        and clause.referential_target
+        and action_verbs & _SEMANTIC_RUNTIME_MUTATION_ACTIONS
+    ):
+        return "missing", False, False, excluded
+    if clause.authorized and "proceed" in clause.action_verbs and clause.referential_target:
+        return "missing", False, False, excluded
+    return "other", False, False, excluded
+
+
+def _has_named_runtime_target(text: str) -> bool:
+    qualified_app = re.search(
+        r"\b(?P<qualifier>[a-z][a-z0-9_.+-]*)\s+"
+        r"(?:app|application|program|software)\s+"
+        r"(?:build\s+|installed\s+|release\s+|runtime\s+)?version\b",
+        text,
+        re.IGNORECASE,
+    )
+    if qualified_app is not None and qualified_app.group("qualifier").lower() not in {
+        "an",
+        "current",
+        "installed",
+        "local",
+        "my",
+        "the",
+        "what",
+        "which",
+    }:
+        return True
+
+    match = _SEMANTIC_NAMED_RUNTIME_RE.search(text)
+    if match is None:
+        return False
+    subject = (match.group("english") or match.group("korean") or "").lower()
+    words = set(re.findall(r"[a-z0-9_.+-]+", subject))
+    placeholders = {
+        "app",
+        "application",
+        "current",
+        "installed",
+        "local",
+        "package",
+        "product",
+        "program",
+        "runtime",
+        "software",
+        "the",
+        "version",
+        "what",
+        "which",
+    }
+    return bool(words - placeholders - {"agent"})
+
+
+def _is_source_status_read(clause: RequestClause) -> bool:
+    if clause.semantic_target != "source" or clause.authorized:
+        return False
+    named_version_read = bool(
+        "named_file" in clause.scopes
+        and _SEMANTIC_RUNTIME_STATE_RE.search(clause.normalized)
+        and "inspect" in clause.action_classes
+    )
+    release_history_read = bool(
+        re.search(
+            r"(?<![a-z0-9_])(?:changelog|release\s+notes?)(?![a-z0-9_])"
+            r"|(?:\ubcc0\uacbd\s*(?:\ub0b4\uc5ed|\uae30\ub85d)|\ub9b4\ub9ac\uc2a4\s*\ub178\ud2b8)",
+            clause.normalized,
+            re.IGNORECASE,
+        )
+        and "inspect" in clause.action_classes
+    )
+    return named_version_read or release_history_read
 
 
 def _is_apparent_change_obligation(
@@ -1041,7 +1550,18 @@ def _action_matches(normalized: str):
     token_starts = [token.start() for token in tokens]
     for phrase_match in _ENGLISH_ACTION_PHRASE_RE.finditer(normalized):
         phrase = re.sub(r"\s+", " ", phrase_match.group("phrase").lower())
-        canonical = _ENGLISH_ACTION_PHRASE_CANONICAL[phrase]
+        if phrase.startswith("bring "):
+            canonical = (
+                "report"
+                if re.fullmatch(r"bring\s+(?:me|us)\s+up\s+to\s+date", phrase)
+                else "update"
+            )
+        elif phrase.startswith("roll ") and phrase.endswith(" back"):
+            canonical = "rollback"
+        elif phrase.startswith("make ") and phrase.endswith(" current"):
+            canonical = "update"
+        else:
+            canonical = _ENGLISH_ACTION_PHRASE_CANONICAL[phrase]
         matches.append(
             (
                 canonical,
@@ -1057,8 +1577,13 @@ def _action_matches(normalized: str):
             if _is_nominal_action_use(normalized, tokens, index, canonical):
                 continue
             classes = _ENGLISH_ACTION_CLASSES[canonical]
-            if canonical == "update" and re.match(
-                r"update\s+me\s+(?:on|about)\b",
+            if canonical == "align" and re.search(
+                r"\b(?:kh|uaf|plugins?|packages?|installations?|runtime|versions?|releases?|branches?|readme|docs?|documentation|tests?)\b",
+                normalized,
+            ):
+                classes = {*classes, "mutate"}
+            if canonical in {"refresh", "update"} and re.match(
+                rf"{canonical}\s+(?:me|us)\s+(?:on|about)\b",
                 normalized[token_match.start() :],
             ):
                 canonical = "report"
@@ -1069,14 +1594,72 @@ def _action_matches(normalized: str):
     for stem, classes in _KOREAN_ACTION_CLASSES.items():
         start = normalized.find(stem)
         while start != -1:
-            token_index = bisect_left(token_starts, start)
-            matches.append((stem, frozenset(classes), start, token_index))
+            if not _is_nominal_korean_action_use(normalized, start, stem):
+                token_index = bisect_left(token_starts, start)
+                matches.append((stem, frozenset(classes), start, token_index))
             start = normalized.find(stem, start + len(stem))
+    for match in _KOREAN_VERSION_SETTING_REQUEST_RE.finditer(normalized):
+        matches.append(
+            (
+                "\uc124\uc815",
+                frozenset(_KOREAN_ACTION_CLASSES["\uc124\uc815"]),
+                match.start(),
+                bisect_left(token_starts, match.start()),
+            )
+        )
     return sorted(matches, key=lambda item: (item[2], item[0]))
 
 
 def _is_nominal_action_use(normalized: str, tokens, index: int, canonical: str) -> bool:
     """Ignore action-shaped nouns governed by an earlier construction verb."""
+    token = tokens[index].group(0).lower()
+    tail = normalized[tokens[index].start() :]
+    if token != canonical and token.endswith("ed"):
+        prefix = normalized[max(0, tokens[index].start() - 72) : tokens[index].start()]
+        passive_obligation = re.search(
+            r"\b(?:must|should|need(?:s)?\s+to|ha(?:s|ve)\s+to|"
+            r"(?:is|are)\s+(?:required|obligated|expected)\s+to)\s+(?:be\s+)?$",
+            prefix,
+        )
+        if passive_obligation is None:
+            return True
+    if canonical in {"clear", "empty"} and index >= 1:
+        if tokens[index - 1].group(0).lower() in {
+            "are",
+            "be",
+            "been",
+            "is",
+            "look",
+            "looks",
+            "seem",
+            "seems",
+            "was",
+            "were",
+        }:
+            return True
+    if re.match(
+        rf"{re.escape(token)}\s+"
+        r"(?:guides?|history|messages?|notes?|polic(?:y|ies)|records?|reports?|"
+        r"wording|words?)\b[^.!?]{0,80}\b(?:are|is|mean|means|refer|should)\b",
+        tail,
+    ):
+        return True
+    if canonical == "set":
+        previous = tokens[index - 1].group(0).lower() if index >= 1 else ""
+        following = tokens[index + 1].group(0).lower() if index + 1 < len(tokens) else ""
+        if previous in {"a", "an", "the"} or following in {"of", "theory"}:
+            return True
+    if canonical == "change" and index >= 1:
+        if tokens[index - 1].group(0).lower() in {
+            "a",
+            "any",
+            "these",
+            "the",
+            "this",
+            "those",
+            "your",
+        }:
+            return True
     if canonical in {"change", "patch", "reset", "update"} and index >= 1:
         prior = tokens[index - 1]
         prior_action = _canonical_english_action(prior.group(0).lower())
@@ -1095,6 +1678,26 @@ def _is_nominal_action_use(normalized: str, tokens, index: int, canonical: str) 
             continue
         between = normalized[prior.end() : tokens[index].start()]
         return re.search(r"(?:[,;]|\b(?:and|but|then)\b)", between) is None
+    return False
+
+
+def _is_nominal_korean_action_use(normalized: str, start: int, stem: str) -> bool:
+    suffix = normalized[start + len(stem) :]
+    if re.match(
+        r"\s*(?:\uac12|\ub0b4\uc6a9|\ub0b4\uc5ed|\uae30\ub85d|\uc774\ub825|\uba54\uc2dc\uc9c0|\ubb38\uad6c|\ubbf8\uc220|\ubc29\ubc95|\ubc29\uc2dd|\uc131\ub2a5|\uc0c1\ud0dc|\ub178\ud2b8|\ub73b)",
+        suffix,
+    ):
+        return True
+    if re.match(
+        r"\s*(?:\uc774\ub77c\ub294|\ub77c\ub294|\uc774\ub780|\ub780)\s*(?:\ub2e8\uc5b4|\ub9d0|\ud45c\ud604)?\b",
+        suffix,
+    ):
+        return True
+    if re.match(
+        r"\s+[\uac00-\ud7a3]{1,20}(?:\uc774\ub780|\ub780)\s*(?:\ubb34\uc5c7|\ubb50|\ub73b)",
+        suffix,
+    ):
+        return True
     return False
 
 
@@ -1141,6 +1744,11 @@ def _is_authorized_action(
     ]
     if not active_mutating_matches or explicit_nonexecution or _is_modal_risk_description(normalized):
         return False
+    if all(
+        _action_is_reported_state(normalized, match)
+        for match in active_mutating_matches
+    ):
+        return False
 
     polite_request = bool(
         re.search(r"\b(?:can|could|would|will)\s+you\b|\b(?:please|kindly)\b", normalized)
@@ -1160,16 +1768,22 @@ def _is_authorized_action(
         re.search(r"\bdo\s+not\s+forget\s+to\s*$", normalized[:match[2]])
         for match in active_mutating_matches
     )
-    if advisory and not polite_request:
+    if advisory and not (polite_request or korean_command):
         return False
     if question and not (polite_request or korean_command or lets_request):
         return False
     if polite_request or obligation or korean_command or lets_request or reminder_obligation:
         return True
 
+    if all(match[0] in _KOREAN_ACTION_CLASSES for match in active_mutating_matches):
+        return False
+
     _, _, char_start, _ = active_mutating_matches[0]
     prefix = normalized[:char_start]
-    if re.match(r"^(?:after|if|once|when)\b[\s\S]*,\s*$", prefix):
+    if re.match(
+        r"^(?:after|afterward|(?:only\s+)?if|once|subsequently|when)\b[\s\S]*,?\s*$",
+        prefix,
+    ):
         return True
     prefix_tokens = [token.lower() for token in _TOKEN_RE.findall(normalized[:char_start])]
     if not prefix_tokens:
@@ -1178,13 +1792,24 @@ def _is_authorized_action(
     return all(token in allowed_prefixes or token.endswith("ly") for token in prefix_tokens)
 
 
-def _is_negated_action(normalized: str, action_matches) -> bool:
-    mutating_matches = [
-        match for match in action_matches if match[1] & MUTATING_ACTION_CLASSES
-    ]
-    if not mutating_matches:
+def _action_is_reported_state(normalized: str, action_match) -> bool:
+    verb, _, char_start, _ = action_match
+    if verb not in _KOREAN_ACTION_CLASSES:
         return False
-    return all(_action_is_negated(normalized, match) for match in mutating_matches)
+    suffix = normalized[char_start + len(verb) : char_start + len(verb) + 28]
+    return bool(
+        re.match(
+            r"\s*(?:\ub410|\ub418\uc5c8|\ub41c|\ub418\ub294|\ud588|\ud55c)"
+            r"(?:\ub294\uc9c0|\ub294\uac00|\uc5b4|\uc5c8|\uc2b5\ub2c8\ub2e4|\ub2e4|\ub098|\ub0d0|\ub2c8|\uc744\uae4c|\uc744\uc9c0)?\b",
+            suffix,
+        )
+    )
+
+
+def _is_negated_action(normalized: str, action_matches) -> bool:
+    if not action_matches:
+        return False
+    return all(_action_is_negated(normalized, match) for match in action_matches)
 
 
 def _action_is_negated(normalized: str, action_match) -> bool:
@@ -1213,6 +1838,11 @@ def _action_is_negated(normalized: str, action_match) -> bool:
     ):
         return True
     if re.search(
+        r"\b(?:can|could|would|will)\s+you\s+(?:please\s+)?not\s*$",
+        prefix,
+    ):
+        return True
+    if re.search(
         r"\b(?:do\s+not|don't|dont|never|must\s+not|should\s+not)\b"
         r"[^.;!?]{0,64}\b(?:and|or)\s*$",
         prefix,
@@ -1230,6 +1860,8 @@ def _action_is_negated(normalized: str, action_match) -> bool:
 
 
 def _has_korean_mutation_command(normalized: str, action_matches) -> bool:
+    if _KOREAN_VERSION_SETTING_REQUEST_RE.search(normalized):
+        return True
     for verb, classes, char_start, _ in action_matches:
         if verb not in _KOREAN_ACTION_CLASSES or not classes & MUTATING_ACTION_CLASSES:
             continue
@@ -1245,6 +1877,7 @@ def _has_korean_mutation_command(normalized: str, action_matches) -> bool:
             r"|(?:\uc8fc\uc138\uc694|\uc8fc\uc2ed\uc2dc\uc624|\uc8fc\uc2dc\uae30\s*\ubc14\ub78d\ub2c8\ub2e4|\uc8fc\uc154\uc57c\s*\ud569\ub2c8\ub2e4|\uc8fc\uc5b4\uc57c\s*\ud569\ub2c8\ub2e4|\uc918\uc57c\s*\ud569\ub2c8\ub2e4)\s*(?=$|[.!?,:;\u2014\u2013])"
             r"|\ud558\ub77c|\ud558\uc790|\ud574\uc57c|\ud558\uc5ec\uc57c|\ud560\s*\ud544\uc694|\ud560\s*\uc758\ubb34"
             r"|(?:\uc8fc\uc138\uc694|\uc918|\uc8fc|\ub77c|\uc2ed\uc2dc\uc624|\uc138\uc694)(?=$|[.!?,:;])"
+            r"|(?:\ub194|\ub194\uc918|\ub193\uc544|\ub193\uc544\uc918|\ub193\uc544\ub450)\s*(?=$|[.!?,:;])"
             r"|(?=$|[.!?,:;]))",
             tail,
         ):
@@ -1404,15 +2037,20 @@ def _approval_state(normalized: str, question: bool) -> str:
 def _has_referential_target(normalized: str) -> bool:
     return bool(
         re.search(
-            r"\b(?:apply|change|correct|delete|drop|execute|fix|implement|modify|patch|remove|repair|run|update)\s+"
+            r"\b(?:apply|change|correct|delete|downgrade|drop|execute|fix|implement|make|modify|patch|pin|remove|repair|revert|revise|rollback|run|set|switch|sync|synchronize|update|upgrade)\s+"
             r"(?:it|that|this|them|these|those)\b"
+            r"|\bdo\s+(?:it|that|this|them|these|those)\b"
+            r"|\bbring\s+(?:it|that|this)\s+up\s+to\s+date\b"
+            r"|\b(?:its|their)\s+(?:installed\s+)?(?:build|release|status|version)\b"
             r"|\b(?:apply|deploy|execute|implement|run)\s+(?:the\s+)?(?:batch|changes?|edits?|patch|revision)\b"
             r"|\bcarry\s+(?:the\s+)?(?:remaining|reviewed|approved|current)?\s*(?:changes?|edits?|patch|revision)\s+into\b"
             r"|\bproceed\s+with\s+(?:it|that|this|the\s+current\s+(?:change|patch)|current\s+(?:change|patch))\b"
             r"|\bcarry\s+(?:it|that|this)\s+out\b"
             r"|\b(?:current|approved)\s+(?:change|patch)\b"
             r"|(?:\uadf8\uac70|\uadf8\uac83|\uadf8\uac78|\uc774\uac70|\uc774\uac83|\uc774\uac78|\uc800\uac70|\uc800\uac83|\uc800\uac78).{0,20}"
-            r"(?:\uace0\uce58|\uad6c\ud604|\ubc18\uc601|\ubcf4\uc644|\ubcc0\uacbd|\uc0ad\uc81c|\uc218\uc815|\uc2e4\ud589|\uc801\uc6a9|\uc81c\uac70|\uc9c0\uc6b0|\ud328\uce58)"
+            r"(?:\uace0\uc815|\uace0\uce58|\uad6c\ud604|\ub9de\ucdb0|\ubc18\uc601|\ubcf4\uc644|\ubcc0\uacbd|\uc0ad\uc81c|\uc124\uc815|\uc218\uc815|\uc2e4\ud589|\uc801\uc6a9|\uc804\ud658|\uc81c\uac70|\uc9c0\uc6b0|\ucc98\ub9ac|\ud328\uce58)"
+            r"|(?:\uadf8|\uc774|\uc800)\s*(?:\uc5c5\ub370\uc774\ud2b8|\uc5c5\uadf8\ub808\uc774\ub4dc|\ubcc0\uacbd|\uc791\uc5c5|\ud328\uce58).{0,24}"
+            r"(?:\uace0\uce58|\ubc18\uc601|\ubcc0\uacbd|\uc218\uc815|\uc2e4\ud589|\uc801\uc6a9|\ucc98\ub9ac|\ud328\uce58)"
             r"|(?:\ud604\uc7ac\s*\ud328\uce58|\uadf8\s*\ubcc0\uacbd)",
             normalized,
         )

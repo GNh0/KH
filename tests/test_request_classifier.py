@@ -3,6 +3,7 @@ import subprocess
 import sys
 import unittest
 
+from src.orchestration.request_act_parser import parse_request_act
 from src.orchestration.request_classifier import classify_request, resolve_request_intent
 
 
@@ -184,6 +185,528 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertIn("runtime_status_evidence", result.evidence_required)
         self.assertIn("kh_runtime_status_question", result.reasons)
         self.assertNotEqual(result.recommended_execution, "role_dag")
+
+    def test_runtime_intent_contract_matrix(self):
+        cases = [
+            ("Verify whether the just-clicked KH marketplace upgrade installed version 2.9.144.", {}, "medium", "skill_read", "kh_runtime_status_question", "runtime_configuration_mutation_request"),
+            ("\uc5c5\ub370\uc774\ud2b8 \ub410\ub294\uc9c0 \ud655\uc778 \uc880", {"project_markers": [".kh"]}, "medium", "skill_read", "kh_runtime_status_question", "runtime_configuration_mutation_request"),
+            ("\uadf8\ub798\uc11c \uc774\uc81c\ub294 \uc218\uc815\ud588\uc73c\ub2c8\uae4c \ub3d9\uc791\ud55c\ub2e4\uace0?", {"prior_context_kind": "session_audit"}, "medium", "skill_read", "kh_runtime_status_question", "runtime_configuration_mutation_request"),
+            ("Check the Datadog plugin version.", {}, "medium", "skill_read", "generic_environment_status_request", "kh_runtime_status_question"),
+            ("What is the current Python version?", {}, "medium", "skill_read", "generic_environment_status_request", "kh_runtime_status_question"),
+            ("What app version is installed?", {}, "ambiguous", "clarify", "targetless_runtime_status_request", "kh_runtime_status_question"),
+            ("Check the version.", {}, "ambiguous", "clarify", "targetless_runtime_status_request", "kh_runtime_status_question"),
+            ("\uc5c5\uadf8\ub808\uc774\ub4dc\ub410\uc5b4?", {}, "ambiguous", "clarify", "targetless_runtime_status_request", "kh_runtime_status_question"),
+            ("How do I upgrade the KH plugin?", {}, "light", "direct_answer", "routing_meta_question_without_mutation_authorization", "runtime_configuration_mutation_request"),
+            ("KH \ud50c\ub7ec\uadf8\uc778 \uc5c5\uadf8\ub808\uc774\ub4dc \ubc29\ubc95 \uc54c\ub824\uc918.", {}, "light", "direct_answer", "routing_meta_question_without_mutation_authorization", "runtime_configuration_mutation_request"),
+            ("Upgrade the KH plugin to the latest version and update the manifests.", {}, "heavy", "role_dag", "runtime_configuration_mutation_request", "kh_runtime_status_question"),
+            ("\ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 \uc62c\ub824\uc918.", {}, "heavy", "role_dag", "runtime_configuration_mutation_request", "kh_runtime_status_question"),
+            ("Could you refresh the plugin cache?", {}, "heavy", "role_dag", "runtime_configuration_mutation_request", "kh_runtime_status_question"),
+            ("Bump the marketplace version, commit it, and push it.", {}, "heavy", "role_dag", "runtime_configuration_mutation_request", "kh_runtime_status_question"),
+            ("Validate KH manifest JSON, no edits.", {}, "medium", "skill_read", "readonly_runtime_inspection_request", "runtime_configuration_mutation_request"),
+            ("Update the KH plugin documentation in README.", {}, "heavy", "role_dag", "implementation_or_design_work", "runtime_configuration_mutation_request"),
+            ("Update the version number in README.", {}, "heavy", "role_dag", "implementation_or_design_work", "runtime_configuration_mutation_request"),
+            ("Can you update me on why KH routing classifies this request as direct?", {}, "light", "direct_answer", "non_mutating_provider_meta_question", "kh_runtime_status_question"),
+        ]
+
+        for prompt, context, complexity, execution, included, excluded in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt, context=context)
+                self.assertEqual((result.complexity, result.recommended_execution), (complexity, execution))
+                self.assertIn(included, result.reasons)
+                self.assertNotIn(excluded, result.reasons)
+
+    def test_runtime_intent_composition_matrix(self):
+        cases = [
+            ("Validate KH manifest JSON, no edits, then upgrade it.", "runtime_configuration_mutation_request"),
+            ("What app version is installed? Then update it.", "runtime_configuration_mutation_request"),
+            ("Validate KH manifest JSON read-only; then push the existing commit.", "mixed_runtime_status_and_unrelated_mutation"),
+            ("Update me on the KH plugin version and upgrade it if stale.", "runtime_configuration_mutation_request"),
+            ("Can we upgrade the KH plugin? Please do it.", "runtime_configuration_mutation_request"),
+            ("How do I upgrade the KH plugin? Then upgrade it now.", "runtime_configuration_mutation_request"),
+            ("Check KH plugin version, then update the inventory dashboard.", "mixed_runtime_status_and_unrelated_mutation"),
+            ("Could you please upgrade it? The KH plugin is stale.", "runtime_configuration_mutation_request"),
+        ]
+        for prompt, reason in cases:
+            with self.subTest(contract="mutation-dominates", prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual((result.complexity, result.recommended_execution), ("heavy", "role_dag"))
+                self.assertIn(reason, result.reasons)
+
+        for prompt in [
+            "Check KH plugin version, then summarize the release version history.",
+            "Check KH plugin version, then verify the inventory app version.",
+        ]:
+            with self.subTest(contract="preserve-second-task", prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual((result.complexity, result.recommended_execution), ("medium", "skill_read"))
+                self.assertIn("mixed_runtime_and_nonruntime_inspection", result.reasons)
+
+    def test_kh_target_continuity_preserves_runtime_intent_without_overbinding(self):
+        mutations = (
+            "KH가 최신인지 확인한 뒤 2.9.143으로 내려줘.",
+            "2.9.145로 바꿔줘. 내가 말한 대상은 KH 플러그인이야.",
+            "KH 버전을 조회한 다음 오래됐으면 갱신해줘.",
+        )
+        for prompt in mutations:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn("runtime_configuration_mutation_request", result.reasons)
+
+        for prompt in (
+            "KH는 업데이트하지 말고 설치된 버전만 알려줘.",
+            "KH는 손대지 말고 현재 설치 버전만 보고해줘.",
+        ):
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("medium", "skill_read"),
+                )
+                self.assertIn("readonly_kh_runtime_status", result.reasons)
+
+        unrelated = classify_request(
+            "Check KH plugin version, then update the inventory dashboard."
+        )
+        self.assertIn("mixed_runtime_status_and_unrelated_mutation", unrelated.reasons)
+
+    def test_runtime_mutation_families_use_central_parser_authorization(self):
+        prompts = (
+            "Set the KH plugin to 2.9.145.",
+            "Switch KH to version 2.9.145.",
+            "Downgrade the KH plugin to 2.9.143.",
+            "Sync KH.",
+            "Pin KH to 2.9.145.",
+            "Bring the KH plugin up to date.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_runtime_status_mutation_composition_and_anaphora(self):
+        prompts = (
+            "Check the KH plugin version. Then set it to 2.9.145.",
+            "Check the KH plugin version and switch it to 2.9.145.",
+            "Set it to 2.9.145. The KH plugin is stale.",
+            "Bring it up to date. The KH plugin is stale.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_runtime_negation_does_not_authorize_mutation(self):
+        prompts = (
+            "Do not downgrade the KH plugin. Check the KH plugin version.",
+            "Do not downgrade KH; just check its installed version.",
+            "Check the KH plugin version and do not switch it.",
+            "Bring me up to date on the KH plugin, but do not upgrade it.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("medium", "skill_read"),
+                )
+                self.assertIn("kh_runtime_status_question", result.reasons)
+                self.assertNotIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_runtime_source_edit_and_named_file_version_boundaries(self):
+        source_mutation = classify_request(
+            "Update the KH plugin tests, not the plugin runtime."
+        )
+        named_file_read = classify_request("Check the version in package.json.")
+        targetless_read = classify_request("Check the version.")
+
+        self.assertEqual(
+            (source_mutation.complexity, source_mutation.recommended_execution),
+            ("heavy", "role_dag"),
+        )
+        self.assertIn("explicit_mutation_authorization", source_mutation.reasons)
+        self.assertNotIn(
+            "runtime_configuration_mutation_request",
+            source_mutation.reasons,
+        )
+        self.assertEqual(
+            (named_file_read.complexity, named_file_read.recommended_execution),
+            ("medium", "skill_read"),
+        )
+        self.assertIn("readonly_source_inspection_request", named_file_read.reasons)
+        self.assertNotIn("targetless_runtime_status_request", named_file_read.reasons)
+        self.assertEqual(
+            (targetless_read.complexity, targetless_read.recommended_execution),
+            ("ambiguous", "clarify"),
+        )
+        self.assertIn("targetless_runtime_status_request", targetless_read.reasons)
+
+    def test_adversarial_runtime_mutation_family_matrix(self):
+        prompts = (
+            "Roll back the KH plugin to 2.9.143.",
+            "Roll the KH plugin back to 2.9.143.",
+            "KH \ud50c\ub7ec\uadf8\uc778\uc744 2.9.145\ub85c \uc124\uc815\ud574\uc918.",
+            "KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 2.9.145\ub85c \ub9de\ucdb0\uc918.",
+            "KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 \ubc14\uafd4\uc918.",
+            "KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 2.9.143\uc73c\ub85c \ub0b4\ub824\uc918.",
+            "KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 \uc62c\ub824\uc918.",
+            "KH \ud50c\ub7ec\uadf8\uc778 \ubc84\uc804\uc744 \uace0\uc815\ud574\uc918.",
+            "KH \ud50c\ub7ec\uadf8\uc778\uc744 \ub3d9\uae30\ud654\ud574\uc918.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_conditional_and_connector_composition_preserves_runtime_mutation(self):
+        prompts = (
+            "Check the KH plugin version and if stale, upgrade it.",
+            "Check the KH plugin version; afterward upgrade it.",
+            "Check the KH plugin version. Upgrade it later.",
+            "Upgrade it. KH \ud50c\ub7ec\uadf8\uc778 \ub9d0\uc774\uc57c.",
+            "Switch it to 2.9.145; the package I mean is KH UAF.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_negated_or_excluded_runtime_target_never_authorizes_or_back_binds(self):
+        negated = classify_request("Could you not upgrade the KH plugin?")
+        self.assertNotEqual(negated.recommended_execution, "role_dag")
+        self.assertNotIn("runtime_configuration_mutation_request", negated.reasons)
+
+        for prompt in (
+            "Upgrade it, but not the KH plugin.",
+            "Update it. The KH plugin should remain unchanged.",
+        ):
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("ambiguous", "clarify"),
+                )
+                self.assertTrue(
+                    {
+                        "targetless_runtime_mutation_request",
+                        "low_context_ambiguous_request",
+                    }
+                    & set(result.reasons)
+                )
+                self.assertNotIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_explicit_source_targets_override_runtime_words(self):
+        prompts = (
+            "Update the README installation wording, not the installed plugin.",
+            "Set the version string in plugin.json to 2.9.145; do not upgrade the installed plugin.",
+            "Update the KH plugin tests, not the plugin runtime.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn("explicit_mutation_authorization", result.reasons)
+                self.assertNotIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_named_runtime_reads_and_named_source_reads_are_not_targetless(self):
+        runtime_prompts = (
+            "What version is the Datadog Agent running?",
+            "Datadog Agent \ud604\uc7ac \ubc84\uc804\uc774 \ubb50\uc57c?",
+            "Datadog Agent\uac00 \uc5b4\ub290 \ubc84\uc804\uc73c\ub85c \uc2e4\ud589 \uc911\uc778\uc9c0 \uc54c\ub824\uc918.",
+            "Is Git installed?",
+            "Is Python installed?",
+        )
+        for prompt in runtime_prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("medium", "skill_read"),
+                )
+                self.assertIn("generic_environment_status_request", result.reasons)
+                self.assertNotIn("targetless_runtime_status_request", result.reasons)
+
+        for prompt in (
+            "Read the declared version from package.json.",
+            "package.json\uc5d0 \uc120\uc5b8\ub41c \ubc84\uc804\uc744 \ud655\uc778\ud574\uc918.",
+        ):
+            with self.subTest(prompt=prompt):
+                source = classify_request(prompt)
+                self.assertEqual(
+                    (source.complexity, source.recommended_execution),
+                    ("medium", "skill_read"),
+                )
+                self.assertIn("readonly_source_inspection_request", source.reasons)
+
+    def test_targetless_polite_mutation_clarifies_unless_context_supplies_target(self):
+        prompt = "\uadf8 \uc5c5\ub370\uc774\ud2b8 \ucc98\ub9ac\ud574\uc8fc\uc2e4 \uc218 \uc788\uc744\uae4c\uc694?"
+        unresolved = classify_request(prompt)
+        resolved = classify_request(prompt, context={"runtime_target": "kh"})
+
+        self.assertEqual(
+            (unresolved.complexity, unresolved.recommended_execution),
+            ("ambiguous", "clarify"),
+        )
+        self.assertIn("low_context_ambiguous_request", unresolved.reasons)
+        self.assertEqual(
+            (resolved.complexity, resolved.recommended_execution),
+            ("heavy", "role_dag"),
+        )
+        self.assertIn("runtime_configuration_mutation_request", resolved.reasons)
+
+    def test_nominal_and_conceptual_action_terms_remain_non_mutating(self):
+        prompts = (
+            "Commit messages should be clear.",
+            "Upgrade notes are missing.",
+            "What is a set?",
+            "\uc5c5\ub370\uc774\ud2b8\ub77c\ub294 \ub2e8\uc5b4 \ub73b\uc744 \uc124\uba85\ud574\uc918.",
+            "\uc124\uce58 \ubbf8\uc220\uc774\ub780 \ubb34\uc5c7\uc778\uac00?",
+            "\ucc98\ub9ac \uc131\ub2a5\uc774 \ub290\ub9ac\ub2e4.",
+            "\uc124\uc815 \uac12\uc774 \uc774\uc0c1\ud558\ub2e4.",
+            "\uc5c5\ub370\uc774\ud2b8 \ub0b4\uc6a9\uc774 \ub204\ub77d\ub410\ub2e4.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertNotEqual(result.recommended_execution, "role_dag")
+                self.assertNotIn("runtime_configuration_mutation_request", result.reasons)
+                self.assertNotIn("explicit_mutation_authorization", result.reasons)
+
+    def test_parenthesized_conditionals_and_extended_runtime_mutations_are_heavy(self):
+        prompts = (
+            "Check the KH plugin version and, if stale, upgrade it.",
+            "Check the KH plugin version and (only if stale) upgrade it.",
+            "Synchronize the installed KH plugin with codex-runtime.",
+            "Revert KH UAF to 2.9.143 and keep it there.",
+            "Align my KH installation with the codex-runtime branch.",
+            "Make the KH marketplace package current.",
+            "KH \ud50c\ub7ec\uadf8\uc778\uc744 2.9.145 \ubc84\uc804\uc73c\ub85c \uc804\ud658\ud574\uc918.",
+            "\uc124\uce58\ub41c KH\ub97c 2.9.145 \ub9b4\ub9ac\uc2a4\ub85c \ub9de\ucdb0 \ub194.",
+            "KH\ub97c 2.9.143\uc73c\ub85c \ub0b4\ub824\ub194.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_runtime_status_and_named_source_or_environment_reads_remain_medium(self):
+        prompts = (
+            "Can you verify whether the installed KH package is already at 2.9.145?",
+            "Has the KH marketplace package already reached release 2.9.145?",
+            "Is the KH marketplace build on this machine newer than 2.9.140?",
+            "What is the current npm version?",
+            "Report the product CLI version available in this workspace.",
+            "Open .codex-plugin/plugin.json and return its declared version.",
+            "Summarize the newest KH changelog entries.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("medium", "skill_read"),
+                )
+
+    def test_conceptual_action_shaped_terms_are_direct(self):
+        for prompt in (
+            "Explain installation art.",
+            "Explain the concept of installation art.",
+            "\uc124\uce58 \ubbf8\uc220\uc758 \uac1c\ub150\uc744 \uc124\uba85\ud574\uc918.",
+        ):
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("light", "direct_answer"),
+                )
+                self.assertNotIn("kh_runtime_status_question", result.reasons)
+                self.assertNotIn("generic_environment_status_request", result.reasons)
+
+    def test_negated_lookup_is_noop_but_other_positive_work_survives(self):
+        for prompt in (
+            "Do not check the KH plugin version.",
+            "Do not verify whether Git is installed.",
+            "Do not read the version from package.json.",
+        ):
+            with self.subTest(contract="noop", prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("light", "direct_answer"),
+                )
+
+        mutation = classify_request(
+            "Do not check the KH plugin version; upgrade it."
+        )
+        status = classify_request("Do not check Git; check Python instead.")
+        self.assertEqual(
+            (mutation.complexity, mutation.recommended_execution),
+            ("heavy", "role_dag"),
+        )
+        self.assertEqual(
+            (status.complexity, status.recommended_execution),
+            ("medium", "skill_read"),
+        )
+
+    def test_source_mutation_targets_override_runtime_vocabulary(self):
+        prompts = (
+            "Revise the KH plugin README installation paragraph to mention offline use.",
+            "Synchronize the examples in KH documentation with its README.",
+            "Extend the KH classifier test file with a Korean negation case.",
+            "KH README\uc758 \uc624\ud504\ub77c\uc778 \uc124\uce58 \uc608\uc2dc\ub97c \ubc14\ub85c\uc7a1\uc544\uc918.",
+            "KH \ubd84\ub958\uae30 \ud14c\uc2a4\ud2b8 \ud30c\uc77c\uc5d0 \ud55c\uad6d\uc5b4 \ubd80\uc815\ubb38 \ucf00\uc774\uc2a4\ub97c \ub123\uc5b4\uc918.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn("explicit_mutation_authorization", result.reasons)
+                self.assertNotIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_targetless_version_mutations_clarify_and_backward_target_binds(self):
+        for prompt in (
+            "Could you please make it current?",
+            "Could you possibly handle the version change?",
+            "Please pin it to the current release.",
+            "\uadf8\uac78 \ud604\uc7ac \ub9b4\ub9ac\uc2a4\uc5d0 \uace0\uc815\ud574\uc918.",
+        ):
+            with self.subTest(contract="targetless", prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("ambiguous", "clarify"),
+                )
+
+        for prompt in (
+            "Change it to 2.9.145. Here, it refers to KH UAF.",
+            "\uadf8\uac78 2.9.145\ub85c \ubcc0\uacbd\ud574\uc918. \uc5ec\uae30\uc11c \uadf8\uac74 KH \ud50c\ub7ec\uadf8\uc778\uc774\uc57c.",
+        ):
+            with self.subTest(contract="backward-binding", prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn("runtime_configuration_mutation_request", result.reasons)
+
+    def test_negated_runtime_change_preserves_advice_or_status(self):
+        advice = classify_request(
+            "Do not change KH; just advise whether a rollback is warranted."
+        )
+        status = classify_request(
+            "Do not upgrade KH; only report its installed version."
+        )
+
+        self.assertEqual(
+            (advice.complexity, advice.recommended_execution),
+            ("light", "direct_answer"),
+        )
+        self.assertEqual(
+            (status.complexity, status.recommended_execution),
+            ("medium", "skill_read"),
+        )
+        self.assertNotIn("runtime_configuration_mutation_request", advice.reasons)
+        self.assertNotIn("runtime_configuration_mutation_request", status.reasons)
+
+    def test_runtime_source_release_and_targetless_semantic_regressions(self):
+        source_mutations = (
+            "KH 플러그인 README의 설치 설명만 수정해줘.",
+            "KH 문서 예시를 README 내용과 맞춰줘.",
+            "KH README의 설치 문구를 고쳐줘.",
+        )
+        for prompt in source_mutations:
+            with self.subTest(contract="source-mutation", prompt=prompt):
+                analysis = parse_request_act(prompt)
+                result = classify_request(prompt)
+                self.assertTrue(analysis.has_mutation_authorization)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertNotIn(
+                    "runtime_configuration_mutation_request",
+                    result.reasons,
+                )
+
+        for prompt in (
+            "KH 플러그인 변경 내역을 최신 기준으로 설명해줘.",
+            "KH 변경 내역을 최신 기준으로 확인해줘.",
+            "KH의 가장 최근 변경 기록을 요약해줘.",
+        ):
+            with self.subTest(contract="release-history-read", prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("medium", "skill_read"),
+                )
+
+        runtime_mutations = (
+            "혹시 KH를 2.9.145로 해주실 수 있을까요?",
+            "Check which KH release is present; if it is older, update it.",
+        )
+        for prompt in runtime_mutations:
+            with self.subTest(contract="runtime-mutation", prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(
+                    (result.complexity, result.recommended_execution),
+                    ("heavy", "role_dag"),
+                )
+                self.assertIn(
+                    "runtime_configuration_mutation_request",
+                    result.reasons,
+                )
+
+        advice = classify_request(
+            "Is it wise to downgrade KH, or should we leave it untouched?"
+        )
+        targetless = classify_request("What version is currently installed?")
+        self.assertEqual(
+            (advice.complexity, advice.recommended_execution),
+            ("light", "direct_answer"),
+        )
+        self.assertEqual(
+            (targetless.complexity, targetless.recommended_execution),
+            ("ambiguous", "clarify"),
+        )
 
     def test_folder_needs_dashboard_routes_to_brainstorming(self):
         result = classify_request(r"C:\work\OpsDash folder needs a new inventory dashboard.")
@@ -2155,6 +2678,26 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertEqual(result.complexity, "heavy")
         self.assertEqual(result.domain, "software")
         self.assertEqual(result.recommended_execution, "role_dag")
+
+    def test_decimal_values_preserve_their_actual_domain(self):
+        cases = (
+            (
+                "Should I update my portfolio target to 60.0% equities?",
+                "medium",
+                "investment",
+                "skill_read",
+            ),
+            ("Upgrade Kubernetes to 1.30.", "heavy", "devops", "role_dag"),
+            ("Change this SQL constant to 2.0.", "ambiguous", "software", "clarify"),
+        )
+
+        for prompt, complexity, domain, execution in cases:
+            with self.subTest(prompt=prompt):
+                result = classify_request(prompt)
+                self.assertEqual(result.complexity, complexity)
+                self.assertEqual(result.domain, domain)
+                self.assertEqual(result.recommended_execution, execution)
+                self.assertNotIn("targetless_runtime_mutation_request", result.reasons)
 
 
 if __name__ == "__main__":

@@ -4939,8 +4939,12 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         issues = {(issue["skill"], issue["status"]) for issue in audit.issues}
         evidence = audit.usage_summary["sql_formatting_evidence"]
+        rows = {row["name"]: row for row in audit.skills}
 
-        self.assertIn(("always-on-front-door", "missing_front_door"), issues)
+        self.assertNotIn(("always-on-front-door", "missing_front_door"), issues)
+        self.assertEqual(rows["always-on-front-door"]["status"], "considered")
+        self.assertEqual(rows["always-on-front-door"]["runtime_hits"], 0)
+        self.assertEqual(rows["always-on-front-door"]["acceptance"]["status"], "passed")
         self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
         self.assertIn(("sql-formatting", "formatter_application_not_proven"), issues)
         self.assertNotIn("provider_inspected", evidence["states"])
@@ -7945,7 +7949,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_non_bootstrap_kh_skill_read_before_front_door_is_a_miss(self):
+    def test_matching_kh_skill_read_satisfies_semantic_front_door(self):
         path = self.write_session(
             [
                 {
@@ -7982,15 +7986,17 @@ class SessionSkillAuditTests(unittest.TestCase):
         )
 
         audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
-                and "qa_gate_harness" in issue["first_work"]
                 for issue in audit.issues
             )
         )
+        self.assertEqual(rows["always-on-front-door"]["status"], "considered")
+        self.assertEqual(rows["always-on-front-door"]["runtime_hits"], 0)
 
     def test_kh_plugin_request_without_host_provenance_remains_unverified(self):
         path = self.write_session(
