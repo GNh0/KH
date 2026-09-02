@@ -1,6 +1,9 @@
+import json
+import tempfile
 import unittest
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from src.orchestration.goal_evidence import (
     RuntimeProducerBoundary,
@@ -492,6 +495,126 @@ class GoalEvidenceTests(unittest.TestCase):
             "runtime_producer_claim_mismatch",
             invalid["metadata"]["invalid_evidence_reasons"],
         )
+
+    def test_durable_consumed_ledger_stays_bounded_for_one_thousand_claims(self):
+        now = datetime(2026, 9, 2, 0, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            boundary = RuntimeProducerBoundary(
+                "bounded-ledger-test",
+                state_dir=tmp,
+                clock=lambda: now,
+            )
+            first = None
+            size_at_300 = 0
+            for index in range(1_000):
+                receipt = boundary.issue_claim(
+                    {"index": index},
+                    claim_kind="bounded-test",
+                    claim_id_field="receipt_id",
+                    claim_id_prefix="bounded",
+                    validity_seconds=3_600,
+                )
+                first = first or receipt
+                self.assertEqual(
+                    [],
+                    boundary.validate_claim(
+                        receipt,
+                        claim_kind="bounded-test",
+                        claim_id_field="receipt_id",
+                        consume=True,
+                    ),
+                )
+                if index == 299:
+                    size_at_300 = boundary._consumed_path.stat().st_size
+            ledger_text = boundary._consumed_path.read_text(encoding="utf-8")
+            ledger = json.loads(ledger_text)
+            replay = boundary.validate_claim(
+                first,
+                claim_kind="bounded-test",
+                claim_id_field="receipt_id",
+                consume=True,
+            )
+
+        self.assertEqual(2, ledger["schema_version"])
+        self.assertEqual(1, len(ledger["buckets"]))
+        self.assertEqual(0, ledger["permanent"]["insertions"])
+        self.assertNotIn(first["receipt_id"], ledger_text)
+        self.assertLessEqual(len(ledger_text.encode("utf-8")), size_at_300 + 32)
+        self.assertEqual(["replayed_receipt"], replay)
+
+    def test_expiring_claim_replay_is_blocked_then_tombstone_is_pruned(self):
+        current = [datetime(2026, 9, 2, 0, 0, tzinfo=timezone.utc)]
+        with tempfile.TemporaryDirectory() as tmp:
+            boundary = RuntimeProducerBoundary(
+                "expiring-ledger-test",
+                state_dir=tmp,
+                clock=lambda: current[0],
+            )
+            receipt = boundary.issue_claim(
+                {"value": "short-lived"},
+                claim_kind="expiry-test",
+                claim_id_field="receipt_id",
+                claim_id_prefix="expiry",
+                validity_seconds=10,
+            )
+            self.assertEqual(
+                [],
+                boundary.validate_claim(
+                    receipt,
+                    claim_kind="expiry-test",
+                    claim_id_field="receipt_id",
+                    consume=True,
+                ),
+            )
+            current[0] += timedelta(seconds=5)
+            replay = boundary.validate_claim(
+                receipt,
+                claim_kind="expiry-test",
+                claim_id_field="receipt_id",
+            )
+            current[0] += timedelta(seconds=6)
+            expired = boundary.validate_claim(
+                receipt,
+                claim_kind="expiry-test",
+                claim_id_field="receipt_id",
+            )
+            ledger = json.loads(
+                boundary._consumed_path.read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(["replayed_receipt"], replay)
+        self.assertEqual(["runtime_producer_claim_expired"], expired)
+        self.assertEqual([], ledger["buckets"])
+
+    def test_legacy_consumed_id_list_migrates_without_reopening_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            boundary = RuntimeProducerBoundary(
+                "legacy-ledger-test",
+                state_dir=tmp,
+            )
+            receipt = boundary.issue_claim(
+                {"value": "legacy"},
+                claim_kind="legacy-test",
+                claim_id_field="receipt_id",
+                claim_id_prefix="legacy",
+            )
+            boundary._consumed_path.write_text(
+                json.dumps([receipt["receipt_id"]]),
+                encoding="utf-8",
+            )
+            replay = boundary.validate_claim(
+                receipt,
+                claim_kind="legacy-test",
+                claim_id_field="receipt_id",
+            )
+            migrated = json.loads(
+                boundary._consumed_path.read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(["replayed_receipt"], replay)
+        self.assertEqual(2, migrated["schema_version"])
+        self.assertEqual(1, migrated["permanent"]["insertions"])
+        self.assertNotIn(receipt["receipt_id"], json.dumps(migrated))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 ---
 name: pb-to-csharp-migration-harness
-description: Use when planning, generating, or reviewing offline PowerBuilder-to-C# WinForms/DevExpress/KoneLib screens, Designer code, DataWindow mappings, and SQL Server SELECT/SAVE procedures.
+description: Use when planning, generating, modifying, or reviewing PowerBuilder-to-C# WinForms/DevExpress/KoneLib screens, Designer code, DataWindow mappings, and SQL Server SELECT/SAVE procedures.
 ---
 
 # PB To C# Migration Harness
@@ -16,7 +16,7 @@ description: Use when planning, generating, or reviewing offline PowerBuilder-to
 
 ## KH Entry Contract
 
-- Apply `always-on-front-door` to every new migration task before reading source, selecting this harness, or asking a clarification. PB migration is specialist, source/tool, mutation, artifact, and verification work, so it normally requires the governed runtime; use the host-native semantic fast path only when every current fast-path eligibility condition is satisfied.
+- Select this harness directly when the request is PB-to-C# planning, analysis, generation, modification, or review. Use governed routing only when a separate concrete risk, orchestration, or audit trigger requires it.
 - Treat a catalog entry, `selected_not_executed_skills`, a `SKILL.md` read, or a smoke check as inspection only. Report this harness as applied only when the governed runtime actually executes it against the exact target/evidence and records the applicable command, exit status, and artifact or verification receipt.
 - Keep generic C# style separate from target behavior. The packaged style contract governs generic naming, layout, event, provider, Designer, grid, and migration-call shape; exact current target artifacts and supplied PB/C#/Designer/SQL evidence govern behavior and preservation. A named comparator may contribute only its explicitly authorized, path- and SHA-256-bound properties after target-role mapping.
 - Use the SQL provider bridge when SQL is emitted or formatted: preserve supplied SQL as passthrough, select a compatible host-local provider before the packaged KH fallback, run the exact formatting verifier, retain non-empty `verifier_history`, and require correlated final-response binding before delivery. Formatting success alone does not prove semantic equivalence or authorize release.
@@ -88,6 +88,8 @@ Without those receipts, report `proposal-only` or `bounded-source-draft`; never 
 - Keep list retrieval, focused-row detail retrieval, validation, binding, and save serialization explicit.
 - Reuse established target-project clear, query, and save helpers before generic assignments or new helpers.
 - Pass raw editor values through existing wrappers, including date text APIs such as `YYYYMMDD`, when target evidence uses them. Let the procedure own date/default/wildcard derivation when target style evidence says so; do not add client-side derivation, DTOs, or value helpers.
+- Preserve target-local edit/save calls. Do not invent `PostEditor`, `UpdateCurrentRow`, whole-table detail-row rewrites, parent-key propagation, composite-key values, or helper abstractions without exact target-source or user evidence.
+- Preserve explicit Added/New, Modified, and Deleted/Del detail-row semantics. Full delete/reinsert is not a generic save strategy and requires exact source or user evidence.
 
 ### Control Provider Order
 

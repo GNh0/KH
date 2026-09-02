@@ -226,6 +226,10 @@
     "save": [
       "validate before serialization",
       "serialize only documented row states",
+      "preserve target-local edit and save calls",
+      "do not rewrite every detail row or propagate inferred keys",
+      "keep Added New Modified Deleted Del as delta operations",
+      "block full delete and reinsert without exact source or user evidence",
       "call one save path",
       "refresh only after success"
     ]
@@ -582,6 +586,8 @@
       "single_argument_datacolumn_add_is_system_string": true,
       "explicit_csharp_datacolumn_types_are_correlated": true,
       "row_state_mapping_required": true,
+      "row_state_delta_preserved": true,
+      "full_delete_reinsert_requires_exact_source_or_user_evidence": true,
       "openxml_order_matches_csharp_payload": true,
       "write_projection_contains": ["editable_payload", "technical_key", "pb_fixed", "server_derived"],
       "omitted_from_xml_and_writes": ["db_default", "unused"],

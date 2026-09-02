@@ -28,7 +28,6 @@ LARGE_WORK_BUNDLE_SKILLS = [
     "plan-execution-harness",
     "systematic-debugging-harness",
     "command-output-harness",
-    "token-optimizer",
     "memory-state-harness",
     "parallel-orchestration-harness",
     "subagent-review-pipeline",
@@ -61,8 +60,6 @@ LARGE_WORK_BUNDLE_EVIDENCE = [
     "skill_statuses",
     "workspace_strategy",
     "parallel_strategy_decision",
-    "token_optimizer_status",
-    "token_optimizer_status_reason",
     "memory_candidates",
     "compound_handoff",
 ]
@@ -3021,14 +3018,16 @@ def _classify_request(
     request_act_text = request_analysis.outer_text
     request_act = _normalize(request_act_text)
     domain = _detect_domain(normalized, context, request_analysis)
-    cross_cutting = ["token-optimizer"]
+    cross_cutting: List[str] = []
     evidence_required: List[str] = []
     reasons: List[str] = []
 
     if _needs_token_optimization(text, normalized):
+        cross_cutting.append("token-optimizer")
         evidence_required.append("token_optimization")
         reasons.append("large_or_log_like_input")
     if _context_exceeds_token_budget(context):
+        cross_cutting.append("token-optimizer")
         evidence_required.append("token_optimization")
         reasons.append("context_budget_threshold_exceeded")
     if _requires_resume_context(context):
@@ -3108,6 +3107,34 @@ def _classify_request(
 
     if memory_requested:
         return _memory_state_classification(domain, cross_cutting, evidence_required, reasons)
+
+    bounded_direct_reason = _bounded_direct_request_reason(
+        normalized,
+        request_analysis,
+    )
+    if bounded_direct_reason:
+        return _classification(
+            complexity="light",
+            domain="software" if domain == "general" else domain,
+            recommended_execution="direct_answer",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router"],
+            evidence_required=evidence_required,
+            reasons=[*reasons, bounded_direct_reason],
+            confidence=0.9,
+        )
+
+    if _is_explicit_front_door_audit_only_request(normalized, request_analysis):
+        return _classification(
+            complexity="light",
+            domain="software",
+            recommended_execution="skill_read",
+            cross_cutting=cross_cutting,
+            recommended_skills=["request-complexity-router", "always-on-front-door"],
+            evidence_required=_dedupe([*evidence_required, "routing_audit"]),
+            reasons=[*reasons, "explicit_front_door_audit_only"],
+            confidence=0.92,
+        )
 
     if _is_high_risk(request_act, domain, context, request_analysis):
         high_risk_reasons = list(reasons)
@@ -3242,6 +3269,13 @@ def _classify_request(
         )
 
     if _is_provider_meta_review_request(normalized):
+        if request_analysis.has_mutation_authorization:
+            return _heavy_classification(
+                "software",
+                cross_cutting,
+                evidence_required,
+                [*reasons, "provider_meta_mutation_request"],
+            )
         if _is_structural_non_mutating_question(request_act, normalized, domain, request_analysis) and not _is_structural_readonly_inspection_request(
             request_act,
             domain,
@@ -5308,6 +5342,317 @@ def _is_provider_meta_review_request(normalized: str) -> bool:
     if not _contains_any(normalized, meta_markers):
         return False
     return not _contains_any(normalized, READONLY_SOURCE_AUDIT_MUTATION_TERMS)
+
+
+def _is_explicit_front_door_audit_only_request(
+    normalized: str,
+    analysis: RequestActAnalysis,
+) -> bool:
+    """Recognize a bounded routing audit without authorizing described work."""
+    has_front_door = _contains_any(
+        normalized,
+        {
+            "front-door",
+            "front door",
+            "front_door",
+            "always-on-front-door",
+            "always_on_front_door",
+            "프런트도어",
+            "프론트도어",
+        },
+    )
+    has_audit_evidence = _contains_any(
+        normalized,
+        {
+            "audit",
+            "routing evidence",
+            "route evidence",
+            "record routing",
+            "receipt",
+            "감사",
+            "라우팅 증거",
+            "라우팅 근거",
+            "영수증",
+        },
+    )
+    if not has_front_door or not has_audit_evidence:
+        return False
+    if analysis.authorized_high_impact_destructive or analysis.outer_database_execution:
+        return False
+    audit_only_actions = {
+        "analyze",
+        "check",
+        "confirm",
+        "inspect",
+        "open",
+        "read",
+        "report",
+        "review",
+        "run",
+        "summarize",
+        "trace",
+        "validate",
+        "verify",
+        "검토",
+        "점검",
+        "확인",
+    }
+    for clause in analysis.clauses:
+        if clause.authorized and set(clause.action_verbs) - audit_only_actions:
+            return False
+    substantive_mutation_terms = {
+        "add",
+        "alter",
+        "change",
+        "configure",
+        "create",
+        "delete",
+        "disable",
+        "edit",
+        "enable",
+        "reconfigure",
+        "modify",
+        "patch",
+        "fix",
+        "repair",
+        "implement",
+        "build",
+        "install",
+        "rename",
+        "replace",
+        "revise",
+        "set",
+        "upgrade",
+        "update",
+        "remove",
+        "write",
+        "write code",
+        "edit source",
+        "설정 변경",
+        "수정",
+        "패치",
+        "고쳐",
+        "구현",
+        "생성",
+        "설치",
+        "업그레이드",
+        "업데이트",
+        "삭제",
+    }
+    return not _contains_any(normalized, substantive_mutation_terms)
+
+
+def _bounded_direct_request_reason(
+    normalized: str,
+    analysis: RequestActAnalysis,
+) -> str:
+    if _is_bounded_named_artifact_edit(normalized, analysis):
+        return "bounded_direct_edit"
+    if _is_explicit_nonexecution_readonly_request(normalized, analysis):
+        return "explicit_nonexecution_readonly"
+    if _is_bounded_repository_state_query(normalized, analysis):
+        return "bounded_repository_state_query"
+    return ""
+
+
+def _is_bounded_named_artifact_edit(
+    normalized: str,
+    analysis: RequestActAnalysis,
+) -> bool:
+    """Recognize one explicit local edit to one named artifact."""
+    if len(normalized.split()) > 24 or len(normalized) > 240:
+        return False
+    if len(analysis.clauses) != 1:
+        return False
+
+    clause = analysis.clauses[0]
+    if not clause.authorized or "mutate" not in clause.action_classes:
+        return False
+    if clause.action_classes & {"destructive", "execute"}:
+        return False
+    if "named_file" not in clause.scopes:
+        return False
+    if clause.scopes & {"all", "live", "production", "recursive", "root", "staging", "system"}:
+        return False
+    if clause.target_classes - {"filesystem", "source"}:
+        return False
+    if analysis.authorized_high_impact_destructive or analysis.outer_database_execution:
+        return False
+
+    named_artifacts = re.findall(
+        r"(?<![a-z0-9_.-])(?:[a-z]:[\\/])?"
+        r"(?:\.?[a-z0-9_-]+[\\/])*"
+        r"[a-z0-9_-]+(?:\.[a-z0-9_-]+)+(?![a-z0-9_-])",
+        normalized,
+        re.IGNORECASE,
+    )
+    if len(named_artifacts) != 1:
+        return False
+
+    localized_actions = {
+        "add",
+        "change",
+        "correct",
+        "edit",
+        "fix",
+        "modify",
+        "patch",
+        "rename",
+        "replace",
+        "revise",
+        "set",
+        "update",
+        "고치",
+        "고쳐",
+        "변경",
+        "보완",
+        "수정",
+        "추가",
+        "패치",
+    }
+    if not (set(clause.action_verbs) & localized_actions):
+        return False
+
+    if re.search(
+        r"\b(?:all|across|codebase|every|entire|many|multiple|project|recursive|"
+        r"repository|several|various|whole|workspace)\b"
+        r"|(?:전체|모든|여러|전반|재귀적)",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return False
+    if re.search(
+        r"\b(?:architecture|authentication|authorization|feature|framework|migration|"
+        r"redesign|refactor|rewrite|subsystem|system|workflow)\b",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return False
+    if re.search(r"\b(?:and|then|plus)\b|[;,]", normalized, re.IGNORECASE):
+        return False
+
+    artifact_start = normalized.find(named_artifacts[0])
+    edit_description = normalized[:artifact_start]
+    return bool(
+        re.search(
+            r"\b(?:a|an|one|single|the|this|that)\b"
+            r"|(?:한\s*개|하나|해당|이\s+|그\s+)",
+            edit_description,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _is_explicit_nonexecution_readonly_request(
+    normalized: str,
+    analysis: RequestActAnalysis,
+) -> bool:
+    front_door_meta_optout = bool(
+        _contains_any(
+            normalized,
+            {"front-door", "front door", "프런트도어", "프론트도어"},
+        )
+        and _contains_any(
+            normalized,
+            {"whether", "needed", "필요한지만", "필요한지"},
+        )
+        and _contains_any(
+            normalized,
+            {
+                "do not run",
+                "do not execute",
+                "do not create routing evidence",
+                "실행하지",
+                "실행하거나",
+                "라우팅 증거를 만들지는 마",
+                "증거를 만들지는 마",
+            },
+        )
+    )
+    if front_door_meta_optout:
+        return True
+    english_nonexecution = bool(
+        re.search(
+            r"\b(?:do\s+not|don't|dont|never)\s+(?:execute|implement|build|create|delete|patch|modify|change|run)\b",
+            normalized,
+        )
+        or re.search(r"\b(?:patch|change|modify|implement|build|create)\s+nothing\b", normalized)
+    )
+    korean_nonexecution = bool(
+        re.search(
+            r"(?:수정|변경|구현|실행|생성|삭제|패치)(?:하|하지|하지는)?\s*(?:말고|마|않)",
+            normalized,
+        )
+    )
+    if not (
+        analysis.pure_negated_action
+        or analysis.nonexecuting_destructive_discussion
+        or english_nonexecution
+        or korean_nonexecution
+    ):
+        return False
+    bounded_readonly_response = _contains_any(
+        normalized,
+        {
+            "show me",
+            "which line",
+            "audit target",
+            "record it",
+            "would need",
+            "only say",
+            "only tell",
+            "필요한지만",
+            "보여",
+            "줄만",
+            "감사 대상",
+            "증거를 만들지는 마",
+        },
+    )
+    negated_generation_only = bool(
+        re.search(r"\b(?:do\s+not|don't|dont|never)\s+(?:implement|build|create)\b", normalized)
+        or re.search(r"(?:구현|생성)(?:하지|하지는)?\s*마", normalized)
+    )
+    if _contains_any(
+        normalized,
+        {
+            "review",
+            "audit",
+            "inspect",
+            "risk",
+            "evidence",
+            "검토",
+            "감사",
+            "점검",
+            "위험",
+            "증거",
+        },
+    ):
+        negated_generation_only = False
+    return bounded_readonly_response or negated_generation_only
+
+
+def _is_bounded_repository_state_query(
+    normalized: str,
+    analysis: RequestActAnalysis,
+) -> bool:
+    if analysis.has_mutation_authorization:
+        return False
+    repository_state = _contains_any(
+        normalized,
+        {
+            "current repository state",
+            "repository status",
+            "repo state",
+            "repo status",
+            "현재 저장소 상태",
+            "현재 리포지토리 상태",
+        },
+    )
+    asks_for_observation = _contains_any(
+        normalized,
+        {"what changed", "show", "tell me", "확인", "알려", "변경된"},
+    )
+    return repository_state and asks_for_observation
 
 
 def _has_authorized_high_impact_destructive_act(

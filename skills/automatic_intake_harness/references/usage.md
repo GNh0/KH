@@ -100,5 +100,5 @@ The actual_runtime_path is `src.orchestration.kh_front_door.build_kh_front_door`
   - `src.orchestration.request_classifier.classify_request`
   - `src.orchestration.plugin_composition.compose_plugin_route`
   - `src.skills.uaf_skill_catalog.collect_packaged_skills`
-- Application path: host-native only for the strict no-tool direct contract; otherwise run the front-door Python module before project reads, memory lookup, subagent dispatch, or target-folder inspection.
+- Application path: ordinary clear work proceeds host-native or through the single matching domain skill without this runtime. Run the front-door Python module only for an explicit routing audit or an already-governed workflow that requires reproducible classification evidence; do not make it a prerequisite for project reads or target inspection.
 - Completion rule: never infer governed execution from reading this file. Report runtime application only when the front-door result records classification, plugin route, skill source, token decision, and applied/skipped/blocked evidence.

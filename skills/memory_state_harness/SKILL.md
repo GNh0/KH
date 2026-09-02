@@ -1,15 +1,15 @@
 ---
 name: memory-state-harness
-description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when a UAF workflow needs scoped persistent memory, memory candidates, project/conversation namespace isolation, or archive/delete cleanup policy.
+description: Use when a UAF workflow needs scoped persistent memory, memory candidates, project/conversation namespace isolation, or archive/delete cleanup policy.
 ---
 
 # Memory State Harness
 
 ## KH Entry Contract
 
-- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
-- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
-- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Select this skill directly when its semantic trigger matches the current request; no separate routing preflight is required.
+- An active KH directive does not select this skill by itself; the current request must still match this skill's trigger or require it as a workflow gate.
+- Use this skill when its frontmatter trigger directly matches the current request or an already-selected workflow requires it.
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 

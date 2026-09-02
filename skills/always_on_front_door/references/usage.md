@@ -1,14 +1,14 @@
-# Always On Front Door Usage
+# Front Door Audit Usage
 
 ## When to use
 
-The default path is host-native semantic selection:
+Do not load this skill to perform ordinary host-native selection. The plugin-level default is:
 
 - direct answer when the request is self-contained
 - one matching specialist skill when its description clearly applies
 - a small process-plus-domain combination only when both materially change the work
 
-Do not run the Python router merely because a request needs a file read, a tool, or a code edit. The selected specialist skill and the host's normal safety policy govern that work.
+Do not read this skill or run the Python router merely because a request needs a file read, database call, tool, SQL change, or C# edit. The selected domain skill and the host's normal safety policy govern that work.
 
 Use the deterministic runtime only when at least one condition is present:
 
@@ -18,7 +18,7 @@ Use the deterministic runtime only when at least one condition is present:
 - a high-risk operation needs a machine-readable authorization boundary
 - KH routing itself is being debugged or regression-tested
 
-The user never needs to name KH. Automatic discovery still depends on the host exposing the skill metadata; no manifest or skill can guarantee host invocation.
+This skill is explicit-only in Codex metadata. The user may name it for an audit, or a governed runtime may invoke it after a concrete high-risk/large-work trigger. It must not self-select on every new request.
 
 Execution level: `host-native-semantic` for direct or specialist selection; `python-module` only for governed runtime audit mode.
 
@@ -43,9 +43,9 @@ Within a current unfinished task, a pure acknowledgement may reuse its selected 
 
 ## Execution pattern
 
-1. Choose direct, specialist, or governed mode from visible context.
-2. For direct mode, answer without Python or another skill read.
-3. For specialist mode, read only the selected skill and follow its evidence contract.
+1. Confirm the explicit audit or governed trigger before reading this reference.
+2. Audit the expected direct, specialist, or governed mode from visible context.
+3. Treat a read of this skill during an ordinary direct or single-domain request as a routing defect.
 4. For governed mode, run the UTF-8-safe command below and retain the runtime receipt internally.
 
 ## Windows UTF-8 invocation
@@ -67,7 +67,7 @@ Use `--summary` only when a human-readable audit packet is required. Exit code 3
 
 ## Evidence to produce
 
-For ordinary semantic selection, evidence is the observable path:
+When auditing ordinary semantic selection after the fact, evidence is the observable path:
 
 - direct answer with no unnecessary routing call, or
 - the selected skill read followed by behavior or executable output that matches it
@@ -87,4 +87,4 @@ For governed mode, record `actual_runtime_path = src.orchestration.kh_front_door
 
 ## Quality bar
 
-The front door succeeds when it makes skill use more reliable without becoming the task. Common requests should incur no Python startup, no catalog scan, no routing JSON in the answer, and no unrelated skill reads. Deterministic code should validate observable facts and high-risk gates, not attempt to encode all natural-language meaning.
+The audit succeeds when it proves that common requests incurred no front-door skill read, no Python startup, no catalog scan, no global-memory preflight, no routing narration, and no unrelated skill reads. Deterministic code should validate observable facts and high-risk gates, not attempt to encode all natural-language meaning.

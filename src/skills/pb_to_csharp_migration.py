@@ -1,13 +1,19 @@
 import hashlib
+import hmac
 import inspect
 import json
 import os
 import re
+import secrets
+import threading
+import time
+import uuid
+from collections import OrderedDict
 from fnmatch import fnmatchcase
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -148,6 +154,26 @@ def _absolute_path_key(value: str | Path) -> str:
     if not raw or not os.path.isabs(raw):
         return ""
     return os.path.normcase(os.path.abspath(raw))
+
+
+def _same_artifact_identity(left: str | Path, right: str | Path) -> bool:
+    """Return True when two artifact paths resolve to the same physical file."""
+    left_raw = str(left or "").strip()
+    right_raw = str(right or "").strip()
+    if not left_raw or not right_raw:
+        return False
+    try:
+        left_resolved = Path(left_raw).resolve(strict=False)
+        right_resolved = Path(right_raw).resolve(strict=False)
+    except OSError:
+        left_resolved = Path(os.path.abspath(left_raw))
+        right_resolved = Path(os.path.abspath(right_raw))
+    if os.path.normcase(str(left_resolved)) == os.path.normcase(str(right_resolved)):
+        return True
+    try:
+        return os.path.samefile(left_resolved, right_resolved)
+    except OSError:
+        return False
 
 
 DATAWINDOW_COLUMN_PATTERN = re.compile(r"column\s*=\s*\(", re.IGNORECASE)
@@ -4504,12 +4530,40 @@ def build_offline_pb_to_csharp_runtime_generation(
     profile_version: str,
     profile_hash: str,
     source_state: MigrationInputState | Dict[str, Any] | None = None,
+    target_source_path: str | Path = "",
+    target_designer_path: str | Path = "",
 ) -> HarnessResult:
     """Build ordinary runtime-generation context from packaged profile data only."""
     loaded = load_packaged_migration_profile(profile_id, profile_version, profile_hash)
     source_plan = build_pbl_export_strategy(source_state) if source_state is not None else None
     objective_present = bool(str(objective or "").strip())
-    success = bool(objective_present and loaded.success)
+    generation_run = None
+    if objective_present and loaded.success and str(target_source_path or "").strip():
+        generation_run = begin_pb_to_csharp_runtime_generation(
+            target_source_path=target_source_path,
+            target_designer_path=target_designer_path,
+        )
+    elif str(target_designer_path or "").strip():
+        generation_run = _runtime_generation_result(
+            success=False,
+            operation="begin_runtime_generation",
+            metadata={
+                "issues": [
+                    {
+                        "code": "csharp_generation_source_path_required",
+                        "severity": "error",
+                        "message": "A Designer generation target cannot be opened without its C# source target.",
+                    }
+                ],
+                "generation_run_receipt": {},
+            },
+            error="PB to C# runtime generation source target is required.",
+        )
+    success = bool(
+        objective_present
+        and loaded.success
+        and (generation_run is None or generation_run.success)
+    )
     issues = list(loaded.metadata.get("issues", []))
     if not objective_present:
         issues.append(
@@ -4518,6 +4572,12 @@ def build_offline_pb_to_csharp_runtime_generation(
                 "severity": "error",
                 "message": "Runtime generation objective is required.",
             }
+        )
+    if generation_run is not None and not generation_run.success:
+        issues.extend(
+            dict(item)
+            for item in generation_run.metadata.get("issues", [])
+            if isinstance(item, Mapping)
         )
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
@@ -4543,6 +4603,14 @@ def build_offline_pb_to_csharp_runtime_generation(
         "tool_execution_intent": dict((source_plan or {}).get("tool_execution_intent", {})),
         "fallback": dict((source_plan or {}).get("fallback", {})),
         "invocation_contract": dict((source_plan or {}).get("invocation_contract", {})),
+        "generation_run": (
+            dict(generation_run.metadata)
+            if generation_run is not None
+            else {
+                "status": "not_requested",
+                "generation_run_receipt": {},
+            }
+        ),
         "capabilities_invoked": {
             "csharp_source_read": False,
             "db": False,
@@ -9892,9 +9960,1207 @@ def _validate_canonical_csharp_style_family(
     }
 
 
+_CSHARP_SOURCE_OPERATION_RECEIPT_SCHEMA = "kh.pb-csharp-source-operation-receipt.v1"
+_CSHARP_GENERATION_RUN_RECEIPT_SCHEMA = "kh.pb-csharp-generation-run-receipt.v1"
+_PB_MIGRATION_RUNTIME_HOST_ID = "kh-uaf-pb-migration-runtime"
+_PB_MIGRATION_RUNTIME_TOOL = "pb-to-csharp-runtime-generation"
+_PB_MIGRATION_RUNTIME_SECRET = secrets.token_bytes(32)
+_PB_MIGRATION_RUNTIME_LOCK = threading.RLock()
+_PB_MIGRATION_ORCHESTRATION_RECEIPT_CAPABILITY = object()
+_PB_MIGRATION_GENERATION_RUNS: Dict[str, Dict[str, Any]] = {}
+_PB_MIGRATION_GENERATION_RECEIPTS: Dict[str, Dict[str, Any]] = {}
+_PB_MIGRATION_GENERATION_TOMBSTONES: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+_PB_MIGRATION_OPEN_RUN_TTL_SECONDS = 15 * 60
+_PB_MIGRATION_PENDING_RECEIPT_TTL_SECONDS = 15 * 60
+_PB_MIGRATION_REPLAY_TOMBSTONE_TTL_SECONDS = 5 * 60
+_PB_MIGRATION_MAX_ACTIVE_RUNS = 256
+_PB_MIGRATION_MAX_ACTIVE_RECEIPTS = 256
+_PB_MIGRATION_MAX_REPLAY_TOMBSTONES = 512
+
+
+def _pb_migration_runtime_now() -> float:
+    return time.monotonic()
+
+
+def _pb_migration_tombstone_key(kind: str, identity: str) -> str:
+    return f"{kind}:{identity}"
+
+
+def _record_pb_migration_tombstone_locked(
+    kind: str,
+    identity: str,
+    status: str,
+    *,
+    now: float,
+    run_id: str = "",
+) -> None:
+    if not identity:
+        return
+    key = _pb_migration_tombstone_key(kind, identity)
+    _PB_MIGRATION_GENERATION_TOMBSTONES.pop(key, None)
+    _PB_MIGRATION_GENERATION_TOMBSTONES[key] = {
+        "kind": kind,
+        "identity": identity,
+        "run_id": run_id,
+        "status": status,
+        "created_at": now,
+        "expires_at": now + _PB_MIGRATION_REPLAY_TOMBSTONE_TTL_SECONDS,
+    }
+    while (
+        len(_PB_MIGRATION_GENERATION_TOMBSTONES)
+        > _PB_MIGRATION_MAX_REPLAY_TOMBSTONES
+    ):
+        _PB_MIGRATION_GENERATION_TOMBSTONES.popitem(last=False)
+
+
+def _remove_pb_migration_receipt_locked(
+    receipt_id: str,
+    status: str,
+    *,
+    now: float,
+) -> Dict[str, Any]:
+    state = _PB_MIGRATION_GENERATION_RECEIPTS.pop(receipt_id, None)
+    if not state:
+        return {}
+    run_id = str(state.get("run_id") or "")
+    _record_pb_migration_tombstone_locked(
+        "receipt",
+        receipt_id,
+        status,
+        now=now,
+        run_id=run_id,
+    )
+    run_state = _PB_MIGRATION_GENERATION_RUNS.get(run_id)
+    if run_state and str(run_state.get("current_receipt_id") or "") == receipt_id:
+        run_state["current_receipt_id"] = ""
+    return state
+
+
+def _remove_pb_migration_run_locked(
+    run_id: str,
+    status: str,
+    *,
+    now: float,
+    receipt_status: str = "expired",
+) -> Dict[str, Any]:
+    state = _PB_MIGRATION_GENERATION_RUNS.pop(run_id, None)
+    if not state:
+        return {}
+    for receipt_id, receipt_state in list(
+        _PB_MIGRATION_GENERATION_RECEIPTS.items()
+    ):
+        if str(receipt_state.get("run_id") or "") == run_id:
+            _remove_pb_migration_receipt_locked(
+                receipt_id,
+                receipt_status,
+                now=now,
+            )
+    _record_pb_migration_tombstone_locked(
+        "run",
+        run_id,
+        status,
+        now=now,
+        run_id=run_id,
+    )
+    return state
+
+
+def _cleanup_pb_migration_generation_state(
+    *,
+    now: float | None = None,
+) -> Dict[str, Any]:
+    """Expire and bound process-local PB generation authority state."""
+    observed_at = _pb_migration_runtime_now() if now is None else float(now)
+    expired_runs: List[str] = []
+    expired_receipts: List[str] = []
+    evicted_runs: List[str] = []
+    evicted_receipts: List[str] = []
+    with _PB_MIGRATION_RUNTIME_LOCK:
+        for key, state in list(_PB_MIGRATION_GENERATION_TOMBSTONES.items()):
+            if float(state.get("expires_at") or 0.0) <= observed_at:
+                _PB_MIGRATION_GENERATION_TOMBSTONES.pop(key, None)
+
+        for receipt_id, state in list(
+            _PB_MIGRATION_GENERATION_RECEIPTS.items()
+        ):
+            if float(state.get("expires_at") or 0.0) <= observed_at:
+                _remove_pb_migration_receipt_locked(
+                    receipt_id,
+                    "expired",
+                    now=observed_at,
+                )
+                expired_receipts.append(receipt_id)
+
+        for run_id, state in list(_PB_MIGRATION_GENERATION_RUNS.items()):
+            if float(state.get("expires_at") or 0.0) <= observed_at:
+                _remove_pb_migration_run_locked(
+                    run_id,
+                    "expired",
+                    now=observed_at,
+                )
+                expired_runs.append(run_id)
+
+        while len(_PB_MIGRATION_GENERATION_RECEIPTS) > _PB_MIGRATION_MAX_ACTIVE_RECEIPTS:
+            receipt_id = min(
+                _PB_MIGRATION_GENERATION_RECEIPTS,
+                key=lambda value: (
+                    float(
+                        _PB_MIGRATION_GENERATION_RECEIPTS[value].get("updated_at")
+                        or _PB_MIGRATION_GENERATION_RECEIPTS[value].get("created_at")
+                        or 0.0
+                    ),
+                    value,
+                ),
+            )
+            _remove_pb_migration_receipt_locked(
+                receipt_id,
+                "expired",
+                now=observed_at,
+            )
+            evicted_receipts.append(receipt_id)
+
+        while len(_PB_MIGRATION_GENERATION_RUNS) > _PB_MIGRATION_MAX_ACTIVE_RUNS:
+            run_id = min(
+                _PB_MIGRATION_GENERATION_RUNS,
+                key=lambda value: (
+                    float(
+                        _PB_MIGRATION_GENERATION_RUNS[value].get("updated_at")
+                        or _PB_MIGRATION_GENERATION_RUNS[value].get("created_at")
+                        or 0.0
+                    ),
+                    value,
+                ),
+            )
+            _remove_pb_migration_run_locked(
+                run_id,
+                "expired",
+                now=observed_at,
+            )
+            evicted_runs.append(run_id)
+
+        while (
+            len(_PB_MIGRATION_GENERATION_TOMBSTONES)
+            > _PB_MIGRATION_MAX_REPLAY_TOMBSTONES
+        ):
+            _PB_MIGRATION_GENERATION_TOMBSTONES.popitem(last=False)
+
+        counts = {
+            "active_runs": len(_PB_MIGRATION_GENERATION_RUNS),
+            "active_receipts": len(_PB_MIGRATION_GENERATION_RECEIPTS),
+            "replay_tombstones": len(_PB_MIGRATION_GENERATION_TOMBSTONES),
+        }
+    return {
+        **counts,
+        "expired_runs": expired_runs,
+        "expired_receipts": expired_receipts,
+        "evicted_runs": evicted_runs,
+        "evicted_receipts": evicted_receipts,
+    }
+
+
+def _pb_migration_tombstone_status_locked(kind: str, identity: str) -> str:
+    state = _PB_MIGRATION_GENERATION_TOMBSTONES.get(
+        _pb_migration_tombstone_key(kind, identity)
+    )
+    return str((state or {}).get("status") or "")
+
+
+def _canonical_source_operation_receipt_payload(receipt: Mapping[str, Any]) -> bytes:
+    payload = {
+        str(key): value
+        for key, value in receipt.items()
+        if str(key) != "signature"
+    }
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _sign_pb_migration_runtime_payload(payload: bytes) -> str:
+    return hmac.new(
+        _PB_MIGRATION_RUNTIME_SECRET,
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _runtime_generation_result(
+    *,
+    success: bool,
+    operation: str,
+    metadata: Mapping[str, Any],
+    error: str,
+) -> HarnessResult:
+    payload = {
+        "harness": "pb-to-csharp-migration-harness",
+        "operation": operation,
+        "status": "passed" if success else "blocked",
+        **dict(metadata),
+    }
+    return HarnessResult(
+        success=success,
+        stdout=json.dumps(
+            {
+                "status": payload["status"],
+                "operation": operation,
+                "run_id": str(payload.get("run_id") or ""),
+                "receipt_id": str(payload.get("receipt_id") or ""),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        stderr="" if success else error,
+        exit_code=0 if success else 1,
+        metadata=payload,
+    )
+
+
+def begin_pb_to_csharp_runtime_generation(
+    *,
+    target_source_path: str | Path,
+    target_designer_path: str | Path = "",
+) -> HarnessResult:
+    """Open a host-owned generation run before either target artifact exists."""
+    issues: List[Dict[str, Any]] = []
+
+    def bind_target(value: str | Path, role: str, *, required: bool) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            if required:
+                issues.append(
+                    {
+                        "code": f"csharp_generation_{role}_path_required",
+                        "severity": "error",
+                        "message": f"An absolute {role.replace('_', ' ')} path is required before generation starts.",
+                    }
+                )
+            return ""
+        if not os.path.isabs(raw):
+            issues.append(
+                {
+                    "code": f"csharp_generation_{role}_path_not_absolute",
+                    "severity": "error",
+                    "message": f"The {role.replace('_', ' ')} path must be absolute.",
+                }
+            )
+            return ""
+        try:
+            resolved = Path(raw).resolve(strict=False)
+        except OSError as exc:
+            issues.append(
+                {
+                    "code": f"csharp_generation_{role}_path_invalid",
+                    "severity": "error",
+                    "message": str(exc),
+                }
+            )
+            return ""
+        if resolved.exists():
+            issues.append(
+                {
+                    "code": f"csharp_generation_{role}_prewrite_not_absent",
+                    "severity": "error",
+                    "message": (
+                        f"Generation requires an absent {role.replace('_', ' ')} target at the host pre-write boundary."
+                    ),
+                }
+            )
+        return str(resolved)
+
+    source_path = bind_target(target_source_path, "source", required=True)
+    designer_path = bind_target(target_designer_path, "designer", required=False)
+    if source_path and designer_path and _same_artifact_identity(source_path, designer_path):
+        issues.append(
+            {
+                "code": "csharp_generation_target_paths_same",
+                "severity": "error",
+                "message": "Generated C# and Designer targets must be distinct physical artifacts.",
+            }
+        )
+    if issues:
+        return _runtime_generation_result(
+            success=False,
+            operation="begin_runtime_generation",
+            metadata={"issues": issues, "generation_run_receipt": {}},
+            error="PB to C# runtime generation could not open a trusted pre-write boundary.",
+        )
+
+    observed_at = _pb_migration_runtime_now()
+    _cleanup_pb_migration_generation_state(now=observed_at)
+    run_id = str(uuid.uuid4())
+    correlation_id = str(uuid.uuid4())
+    run_receipt: Dict[str, Any] = {
+        "schema_version": _CSHARP_GENERATION_RUN_RECEIPT_SCHEMA,
+        "operation": "generation",
+        "run_id": run_id,
+        "correlation_id": correlation_id,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "producer": {
+            "host_id": _PB_MIGRATION_RUNTIME_HOST_ID,
+            "tool": _PB_MIGRATION_RUNTIME_TOOL,
+            "result_id": str(uuid.uuid4()),
+        },
+        "targets": {
+            "source": {"path": source_path, "pre_write_state": "absent"},
+            "designer": (
+                {"path": designer_path, "pre_write_state": "absent"}
+                if designer_path
+                else {}
+            ),
+        },
+    }
+    run_payload = _canonical_source_operation_receipt_payload(run_receipt)
+    run_receipt["signature"] = _sign_pb_migration_runtime_payload(run_payload)
+    with _PB_MIGRATION_RUNTIME_LOCK:
+        _PB_MIGRATION_GENERATION_RUNS[run_id] = {
+            "receipt": dict(run_receipt),
+            "payload": run_payload,
+            "signature": run_receipt["signature"],
+            "source_path": source_path,
+            "designer_path": designer_path,
+            "status": "open",
+            "attempt": 0,
+            "current_receipt_id": "",
+            "created_at": observed_at,
+            "updated_at": observed_at,
+            "expires_at": observed_at + _PB_MIGRATION_OPEN_RUN_TTL_SECONDS,
+        }
+        lifecycle = _cleanup_pb_migration_generation_state(now=observed_at)
+    return _runtime_generation_result(
+        success=True,
+        operation="begin_runtime_generation",
+        metadata={
+            "run_id": run_id,
+            "correlation_id": correlation_id,
+            "generation_run_receipt": run_receipt,
+            "pre_write_state": {
+                "source": "absent",
+                "designer": "absent" if designer_path else "not_applicable",
+            },
+            "lifecycle": lifecycle,
+            "issues": [],
+        },
+        error="",
+    )
+
+
+def _authenticate_pb_migration_generation_run(
+    receipt_value: Any,
+) -> tuple[str, Dict[str, Any]]:
+    receipt = dict(receipt_value) if isinstance(receipt_value, Mapping) else {}
+    if receipt.get("schema_version") != _CSHARP_GENERATION_RUN_RECEIPT_SCHEMA:
+        return "invalid_schema", {}
+    run_id = str(receipt.get("run_id") or "")
+    signature = str(receipt.get("signature") or "")
+    payload = _canonical_source_operation_receipt_payload(receipt)
+    if not run_id or not signature or not hmac.compare_digest(
+        _sign_pb_migration_runtime_payload(payload),
+        signature,
+    ):
+        return "authentication_failed", {}
+    observed_at = _pb_migration_runtime_now()
+    with _PB_MIGRATION_RUNTIME_LOCK:
+        _cleanup_pb_migration_generation_state(now=observed_at)
+        state = _PB_MIGRATION_GENERATION_RUNS.get(run_id)
+        if not state:
+            tombstone_status = _pb_migration_tombstone_status_locked("run", run_id)
+            if tombstone_status:
+                return tombstone_status, {}
+            return "unknown_run", {}
+        if not hmac.compare_digest(state["payload"], payload) or not hmac.compare_digest(
+            str(state["signature"]),
+            signature,
+        ):
+            return "authentication_failed", {}
+        if state.get("status") == "completed":
+            return "completed", dict(state)
+        return "authenticated", dict(state)
+
+
+def issue_pb_to_csharp_runtime_generation_receipt(
+    generation_run_receipt: Mapping[str, Any],
+    *,
+    expected_source_sha256: str = "",
+    expected_designer_sha256: str = "",
+) -> HarnessResult:
+    """Bind post-write artifacts to a host-authenticated, retryable generation receipt."""
+    authentication_status, run_state = _authenticate_pb_migration_generation_run(
+        generation_run_receipt
+    )
+    if authentication_status != "authenticated":
+        code = (
+            "csharp_generation_run_receipt_replayed"
+            if authentication_status == "completed"
+            else "csharp_generation_run_receipt_authentication_failed"
+        )
+        return _runtime_generation_result(
+            success=False,
+            operation="issue_runtime_generation_receipt",
+            metadata={
+                "run_id": str(dict(generation_run_receipt or {}).get("run_id") or ""),
+                "issues": [
+                    {
+                        "code": code,
+                        "severity": "error",
+                        "message": "The host generation run receipt is invalid, unknown, or already completed.",
+                    }
+                ],
+                "generation_receipt": {},
+            },
+            error="PB to C# runtime generation receipt issuance failed closed.",
+        )
+
+    bindings: Dict[str, Dict[str, Any]] = {}
+    issues: List[Dict[str, Any]] = []
+    for role, expected_sha256, maximum_bytes in (
+        ("source", expected_source_sha256, TARGET_CSHARP_ARTIFACT_MAX_BYTES),
+        ("designer", expected_designer_sha256, TARGET_CSHARP_ARTIFACT_MAX_BYTES),
+    ):
+        path = str(run_state.get(f"{role}_path") or "")
+        if not path:
+            continue
+        try:
+            resolved, size, digest, _ = _read_bounded_artifact(
+                path,
+                maximum_bytes=maximum_bytes,
+                collect_bytes=False,
+            )
+        except _ArtifactReadError as exc:
+            issues.append(
+                {
+                    "code": f"csharp_generation_{role}_{exc.code}",
+                    "severity": "error",
+                    "message": str(exc),
+                }
+            )
+            continue
+        normalized_expected = _normalized_sha256(expected_sha256)
+        if normalized_expected and normalized_expected != digest:
+            issues.append(
+                {
+                    "code": f"csharp_generation_{role}_expected_hash_mismatch",
+                    "severity": "error",
+                    "message": f"The current {role} SHA-256 does not match the orchestration input.",
+                }
+            )
+        bindings[role] = {
+            "path": str(resolved),
+            "sha256": f"sha256:{digest}",
+            "size_bytes": size,
+        }
+    if "source" not in bindings:
+        issues.append(
+            {
+                "code": "csharp_generation_source_postwrite_binding_required",
+                "severity": "error",
+                "message": "The generated C# source must exist and be SHA-256 bound after the host write.",
+            }
+        )
+    if run_state.get("designer_path") and "designer" not in bindings:
+        issues.append(
+            {
+                "code": "csharp_generation_designer_postwrite_binding_required",
+                "severity": "error",
+                "message": "The generated Designer source must exist and be SHA-256 bound after the host write.",
+            }
+        )
+    if issues:
+        return _runtime_generation_result(
+            success=False,
+            operation="issue_runtime_generation_receipt",
+            metadata={
+                "run_id": str(dict(generation_run_receipt).get("run_id") or ""),
+                "issues": issues,
+                "generation_receipt": {},
+            },
+            error="PB to C# runtime generation artifacts could not be bound.",
+        )
+
+    run_id = str(dict(generation_run_receipt).get("run_id") or "")
+    observed_at = _pb_migration_runtime_now()
+    with _PB_MIGRATION_RUNTIME_LOCK:
+        _cleanup_pb_migration_generation_state(now=observed_at)
+        live_run = _PB_MIGRATION_GENERATION_RUNS.get(run_id)
+        if not live_run or live_run.get("status") != "open":
+            return _runtime_generation_result(
+                success=False,
+                operation="issue_runtime_generation_receipt",
+                metadata={
+                    "run_id": run_id,
+                    "issues": [
+                        {
+                            "code": "csharp_generation_run_not_open",
+                            "severity": "error",
+                            "message": "The generation run is not open for receipt issuance.",
+                        }
+                    ],
+                    "generation_receipt": {},
+                },
+                error="PB to C# runtime generation run is closed.",
+            )
+        current_id = str(live_run.get("current_receipt_id") or "")
+        current_state = _PB_MIGRATION_GENERATION_RECEIPTS.get(current_id) if current_id else None
+        if current_state and current_state.get("status") == "pending":
+            current_receipt = dict(current_state.get("receipt") or {})
+            current_source = dict(current_receipt.get("target_source") or {})
+            current_designer = dict(current_receipt.get("target_designer") or {})
+            if (
+                current_source == bindings["source"]
+                and current_designer == bindings.get("designer", {})
+            ):
+                current_state["updated_at"] = observed_at
+                current_state["expires_at"] = (
+                    observed_at + _PB_MIGRATION_PENDING_RECEIPT_TTL_SECONDS
+                )
+                live_run["updated_at"] = observed_at
+                live_run["expires_at"] = (
+                    observed_at + _PB_MIGRATION_OPEN_RUN_TTL_SECONDS
+                )
+                return _runtime_generation_result(
+                    success=True,
+                    operation="issue_runtime_generation_receipt",
+                    metadata={
+                        "run_id": run_id,
+                        "receipt_id": current_id,
+                        "generation_receipt": current_receipt,
+                        "issuance": "idempotent_retry",
+                        "issues": [],
+                    },
+                    error="",
+                )
+            _remove_pb_migration_receipt_locked(
+                current_id,
+                "superseded",
+                now=observed_at,
+            )
+
+        live_run["attempt"] = int(live_run.get("attempt") or 0) + 1
+        receipt_id = str(uuid.uuid4())
+        run_receipt = dict(live_run.get("receipt") or {})
+        source_operation_receipt: Dict[str, Any] = {
+            "schema_version": _CSHARP_SOURCE_OPERATION_RECEIPT_SCHEMA,
+            "operation": "generation",
+            "receipt_id": receipt_id,
+            "run_id": run_id,
+            "correlation_id": str(run_receipt.get("correlation_id") or ""),
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "attempt": live_run["attempt"],
+            "producer": {
+                "host_id": _PB_MIGRATION_RUNTIME_HOST_ID,
+                "tool": _PB_MIGRATION_RUNTIME_TOOL,
+                "result_id": str(uuid.uuid4()),
+            },
+            "target_source": bindings["source"],
+        }
+        if "designer" in bindings:
+            source_operation_receipt["target_designer"] = bindings["designer"]
+        receipt_payload = _canonical_source_operation_receipt_payload(
+            source_operation_receipt
+        )
+        source_operation_receipt["signature"] = _sign_pb_migration_runtime_payload(
+            receipt_payload
+        )
+        _PB_MIGRATION_GENERATION_RECEIPTS[receipt_id] = {
+            "receipt": dict(source_operation_receipt),
+            "payload": receipt_payload,
+            "signature": source_operation_receipt["signature"],
+            "run_id": run_id,
+            "status": "pending",
+            "created_at": observed_at,
+            "updated_at": observed_at,
+            "expires_at": observed_at + _PB_MIGRATION_PENDING_RECEIPT_TTL_SECONDS,
+        }
+        live_run["current_receipt_id"] = receipt_id
+        live_run["updated_at"] = observed_at
+        live_run["expires_at"] = observed_at + _PB_MIGRATION_OPEN_RUN_TTL_SECONDS
+        lifecycle = _cleanup_pb_migration_generation_state(now=observed_at)
+
+    return _runtime_generation_result(
+        success=True,
+        operation="issue_runtime_generation_receipt",
+        metadata={
+            "run_id": run_id,
+            "receipt_id": receipt_id,
+            "generation_receipt": source_operation_receipt,
+            "issuance": "new" if int(source_operation_receipt["attempt"]) == 1 else "corrected_retry",
+            "lifecycle": lifecycle,
+            "issues": [],
+        },
+        error="",
+    )
+
+
+def _host_generation_receipt_authentication_status(
+    payload: bytes,
+    signature: str,
+) -> str:
+    if not signature or not hmac.compare_digest(
+        _sign_pb_migration_runtime_payload(payload),
+        str(signature),
+    ):
+        return "authentication_failed"
+    try:
+        receipt = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "authentication_failed"
+    receipt_id = str(receipt.get("receipt_id") or "") if isinstance(receipt, Mapping) else ""
+    observed_at = _pb_migration_runtime_now()
+    with _PB_MIGRATION_RUNTIME_LOCK:
+        _cleanup_pb_migration_generation_state(now=observed_at)
+        state = _PB_MIGRATION_GENERATION_RECEIPTS.get(receipt_id)
+        if not state:
+            tombstone_status = _pb_migration_tombstone_status_locked(
+                "receipt", receipt_id
+            )
+            if tombstone_status:
+                return tombstone_status
+            return "unknown_receipt"
+        if not hmac.compare_digest(state["payload"], payload) or not hmac.compare_digest(
+            str(state["signature"]),
+            str(signature),
+        ):
+            return "authentication_failed"
+        return str(state.get("status") or "unknown_receipt")
+
+
+def _consume_host_generation_receipt(receipt_value: Any) -> bool:
+    receipt = dict(receipt_value) if isinstance(receipt_value, Mapping) else {}
+    payload = _canonical_source_operation_receipt_payload(receipt)
+    signature = str(receipt.get("signature") or "")
+    receipt_id = str(receipt.get("receipt_id") or "")
+    observed_at = _pb_migration_runtime_now()
+    with _PB_MIGRATION_RUNTIME_LOCK:
+        _cleanup_pb_migration_generation_state(now=observed_at)
+        state = _PB_MIGRATION_GENERATION_RECEIPTS.get(receipt_id)
+        if (
+            not state
+            or state.get("status") != "pending"
+            or not hmac.compare_digest(_sign_pb_migration_runtime_payload(payload), signature)
+            or not hmac.compare_digest(state["payload"], payload)
+            or not hmac.compare_digest(str(state["signature"]), signature)
+        ):
+            return False
+        run_id = str(state.get("run_id") or "")
+        _remove_pb_migration_receipt_locked(
+            receipt_id,
+            "consumed",
+            now=observed_at,
+        )
+        _remove_pb_migration_run_locked(
+            run_id,
+            "completed",
+            now=observed_at,
+            receipt_status="superseded",
+        )
+        return True
+
+
+def run_pb_to_csharp_runtime_generation(
+    objective: str,
+    *,
+    writer: Callable[[Path, Path | None], Any],
+    target_source_path: str | Path,
+    target_designer_path: str | Path = "",
+    profile_id: str,
+    profile_version: str,
+    profile_hash: str,
+    orchestration_kwargs: Mapping[str, Any] | None = None,
+    generation_run_receipt: Mapping[str, Any] | None = None,
+) -> HarnessResult:
+    """Write and validate a generated C# pair through one host-owned operation."""
+    operation = "runtime_generation_host_operation"
+    protected_keys = {
+        "csharp_source_text",
+        "csharp_source_operation",
+        "csharp_source_operation_receipt",
+        "csharp_source_operation_receipt_authenticator",
+        "runtime_generation_run_receipt",
+        "designer_source_text",
+        "profile_id",
+        "profile_version",
+        "profile_hash",
+        "target_source_path",
+        "target_source_sha256",
+        "target_designer_path",
+        "target_designer_sha256",
+    }
+
+    def finish(
+        success: bool,
+        *,
+        stage: str,
+        run_receipt: Mapping[str, Any] | None = None,
+        generation_receipt: Mapping[str, Any] | None = None,
+        orchestration: HarnessResult | None = None,
+        issues: Iterable[Mapping[str, Any]] = (),
+        retry_allowed: bool = False,
+        extra: Mapping[str, Any] | None = None,
+    ) -> HarnessResult:
+        run_value = dict(run_receipt or {})
+        receipt_value = dict(generation_receipt or {})
+        return _runtime_generation_result(
+            success=success,
+            operation=operation,
+            metadata={
+                "stage": stage,
+                "run_id": str(run_value.get("run_id") or receipt_value.get("run_id") or ""),
+                "receipt_id": str(receipt_value.get("receipt_id") or ""),
+                "generation_run_receipt": run_value,
+                "generation_receipt": receipt_value,
+                "retry_allowed": retry_allowed,
+                "writer_completed": stage not in {"request", "open-run", "writer"},
+                "authentication_provider": "built_in_pb_migration_runtime",
+                "orchestration": orchestration.to_dict() if orchestration else {},
+                "issues": [dict(item) for item in issues],
+                **dict(extra or {}),
+            },
+            error=(
+                ""
+                if success
+                else "PB to C# runtime host generation failed closed."
+            ),
+        )
+
+    if not callable(writer):
+        return finish(
+            False,
+            stage="request",
+            issues=[
+                {
+                    "code": "csharp_generation_writer_callback_required",
+                    "severity": "error",
+                    "message": "A callable host writer is required.",
+                }
+            ],
+        )
+    if orchestration_kwargs is not None and not isinstance(
+        orchestration_kwargs, Mapping
+    ):
+        return finish(
+            False,
+            stage="request",
+            issues=[
+                {
+                    "code": "csharp_generation_orchestration_kwargs_invalid",
+                    "severity": "error",
+                    "message": "Orchestration arguments must be a mapping.",
+                }
+            ],
+        )
+    supplied_orchestration = dict(orchestration_kwargs or {})
+    forbidden_overrides = sorted(protected_keys.intersection(supplied_orchestration))
+    if forbidden_overrides:
+        return finish(
+            False,
+            stage="request",
+            issues=[
+                {
+                    "code": "csharp_generation_host_binding_override_forbidden",
+                    "severity": "error",
+                    "observed": forbidden_overrides,
+                    "message": (
+                        "The host operation owns generated text, receipt, profile, path, and hash bindings."
+                    ),
+                }
+            ],
+        )
+
+    run_receipt: Dict[str, Any]
+    if generation_run_receipt:
+        runtime = build_offline_pb_to_csharp_runtime_generation(
+            objective,
+            profile_id=profile_id,
+            profile_version=profile_version,
+            profile_hash=profile_hash,
+        )
+        if not runtime.success:
+            return finish(
+                False,
+                stage="open-run",
+                run_receipt=generation_run_receipt,
+                issues=runtime.metadata.get("issues", []),
+                retry_allowed=True,
+                extra={"runtime_generation": runtime.to_dict()},
+            )
+        authentication_status, run_state = _authenticate_pb_migration_generation_run(
+            generation_run_receipt
+        )
+        if authentication_status != "authenticated":
+            return finish(
+                False,
+                stage="open-run",
+                run_receipt=generation_run_receipt,
+                issues=[
+                    {
+                        "code": "csharp_generation_run_receipt_authentication_failed",
+                        "severity": "error",
+                        "observed": authentication_status,
+                        "message": "The retry run is unknown, expired, forged, or completed.",
+                    }
+                ],
+            )
+        expected_source_key = _absolute_path_key(run_state.get("source_path", ""))
+        expected_designer_key = _absolute_path_key(run_state.get("designer_path", ""))
+        if (
+            _absolute_path_key(target_source_path) != expected_source_key
+            or _absolute_path_key(target_designer_path) != expected_designer_key
+        ):
+            return finish(
+                False,
+                stage="open-run",
+                run_receipt=generation_run_receipt,
+                issues=[
+                    {
+                        "code": "csharp_generation_retry_target_path_mismatch",
+                        "severity": "error",
+                        "message": "A retry must use the exact source and Designer paths bound before the first write.",
+                    }
+                ],
+                retry_allowed=True,
+            )
+        run_receipt = dict(generation_run_receipt)
+    else:
+        runtime = build_offline_pb_to_csharp_runtime_generation(
+            objective,
+            profile_id=profile_id,
+            profile_version=profile_version,
+            profile_hash=profile_hash,
+            target_source_path=target_source_path,
+            target_designer_path=target_designer_path,
+        )
+        generation_run = dict(runtime.metadata.get("generation_run") or {})
+        run_receipt = dict(generation_run.get("generation_run_receipt") or {})
+        if not runtime.success or not run_receipt:
+            return finish(
+                False,
+                stage="open-run",
+                run_receipt=run_receipt,
+                issues=runtime.metadata.get("issues", []),
+                extra={"runtime_generation": runtime.to_dict()},
+            )
+
+    authentication_status, run_state = _authenticate_pb_migration_generation_run(
+        run_receipt
+    )
+    if authentication_status != "authenticated":
+        return finish(
+            False,
+            stage="open-run",
+            run_receipt=run_receipt,
+            issues=[
+                {
+                    "code": "csharp_generation_run_not_open",
+                    "severity": "error",
+                    "observed": authentication_status,
+                    "message": "The host generation run is not open for writing.",
+                }
+            ],
+        )
+    exact_source_path = Path(str(run_state.get("source_path") or ""))
+    designer_value = str(run_state.get("designer_path") or "")
+    exact_designer_path = Path(designer_value) if designer_value else None
+
+    try:
+        writer(exact_source_path, exact_designer_path)
+    except Exception as exc:
+        return finish(
+            False,
+            stage="writer",
+            run_receipt=run_receipt,
+            issues=[
+                {
+                    "code": "csharp_generation_writer_failed",
+                    "severity": "error",
+                    "message": f"{type(exc).__name__}: {exc}",
+                }
+            ],
+            retry_allowed=True,
+            extra={
+                "target_source_path": str(exact_source_path),
+                "target_designer_path": str(exact_designer_path or ""),
+            },
+        )
+
+    issued = issue_pb_to_csharp_runtime_generation_receipt(run_receipt)
+    generation_receipt = dict(issued.metadata.get("generation_receipt") or {})
+    if not issued.success or not generation_receipt:
+        return finish(
+            False,
+            stage="postwrite-binding",
+            run_receipt=run_receipt,
+            issues=issued.metadata.get("issues", []),
+            retry_allowed=True,
+            extra={
+                "receipt_issuance": issued.to_dict(),
+                "target_source_path": str(exact_source_path),
+                "target_designer_path": str(exact_designer_path or ""),
+            },
+        )
+
+    try:
+        source_resolved, _, source_digest, source_text = _read_bounded_text_artifact(
+            exact_source_path,
+            maximum_bytes=TARGET_CSHARP_ARTIFACT_MAX_BYTES,
+        )
+        designer_text = ""
+        designer_digest = ""
+        designer_resolved: Path | None = None
+        if exact_designer_path is not None:
+            (
+                designer_resolved,
+                _,
+                designer_digest,
+                designer_text,
+            ) = _read_bounded_text_artifact(
+                exact_designer_path,
+                maximum_bytes=TARGET_CSHARP_ARTIFACT_MAX_BYTES,
+            )
+    except _ArtifactReadError as exc:
+        return finish(
+            False,
+            stage="postwrite-readback",
+            run_receipt=run_receipt,
+            generation_receipt=generation_receipt,
+            issues=[
+                {
+                    "code": f"csharp_generation_postwrite_{exc.code}",
+                    "severity": "error",
+                    "message": str(exc),
+                }
+            ],
+            retry_allowed=True,
+        )
+
+    receipt_source = dict(generation_receipt.get("target_source") or {})
+    receipt_designer = dict(generation_receipt.get("target_designer") or {})
+    readback_matches_receipt = bool(
+        _absolute_path_key(receipt_source.get("path", ""))
+        == _absolute_path_key(source_resolved)
+        and _normalized_sha256(receipt_source.get("sha256")) == source_digest
+        and (
+            exact_designer_path is None
+            or (
+                designer_resolved is not None
+                and _absolute_path_key(receipt_designer.get("path", ""))
+                == _absolute_path_key(designer_resolved)
+                and _normalized_sha256(receipt_designer.get("sha256"))
+                == designer_digest
+            )
+        )
+    )
+    if not readback_matches_receipt:
+        return finish(
+            False,
+            stage="postwrite-readback",
+            run_receipt=run_receipt,
+            generation_receipt=generation_receipt,
+            issues=[
+                {
+                    "code": "csharp_generation_postwrite_binding_changed",
+                    "severity": "error",
+                    "message": "The generated source or Designer changed after receipt issuance.",
+                }
+            ],
+            retry_allowed=True,
+        )
+
+    orchestration = orchestrate_pb_migration_validation(
+        **supplied_orchestration,
+        csharp_source_text=source_text,
+        csharp_source_operation="generation",
+        csharp_source_operation_receipt=generation_receipt,
+        designer_source_text=designer_text,
+        profile_id=profile_id,
+        profile_version=profile_version,
+        profile_hash=profile_hash,
+        target_source_path=str(source_resolved),
+        target_source_sha256=f"sha256:{source_digest}",
+        target_designer_path=str(designer_resolved or ""),
+        target_designer_sha256=(
+            f"sha256:{designer_digest}" if designer_resolved is not None else ""
+        ),
+    )
+    return finish(
+        orchestration.success,
+        stage="complete" if orchestration.success else "orchestration",
+        run_receipt=run_receipt,
+        generation_receipt=generation_receipt,
+        orchestration=orchestration,
+        retry_allowed=not orchestration.success,
+        extra={
+            "target_source_path": str(source_resolved),
+            "target_source_sha256": f"sha256:{source_digest}",
+            "target_designer_path": str(designer_resolved or ""),
+            "target_designer_sha256": (
+                f"sha256:{designer_digest}" if designer_resolved is not None else ""
+            ),
+            "receipt_issuance": issued.to_dict(),
+            "lifecycle": _cleanup_pb_migration_generation_state(),
+        },
+    )
+
+
+def _validate_generation_source_operation_receipt(
+    receipt_value: Any,
+    authenticator: Callable[[bytes, str], bool] | None,
+    *,
+    source_binding: Mapping[str, Any],
+    designer_binding: Mapping[str, Any],
+    designer_required: bool,
+) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Validate a host-authenticated receipt for a newly generated C# pair."""
+    del authenticator  # External callbacks are not authority for the host runtime receipt schema.
+    issues: List[Dict[str, Any]] = []
+
+    def issue(code: str, message: str) -> None:
+        issues.append({"code": code, "severity": "error", "message": message})
+
+    receipt = dict(receipt_value) if isinstance(receipt_value, Mapping) else {}
+    if not receipt:
+        issue(
+            "csharp_generation_source_operation_receipt_required",
+            "Generation verification is pending until a host-correlated source-operation receipt is supplied.",
+        )
+    if receipt:
+        if receipt.get("schema_version") != _CSHARP_SOURCE_OPERATION_RECEIPT_SCHEMA:
+            issue(
+                "csharp_generation_source_operation_receipt_schema_invalid",
+                "The source-operation receipt schema is invalid.",
+            )
+        if str(receipt.get("operation") or "").strip().lower() != "generation":
+            issue(
+                "csharp_generation_source_operation_receipt_operation_mismatch",
+                "The source-operation receipt must authorize generation.",
+            )
+        if not all(
+            str(receipt.get(name) or "").strip()
+            for name in ("receipt_id", "run_id", "correlation_id")
+        ):
+            issue(
+                "csharp_generation_source_operation_receipt_identity_missing",
+                "Receipt, run, and correlation IDs are required.",
+            )
+        try:
+            observed_at = datetime.fromisoformat(
+                str(receipt.get("observed_at") or "").replace("Z", "+00:00")
+            )
+            timestamp_valid = observed_at.tzinfo is not None and observed_at.utcoffset() is not None
+        except ValueError:
+            timestamp_valid = False
+        if not timestamp_valid:
+            issue(
+                "csharp_generation_source_operation_receipt_timestamp_invalid",
+                "A timezone-aware source-operation observation timestamp is required.",
+            )
+
+        producer = receipt.get("producer")
+        if not isinstance(producer, Mapping) or not all(
+            str(producer.get(name) or "").strip()
+            for name in ("host_id", "tool", "result_id")
+        ):
+            issue(
+                "csharp_generation_source_operation_receipt_producer_invalid",
+                "The receipt must identify the host, generation tool, and execution result.",
+            )
+
+        expected_source = receipt.get("target_source")
+        expected_source = dict(expected_source) if isinstance(expected_source, Mapping) else {}
+        source_path_matches = bool(
+            _absolute_path_key(expected_source.get("path", ""))
+            and _absolute_path_key(expected_source.get("path", ""))
+            == _absolute_path_key(source_binding.get("path", ""))
+        )
+        source_hash_matches = bool(
+            _normalized_sha256(expected_source.get("sha256"))
+            and _normalized_sha256(expected_source.get("sha256"))
+            == _normalized_sha256(source_binding.get("actual_sha256"))
+        )
+        if not source_path_matches or not source_hash_matches:
+            issue(
+                "csharp_generation_source_operation_receipt_source_mismatch",
+                "The receipt must bind the exact current generated C# artifact path and SHA-256.",
+            )
+
+        expected_designer = receipt.get("target_designer")
+        expected_designer = (
+            dict(expected_designer) if isinstance(expected_designer, Mapping) else {}
+        )
+        if designer_required:
+            designer_path_matches = bool(
+                _absolute_path_key(expected_designer.get("path", ""))
+                and _absolute_path_key(expected_designer.get("path", ""))
+                == _absolute_path_key(designer_binding.get("path", ""))
+            )
+            designer_hash_matches = bool(
+                _normalized_sha256(expected_designer.get("sha256"))
+                and _normalized_sha256(expected_designer.get("sha256"))
+                == _normalized_sha256(designer_binding.get("actual_sha256"))
+            )
+            if not designer_path_matches or not designer_hash_matches:
+                issue(
+                    "csharp_generation_source_operation_receipt_designer_mismatch",
+                    "The receipt must bind the exact current generated Designer artifact path and SHA-256.",
+                )
+
+        signature = str(receipt.get("signature") or "").strip()
+        if not signature:
+            issue(
+                "csharp_generation_source_operation_receipt_signature_missing",
+                "A host-authenticated source-operation receipt signature is required.",
+            )
+        else:
+            authentication_status = _host_generation_receipt_authentication_status(
+                _canonical_source_operation_receipt_payload(receipt),
+                signature,
+            )
+            if authentication_status == "consumed":
+                issue(
+                    "csharp_generation_source_operation_receipt_replayed",
+                    "A successfully consumed generation receipt cannot authorize another validation.",
+                )
+            elif authentication_status == "superseded":
+                issue(
+                    "csharp_generation_source_operation_receipt_superseded",
+                    "A corrected artifact pair superseded this generation receipt.",
+                )
+            elif authentication_status != "pending":
+                issue(
+                    "csharp_generation_source_operation_receipt_authentication_failed",
+                    "The built-in PB migration runtime could not authenticate the source-operation receipt.",
+                )
+
+    metadata = {
+        "status": "passed" if not issues else "pending",
+        "reason": (
+            "host_correlated_generation_receipt_verified"
+            if not issues
+            else "trusted_generation_receipt_required"
+        ),
+        "operation": "generation",
+        "schema_version": str(receipt.get("schema_version") or ""),
+        "receipt_id": str(receipt.get("receipt_id") or ""),
+        "run_id": str(receipt.get("run_id") or ""),
+        "correlation_id": str(receipt.get("correlation_id") or ""),
+        "authentication_provider": "built_in_pb_migration_runtime",
+        "external_authenticator_used": False,
+        "issues": [dict(item) for item in issues],
+    }
+    return issues, metadata
+
+
 def verify_migration_generated_csharp_style(
     source_text: str,
     *,
+    source_operation: str,
+    original_source_text: str = "",
+    original_source_path: str | Path = "",
+    original_source_sha256: str = "",
+    source_modification_evidence: Mapping[str, Any] | None = None,
+    source_operation_receipt: Mapping[str, Any] | None = None,
+    source_operation_receipt_authenticator: Callable[[bytes, str], bool] | None = None,
     designer_source_text: str = "",
     profile_evidence: Any = None,
     program_key: str = "",
@@ -9926,6 +11192,7 @@ def verify_migration_generated_csharp_style(
     layout_load_artifact_text: str = "",
     layout_load_evidence: Any = None,
     require_designer_companion: bool = False,
+    _receipt_consumption_capability: Any = None,
 ) -> HarnessResult:
     """Block generated C# patterns that do not match control, Designer, and grid contracts."""
     result_fields_list = None if result_fields is None else list(result_fields)
@@ -9939,6 +11206,97 @@ def verify_migration_generated_csharp_style(
     source = source_view.comments_removed
     designer_source = designer_view.comments_removed
     issues: List[Dict[str, Any]] = []
+    original_source_artifact_binding: Dict[str, Any] = {
+        "role": "original_source",
+        "status": "not_applicable",
+        "path": "",
+        "expected_sha256": "",
+        "actual_sha256": "",
+        "size_bytes": 0,
+        "readback_matches_supplied_text": False,
+    }
+    from src.skills.csharp_designer_style import (
+        normalize_csharp_source_operation,
+        verify_csharp_edit_contract,
+    )
+
+    try:
+        normalized_source_operation = normalize_csharp_source_operation(
+            source_operation
+        )
+    except ValueError as exc:
+        normalized_source_operation = "invalid"
+        operation_issue = {
+            "code": "csharp_source_operation_invalid",
+            "severity": "error",
+            "message": str(exc),
+        }
+        issues.append(operation_issue)
+        source_modification_contract: Dict[str, Any] = {
+            "status": "blocked",
+            "reason": "invalid_source_operation",
+            "operation": str(source_operation or ""),
+            "issues": [operation_issue],
+        }
+    else:
+        if normalized_source_operation == "modification":
+            (
+                original_source_artifact_issues,
+                original_source_artifact_binding,
+                original_source_readback,
+            ) = _validate_text_artifact_binding(
+                str(original_source_text or ""),
+                path_value=original_source_path,
+                expected_sha256=original_source_sha256,
+                role="original_source",
+                required=True,
+            )
+            issues.extend(original_source_artifact_issues)
+            if not str(original_source_text or "").strip():
+                operation_issue = {
+                    "code": "csharp_modification_original_required",
+                    "severity": "error",
+                    "message": (
+                        "C# modification verification requires the exact original source text."
+                    ),
+                }
+                issues.append(operation_issue)
+                source_modification_contract = {
+                    "status": "blocked",
+                    "reason": "original_source_required_for_modification",
+                    "operation": normalized_source_operation,
+                    "issues": [operation_issue, *original_source_artifact_issues],
+                }
+            elif original_source_artifact_issues:
+                source_modification_contract = {
+                    "status": "blocked",
+                    "reason": "original_source_artifact_binding_invalid",
+                    "operation": normalized_source_operation,
+                    "issues": [dict(item) for item in original_source_artifact_issues],
+                }
+            else:
+                edit_result = verify_csharp_edit_contract(
+                    original_source_readback,
+                    str(source_text),
+                    evidence=source_modification_evidence,
+                    designer_source=designer_source_text,
+                )
+                source_modification_contract = dict(edit_result.metadata)
+                source_modification_contract["source_operation"] = (
+                    normalized_source_operation
+                )
+                issues.extend(
+                    dict(item)
+                    for item in edit_result.metadata.get("issues", [])
+                    if isinstance(item, Mapping)
+                )
+        else:
+            source_modification_contract = {
+                "status": "pending",
+                "reason": "trusted_generation_receipt_pending",
+                "operation": normalized_source_operation,
+                "issues": [],
+            }
     if not source_view.code.strip():
         issues.append(
             {
@@ -10009,6 +11367,37 @@ def verify_migration_generated_csharp_style(
         required=True,
     )
     issues.extend(source_artifact_issues)
+    if (
+        normalized_source_operation == "modification"
+        and original_source_artifact_binding.get("status") == "passed"
+        and source_artifact_binding.get("status") == "passed"
+        and _same_artifact_identity(
+            original_source_artifact_binding.get("path", ""),
+            source_artifact_binding.get("path", ""),
+        )
+    ):
+        same_path_issue = {
+            "code": "csharp_modification_original_candidate_path_same",
+            "severity": "error",
+            "message": (
+                "C# modification verification requires a distinct hash-bound pre-edit artifact; "
+                "the candidate cannot be reused as its own original receipt."
+            ),
+        }
+        issues.append(same_path_issue)
+        source_modification_contract = {
+            **source_modification_contract,
+            "status": "blocked",
+            "reason": "original_candidate_artifact_identity_conflict",
+            "issues": [
+                *[
+                    dict(item)
+                    for item in source_modification_contract.get("issues", [])
+                    if isinstance(item, Mapping)
+                ],
+                same_path_issue,
+            ],
+        }
     designer_artifact_issues, designer_artifact_binding, _ = _validate_text_artifact_binding(
         designer_source_text,
         path_value=target_designer_path,
@@ -10017,6 +11406,17 @@ def verify_migration_generated_csharp_style(
         required=bool(designer_source_text.strip() or require_designer_companion),
     )
     issues.extend(designer_artifact_issues)
+    if normalized_source_operation == "generation":
+        generation_receipt_issues, source_modification_contract = (
+            _validate_generation_source_operation_receipt(
+                source_operation_receipt,
+                source_operation_receipt_authenticator,
+                source_binding=source_artifact_binding,
+                designer_binding=designer_artifact_binding,
+                designer_required=bool(designer_source_text.strip() or require_designer_companion),
+            )
+        )
+        issues.extend(generation_receipt_issues)
     baseline_artifact_issues, baseline_artifact_binding, baseline_designer_source = (
         _validate_text_artifact_binding(
             "",
@@ -10837,6 +12237,48 @@ def verify_migration_generated_csharp_style(
             )
 
     passed = not any(issue["severity"] == "error" for issue in issues)
+    if (
+        normalized_source_operation == "generation"
+        and source_modification_contract.get("status") == "passed"
+    ):
+        if passed:
+            if (
+                _receipt_consumption_capability
+                is _PB_MIGRATION_ORCHESTRATION_RECEIPT_CAPABILITY
+            ):
+                source_modification_contract["receipt_state"] = (
+                    "validated_pending_orchestration"
+                )
+                source_modification_contract["retry_allowed"] = True
+            elif _consume_host_generation_receipt(source_operation_receipt):
+                source_modification_contract["receipt_state"] = "consumed"
+                source_modification_contract["retry_allowed"] = False
+            else:
+                replay_issue = {
+                    "code": "csharp_generation_source_operation_receipt_replayed",
+                    "severity": "error",
+                    "message": "The generation receipt was consumed or invalidated before final validation completed.",
+                }
+                issues.append(replay_issue)
+                source_modification_contract = {
+                    **source_modification_contract,
+                    "status": "blocked",
+                    "reason": "generation_receipt_replay_or_race",
+                    "receipt_state": "rejected",
+                    "retry_allowed": False,
+                    "issues": [
+                        *[
+                            dict(item)
+                            for item in source_modification_contract.get("issues", [])
+                            if isinstance(item, Mapping)
+                        ],
+                        replay_issue,
+                    ],
+                }
+                passed = False
+        else:
+            source_modification_contract["receipt_state"] = "pending_retry"
+            source_modification_contract["retry_allowed"] = True
     metadata = {
         "harness": "pb-to-csharp-migration-harness",
         "status": "passed" if passed else "blocked",
@@ -10851,6 +12293,8 @@ def verify_migration_generated_csharp_style(
         "canonical_style_contract": canonical_style_contract,
         "canonical_style_profile": packaged_canonical_style,
         "canonical_style_profile_hash": canonical_style_profile_hash,
+        "source_operation": normalized_source_operation,
+        "source_modification_contract": source_modification_contract,
         "program_form_contract": program_form_contract,
         "surface_base_contract": {
             "status": (
@@ -10877,6 +12321,7 @@ def verify_migration_generated_csharp_style(
         "control_contracts": control_contracts,
         "konelib_default_guards": konelib_default_guards,
         "target_artifact_binding": {
+            "original_source": original_source_artifact_binding,
             "source": source_artifact_binding,
             "designer": designer_artifact_binding,
             "baseline_designer": baseline_artifact_binding,
@@ -17153,6 +18598,8 @@ def _execute_pb_sql_final_response_binding(
     cte_temp_table_reason: str = "",
     alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     sql_formatting_verifier_kwargs: Mapping[str, Any] | None = None,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None = None,
+    required_operation: str = "formatting",
 ) -> tuple[bool, Dict[str, Any]]:
     from src.skills.sql_formatting_provider import (
         SqlFinalResponseBindingError,
@@ -17186,28 +18633,125 @@ def _execute_pb_sql_final_response_binding(
             "message": "SQL-emitting PB validation requires correlated front-door provider-selection evidence.",
         }
     verifier_kwargs = dict(sql_formatting_verifier_kwargs or {})
-    operation = verifier_kwargs.pop("operation", "formatting")
+    expected_operation = str(required_operation or "formatting").strip().lower()
+    operation = str(
+        verifier_kwargs.pop("operation", expected_operation)
+    ).strip().lower()
     style_contract_path = verifier_kwargs.pop("style_contract_path", None)
-    if operation != "formatting" or verifier_kwargs:
+    where_subquery_source_contract = verifier_kwargs.pop(
+        "where_subquery_source_contract",
+        None,
+    )
+    save_row_state_contract = verifier_kwargs.pop("save_row_state_contract", None)
+    kwargs_runtime_receipt_authenticator = verifier_kwargs.pop(
+        "runtime_receipt_authenticator",
+        None,
+    )
+    if (
+        runtime_receipt_authenticator is not None
+        and kwargs_runtime_receipt_authenticator is not None
+        and runtime_receipt_authenticator is not kwargs_runtime_receipt_authenticator
+    ):
+        return False, {
+            "status": "blocked",
+            "code": "runtime_receipt_authenticator_conflict",
+            "message": "PB SQL binding received conflicting runtime receipt authenticators.",
+        }
+    effective_runtime_receipt_authenticator = (
+        runtime_receipt_authenticator
+        if runtime_receipt_authenticator is not None
+        else kwargs_runtime_receipt_authenticator
+    )
+    if (
+        effective_runtime_receipt_authenticator is not None
+        and not callable(effective_runtime_receipt_authenticator)
+    ):
+        return False, {
+            "status": "blocked",
+            "code": "runtime_receipt_authenticator_invalid",
+            "message": "runtime_receipt_authenticator must be callable.",
+        }
+    if expected_operation not in {"formatting", "generation"}:
+        return False, {
+            "status": "blocked",
+            "code": "unsupported_sql_binding_operation",
+            "message": "PB SQL binding supports only formatting or generation policy preflight.",
+            "operation": expected_operation,
+        }
+    operation_compatible = operation == expected_operation or (
+        expected_operation == "generation" and operation == "formatting"
+    )
+    if not operation_compatible:
+        return False, {
+            "status": "blocked",
+            "code": "sql_binding_operation_mismatch",
+            "message": "The SQL verifier operation must match the PB stored-procedure operation.",
+            "expected_operation": expected_operation,
+            "actual_operation": operation,
+        }
+    if verifier_kwargs:
         return False, {
             "status": "blocked",
             "code": "unsupported_sql_binding_verifier_options",
-            "message": "The PB final-response binder accepts only operation='formatting' and style_contract_path.",
+            "message": (
+                "The PB final-response binder accepts operation, style_contract_path, "
+                "where_subquery_source_contract, save_row_state_contract, and "
+                "runtime_receipt_authenticator."
+            ),
             "unsupported_options": sorted(verifier_kwargs),
         }
-    verification_kwargs: Dict[str, Any] = {
+    formatting_verification_kwargs: Dict[str, Any] = {
         "operation": "formatting",
         "cte_temp_table_reason": cte_temp_table_reason,
     }
     if style_contract_path is not None:
-        verification_kwargs["style_contract_path"] = style_contract_path
+        formatting_verification_kwargs["style_contract_path"] = style_contract_path
     if alias_role_plan is not None:
-        verification_kwargs["alias_role_plan"] = alias_role_plan
+        formatting_verification_kwargs["alias_role_plan"] = alias_role_plan
+    if effective_runtime_receipt_authenticator is not None:
+        formatting_verification_kwargs["runtime_receipt_authenticator"] = (
+            effective_runtime_receipt_authenticator
+        )
     try:
+        generation_policy: Dict[str, Any] = {
+            "status": "not_applicable",
+            "reason": "formatting_only_operation",
+        }
+        if expected_operation == "generation":
+            generation_kwargs = dict(formatting_verification_kwargs)
+            generation_kwargs["operation"] = "generation"
+            if where_subquery_source_contract is not None:
+                generation_kwargs["where_subquery_source_contract"] = (
+                    where_subquery_source_contract
+                )
+            if save_row_state_contract is not None:
+                generation_kwargs["save_row_state_contract"] = save_row_state_contract
+            generation_result = verify_sql_formatting_style(
+                "",
+                formatted_sql_text,
+                **generation_kwargs,
+            )
+            if isinstance(generation_result, HarnessResult):
+                generation_policy = generation_result.to_dict()
+            elif isinstance(generation_result, Mapping):
+                generation_policy = dict(generation_result)
+            else:
+                return False, {
+                    "status": "blocked",
+                    "code": "sql_generation_policy_result_invalid",
+                    "message": "The PB bridge did not receive a structured generation-policy result.",
+                }
+            if generation_policy.get("success") is not True:
+                return False, {
+                    "status": "blocked",
+                    "code": "sql_generation_policy_blocked",
+                    "message": "Generated SQL failed the structural generation policy before final formatting binding.",
+                    "generation_policy": generation_policy,
+                }
         history_result = verify_sql_formatting_style(
             original_sql_text,
             formatted_sql_text,
-            **verification_kwargs,
+            **formatting_verification_kwargs,
         )
         if isinstance(history_result, HarnessResult):
             verifier_history = [history_result.to_dict()]
@@ -17251,6 +18795,7 @@ def _execute_pb_sql_final_response_binding(
         and latest_metadata.get("formatted_sha256") == expected_formatted_sha256
     )
     receipt["verifier_history"] = verifier_history
+    receipt["generation_policy"] = generation_policy
     receipt["verifier_history_correlation"] = {
         "status": "correlated" if correlation_valid else "blocked",
         "attempt_count": len(verifier_history),
@@ -17305,6 +18850,7 @@ def verify_pb_migration_sp_with_sql_formatting(
     profile_evidence: Any = None,
     alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     sql_formatting_verifier_kwargs: Mapping[str, Any] | None = None,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None = None,
     sp_operation: str = "new_generation",
     original_sp_text: str | None = None,
     caller_parameter_contract: Any = None,
@@ -17348,6 +18894,10 @@ def verify_pb_migration_sp_with_sql_formatting(
             cte_temp_table_reason=cte_temp_table_reason,
             alias_role_plan=alias_role_plan,
             sql_formatting_verifier_kwargs=sql_formatting_verifier_kwargs,
+            runtime_receipt_authenticator=runtime_receipt_authenticator,
+            required_operation=(
+                "formatting" if sp_operation == "existing_sp_cleanup" else "generation"
+            ),
         )
         binding_success, binding_receipt, release_receipt = (
             _pb_sql_release_evidence_views(binding_success, release_receipt)
@@ -18482,6 +20032,14 @@ def _evaluate_pb_event_preflight_integrations(
 def orchestrate_pb_migration_validation(
     *,
     csharp_source_text: str,
+    csharp_source_operation: str,
+    original_csharp_source_text: str = "",
+    original_csharp_source_path: str | Path = "",
+    original_csharp_source_sha256: str = "",
+    csharp_edit_evidence: Mapping[str, Any] | None = None,
+    csharp_source_operation_receipt: Mapping[str, Any] | None = None,
+    csharp_source_operation_receipt_authenticator: Callable[[bytes, str], bool] | None = None,
+    runtime_generation_run_receipt: Mapping[str, Any] | None = None,
     designer_source_text: str,
     original_sql_text: str,
     formatted_sql_text: str,
@@ -18521,6 +20079,7 @@ def orchestrate_pb_migration_validation(
     cte_temp_table_reason: str = "",
     alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     sql_formatting_verifier_kwargs: Mapping[str, Any] | None = None,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None = None,
     sp_operation: str = "new_generation",
     caller_parameter_contract: Any = None,
     external_caller_contract: Any = None,
@@ -18556,6 +20115,7 @@ def orchestrate_pb_migration_validation(
     ]
     stages: List[Dict[str, Any]] = []
     evidence: Dict[str, Any] = {}
+    effective_source_operation_receipt = csharp_source_operation_receipt
 
     def finish(core_success: bool) -> HarnessResult:
         claims = dict(completion_claims or {})
@@ -18772,6 +20332,31 @@ def orchestrate_pb_migration_validation(
         )
         draft_allowed = core_validation_passed and not completion_requested
         result_success = bool(completion_allowed if completion_requested else core_validation_passed)
+        if (
+            result_success
+            and str(csharp_source_operation or "").strip().lower() == "generation"
+            and effective_source_operation_receipt
+        ):
+            if _consume_host_generation_receipt(effective_source_operation_receipt):
+                csharp_contract = evidence.get("csharp", {}).get(
+                    "source_modification_contract"
+                )
+                if isinstance(csharp_contract, dict):
+                    csharp_contract["receipt_state"] = "consumed"
+                    csharp_contract["retry_allowed"] = False
+            else:
+                receipt_issue = {
+                    "code": "csharp_generation_source_operation_receipt_replayed",
+                    "severity": "error",
+                    "message": "The generation receipt could not be consumed at the successful orchestration boundary.",
+                }
+                if stages:
+                    stages[-1].setdefault("issues", []).append(receipt_issue)
+                    stages[-1]["status"] = "blocked"
+                core_validation_passed = False
+                completion_allowed = False
+                draft_allowed = False
+                result_success = False
         claim_status = {
             "completion": "passed" if completion_allowed else "blocked" if completion_requested else "not_claimed",
             "event_state": pb_contract_integrations["event_state"]["status"],
@@ -18915,8 +20500,38 @@ def orchestrate_pb_migration_validation(
     if not loaded_profile.success:
         return finish(False)
 
+    if (
+        str(csharp_source_operation or "").strip().lower() == "generation"
+        and not effective_source_operation_receipt
+        and runtime_generation_run_receipt
+    ):
+        generation_receipt_result = issue_pb_to_csharp_runtime_generation_receipt(
+            runtime_generation_run_receipt,
+            expected_source_sha256=str(target_source_sha256 or ""),
+            expected_designer_sha256=str(target_designer_sha256 or ""),
+        )
+        evidence["generation_receipt_issuance"] = dict(
+            generation_receipt_result.metadata
+        )
+        if generation_receipt_result.success:
+            effective_source_operation_receipt = dict(
+                generation_receipt_result.metadata.get("generation_receipt") or {}
+            )
+    else:
+        evidence["generation_receipt_issuance"] = {
+            "status": "supplied" if effective_source_operation_receipt else "not_requested",
+            "operation": "issue_runtime_generation_receipt",
+        }
+
     csharp_result = verify_migration_generated_csharp_style(
         csharp_source_text,
+        source_operation=csharp_source_operation,
+        original_source_text=original_csharp_source_text,
+        original_source_path=original_csharp_source_path,
+        original_source_sha256=original_csharp_source_sha256,
+        source_modification_evidence=csharp_edit_evidence,
+        source_operation_receipt=effective_source_operation_receipt,
+        source_operation_receipt_authenticator=csharp_source_operation_receipt_authenticator,
         designer_source_text=designer_source_text,
         profile_evidence=loaded_profile,
         program_key=program_key,
@@ -18948,6 +20563,9 @@ def orchestrate_pb_migration_validation(
         layout_load_artifact_text=layout_load_artifact_text,
         layout_load_evidence=layout_load_evidence,
         require_designer_companion=True,
+        _receipt_consumption_capability=(
+            _PB_MIGRATION_ORCHESTRATION_RECEIPT_CAPABILITY
+        ),
     )
     stages.append(
         {
@@ -18997,6 +20615,10 @@ def orchestrate_pb_migration_validation(
         cte_temp_table_reason=cte_temp_table_reason,
         alias_role_plan=alias_role_plan,
         sql_formatting_verifier_kwargs=sql_formatting_verifier_kwargs,
+        runtime_receipt_authenticator=runtime_receipt_authenticator,
+        required_operation=(
+            "formatting" if sp_operation == "existing_sp_cleanup" else "generation"
+        ),
     )
     binding_success, binding_receipt, release_receipt = _pb_sql_release_evidence_views(
         binding_success,

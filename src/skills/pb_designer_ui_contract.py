@@ -35,6 +35,25 @@ _ASSIGNMENT = re.compile(
     rf"(?P<property>{_IDENTIFIER}(?:\.{_IDENTIFIER})*)\s*=\s*(?P<value>.*?);\s*$",
     re.MULTILINE,
 )
+_CODE_BEHIND_INITIALIZER = re.compile(
+    rf"(?<![.\w])(?P<qualified>this\.)?(?P<name>{_IDENTIFIER})\s*=\s*new\s+"
+    rf"(?P<type>[A-Za-z_][A-Za-z0-9_.<>]*)\s*\("
+)
+_CODE_BEHIND_ASSIGNMENT = re.compile(
+    rf"(?<![.\w])(?P<qualified>this\.)?(?P<name>{_IDENTIFIER})\."
+    rf"(?P<property>{_IDENTIFIER}(?:\.{_IDENTIFIER})*)\s*=\s*(?P<value>.*?);"
+)
+_CODE_BEHIND_COLLECTION = re.compile(
+    rf"(?<![.\w])(?P<qualified>this\.)?(?P<name>{_IDENTIFIER})\."
+    rf"(?P<collection>Controls|Columns|RepositoryItems)\."
+    rf"(?P<method>Add|AddRange|SetChildIndex)\s*\("
+)
+_CODE_BEHIND_EVENT = re.compile(
+    rf"(?<![.\w])(?P<qualified>this\.)?(?P<name>{_IDENTIFIER})\."
+    rf"(?P<event>{_IDENTIFIER})\s*\+="
+)
+_FORM_COLLECTION = re.compile(r"(?<![.\w])this\.Controls\.(?:Add|SetChildIndex)\s*\(")
+_FORM_EVENT = re.compile(rf"(?<![.\w])this\.(?P<event>{_IDENTIFIER})\s*\+=")
 _FORM_ASSIGNMENT = re.compile(
     rf"^\s*this\.(?P<property>{_IDENTIFIER}(?:\.{_IDENTIFIER})*)\s*=\s*(?P<value>.*?);\s*$",
     re.MULTILINE,
@@ -279,6 +298,104 @@ def _strip_csharp_comments(source: str) -> str:
     return "".join(output)
 
 
+def _mask_csharp_noncode(source: str) -> str:
+    """Mask comments and literals while retaining offsets and line breaks."""
+
+    text = str(source or "")
+    output = list(text)
+    index = 0
+    state = "code"
+    raw_quote_count = 0
+    while index < len(text):
+        char = text[index]
+        nxt = text[index + 1] if index + 1 < len(text) else ""
+        if state == "code":
+            if char == "/" and nxt == "/":
+                output[index] = output[index + 1] = " "
+                index += 2
+                state = "line_comment"
+                continue
+            if char == "/" and nxt == "*":
+                output[index] = output[index + 1] = " "
+                index += 2
+                state = "block_comment"
+                continue
+            raw_match = re.match(r"\$*\"{3,}", text[index:])
+            if raw_match:
+                token = raw_match.group(0)
+                raw_quote_count = len(token) - len(token.lstrip("$"))
+                raw_quote_count = len(token) - raw_quote_count
+                for offset in range(len(token)):
+                    output[index + offset] = " "
+                index += len(token)
+                state = "raw_string"
+                continue
+            prefix_match = re.match(r"(?:\$@|@\$|\$|@)?\"", text[index:])
+            if prefix_match:
+                token = prefix_match.group(0)
+                for offset in range(len(token)):
+                    output[index + offset] = " "
+                index += len(token)
+                state = "verbatim_string" if "@" in token else "string"
+                continue
+            if char == "'":
+                output[index] = " "
+                index += 1
+                state = "character"
+                continue
+            index += 1
+            continue
+        if state == "line_comment":
+            if char in "\r\n":
+                state = "code"
+            else:
+                output[index] = " "
+            index += 1
+            continue
+        if state == "block_comment":
+            if char == "*" and nxt == "/":
+                output[index] = output[index + 1] = " "
+                index += 2
+                state = "code"
+            else:
+                if char not in "\r\n":
+                    output[index] = " "
+                index += 1
+            continue
+        if state == "raw_string":
+            closing = '"' * raw_quote_count
+            if text.startswith(closing, index):
+                for offset in range(raw_quote_count):
+                    output[index + offset] = " "
+                index += raw_quote_count
+                state = "code"
+            else:
+                if char not in "\r\n":
+                    output[index] = " "
+                index += 1
+            continue
+        if state == "verbatim_string":
+            if char == '"' and nxt == '"':
+                output[index] = output[index + 1] = " "
+                index += 2
+            else:
+                if char not in "\r\n":
+                    output[index] = " "
+                index += 1
+                if char == '"':
+                    state = "code"
+            continue
+        output[index] = " " if char not in "\r\n" else char
+        index += 1
+        if char == "\\" and index < len(text):
+            if text[index] not in "\r\n":
+                output[index] = " "
+            index += 1
+        elif (state == "string" and char == '"') or (state == "character" and char == "'"):
+            state = "code"
+    return "".join(output)
+
+
 def _csharp_string_value(value: str) -> str | None:
     raw = str(value or "").strip()
     if not _CSHARP_STRING.fullmatch(raw):
@@ -490,6 +607,96 @@ def _matching_brace(source: str, opening_index: int) -> int | None:
                 state = "code"
         index += 1
     return None
+
+
+def _enclosing_callable_scope(source: str, position: int) -> Tuple[int, int, str] | None:
+    """Return the narrowest method or constructor body containing ``position``."""
+
+    candidates: List[Tuple[int, int, str]] = []
+    for opening in (match.start() for match in re.finditer(r"\{", source[:position + 1])):
+        prefix = source[max(0, opening - 1200):opening]
+        header = re.search(
+            rf"(?P<name>{_IDENTIFIER})\s*\((?P<parameters>[^{{}};]*)\)\s*$",
+            prefix,
+        )
+        if not header or header.group("name") in {
+            "if", "for", "foreach", "while", "switch", "catch", "using", "lock", "fixed",
+        }:
+            continue
+        closing = _matching_brace(source, opening)
+        if closing is not None and opening < position < closing:
+            candidates.append((opening, closing, header.group("parameters")))
+    return min(candidates, key=lambda item: item[1] - item[0]) if candidates else None
+
+
+def _unqualified_member_is_shadowed(source: str, name: str, position: int) -> bool:
+    """Conservatively recognize parameters and locals that hide a form field."""
+
+    scope = _enclosing_callable_scope(source, position)
+    if scope is None:
+        return False
+    opening, _, parameters = scope
+    parameter_pattern = re.compile(
+        rf"(?:^|,)\s*(?:(?:this|ref|out|in|params)\s+)*"
+        rf"[A-Za-z_][A-Za-z0-9_.<>?\[\],]*\s+{re.escape(name)}\b"
+    )
+    if parameter_pattern.search(parameters):
+        return True
+    body_prefix = source[opening + 1:position]
+    local_pattern = re.compile(
+        rf"(?<![.\w])(?:var|[A-Za-z_][A-Za-z0-9_.<>?\[\],]*)\s+"
+        rf"{re.escape(name)}\b\s*(?==|;|,|\))"
+    )
+    target_blocks = set(_active_lexical_blocks(source, position, opening))
+    for match in local_pattern.finditer(body_prefix):
+        declaration_position = opening + 1 + match.start()
+        declaration_blocks = _active_lexical_blocks(
+            source,
+            declaration_position,
+            opening,
+        )
+        if declaration_blocks and declaration_blocks[-1] in target_blocks:
+            return True
+    return False
+
+
+def _active_lexical_blocks(
+    source: str,
+    position: int,
+    lower_bound: int,
+) -> Tuple[int, ...]:
+    """Return brace-delimited blocks still open at ``position``."""
+
+    blocks: List[int] = []
+    start = max(0, lower_bound)
+    stop = min(max(position, start), len(source))
+    for index in range(start, stop):
+        if source[index] == "{":
+            blocks.append(index)
+        elif source[index] == "}" and blocks:
+            blocks.pop()
+    return tuple(blocks)
+
+
+def _unqualified_initializer_is_local(source: str, position: int) -> bool:
+    line_start = max(source.rfind("\n", 0, position), source.rfind("\r", 0, position)) + 1
+    prefix = source[line_start:position]
+    return bool(
+        re.search(
+            r"(?:^|\s)(?:var|[A-Za-z_][A-Za-z0-9_.<>?\[\],]*)\s+$",
+            prefix,
+        )
+    )
+
+
+def _is_static_designer_property(property_name: str) -> bool:
+    first = str(property_name or "").split(".", 1)[0]
+    for prefix in _STATIC_PROPERTY_PREFIXES:
+        if property_name == prefix or property_name.startswith(prefix + "."):
+            return True
+        if prefix in {"Appearance", "Options"} and first.startswith(prefix):
+            return True
+    return False
 
 
 def _source_type_declarations(source: str) -> Dict[str, Dict[str, str]]:
@@ -1953,45 +2160,79 @@ def validate_static_designer_ownership_contract(
     """Reject design-time construction/layout/property assignments in code-behind."""
 
     model = parse_designer_source(designer_source)
-    source = _strip_csharp_comments(code_behind_source)
+    source = _mask_csharp_noncode(code_behind_source)
     allowlist = {str(item).strip() for item in dynamic_property_allowlist}
     issues: List[Dict[str, Any]] = []
     control_names = set(model.controls)
-    for match in _CONTROL_INITIALIZER.finditer(source):
-        if match.group("name") in control_names:
+    for match in _CODE_BEHIND_INITIALIZER.finditer(source):
+        name = match.group("name")
+        if name in control_names and (
+            match.group("qualified")
+            or (
+                not _unqualified_initializer_is_local(source, match.start())
+                and not _unqualified_member_is_shadowed(source, name, match.start())
+            )
+        ):
             issues.append(
                 _issue(
                     "static_control_construction_in_code_behind",
                     "Control construction is Designer-owned.",
-                    control=match.group("name"),
+                    control=name,
                 )
             )
-    for match in _ASSIGNMENT.finditer(source):
+    for match in _CODE_BEHIND_ASSIGNMENT.finditer(source):
         name = match.group("name")
         property_name = match.group("property")
         identity = f"{name}.{property_name}"
-        if name not in control_names or identity in allowlist:
+        if (
+            name not in control_names
+            or identity in allowlist
+            or (
+                not match.group("qualified")
+                and _unqualified_member_is_shadowed(source, name, match.start())
+            )
+        ):
             continue
         if property_name == "DataSource" or property_name.startswith("DataSource."):
             continue
-        if any(property_name == prefix or property_name.startswith(prefix + ".") for prefix in _STATIC_PROPERTY_PREFIXES):
+        if _is_static_designer_property(property_name):
             issues.append(
                 _issue(
                     "static_designer_property_in_code_behind",
                     "Static UI properties belong in the companion Designer source.",
                     control=name,
                     property=property_name,
-                    value=match.group("value").strip(),
+                    value=code_behind_source[match.start("value"):match.end("value")].strip(),
                 )
             )
-    collection_pattern = re.compile(
-        rf"this(?:\.{_IDENTIFIER})?\.(?:Controls\.(?:Add|SetChildIndex)|Columns\.AddRange|RepositoryItems\.AddRange)\s*\("
-    )
-    if collection_pattern.search(source):
+    collection_matches = []
+    for match in _CODE_BEHIND_COLLECTION.finditer(source):
+        name = match.group("name")
+        if name not in control_names:
+            continue
+        if not match.group("qualified") and _unqualified_member_is_shadowed(source, name, match.start()):
+            continue
+        collection_matches.append(match)
+    if collection_matches or _FORM_COLLECTION.search(source):
         issues.append(
             _issue(
                 "static_collection_wiring_in_code_behind",
                 "Parent containment, z-order, columns, and repositories are Designer-owned.",
+            )
+        )
+    event_matches = []
+    for match in _CODE_BEHIND_EVENT.finditer(source):
+        name = match.group("name")
+        if name not in control_names:
+            continue
+        if not match.group("qualified") and _unqualified_member_is_shadowed(source, name, match.start()):
+            continue
+        event_matches.append(match)
+    if event_matches or _FORM_EVENT.search(source):
+        issues.append(
+            _issue(
+                "static_event_wiring_in_code_behind",
+                "Events on Designer-owned controls and forms belong in the companion Designer source.",
             )
         )
     return _result(issues, contract="static_designer_ownership", allowlist=sorted(allowlist))

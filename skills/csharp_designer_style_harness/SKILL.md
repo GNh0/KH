@@ -1,16 +1,16 @@
 ---
 name: csharp-designer-style-harness
-description: Use when verifying an exact C# WinForms/DevExpress/KoneLib code-behind and .Designer.cs pair against the packaged style contract with hash-bound evidence and no-write analysis.
+description: Use when generating, modifying, or reviewing C# WinForms/DevExpress/KoneLib code-behind and .Designer.cs while preserving the exact target's helper, save, binding, and Designer patterns.
 ---
 
 # C# Designer Style Harness
 
-This skill verifies one exact C# code-behind and `.Designer.cs` pair against the packaged C# WinForms/DevExpress/KoneLib contract. It is source-bound, PB-independent, and does not discover style from a project root, sibling tree, source-control history, author metadata, or arbitrary files.
+This skill governs generation and modification of one exact C# code-behind and `.Designer.cs` pair, then verifies the candidate against the packaged contract. It is source-bound and does not discover style from sibling trees, history, author metadata, or arbitrary files.
 
 ## KH Entry Contract
 
-- Start non-trivial verification through `always-on-front-door` before reading target artifacts, selecting this skill, or running the verifier. This source, tool, artifact, and verification work normally requires governed runtime intake.
-- A catalog entry, `selected_not_executed_skills`, a `SKILL.md` read, or a smoke check is inspection only. Report this skill as applied only after `verify_csharp_designer_style` runs against the exact hash-bound source and Designer receipts and returns a structured result.
+- Select this skill for C# WinForms/DevExpress/KoneLib generation, modification, or review; do not require the user to name the skill or ask for verification.
+- Read the exact target source and Designer pair before editing. A catalog entry, skill read, or smoke check alone is not application evidence.
 - Preserve the user's exact target paths, requested operation, exclusions, and no-write boundary. Do not expand the scope into catalog, routing, project, database, or caller changes.
 - Keep `confirmed`, `inferred`, `blocked`, and `proposal-only` facts separate. Missing source, Designer, hash, identity, base-type, or event evidence remains blocked; it is never replaced with an invented control, field, helper, query, or style choice.
 - Runtime evidence belongs to the current exact artifact pair. A copied demo result, reference read, or prior verification cannot authorize a different pair.
@@ -25,6 +25,13 @@ This skill verifies one exact C# code-behind and `.Designer.cs` pair against the
 - This is a runtime-backed verifier, not a `hybrid-harness`: the host procedure collects receipts and interprets evidence, while the Python module owns deterministic contract checks. The packaged examples and demos document the procedure but do not change the catalog classification.
 - Default mode is `analysis_only=True`; use `applicable_operations=("query",)` for an explicitly read-only query surface. The default verifies both query and normal save families.
 
+## Generation And Modification Contract
+
+- Preserve the exact target's helper calls, query/save method family, detail row-state handling, bindings, and Designer ownership unless exact target-source or user evidence authorizes a change.
+- Do not introduce `PostEditor`, `UpdateCurrentRow`, whole-table `DataTable` row rewrites, parent-key propagation, inferred composite-key values, or DTOs merely because they seem defensive. An ordinary new helper is a review concern, not a deterministic blocker by itself.
+- Added/New, Modified, and Deleted/Del detail states remain delta operations. Do not replace them with full delete/reinsert without exact source or user evidence.
+- Run `src.skills.csharp_designer_style.verify_csharp_edit_contract` against the pre-edit and candidate code-behind. Then run the pair verifier when source and Designer are both in scope.
+
 ## Inputs
 
 Pass two exact artifact receipts. Each receipt contains an absolute `path` and the expected byte `sha256`, with or without the `sha256:` prefix. Source and Designer paths must be distinct.
@@ -33,12 +40,11 @@ Optional expected and target identities may name the exact form, controls, field
 
 ## Workflow
 
-1. Run the front door and record the selected provider, execution gate, and exact allowed file boundary before source inspection.
-2. Read the exact source and Designer paths supplied for the current task. Recompute byte hashes and decode UTF-8; do not use sibling or backup artifacts as substitutes.
-3. Call `verify_csharp_designer_style` with both receipts, the requested operation set, expected/target identities, and any packaged native-helper names. Do not manufacture authority with exception provenance or caller-owned type claims.
-4. Inspect the structured `HarnessResult` metadata for artifact hashes, packaged-contract hash, `verification_binding`, verifier id, and issue codes. A successful return is evidence for that exact pair only.
-5. For a blocked result, report the issue code and missing evidence. Do not repair source or Designer files inside this skill unless a separate user instruction explicitly authorizes those files.
-6. Preserve the exact verifier output and demo/smoke command exit codes as evidence. Do not claim live project build, Designer layout load, PB parity, or database equivalence from this verifier alone.
+1. Read the exact current source and Designer pair; do not substitute a sibling, backup, or remembered program.
+2. Record existing helpers, save calls, row-state behavior, bindings, and Designer-owned members.
+3. Make the smallest source-grounded change and run `verify_csharp_edit_contract` on original versus candidate.
+4. Block new edit-commit calls, whole-table row rewrites, and key propagation unless exact evidence authorizes them. Review ordinary new helpers in context instead of rejecting every new method mechanically.
+5. Run `verify_csharp_designer_style` for the final pair when both artifacts are in scope, then run the focused build/syntax check permitted by the task.
 
 ## Verification Contract
 
@@ -75,6 +81,7 @@ Code-behind static UI construction, runtime column factories, Designer helper me
 
 ## UAF implementation targets
 
+- `src.skills.csharp_designer_style.verify_csharp_edit_contract`
 - `src.skills.csharp_designer_style_contract.verify_csharp_designer_style`
 - `src.contracts.HarnessResult`
 - `skills/csharp_designer_style_harness/scripts/smoke_check.py`

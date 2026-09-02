@@ -2,18 +2,18 @@
 
 ## Scenario
 
-A host agent receives a KH-routed request. The token gate must run even if the request is light/direct and no compression is ultimately applied; actual optimization is used only when content can be safely reduced without losing required facts.
+A host agent receives a 900-line failing test log. The visible payload is large and reducible, so the token-optimizer trigger matches. A short SQL or C# request without such a payload would not load this skill.
 
 The agent must decide whether `token-optimizer` applies, run or apply it according to its execution level, and leave auditable evidence.
 
 ## Expected steps
 
-1. Load `SKILL.md` and confirm the trigger applies.
+1. Confirm from visible payload size/type that the trigger applies, then load `SKILL.md`.
 2. Read `references/usage.md` before doing the work.
 3. Collect the user objective, workspace boundary, expected outputs, and evidence requirements.
-4. Record `token_optimizer_status` as `used`, `considered_not_needed`, `passthrough`, or `blocked` before broad reads, subagent packets, long commands, or implementation.
+4. Record internal `token_optimizer_status` as `used`, `considered_not_needed`, `passthrough`, or `blocked` before processing the large payload.
 5. When content is compressible, call `optimize_context_content`, `summarize_agent_transcript`, `summarize_command_output`, or `python -m src.skills.token_optimizer --log-file <path>` according to the content type.
-6. Write or report the resulting compact output, `HarnessResult`, before/after size, `not_used_reason`, passthrough reason, or blocked reason.
+6. Store the resulting compact output, `HarnessResult`, before/after size, `not_used_reason`, passthrough reason, or blocked reason internally. Report telemetry only when requested or when blocked.
 7. Run `python scripts/smoke_check.py` when validating the packaged skill folder itself.
 
 ## Expected evidence
@@ -42,7 +42,8 @@ The agent must decide whether `token-optimizer` applies, run or apply it accordi
 ## Failure cases
 
 - The agent claims the skill was executed but only read `SKILL.md`.
-- The agent omits `token_optimizer_status` or `not_used_reason` when no compression was applied.
+- After selecting the skill for a large payload, the agent omits `token_optimizer_status` or the applicable reason.
+- The agent loads the skill for a short request merely to record `considered_not_needed` or `passthrough`.
 - The agent reports provider billing-token savings when only local payload estimates were available.
 - The agent reports parallel, role, state, or gate behavior without runtime-path evidence.
 - The agent creates user-facing artifacts in hidden state folders or hidden state in the user output folder.

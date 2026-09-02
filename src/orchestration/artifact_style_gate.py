@@ -11,6 +11,8 @@ import json
 import os
 import re
 import copy
+import shutil
+import tempfile
 import threading
 import time
 import uuid
@@ -34,6 +36,14 @@ ARTIFACT_STYLE_SNAPSHOT_KIND = "artifact_style_snapshot_v1"
 ARTIFACT_VISUAL_RECEIPT_KIND = "artifact_visual_qa_v1"
 ARTIFACT_HOST_CALL_KIND = "artifact_host_call_v1"
 ARTIFACT_HOST_RESULT_KIND = "artifact_host_result_v1"
+ARTIFACT_GENERATION_PREWRITE_KIND = "artifact_generation_prewrite_v1"
+ARTIFACT_GENERATION_PREWRITE_TOOL = "artifact-generation-prewrite-observer"
+ARTIFACT_MODIFICATION_PREEDIT_KIND = "artifact_modification_preedit_v1"
+ARTIFACT_MODIFICATION_PREEDIT_TOOL = "artifact-modification-preedit-snapshot"
+ARTIFACT_OPERATION_RETRY_KIND = "artifact_operation_retry_v1"
+ARTIFACT_RETRY_SNAPSHOT_MARKER_KIND = "artifact_retry_snapshot_marker_v1"
+_ARTIFACT_RETRY_MARKER_FILE = ".kh-retry-snapshot.json"
+_ABSENT_ARTIFACT_SHA256 = sha256(b"kh-artifact-path-absent-v1").hexdigest()
 
 _CONTEXT_KEYS = ("runtime_context", "execution_context", "plan", "tool_metadata")
 _ARTIFACT_KEYS = (
@@ -51,7 +61,7 @@ _RECEIPT_KEYS = (
 _VISUAL_RECEIPT_KEYS = ("visual_qa_receipts", "render_qa_receipts")
 _CHANGE_OPERATIONS = {
     "create", "created", "generate", "generated", "modify", "modified",
-    "write", "written", "update", "updated",
+    "generation", "modification", "write", "written", "update", "updated",
 }
 _DEPLOY_OPERATIONS = {
     "deploy", "deployed", "execute", "executed", "db_deploy",
@@ -91,6 +101,13 @@ _HOST_REGISTRY_LOCK = threading.Lock()
 _HOST_REGISTRIES: Dict[str, "HostCallResultRegistry"] = {}
 _HOST_REGISTRY_ORDER: List[str] = []
 _HOST_REGISTRY_LIMIT = 256
+_CSHARP_RETRY_LIMIT = 16
+_CSHARP_RETRY_TTL_SECONDS = 15 * 60
+_CSHARP_RETRY_MAX_ATTEMPTS = 3
+_CSHARP_OPERATION_RECEIPT_VALIDITY_SECONDS = 24 * 60 * 60
+_CSHARP_RETRY_LOCK = threading.Lock()
+_CSHARP_RETRY_STATES: Dict[str, Dict[str, Any]] = {}
+_CSHARP_RETRY_PERSISTING: set[str] = set()
 _GLOBAL_EXECUTION_SEQUENCE_LOCK = threading.Lock()
 _GLOBAL_EXECUTION_SEQUENCE = 0
 _EXECUTOR_REGISTRY_OWNERSHIP = object()
@@ -149,6 +166,15 @@ def _path_key(path: Path) -> str:
     return os.path.normcase(os.path.normpath(str(path)))
 
 
+def _same_physical_file(first: Path, second: Path) -> bool:
+    if _path_key(first) == _path_key(second):
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except (OSError, ValueError):
+        return False
+
+
 def _canonical_project_root(value: Any) -> tuple[Path | None, str]:
     if not isinstance(value, (str, os.PathLike)) or not str(value).strip():
         return None, "project_root_missing"
@@ -161,6 +187,32 @@ def _canonical_project_root(value: Any) -> tuple[Path | None, str]:
         return None, "project_root_unresolvable"
     if not resolved.is_dir():
         return None, "project_root_missing"
+    return resolved, ""
+
+
+def _canonical_project_target(
+    value: Any,
+    project_root: Path,
+) -> tuple[Path | None, str]:
+    if not isinstance(value, (str, os.PathLike)) or not str(value).strip():
+        return None, "artifact_path_missing"
+    supplied = Path(str(value).strip())
+    if not supplied.is_absolute():
+        return None, "artifact_path_relative"
+    if ".." in supplied.parts:
+        return None, "artifact_path_parent_traversal"
+    try:
+        resolved = supplied.resolve(strict=False)
+    except OSError:
+        return None, "artifact_path_unresolvable"
+    try:
+        common = os.path.commonpath((_path_key(project_root), _path_key(resolved)))
+    except ValueError:
+        return None, "artifact_path_outside_project"
+    if common != _path_key(project_root):
+        return None, "artifact_path_outside_project"
+    if not resolved.parent.is_dir():
+        return None, "artifact_parent_missing"
     return resolved, ""
 
 
@@ -203,17 +255,25 @@ def _project_root(
     return _canonical_project_root(value)
 
 
-def _runtime_boundary(project_root: Path) -> RuntimeProducerBoundary:
+def _artifact_style_runtime_state_dir(project_root: Path) -> Path:
     project_key = sha256(_path_key(project_root).encode("utf-8")).hexdigest()[:24]
+    return runtime_root() / "runtime-receipts" / "artifact-style" / project_key
+
+
+def _runtime_boundary(project_root: Path) -> RuntimeProducerBoundary:
     return RuntimeProducerBoundary(
         ARTIFACT_STYLE_PRODUCER,
-        state_dir=(
-            runtime_root()
-            / "runtime-receipts"
-            / "artifact-style"
-            / project_key
-        ),
+        state_dir=_artifact_style_runtime_state_dir(project_root),
     )
+
+
+def _retry_record_directory(project_root: Path) -> Path:
+    return _artifact_style_runtime_state_dir(project_root) / "retry-snapshots"
+
+
+def _retry_record_path(project_root: Path, retry_id: str) -> Path:
+    record_name = sha256(str(retry_id).encode("utf-8")).hexdigest() + ".json"
+    return _retry_record_directory(project_root) / record_name
 
 
 def _runtime_output(value: Any) -> Dict[str, Any]:
@@ -418,6 +478,1230 @@ def _registered_host_registry(value: Any) -> HostCallResultRegistry | None:
     return registry
 
 
+def _operation_registry_ids(rows: Sequence[Mapping[str, Any]]) -> List[str]:
+    registry_ids: List[str] = []
+    for row in rows:
+        for key in (
+            "generation_prewrite_receipt",
+            "modification_preedit_receipt",
+        ):
+            receipt = row.get(key)
+            if isinstance(receipt, Mapping):
+                registry_id = str(receipt.get("host_registry_id") or "")
+                if registry_id:
+                    registry_ids.append(registry_id)
+    return list(dict.fromkeys(registry_ids))
+
+
+def _remove_host_registries(registry_ids: Iterable[str]) -> None:
+    normalized = {str(item or "").strip() for item in registry_ids}
+    normalized.discard("")
+    if not normalized:
+        return
+    with _HOST_REGISTRY_LOCK:
+        for registry_id in normalized:
+            _HOST_REGISTRIES.pop(registry_id, None)
+        _HOST_REGISTRY_ORDER[:] = [
+            item for item in _HOST_REGISTRY_ORDER if item not in normalized
+        ]
+
+
+def _atomic_write_runtime_json(path: Path, value: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(
+        f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        with temporary.open("x", encoding="utf-8", newline="\n") as handle:
+            json.dump(value, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _persist_csharp_retry_cleanup_record(
+    *,
+    project_root: Path,
+    retry_receipt: Mapping[str, Any],
+    snapshot_directory: str,
+    snapshot_paths: Sequence[str],
+) -> Dict[str, Any]:
+    retry_id = str(retry_receipt.get("retry_id") or "")
+    record_path = _retry_record_path(project_root, retry_id)
+    marker: Dict[str, Any] = {}
+    marker_path = ""
+    if snapshot_directory:
+        snapshot_dir, error = _canonical_project_target(
+            snapshot_directory,
+            project_root,
+        )
+        if (
+            snapshot_dir is None
+            or error
+            or not snapshot_dir.is_dir()
+            or snapshot_dir.parent != project_root
+        ):
+            raise ValueError("csharp_retry_snapshot_directory_not_owned")
+        normalized_paths = []
+        for path_text in snapshot_paths:
+            snapshot, snapshot_error = _canonical_project_file(
+                path_text,
+                project_root,
+            )
+            if (
+                snapshot is None
+                or snapshot_error
+                or snapshot.parent != snapshot_dir
+            ):
+                raise ValueError("csharp_retry_snapshot_path_not_owned")
+            normalized_paths.append(
+                {
+                    "path": str(snapshot),
+                    "sha256": sha256_bytes(snapshot.read_bytes()),
+                }
+            )
+        marker_path = str(snapshot_dir / _ARTIFACT_RETRY_MARKER_FILE)
+        marker = _runtime_boundary(project_root).issue_claim(
+            {
+                "schema_version": 1,
+                "receipt_type": ARTIFACT_RETRY_SNAPSHOT_MARKER_KIND,
+                "project_root": str(project_root),
+                "retry_id": retry_id,
+                "snapshot_directory": str(snapshot_dir),
+                "snapshot_paths": normalized_paths,
+                "marker_path": marker_path,
+                "issued_at": datetime.now(timezone.utc).isoformat(),
+            },
+            claim_kind=ARTIFACT_RETRY_SNAPSHOT_MARKER_KIND,
+            claim_id_field="marker_id",
+            claim_id_prefix="artifact-retry-snapshot",
+        )
+    record = {
+        "schema_version": 1,
+        "retry_id": retry_id,
+        "project_root": str(project_root),
+        "retry_receipt": dict(retry_receipt),
+        "snapshot_marker": marker,
+    }
+    try:
+        _atomic_write_runtime_json(record_path, record)
+        if marker_path:
+            _atomic_write_runtime_json(Path(marker_path), marker)
+    except Exception:
+        record_path.unlink(missing_ok=True)
+        if marker_path:
+            Path(marker_path).unlink(missing_ok=True)
+        raise
+    return {
+        "persistence_path": str(record_path),
+        "snapshot_marker": marker,
+    }
+
+
+def _remove_authenticated_retry_snapshot(state: Mapping[str, Any]) -> bool:
+    snapshot_directory = str(state.get("snapshot_directory") or "")
+    if not snapshot_directory:
+        return True
+    marker = state.get("snapshot_marker")
+    if not isinstance(marker, Mapping) or not marker:
+        return False
+    root, root_error = _canonical_project_root(marker.get("project_root"))
+    if root is None or root_error:
+        return False
+    marker_errors = _runtime_boundary(root).validate_claim(
+        marker,
+        claim_kind=ARTIFACT_RETRY_SNAPSHOT_MARKER_KIND,
+        claim_id_field="marker_id",
+        consume=False,
+    )
+    if marker_errors or marker.get("receipt_type") != ARTIFACT_RETRY_SNAPSHOT_MARKER_KIND:
+        return False
+    snapshot_dir, error = _canonical_project_target(snapshot_directory, root)
+    if (
+        snapshot_dir is None
+        or error
+        or not snapshot_dir.is_dir()
+        or snapshot_dir.parent != root
+        or str(snapshot_dir) != str(marker.get("snapshot_directory") or "")
+    ):
+        return not Path(snapshot_directory).exists()
+    marker_path = snapshot_dir / _ARTIFACT_RETRY_MARKER_FILE
+    if str(marker_path) != str(marker.get("marker_path") or ""):
+        return False
+    if marker_path.exists():
+        try:
+            persisted_marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if _json_hash(persisted_marker) != _json_hash(marker):
+            return False
+    expected_paths: List[Path] = []
+    for row in _as_rows(marker.get("snapshot_paths")):
+        candidate = Path(str(row.get("path") or "")).resolve(strict=False)
+        if candidate.parent != snapshot_dir:
+            return False
+        expected_paths.append(candidate)
+    allowed = {_path_key(path) for path in expected_paths}
+    allowed.add(_path_key(marker_path))
+    try:
+        children = list(snapshot_dir.iterdir())
+    except OSError:
+        return False
+    if any(_path_key(child) not in allowed or not child.is_file() for child in children):
+        return False
+    try:
+        for path in expected_paths:
+            path.unlink(missing_ok=True)
+        marker_path.unlink(missing_ok=True)
+        snapshot_dir.rmdir()
+    except OSError:
+        return False
+    return not snapshot_dir.exists()
+
+
+def _remove_snapshot_directory(snapshot_directory: str) -> bool:
+    path_text = str(snapshot_directory or "").strip()
+    if not path_text:
+        return True
+    snapshot_path = Path(path_text)
+    for attempt in range(3):
+        try:
+            shutil.rmtree(snapshot_path, ignore_errors=False)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            if attempt < 2:
+                time.sleep(0.01)
+                continue
+        return not snapshot_path.exists()
+    return not snapshot_path.exists()
+
+
+def _cleanup_csharp_retry_state(
+    state: Dict[str, Any],
+    *,
+    terminal_reason: str,
+) -> Dict[str, Any]:
+    receipt = state.get("retry_receipt")
+    claim_errors: List[str] = []
+    if isinstance(receipt, Mapping):
+        root, root_error = _canonical_project_root(receipt.get("project_root"))
+        if root is None:
+            claim_errors.append(root_error)
+        else:
+            claim_errors.extend(
+                _runtime_boundary(root).validate_claim(
+                    receipt,
+                    claim_kind=ARTIFACT_OPERATION_RETRY_KIND,
+                    claim_id_field="retry_id",
+                    consume=True,
+                )
+            )
+    snapshot_directory = str(state.get("snapshot_directory") or "")
+    if state.get("persistence_path") or state.get("snapshot_marker"):
+        snapshot_removed = _remove_authenticated_retry_snapshot(state)
+    else:
+        snapshot_removed = _remove_snapshot_directory(snapshot_directory)
+    _remove_host_registries(state.get("operation_registry_ids", []))
+    persistence_text = str(state.get("persistence_path") or "")
+    if snapshot_removed and persistence_text:
+        Path(persistence_text).unlink(missing_ok=True)
+    state["context"] = {}
+    state["targets"] = {}
+    state["retry_receipt"] = {}
+    state["operation_registry_ids"] = []
+    state["snapshot_marker"] = {}
+    state["persistence_path"] = ""
+    return {
+        "retry_id": str(receipt.get("retry_id") or "")
+        if isinstance(receipt, Mapping)
+        else "",
+        "terminal_reason": terminal_reason,
+        "snapshot_removed": snapshot_removed,
+        "claim_errors": [
+            item
+            for item in claim_errors
+            if item
+            not in {"replayed_receipt", "runtime_producer_claim_expired"}
+        ],
+    }
+
+
+def _persisted_retry_record_paths() -> List[Path]:
+    root = runtime_root() / "runtime-receipts" / "artifact-style"
+    if not root.is_dir():
+        return []
+    records: List[Path] = []
+    for project_dir in root.iterdir():
+        retry_dir = project_dir / "retry-snapshots"
+        if not project_dir.is_dir() or not retry_dir.is_dir():
+            continue
+        records.extend(
+            path for path in retry_dir.iterdir() if path.is_file() and path.suffix == ".json"
+        )
+    return sorted(records, key=lambda path: _path_key(path))
+
+
+def _cleanup_abandoned_retry_records(active_retry_ids: set[str]) -> Dict[str, Any]:
+    cleaned: List[Dict[str, Any]] = []
+    rejected = 0
+    for record_path in _persisted_retry_record_paths():
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            record_path.unlink(missing_ok=True)
+            rejected += 1
+            continue
+        if not isinstance(record, Mapping):
+            record_path.unlink(missing_ok=True)
+            rejected += 1
+            continue
+        retry_receipt = record.get("retry_receipt")
+        retry_id = str(record.get("retry_id") or "")
+        if retry_id in active_retry_ids:
+            continue
+        if (
+            not isinstance(retry_receipt, Mapping)
+            or retry_id != str(retry_receipt.get("retry_id") or "")
+        ):
+            record_path.unlink(missing_ok=True)
+            rejected += 1
+            continue
+        root, root_error = _canonical_project_root(record.get("project_root"))
+        if (
+            root is None
+            or root_error
+            or record_path != _retry_record_path(root, retry_id)
+        ):
+            record_path.unlink(missing_ok=True)
+            rejected += 1
+            continue
+        receipt_errors = _runtime_boundary(root).validate_claim(
+            retry_receipt,
+            claim_kind=ARTIFACT_OPERATION_RETRY_KIND,
+            claim_id_field="retry_id",
+            consume=False,
+        )
+        if set(receipt_errors) - {
+            "replayed_receipt",
+            "runtime_producer_claim_expired",
+        }:
+            record_path.unlink(missing_ok=True)
+            rejected += 1
+            continue
+        marker = record.get("snapshot_marker")
+        snapshot_directory = (
+            str(marker.get("snapshot_directory") or "")
+            if isinstance(marker, Mapping)
+            else ""
+        )
+        cleanup = _cleanup_csharp_retry_state(
+            {
+                "retry_receipt": dict(retry_receipt),
+                "snapshot_directory": snapshot_directory,
+                "snapshot_marker": dict(marker) if isinstance(marker, Mapping) else {},
+                "persistence_path": str(record_path),
+                "operation_registry_ids": [],
+                "context": {},
+                "targets": {},
+            },
+            terminal_reason="process_restart_invalidated",
+        )
+        if cleanup.get("snapshot_removed") and not cleanup.get("claim_errors"):
+            cleaned.append(cleanup)
+    return {
+        "cleaned_count": len(cleaned),
+        "rejected_record_count": rejected,
+        "cleaned": cleaned,
+    }
+
+
+def sweep_csharp_artifact_retry_registry() -> Dict[str, Any]:
+    """Expire bounded retry state and remove its snapshots and registries."""
+
+    now = time.monotonic()
+    expired: List[Dict[str, Any]] = []
+    with _CSHARP_RETRY_LOCK:
+        for retry_id, state in list(_CSHARP_RETRY_STATES.items()):
+            if (
+                not state.get("in_use")
+                and float(state.get("expires_monotonic") or 0.0) <= now
+            ):
+                expired.append(_CSHARP_RETRY_STATES.pop(retry_id))
+        active = len(_CSHARP_RETRY_STATES)
+        active_retry_ids = set(_CSHARP_RETRY_STATES) | set(_CSHARP_RETRY_PERSISTING)
+    cleaned = [
+        _cleanup_csharp_retry_state(state, terminal_reason="expired")
+        for state in expired
+    ]
+    abandoned = _cleanup_abandoned_retry_records(active_retry_ids)
+    return {
+        "status": "passed",
+        "expired_count": len(cleaned),
+        "active_count": active,
+        "cleaned": cleaned,
+        "restart_cleanup": abandoned,
+        "limit": _CSHARP_RETRY_LIMIT,
+        "ttl_seconds": _CSHARP_RETRY_TTL_SECONDS,
+    }
+
+
+def _register_csharp_retry_state(
+    *,
+    project_root: Path,
+    pair_id: str,
+    operation: str,
+    context: Mapping[str, Any],
+    targets: Mapping[str, Path],
+    snapshot_directory: str,
+    attempts: int,
+) -> Dict[str, Any]:
+    sweep_csharp_artifact_retry_registry()
+    created_at = datetime.now(timezone.utc)
+    ttl_seconds = max(0.0, float(_CSHARP_RETRY_TTL_SECONDS))
+    expires_at = datetime.fromtimestamp(
+        created_at.timestamp() + ttl_seconds,
+        tz=timezone.utc,
+    )
+    rows = []
+    for key in ("generated_artifacts", "changed_artifacts"):
+        rows.extend(_as_rows(context.get(key)))
+    snapshot_paths = [
+        str(receipt.get("snapshot_path") or "")
+        for row in rows
+        for receipt in [row.get("modification_preedit_receipt")]
+        if isinstance(receipt, Mapping)
+        and str(receipt.get("snapshot_path") or "")
+    ]
+    payload = {
+        "schema_version": 1,
+        "receipt_type": ARTIFACT_OPERATION_RETRY_KIND,
+        "status": "available",
+        "project_root": str(project_root),
+        "pair_id": pair_id,
+        "operation": operation,
+        "artifact_paths": {
+            role: str(path) for role, path in sorted(targets.items())
+        },
+        "snapshot_paths": snapshot_paths,
+        "context_sha256": _json_hash(context),
+        "attempts": int(attempts),
+        "max_attempts": int(_CSHARP_RETRY_MAX_ATTEMPTS),
+        "created_at": created_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+    receipt = _runtime_boundary(project_root).issue_claim(
+        payload,
+        claim_kind=ARTIFACT_OPERATION_RETRY_KIND,
+        claim_id_field="retry_id",
+        claim_id_prefix="artifact-retry",
+        validity_seconds=max(1.0, ttl_seconds),
+    )
+    retry_id = str(receipt["retry_id"])
+    with _CSHARP_RETRY_LOCK:
+        _CSHARP_RETRY_PERSISTING.add(retry_id)
+    try:
+        persistence = _persist_csharp_retry_cleanup_record(
+            project_root=project_root,
+            retry_receipt=receipt,
+            snapshot_directory=snapshot_directory,
+            snapshot_paths=snapshot_paths,
+        )
+    except Exception:
+        with _CSHARP_RETRY_LOCK:
+            _CSHARP_RETRY_PERSISTING.discard(retry_id)
+        raise
+    state = {
+        "retry_receipt": copy.deepcopy(receipt),
+        "context": copy.deepcopy(dict(context)),
+        "targets": {role: str(path) for role, path in targets.items()},
+        "snapshot_directory": snapshot_directory,
+        "operation_registry_ids": _operation_registry_ids(rows),
+        "attempts": int(attempts),
+        "expires_monotonic": time.monotonic() + ttl_seconds,
+        "in_use": False,
+        **persistence,
+    }
+    evicted: List[Dict[str, Any]] = []
+    registry_busy = False
+    with _CSHARP_RETRY_LOCK:
+        limit = max(1, int(_CSHARP_RETRY_LIMIT))
+        while len(_CSHARP_RETRY_STATES) >= limit:
+            oldest = next(
+                (
+                    retry_id
+                    for retry_id, existing in _CSHARP_RETRY_STATES.items()
+                    if not existing.get("in_use")
+                ),
+                "",
+            )
+            if not oldest:
+                registry_busy = True
+                break
+            evicted.append(_CSHARP_RETRY_STATES.pop(oldest))
+        if not registry_busy:
+            _CSHARP_RETRY_STATES[retry_id] = state
+        _CSHARP_RETRY_PERSISTING.discard(retry_id)
+    for stale in evicted:
+        _cleanup_csharp_retry_state(stale, terminal_reason="evicted")
+    if registry_busy:
+        _cleanup_csharp_retry_state(state, terminal_reason="registry_busy")
+        raise RuntimeError("csharp_artifact_retry_registry_busy")
+    return receipt
+
+
+def _load_csharp_retry_state(
+    retry_receipt: Mapping[str, Any] | Any,
+    *,
+    require_snapshots: bool = True,
+) -> tuple[Dict[str, Any] | None, List[str]]:
+    sweep_csharp_artifact_retry_registry()
+    if not isinstance(retry_receipt, Mapping):
+        return None, ["csharp_artifact_retry_receipt_missing"]
+    root, root_error = _canonical_project_root(retry_receipt.get("project_root"))
+    if root is None:
+        return None, [root_error]
+    errors = _runtime_boundary(root).validate_claim(
+        retry_receipt,
+        claim_kind=ARTIFACT_OPERATION_RETRY_KIND,
+        claim_id_field="retry_id",
+        consume=False,
+    )
+    if retry_receipt.get("receipt_type") != ARTIFACT_OPERATION_RETRY_KIND:
+        errors.append("csharp_artifact_retry_receipt_type_mismatch")
+    retry_id = str(retry_receipt.get("retry_id") or "")
+    with _CSHARP_RETRY_LOCK:
+        state = _CSHARP_RETRY_STATES.get(retry_id)
+        state_copy = copy.deepcopy(state) if state is not None else None
+    if state_copy is None:
+        errors.append("csharp_artifact_retry_state_missing")
+    else:
+        if _json_hash(state_copy.get("context", {})) != retry_receipt.get(
+            "context_sha256"
+        ):
+            errors.append("csharp_artifact_retry_context_mismatch")
+        if state_copy.get("targets") != retry_receipt.get("artifact_paths"):
+            errors.append("csharp_artifact_retry_targets_mismatch")
+        snapshot_receipts = [
+            receipt
+            for key in ("generated_artifacts", "changed_artifacts")
+            for row in _as_rows(state_copy.get("context", {}).get(key))
+            for receipt in [row.get("modification_preedit_receipt")]
+            if isinstance(receipt, Mapping)
+        ]
+        expected_snapshot_paths = [
+            str(receipt.get("snapshot_path") or "")
+            for receipt in snapshot_receipts
+            if str(receipt.get("snapshot_path") or "")
+        ]
+        if expected_snapshot_paths != list(
+            retry_receipt.get("snapshot_paths") or []
+        ):
+            errors.append("csharp_artifact_retry_snapshot_paths_mismatch")
+        for receipt in snapshot_receipts if require_snapshots else []:
+            snapshot, snapshot_error = _canonical_project_file(
+                receipt.get("snapshot_path"),
+                root,
+            )
+            if snapshot is None:
+                errors.append(
+                    f"csharp_artifact_retry_snapshot_unavailable:{snapshot_error}"
+                )
+                continue
+            if sha256_bytes(snapshot.read_bytes()) != _canonical_hash(
+                receipt.get("snapshot_sha256")
+            ):
+                errors.append("csharp_artifact_retry_snapshot_hash_mismatch")
+    return state_copy if not errors else None, list(dict.fromkeys(errors))
+
+
+def issue_csharp_generation_prewrite_receipt(
+    *,
+    project_root: str | os.PathLike[str],
+    artifact_path: str | os.PathLike[str],
+    artifact_role: str,
+    pair_id: str,
+) -> Dict[str, Any]:
+    """Observe an absent C# target before creation and issue host-owned proof."""
+
+    root, error = _canonical_project_root(project_root)
+    if root is None:
+        raise ValueError(error)
+    target, error = _canonical_project_target(artifact_path, root)
+    if target is None:
+        raise ValueError(error)
+    role = str(artifact_role or "").strip().lower()
+    if role not in {"winforms_codebehind", "winforms_designer"}:
+        raise ValueError("csharp_generation_artifact_role_invalid")
+    normalized_pair_id = str(pair_id or "").strip()
+    if not normalized_pair_id:
+        raise ValueError("csharp_generation_pair_id_missing")
+    if target.exists():
+        raise ValueError("csharp_generation_target_already_exists")
+
+    registry = _new_executor_host_registry(root)
+    boundary = registry.producer_boundary
+    absent_hash = f"sha256:{_ABSENT_ARTIFACT_SHA256}"
+    producer_identity = (
+        f"{ARTIFACT_STYLE_PRODUCER}:{ARTIFACT_GENERATION_PREWRITE_TOOL}"
+    )
+    request = {
+        "project_root": str(root),
+        "artifact_path": str(target),
+        "artifact_role": role,
+        "pair_id": normalized_pair_id,
+        "expected_path_state": "absent",
+    }
+
+    def observe_absence(_request: Dict[str, Any]) -> Dict[str, Any]:
+        observed_at = datetime.now(timezone.utc).isoformat()
+        absent = not target.exists()
+        return {
+            "status": "passed" if absent else "blocked",
+            "success": absent,
+            "exit_code": 0 if absent else 1,
+            "artifact_path": str(target),
+            "artifact_sha256": absent_hash,
+            "artifact_role": role,
+            "pair_id": normalized_pair_id,
+            "path_state": "absent" if absent else "present",
+            "observed_at": observed_at,
+        }
+
+    execution = registry.invoke(
+        tool_name=ARTIFACT_GENERATION_PREWRITE_TOOL,
+        producer_identity=producer_identity,
+        artifact_path=str(target),
+        artifact_sha256=absent_hash,
+        input_payload=request,
+        runner=observe_absence,
+    )
+    output = dict(execution["output"])
+    if (
+        not _runtime_output_passed(output)
+        or output.get("path_state") != "absent"
+        or target.exists()
+    ):
+        raise RuntimeError("csharp_generation_prewrite_observation_failed")
+    call_receipt = execution["call_receipt"]
+    result_receipt = execution["result_receipt"]
+    return boundary.issue_claim(
+        {
+            "schema_version": 1,
+            "receipt_type": ARTIFACT_GENERATION_PREWRITE_KIND,
+            "host_registry_id": registry.registry_id,
+            "status": "passed",
+            "project_root": str(root),
+            "artifact_path": str(target),
+            "artifact_role": role,
+            "pair_id": normalized_pair_id,
+            "path_state": "absent",
+            "absent_artifact_sha256": absent_hash,
+            "tool_name": ARTIFACT_GENERATION_PREWRITE_TOOL,
+            "producer_identity": producer_identity,
+            "sequence": int(call_receipt["sequence"]),
+            "call_id": str(call_receipt["call_id"]),
+            "result_id": str(result_receipt["result_id"]),
+            "execution_output_sha256": str(result_receipt["output_sha256"]),
+            "execution_input_artifact_sha256": absent_hash,
+            "execution_call_receipt": dict(call_receipt),
+            "execution_result_receipt": dict(result_receipt),
+            "observed_at": str(output.get("observed_at") or ""),
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+        },
+        claim_kind=ARTIFACT_GENERATION_PREWRITE_KIND,
+        claim_id_field="receipt_id",
+        claim_id_prefix="artifact-generation-prewrite",
+        validity_seconds=_CSHARP_OPERATION_RECEIPT_VALIDITY_SECONDS,
+    )
+
+
+def issue_csharp_modification_preedit_receipt(
+    *,
+    project_root: str | os.PathLike[str],
+    artifact_path: str | os.PathLike[str],
+    artifact_role: str,
+    pair_id: str,
+    snapshot_directory: str | os.PathLike[str],
+) -> Dict[str, Any]:
+    """Capture one host-owned pre-edit C# snapshot and bind its exact bytes."""
+
+    root, error = _canonical_project_root(project_root)
+    if root is None:
+        raise ValueError(error)
+    target, error = _canonical_project_file(artifact_path, root)
+    if target is None:
+        raise ValueError(error)
+    role = str(artifact_role or "").strip().lower()
+    if role not in {"winforms_codebehind", "winforms_designer"}:
+        raise ValueError("csharp_modification_artifact_role_invalid")
+    normalized_pair_id = str(pair_id or "").strip()
+    if not normalized_pair_id:
+        raise ValueError("csharp_modification_pair_id_missing")
+
+    snapshot_root = Path(str(snapshot_directory or "").strip())
+    if not snapshot_root.is_absolute():
+        raise ValueError("csharp_modification_snapshot_directory_relative")
+    snapshot_root = snapshot_root.resolve(strict=False)
+    if not snapshot_root.is_dir():
+        raise ValueError("csharp_modification_snapshot_directory_missing")
+    try:
+        common = os.path.commonpath(
+            (_path_key(root), _path_key(snapshot_root))
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "csharp_modification_snapshot_directory_outside_project"
+        ) from exc
+    if common != _path_key(root):
+        raise ValueError("csharp_modification_snapshot_directory_outside_project")
+
+    original_bytes = target.read_bytes()
+    original_hash = sha256_bytes(original_bytes)
+    snapshot = snapshot_root / (
+        f"{role}-{uuid.uuid4().hex}.before.cs"
+    )
+    registry = _new_executor_host_registry(root)
+    boundary = registry.producer_boundary
+    producer_identity = (
+        f"{ARTIFACT_STYLE_PRODUCER}:{ARTIFACT_MODIFICATION_PREEDIT_TOOL}"
+    )
+    request = {
+        "project_root": str(root),
+        "artifact_path": str(target),
+        "artifact_role": role,
+        "pair_id": normalized_pair_id,
+        "original_artifact_sha256": original_hash,
+        "snapshot_path": str(snapshot),
+    }
+
+    def capture_preedit(_request: Dict[str, Any]) -> Dict[str, Any]:
+        current_bytes = target.read_bytes()
+        current_hash = sha256_bytes(current_bytes)
+        if current_hash != original_hash:
+            return {
+                "status": "blocked",
+                "success": False,
+                "exit_code": 1,
+                "artifact_path": str(target),
+                "artifact_sha256": current_hash,
+                "reason": "source_changed_during_preedit_capture",
+            }
+        snapshot.write_bytes(current_bytes)
+        captured_at = datetime.now(timezone.utc).isoformat()
+        return {
+            "status": "passed",
+            "success": True,
+            "exit_code": 0,
+            "artifact_path": str(target),
+            "artifact_sha256": original_hash,
+            "artifact_role": role,
+            "pair_id": normalized_pair_id,
+            "snapshot_path": str(snapshot),
+            "snapshot_sha256": sha256_bytes(snapshot.read_bytes()),
+            "captured_at": captured_at,
+        }
+
+    execution = registry.invoke(
+        tool_name=ARTIFACT_MODIFICATION_PREEDIT_TOOL,
+        producer_identity=producer_identity,
+        artifact_path=str(target),
+        artifact_sha256=original_hash,
+        input_payload=request,
+        runner=capture_preedit,
+    )
+    output = dict(execution["output"])
+    if (
+        not _runtime_output_passed(output)
+        or not snapshot.is_file()
+        or sha256_bytes(snapshot.read_bytes()) != original_hash
+        or sha256_bytes(target.read_bytes()) != original_hash
+    ):
+        raise RuntimeError("csharp_modification_preedit_capture_failed")
+    call_receipt = execution["call_receipt"]
+    result_receipt = execution["result_receipt"]
+    return boundary.issue_claim(
+        {
+            "schema_version": 1,
+            "receipt_type": ARTIFACT_MODIFICATION_PREEDIT_KIND,
+            "host_registry_id": registry.registry_id,
+            "status": "passed",
+            "project_root": str(root),
+            "artifact_path": str(target),
+            "artifact_role": role,
+            "pair_id": normalized_pair_id,
+            "original_artifact_sha256": original_hash,
+            "snapshot_path": str(snapshot),
+            "snapshot_sha256": original_hash,
+            "tool_name": ARTIFACT_MODIFICATION_PREEDIT_TOOL,
+            "producer_identity": producer_identity,
+            "sequence": int(call_receipt["sequence"]),
+            "call_id": str(call_receipt["call_id"]),
+            "result_id": str(result_receipt["result_id"]),
+            "execution_output_sha256": str(result_receipt["output_sha256"]),
+            "execution_input_artifact_sha256": original_hash,
+            "execution_call_receipt": dict(call_receipt),
+            "execution_result_receipt": dict(result_receipt),
+            "captured_at": str(output.get("captured_at") or ""),
+            "issued_at": datetime.now(timezone.utc).isoformat(),
+        },
+        claim_kind=ARTIFACT_MODIFICATION_PREEDIT_KIND,
+        claim_id_field="receipt_id",
+        claim_id_prefix="artifact-modification-preedit",
+        validity_seconds=_CSHARP_OPERATION_RECEIPT_VALIDITY_SECONDS,
+    )
+
+
+def execute_csharp_artifact_operation(
+    *,
+    project_root: str | os.PathLike[str],
+    pair_id: str,
+    operation: str,
+    codebehind_path: str | os.PathLike[str],
+    designer_path: str | os.PathLike[str],
+    write_artifacts: Callable[[Dict[str, Path]], Any],
+    completion: bool = True,
+    visual_completion: bool = False,
+) -> Dict[str, Any]:
+    """Execute one C# pair write through host-owned pre-write evidence and gates."""
+
+    if not callable(write_artifacts):
+        raise ValueError("csharp_artifact_writer_unavailable")
+    sweep_csharp_artifact_retry_registry()
+    root, error = _canonical_project_root(project_root)
+    if root is None:
+        raise ValueError(error)
+    normalized_pair_id = str(pair_id or "").strip()
+    if not normalized_pair_id:
+        raise ValueError("csharp_artifact_pair_id_missing")
+    from src.skills.csharp_designer_style import (
+        normalize_csharp_source_operation,
+    )
+
+    normalized_operation = normalize_csharp_source_operation(operation)
+    targets: Dict[str, Path] = {}
+    for role, supplied in (
+        ("winforms_codebehind", codebehind_path),
+        ("winforms_designer", designer_path),
+    ):
+        if normalized_operation == "generation":
+            target, target_error = _canonical_project_target(supplied, root)
+            if target is not None and target.exists():
+                target = None
+                target_error = "csharp_generation_target_already_exists"
+        else:
+            target, target_error = _canonical_project_file(supplied, root)
+        if target is None:
+            raise ValueError(f"{target_error}:{supplied}")
+        targets[role] = target
+    if _same_physical_file(
+        targets["winforms_codebehind"],
+        targets["winforms_designer"],
+    ):
+        raise ValueError("csharp_artifact_pair_paths_not_distinct")
+
+    def write_and_verify(
+        rows: List[Dict[str, Any]],
+        *,
+        snapshot_directory: str = "",
+    ) -> Dict[str, Any]:
+        source_key = (
+            "generated_artifacts"
+            if normalized_operation == "generation"
+            else "changed_artifacts"
+        )
+        context = {
+            "project": str(root),
+            source_key: rows,
+            "completion": bool(completion),
+            "visual_completion": bool(visual_completion),
+        }
+        writer_result: Any = None
+        writer_error = ""
+        try:
+            writer_result = write_artifacts(dict(targets))
+            missing = [
+                str(target) for target in targets.values() if not target.is_file()
+            ]
+            if missing:
+                raise RuntimeError(
+                    "csharp_artifact_writer_missing_output:" + ",".join(missing)
+                )
+            gate = execute_artifact_style_precompletion(context)
+        except Exception as exc:
+            writer_error = f"{type(exc).__name__}:{exc}"
+            gate = {
+                "project_root": str(root),
+                "required_skills": [CSHARP_STYLE_SKILL],
+                "style_passed": False,
+                "completion_blocked": True,
+                "executor_status": "blocked",
+                "executor_errors": [
+                    f"csharp_artifact_writer_failed:{writer_error}"
+                ],
+                "operation_receipt_lifecycle": "retained_for_retry",
+            }
+        gate["artifact_operation"] = {
+            "status": "passed" if gate.get("style_passed") else "blocked",
+            "operation": normalized_operation,
+            "pair_id": normalized_pair_id,
+            "public_call_path": (
+                "execute_csharp_artifact_operation>"
+                "prewrite_or_preedit_receipt>write_artifacts>"
+                "execute_artifact_style_precompletion"
+            ),
+            "writer_result_type": type(writer_result).__name__,
+        }
+        if writer_error:
+            gate["artifact_operation"]["writer_error"] = writer_error
+        if gate.get("style_passed"):
+            snapshot_removed = _remove_snapshot_directory(snapshot_directory)
+            _remove_host_registries(_operation_registry_ids(rows))
+            if not snapshot_removed:
+                gate["style_passed"] = False
+                gate["completion_blocked"] = True
+                gate["executor_status"] = "blocked"
+                gate.setdefault("executor_errors", []).append(
+                    "csharp_artifact_operation_snapshot_cleanup_failed"
+                )
+                gate["operation_receipt_lifecycle"] = "cleanup_blocked"
+            gate["retry_state"] = {
+                "status": "not_required" if snapshot_removed else "cleanup_blocked",
+                "snapshot_cleanup": (
+                    "completed" if snapshot_removed else "failed"
+                ),
+            }
+            return gate
+
+        try:
+            retry_receipt = _register_csharp_retry_state(
+                project_root=root,
+                pair_id=normalized_pair_id,
+                operation=normalized_operation,
+                context=context,
+                targets=targets,
+                snapshot_directory=snapshot_directory,
+                attempts=1,
+            )
+        except Exception as exc:
+            _remove_snapshot_directory(snapshot_directory)
+            _remove_host_registries(_operation_registry_ids(rows))
+            gate.setdefault("executor_errors", []).append(
+                "csharp_artifact_retry_registration_failed:"
+                f"{type(exc).__name__}:{exc}"
+            )
+            gate["operation_receipt_lifecycle"] = "retry_unavailable"
+            gate["retry_state"] = {"status": "unavailable"}
+            return gate
+        gate["operation_receipt_lifecycle"] = "retained_for_retry"
+        gate["retry_receipt"] = retry_receipt
+        gate["retry_state"] = {
+            "status": "available",
+            "attempts": 1,
+            "max_attempts": _CSHARP_RETRY_MAX_ATTEMPTS,
+            "expires_at": retry_receipt["expires_at"],
+            "snapshot_paths": list(retry_receipt["snapshot_paths"]),
+        }
+        return gate
+
+    if normalized_operation == "generation":
+        rows = []
+        try:
+            for role, target in targets.items():
+                receipt = issue_csharp_generation_prewrite_receipt(
+                    project_root=root,
+                    artifact_path=target,
+                    artifact_role=role,
+                    pair_id=normalized_pair_id,
+                )
+                rows.append(
+                    {
+                        "path": str(target),
+                        "artifact_role": role,
+                        "pair_id": normalized_pair_id,
+                        "operation": "generation",
+                        "generation_prewrite_receipt": receipt,
+                    }
+                )
+        except Exception:
+            _remove_host_registries(_operation_registry_ids(rows))
+            raise
+        return write_and_verify(rows)
+
+    snapshot_directory = tempfile.mkdtemp(
+        prefix=".kh-artifact-preedit-",
+        dir=str(root),
+    )
+    rows = []
+    try:
+        for role, target in targets.items():
+            receipt = issue_csharp_modification_preedit_receipt(
+                project_root=root,
+                artifact_path=target,
+                artifact_role=role,
+                pair_id=normalized_pair_id,
+                snapshot_directory=snapshot_directory,
+            )
+            rows.append(
+                {
+                    "path": str(target),
+                    "artifact_role": role,
+                    "pair_id": normalized_pair_id,
+                    "operation": "modification",
+                    "modification_preedit_receipt": receipt,
+                }
+            )
+    except Exception:
+        _remove_snapshot_directory(snapshot_directory)
+        _remove_host_registries(_operation_registry_ids(rows))
+        raise
+    return write_and_verify(rows, snapshot_directory=snapshot_directory)
+
+
+def retry_csharp_artifact_operation(
+    *,
+    retry_receipt: Mapping[str, Any],
+    write_artifacts: Callable[[Dict[str, Path]], Any],
+) -> Dict[str, Any]:
+    """Retry one failed C# operation with its preserved host-owned evidence."""
+
+    if not callable(write_artifacts):
+        raise ValueError("csharp_artifact_writer_unavailable")
+    loaded, errors = _load_csharp_retry_state(retry_receipt)
+    if loaded is None:
+        return {
+            "project_root": str(
+                retry_receipt.get("project_root")
+                if isinstance(retry_receipt, Mapping)
+                else ""
+            ),
+            "style_passed": False,
+            "completion_blocked": True,
+            "executor_status": "blocked",
+            "executor_errors": errors,
+            "operation_receipt_lifecycle": "retry_unavailable",
+            "retry_state": {"status": "unavailable"},
+        }
+
+    retry_id = str(retry_receipt.get("retry_id") or "")
+    max_attempts = max(
+        1,
+        int(retry_receipt.get("max_attempts") or _CSHARP_RETRY_MAX_ATTEMPTS),
+    )
+    exhausted: Dict[str, Any] | None = None
+    terminal_state: Dict[str, Any] | None = None
+    attempts = 0
+    with _CSHARP_RETRY_LOCK:
+        state = _CSHARP_RETRY_STATES.get(retry_id)
+        if state is None:
+            return {
+                "style_passed": False,
+                "completion_blocked": True,
+                "executor_status": "blocked",
+                "executor_errors": ["csharp_artifact_retry_state_missing"],
+                "operation_receipt_lifecycle": "retry_unavailable",
+            }
+        if state.get("in_use"):
+            return {
+                "style_passed": False,
+                "completion_blocked": True,
+                "executor_status": "blocked",
+                "executor_errors": ["csharp_artifact_retry_already_in_use"],
+                "operation_receipt_lifecycle": "retry_unavailable",
+            }
+        attempts = int(state.get("attempts") or 0) + 1
+        if attempts > max_attempts:
+            exhausted = _CSHARP_RETRY_STATES.pop(retry_id)
+            state = None
+        else:
+            state["attempts"] = attempts
+            state["in_use"] = True
+            context = copy.deepcopy(state["context"])
+            targets = {
+                role: Path(path) for role, path in state["targets"].items()
+            }
+    if exhausted is not None:
+        cleanup = _cleanup_csharp_retry_state(
+            exhausted,
+            terminal_reason="attempts_exhausted",
+        )
+        return {
+            "style_passed": False,
+            "completion_blocked": True,
+            "executor_status": "blocked",
+            "executor_errors": ["csharp_artifact_retry_attempts_exhausted"],
+            "operation_receipt_lifecycle": "retry_exhausted",
+            "retry_state": {"status": "exhausted", "cleanup": cleanup},
+        }
+
+    writer_result: Any = None
+    writer_error = ""
+    try:
+        writer_result = write_artifacts(dict(targets))
+        missing = [str(path) for path in targets.values() if not path.is_file()]
+        if missing:
+            raise RuntimeError(
+                "csharp_artifact_writer_missing_output:" + ",".join(missing)
+            )
+        gate = execute_artifact_style_precompletion(context)
+    except Exception as exc:
+        writer_error = f"{type(exc).__name__}:{exc}"
+        gate = {
+            "project_root": str(retry_receipt.get("project_root") or ""),
+            "style_passed": False,
+            "completion_blocked": True,
+            "executor_status": "blocked",
+            "executor_errors": [
+                f"csharp_artifact_retry_writer_failed:{writer_error}"
+            ],
+            "operation_receipt_lifecycle": "retained_for_retry",
+        }
+
+    gate["artifact_operation"] = {
+        "status": "passed" if gate.get("style_passed") else "blocked",
+        "operation": str(retry_receipt.get("operation") or ""),
+        "pair_id": str(retry_receipt.get("pair_id") or ""),
+        "public_call_path": (
+            "retry_csharp_artifact_operation>write_artifacts>"
+            "execute_artifact_style_precompletion"
+        ),
+        "writer_result_type": type(writer_result).__name__,
+    }
+    if writer_error:
+        gate["artifact_operation"]["writer_error"] = writer_error
+
+    if gate.get("style_passed"):
+        with _CSHARP_RETRY_LOCK:
+            terminal_state = _CSHARP_RETRY_STATES.pop(retry_id, None)
+        cleanup = (
+            _cleanup_csharp_retry_state(
+                terminal_state,
+                terminal_reason="succeeded",
+            )
+            if terminal_state is not None
+            else {
+                "terminal_reason": "succeeded",
+                "snapshot_removed": True,
+                "claim_errors": ["csharp_artifact_retry_state_missing"],
+            }
+        )
+        if cleanup.get("claim_errors") or not cleanup.get("snapshot_removed"):
+            gate["style_passed"] = False
+            gate["completion_blocked"] = True
+            gate["executor_status"] = "blocked"
+            gate.setdefault("executor_errors", []).append(
+                "csharp_artifact_retry_terminal_cleanup_failed"
+            )
+            gate["operation_receipt_lifecycle"] = "retry_cleanup_blocked"
+            gate["artifact_operation"]["status"] = "blocked"
+        gate["retry_state"] = {
+            "status": (
+                "completed"
+                if gate.get("style_passed")
+                else "cleanup_blocked"
+            ),
+            "cleanup": cleanup,
+        }
+        return gate
+
+    current_missing = False
+    with _CSHARP_RETRY_LOCK:
+        current = _CSHARP_RETRY_STATES.get(retry_id)
+        if current is not None:
+            current["in_use"] = False
+            attempts = int(current.get("attempts") or attempts)
+            exhausted_now = attempts >= max_attempts
+            if exhausted_now:
+                terminal_state = _CSHARP_RETRY_STATES.pop(retry_id)
+            else:
+                terminal_state = None
+        else:
+            current_missing = True
+    if current_missing:
+        gate["operation_receipt_lifecycle"] = "retry_unavailable"
+        gate.pop("retry_receipt", None)
+        gate.setdefault("executor_errors", []).append(
+            "csharp_artifact_retry_state_missing"
+        )
+        gate["retry_state"] = {"status": "unavailable"}
+        return gate
+    if terminal_state is not None:
+        cleanup = _cleanup_csharp_retry_state(
+            terminal_state,
+            terminal_reason="attempts_exhausted",
+        )
+        gate["operation_receipt_lifecycle"] = "retry_exhausted"
+        gate.pop("retry_receipt", None)
+        gate["retry_state"] = {"status": "exhausted", "cleanup": cleanup}
+        return gate
+
+    gate["operation_receipt_lifecycle"] = "retained_for_retry"
+    gate["retry_receipt"] = copy.deepcopy(dict(retry_receipt))
+    gate["retry_state"] = {
+        "status": "available",
+        "attempts": attempts,
+        "max_attempts": max_attempts,
+        "expires_at": retry_receipt.get("expires_at"),
+        "snapshot_paths": list(retry_receipt.get("snapshot_paths") or []),
+    }
+    return gate
+
+
+def cancel_csharp_artifact_operation_retry(
+    *,
+    retry_receipt: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Cancel one retry and clean every host-owned snapshot and registry."""
+
+    loaded, errors = _load_csharp_retry_state(
+        retry_receipt,
+        require_snapshots=False,
+    )
+    if loaded is None:
+        return {
+            "status": "blocked",
+            "cancelled": False,
+            "errors": errors,
+        }
+    retry_id = str(retry_receipt.get("retry_id") or "")
+    with _CSHARP_RETRY_LOCK:
+        state = _CSHARP_RETRY_STATES.get(retry_id)
+        if state is None:
+            return {
+                "status": "blocked",
+                "cancelled": False,
+                "errors": ["csharp_artifact_retry_state_missing"],
+            }
+        if state.get("in_use"):
+            return {
+                "status": "blocked",
+                "cancelled": False,
+                "errors": ["csharp_artifact_retry_already_in_use"],
+            }
+        terminal_state = _CSHARP_RETRY_STATES.pop(retry_id)
+    cleanup = _cleanup_csharp_retry_state(
+        terminal_state,
+        terminal_reason="cancelled",
+    )
+    return {
+        "status": (
+            "passed"
+            if cleanup.get("snapshot_removed")
+            and not cleanup.get("claim_errors")
+            else "blocked"
+        ),
+        "cancelled": bool(
+            cleanup.get("snapshot_removed")
+            and not cleanup.get("claim_errors")
+        ),
+        "cleanup": cleanup,
+    }
+
+
 def _artifact_path(row: Mapping[str, Any]) -> str:
     return str(
         row.get("path") or row.get("artifact_path") or row.get("file") or ""
@@ -540,6 +1824,8 @@ def _receipt_rows(
 def _artifact_candidates(
     context: Mapping[str, Any] | None,
     project_root: Path,
+    *,
+    validated_operation_receipts: List[Dict[str, Any]] | None = None,
 ) -> tuple[List[Dict[str, Any]], List[str]]:
     candidates: List[Dict[str, Any]] = []
     errors: List[str] = []
@@ -564,27 +1850,167 @@ def _artifact_candidates(
                 supplied_hash = _artifact_hash(row)
                 if supplied_hash and supplied_hash != actual_hash:
                     errors.append(f"artifact_hash_mismatch:{path}")
-                candidates.append(
-                    {
-                        "path": str(path),
-                        "path_key": _path_key(path),
-                        "sha256": actual_hash,
-                        "artifact_role": role,
-                        "pair_id": str(
-                            row.get("pair_id")
-                            or row.get("artifact_pair_id")
-                            or ""
-                        ).strip(),
-                        "operation": str(
-                            row.get("operation")
-                            or row.get("change_type")
-                            or row.get("action")
-                            or "modified"
-                        ).strip().lower(),
-                        "sequence": row.get("sequence"),
-                        "result_id": str(row.get("result_id") or "").strip(),
-                    }
-                )
+                candidate = {
+                    "path": str(path),
+                    "path_key": _path_key(path),
+                    "sha256": actual_hash,
+                    "artifact_role": role,
+                    "pair_id": str(
+                        row.get("pair_id")
+                        or row.get("artifact_pair_id")
+                        or ""
+                    ).strip(),
+                    "operation": str(
+                        row.get("operation")
+                        or row.get("change_type")
+                        or row.get("action")
+                        or "modified"
+                    ).strip().lower(),
+                    "sequence": row.get("sequence"),
+                    "result_id": str(row.get("result_id") or "").strip(),
+                }
+                if role in {"winforms_codebehind", "winforms_designer"}:
+                    from src.skills.csharp_designer_style import (
+                        normalize_csharp_source_operation,
+                    )
+
+                    try:
+                        candidate["operation"] = normalize_csharp_source_operation(
+                            candidate["operation"]
+                        )
+                    except ValueError:
+                        errors.append(
+                            f"csharp_source_operation_invalid:{path}:{candidate['operation']}"
+                        )
+                original_path_value = str(row.get("original_path") or "").strip()
+                original_hash = _canonical_hash(row.get("original_sha256"))
+                if (
+                    role in {"winforms_codebehind", "winforms_designer"}
+                    and candidate["operation"] == "generation"
+                ):
+                    if original_path_value or original_hash:
+                        errors.append(
+                            f"csharp_generation_original_conflict:{path}"
+                        )
+                    if key != "generated_artifacts":
+                        errors.append(f"csharp_generation_context_invalid:{path}")
+                    generation_receipt = row.get("generation_prewrite_receipt")
+                    if not isinstance(generation_receipt, Mapping):
+                        errors.append(
+                            f"csharp_generation_prewrite_receipt_required:{path}"
+                        )
+                    else:
+                        receipt_errors = (
+                            _validate_csharp_generation_prewrite_receipt(
+                                generation_receipt,
+                                project_root=project_root,
+                                artifact_path=path,
+                                artifact_role=role,
+                                pair_id=str(candidate.get("pair_id") or ""),
+                                consume=False,
+                            )
+                        )
+                        if receipt_errors:
+                            errors.extend(
+                                f"csharp_generation_prewrite_receipt_invalid:{path}:{item}"
+                                for item in receipt_errors
+                            )
+                        else:
+                            candidate["generation_prewrite_receipt_id"] = str(
+                                generation_receipt.get("receipt_id") or ""
+                            )
+                            candidate["generation_prewrite_host_registry_id"] = str(
+                                generation_receipt.get("host_registry_id") or ""
+                            )
+                            candidate["generation_prewrite_sequence"] = (
+                                generation_receipt.get("sequence")
+                            )
+                            if validated_operation_receipts is not None:
+                                validated_operation_receipts.append(
+                                    {
+                                        "kind": "generation",
+                                        "receipt": generation_receipt,
+                                        "path": path,
+                                        "artifact_role": role,
+                                        "pair_id": str(
+                                            candidate.get("pair_id") or ""
+                                        ),
+                                    }
+                                )
+                if (
+                    role in {"winforms_codebehind", "winforms_designer"}
+                    and candidate["operation"] == "modification"
+                ):
+                    preedit_receipt = row.get("modification_preedit_receipt")
+                    if not isinstance(preedit_receipt, Mapping):
+                        errors.append(f"original_artifact_receipt_required:{path}")
+                    else:
+                        receipt_errors = (
+                            _validate_csharp_modification_preedit_receipt(
+                                preedit_receipt,
+                                project_root=project_root,
+                                artifact_path=path,
+                                artifact_role=role,
+                                pair_id=str(candidate.get("pair_id") or ""),
+                                consume=False,
+                            )
+                        )
+                        if receipt_errors:
+                            errors.extend(
+                                f"csharp_modification_preedit_receipt_invalid:{path}:{item}"
+                                for item in receipt_errors
+                            )
+                        else:
+                            original_path = Path(
+                                str(preedit_receipt.get("snapshot_path") or "")
+                            )
+                            actual_original_hash = _canonical_hash(
+                                preedit_receipt.get("snapshot_sha256")
+                            )
+                            if _same_physical_file(path, original_path):
+                                errors.append(
+                                    f"original_artifact_same_as_candidate:{path}"
+                                )
+                            else:
+                                if original_path_value and (
+                                    _path_key(Path(original_path_value))
+                                    != _path_key(original_path)
+                                ):
+                                    errors.append(
+                                        f"original_artifact_receipt_path_mismatch:{path}"
+                                    )
+                                if original_hash and original_hash != actual_original_hash:
+                                    errors.append(
+                                        f"original_artifact_receipt_hash_mismatch:{path}"
+                                    )
+                                candidate["original_path"] = str(original_path)
+                                candidate["original_sha256"] = actual_original_hash
+                                candidate["modification_preedit_receipt_id"] = str(
+                                    preedit_receipt.get("receipt_id") or ""
+                                )
+                                candidate["modification_preedit_host_registry_id"] = str(
+                                    preedit_receipt.get("host_registry_id") or ""
+                                )
+                                candidate["modification_preedit_sequence"] = (
+                                    preedit_receipt.get("sequence")
+                                )
+                                if isinstance(row.get("edit_evidence"), Mapping):
+                                    candidate["edit_evidence"] = dict(
+                                        row["edit_evidence"]
+                                    )
+                                if validated_operation_receipts is not None:
+                                    validated_operation_receipts.append(
+                                        {
+                                            "kind": "modification",
+                                            "receipt": preedit_receipt,
+                                            "path": path,
+                                            "artifact_role": role,
+                                            "pair_id": str(
+                                                candidate.get("pair_id") or ""
+                                            ),
+                                        }
+                                    )
+                candidates.append(candidate)
         for key in (
             "db_deployment",
             "database_deployment",
@@ -902,6 +2328,290 @@ def _validate_execution_correlation(
             errors.append("artifact_host_registry_call_timestamp_mismatch")
         if record.get("result_issued_at") != result.get("issued_at"):
             errors.append("artifact_host_registry_result_timestamp_mismatch")
+    return list(dict.fromkeys(errors))
+
+
+def _validate_csharp_generation_prewrite_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    project_root: Path,
+    artifact_path: Path,
+    artifact_role: str,
+    pair_id: str,
+    consume: bool,
+) -> List[str]:
+    errors: List[str] = []
+    registry, registry_errors = _registry_for_receipt(receipt)
+    errors.extend(registry_errors)
+    boundary = registry.producer_boundary if registry is not None else None
+    if boundary is not None:
+        errors.extend(
+            boundary.validate_claim(
+                receipt,
+                claim_kind=ARTIFACT_GENERATION_PREWRITE_KIND,
+                claim_id_field="receipt_id",
+                consume=False,
+            )
+        )
+
+    target, target_error = _canonical_project_target(artifact_path, project_root)
+    if target_error:
+        errors.append(target_error)
+        target = None
+    absent_hash = f"sha256:{_ABSENT_ARTIFACT_SHA256}"
+    expected_path = str(target) if target is not None else ""
+    expected_producer = (
+        f"{ARTIFACT_STYLE_PRODUCER}:{ARTIFACT_GENERATION_PREWRITE_TOOL}"
+    )
+    expected_fields = {
+        "schema_version": 1,
+        "receipt_type": ARTIFACT_GENERATION_PREWRITE_KIND,
+        "status": "passed",
+        "project_root": str(project_root),
+        "artifact_path": expected_path,
+        "artifact_role": artifact_role,
+        "pair_id": pair_id,
+        "path_state": "absent",
+        "absent_artifact_sha256": absent_hash,
+        "tool_name": ARTIFACT_GENERATION_PREWRITE_TOOL,
+        "producer_identity": expected_producer,
+    }
+    for key, expected in expected_fields.items():
+        if receipt.get(key) != expected:
+            errors.append(f"generation_prewrite_{key}_mismatch")
+
+    errors.extend(
+        _validate_execution_correlation(
+            receipt,
+            registry=registry,
+            expected_tool_name=ARTIFACT_GENERATION_PREWRITE_TOOL,
+            expected_artifact_path=target,
+            expected_artifact_sha256=absent_hash,
+        )
+    )
+
+    call_id = str(receipt.get("call_id") or "")
+    record = registry.lookup(call_id) if registry is not None else None
+    if record is not None:
+        expected_input = {
+            "project_root": str(project_root),
+            "artifact_path": expected_path,
+            "artifact_role": artifact_role,
+            "pair_id": pair_id,
+            "expected_path_state": "absent",
+        }
+        if record.get("input_payload") != expected_input:
+            errors.append("generation_prewrite_registry_input_mismatch")
+        output = record.get("output")
+        if not isinstance(output, Mapping):
+            errors.append("generation_prewrite_registry_output_missing")
+            output = {}
+        expected_output = {
+            "status": "passed",
+            "success": True,
+            "exit_code": 0,
+            "artifact_path": expected_path,
+            "artifact_sha256": absent_hash,
+            "artifact_role": artifact_role,
+            "pair_id": pair_id,
+            "path_state": "absent",
+        }
+        for key, expected in expected_output.items():
+            if output.get(key) != expected:
+                errors.append(f"generation_prewrite_output_{key}_mismatch")
+        if receipt.get("observed_at") != output.get("observed_at"):
+            errors.append("generation_prewrite_observed_at_mismatch")
+        call_time = _parse_issued_at(record.get("call_issued_at"))
+        observed_time = _parse_issued_at(output.get("observed_at"))
+        result_time = _parse_issued_at(record.get("result_issued_at"))
+        receipt_time = _parse_issued_at(receipt.get("issued_at"))
+        if None in {call_time, observed_time, result_time, receipt_time}:
+            errors.append("generation_prewrite_timestamp_invalid")
+        elif not call_time <= observed_time <= result_time <= receipt_time:
+            errors.append("generation_prewrite_timestamp_order_invalid")
+
+    errors = list(dict.fromkeys(errors))
+    if not errors and consume and boundary is not None:
+        errors.extend(
+            boundary.validate_claim(
+                receipt,
+                claim_kind=ARTIFACT_GENERATION_PREWRITE_KIND,
+                claim_id_field="receipt_id",
+                consume=True,
+            )
+        )
+    return list(dict.fromkeys(errors))
+
+
+def _validate_csharp_modification_preedit_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    project_root: Path,
+    artifact_path: Path,
+    artifact_role: str,
+    pair_id: str,
+    consume: bool,
+) -> List[str]:
+    errors: List[str] = []
+    registry, registry_errors = _registry_for_receipt(receipt)
+    errors.extend(registry_errors)
+    boundary = registry.producer_boundary if registry is not None else None
+    if boundary is not None:
+        errors.extend(
+            boundary.validate_claim(
+                receipt,
+                claim_kind=ARTIFACT_MODIFICATION_PREEDIT_KIND,
+                claim_id_field="receipt_id",
+                consume=False,
+            )
+        )
+
+    target, target_error = _canonical_project_file(artifact_path, project_root)
+    if target_error:
+        errors.append(target_error)
+        target = None
+    snapshot, snapshot_error = _canonical_project_file(
+        receipt.get("snapshot_path"),
+        project_root,
+    )
+    if snapshot_error:
+        errors.append(f"modification_preedit_snapshot_{snapshot_error}")
+        snapshot = None
+    original_hash = _canonical_hash(
+        receipt.get("original_artifact_sha256")
+    )
+    snapshot_hash = _canonical_hash(receipt.get("snapshot_sha256"))
+    if not original_hash:
+        errors.append("modification_preedit_original_hash_missing")
+    if snapshot_hash != original_hash:
+        errors.append("modification_preedit_snapshot_hash_mismatch")
+    if snapshot is not None and sha256_bytes(snapshot.read_bytes()) != original_hash:
+        errors.append("modification_preedit_snapshot_bytes_mismatch")
+
+    expected_path = str(target) if target is not None else ""
+    expected_snapshot = str(snapshot) if snapshot is not None else ""
+    expected_producer = (
+        f"{ARTIFACT_STYLE_PRODUCER}:{ARTIFACT_MODIFICATION_PREEDIT_TOOL}"
+    )
+    expected_fields = {
+        "schema_version": 1,
+        "receipt_type": ARTIFACT_MODIFICATION_PREEDIT_KIND,
+        "status": "passed",
+        "project_root": str(project_root),
+        "artifact_path": expected_path,
+        "artifact_role": artifact_role,
+        "pair_id": pair_id,
+        "snapshot_path": expected_snapshot,
+        "snapshot_sha256": original_hash,
+        "tool_name": ARTIFACT_MODIFICATION_PREEDIT_TOOL,
+        "producer_identity": expected_producer,
+        "execution_input_artifact_sha256": original_hash,
+    }
+    for key, expected in expected_fields.items():
+        if receipt.get(key) != expected:
+            errors.append(f"modification_preedit_{key}_mismatch")
+
+    errors.extend(
+        _validate_execution_correlation(
+            receipt,
+            registry=registry,
+            expected_tool_name=ARTIFACT_MODIFICATION_PREEDIT_TOOL,
+            expected_artifact_path=target,
+            expected_artifact_sha256=original_hash,
+        )
+    )
+
+    call_id = str(receipt.get("call_id") or "")
+    record = registry.lookup(call_id) if registry is not None else None
+    if record is not None:
+        expected_input = {
+            "project_root": str(project_root),
+            "artifact_path": expected_path,
+            "artifact_role": artifact_role,
+            "pair_id": pair_id,
+            "original_artifact_sha256": original_hash,
+            "snapshot_path": expected_snapshot,
+        }
+        if record.get("input_payload") != expected_input:
+            errors.append("modification_preedit_registry_input_mismatch")
+        output = record.get("output")
+        if not isinstance(output, Mapping):
+            errors.append("modification_preedit_registry_output_missing")
+            output = {}
+        expected_output = {
+            "status": "passed",
+            "success": True,
+            "exit_code": 0,
+            "artifact_path": expected_path,
+            "artifact_sha256": original_hash,
+            "artifact_role": artifact_role,
+            "pair_id": pair_id,
+            "snapshot_path": expected_snapshot,
+            "snapshot_sha256": original_hash,
+        }
+        for key, expected in expected_output.items():
+            if output.get(key) != expected:
+                errors.append(f"modification_preedit_output_{key}_mismatch")
+        if receipt.get("captured_at") != output.get("captured_at"):
+            errors.append("modification_preedit_captured_at_mismatch")
+        call_time = _parse_issued_at(record.get("call_issued_at"))
+        captured_time = _parse_issued_at(output.get("captured_at"))
+        result_time = _parse_issued_at(record.get("result_issued_at"))
+        receipt_time = _parse_issued_at(receipt.get("issued_at"))
+        if None in {call_time, captured_time, result_time, receipt_time}:
+            errors.append("modification_preedit_timestamp_invalid")
+        elif not call_time <= captured_time <= result_time <= receipt_time:
+            errors.append("modification_preedit_timestamp_order_invalid")
+
+    errors = list(dict.fromkeys(errors))
+    if not errors and consume and boundary is not None:
+        errors.extend(
+            boundary.validate_claim(
+                receipt,
+                claim_kind=ARTIFACT_MODIFICATION_PREEDIT_KIND,
+                claim_id_field="receipt_id",
+                consume=True,
+            )
+        )
+    return list(dict.fromkeys(errors))
+
+
+def _consume_csharp_operation_receipts(
+    receipts: Sequence[Mapping[str, Any]],
+    *,
+    project_root: Path,
+) -> List[str]:
+    errors: List[str] = []
+    for item in receipts:
+        kind = str(item.get("kind") or "")
+        receipt = item.get("receipt")
+        path = item.get("path")
+        if not isinstance(receipt, Mapping) or not isinstance(path, Path):
+            errors.append("csharp_operation_receipt_binding_invalid")
+            continue
+        kwargs = {
+            "project_root": project_root,
+            "artifact_path": path,
+            "artifact_role": str(item.get("artifact_role") or ""),
+            "pair_id": str(item.get("pair_id") or ""),
+            "consume": True,
+        }
+        if kind == "generation":
+            receipt_errors = _validate_csharp_generation_prewrite_receipt(
+                receipt,
+                **kwargs,
+            )
+        elif kind == "modification":
+            receipt_errors = _validate_csharp_modification_preedit_receipt(
+                receipt,
+                **kwargs,
+            )
+        else:
+            receipt_errors = ["csharp_operation_receipt_kind_invalid"]
+        errors.extend(
+            f"csharp_{kind}_receipt_consume_failed:{path}:{error}"
+            for error in receipt_errors
+        )
     return list(dict.fromkeys(errors))
 
 
@@ -1560,6 +3270,26 @@ def _issue_style_receipt(
         "verifier_result_sha256": _json_hash(result),
         "issued_at": datetime.now(timezone.utc).isoformat(),
     }
+    if artifact.get("generation_prewrite_receipt_id"):
+        payload["generation_prewrite_receipt_id"] = str(
+            artifact["generation_prewrite_receipt_id"]
+        )
+        payload["generation_prewrite_host_registry_id"] = str(
+            artifact.get("generation_prewrite_host_registry_id") or ""
+        )
+        payload["generation_prewrite_sequence"] = artifact.get(
+            "generation_prewrite_sequence"
+        )
+    if artifact.get("modification_preedit_receipt_id"):
+        payload["modification_preedit_receipt_id"] = str(
+            artifact["modification_preedit_receipt_id"]
+        )
+        payload["modification_preedit_host_registry_id"] = str(
+            artifact.get("modification_preedit_host_registry_id") or ""
+        )
+        payload["modification_preedit_sequence"] = artifact.get(
+            "modification_preedit_sequence"
+        )
     payload.update(dict(extra or {}))
     return boundary.issue_claim(
         payload,
@@ -1567,6 +3297,121 @@ def _issue_style_receipt(
         claim_id_field="receipt_id",
         claim_id_prefix="artifact-style",
     )
+
+
+def _mask_csharp_noncode(value: str) -> str:
+    result = list(str(value or ""))
+    pattern = re.compile(
+        r'//[^\r\n]*|/\*.*?\*/|\$?@"(?:""|[^"])*"|\$?"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
+        re.DOTALL,
+    )
+    for match in pattern.finditer(str(value or "")):
+        for index in range(match.start(), match.end()):
+            if result[index] not in "\r\n":
+                result[index] = " "
+    return "".join(result)
+
+
+def _designer_field_inventory(source: str) -> Dict[str, str]:
+    code = _mask_csharp_noncode(source)
+    pattern = re.compile(
+        r"(?m)^\s*(?:(?:private|protected|internal|public|static|readonly)\s+)+"
+        r"(?P<type>[A-Za-z_][A-Za-z0-9_.<>,\[\]?]*)\s+"
+        r"@?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*[^;]*)?;"
+    )
+    return {
+        match.group("name"): match.group("type")
+        for match in pattern.finditer(code)
+    }
+
+
+def _designer_assignment_inventory(
+    source: str,
+    fields: Mapping[str, str],
+) -> set[tuple[str, str]]:
+    code = _mask_csharp_noncode(source)
+    assignments: set[tuple[str, str]] = set()
+    nested = re.compile(
+        r"\b(?:this\.)?(?P<member>[A-Za-z_][A-Za-z0-9_]*)\."
+        r"(?P<property>[A-Za-z_][A-Za-z0-9_.]*)\s*="
+    )
+    for match in nested.finditer(code):
+        member = match.group("member")
+        if member in fields:
+            assignments.add((member, match.group("property")))
+    direct = re.compile(
+        r"\bthis\.(?P<member>[A-Za-z_][A-Za-z0-9_]*)\s*="
+    )
+    for match in direct.finditer(code):
+        member = match.group("member")
+        assignments.add(
+            (member, "$instance" if member in fields else "$form_property")
+        )
+    return assignments
+
+
+def _verify_csharp_designer_modification_contract(
+    original_source: str,
+    candidate_source: str,
+) -> Dict[str, Any]:
+    original_fields = _designer_field_inventory(original_source)
+    candidate_fields = _designer_field_inventory(candidate_source)
+    original_assignments = _designer_assignment_inventory(
+        original_source,
+        original_fields,
+    )
+    candidate_assignments = _designer_assignment_inventory(
+        candidate_source,
+        candidate_fields,
+    )
+    issues: List[Dict[str, Any]] = []
+    for name, type_name in sorted(original_fields.items()):
+        if name not in candidate_fields:
+            issues.append(
+                {
+                    "code": "designer_control_removed",
+                    "identity": name,
+                    "original_type": type_name,
+                }
+            )
+        elif candidate_fields[name] != type_name:
+            issues.append(
+                {
+                    "code": "designer_control_type_changed",
+                    "identity": name,
+                    "original_type": type_name,
+                    "candidate_type": candidate_fields[name],
+                }
+            )
+    for member, property_name in sorted(
+        original_assignments - candidate_assignments
+    ):
+        issues.append(
+            {
+                "code": "designer_property_removed",
+                "identity": member,
+                "property": property_name,
+            }
+        )
+    original_hash = sha256_bytes(original_source.encode("utf-8"))
+    candidate_hash = sha256_bytes(candidate_source.encode("utf-8"))
+    return {
+        "status": "blocked" if issues else "passed",
+        "success": not issues,
+        "exit_code": 1 if issues else 0,
+        "metadata": {
+            "operation": "designer_modification_guard",
+            "status": "blocked" if issues else "passed",
+            "original_sha256": original_hash,
+            "candidate_sha256": candidate_hash,
+            "issues": issues,
+            "checked_rules": [
+                "preserve_existing_designer_controls",
+                "preserve_existing_designer_control_types",
+                "preserve_existing_designer_property_assignments",
+            ],
+        },
+    }
 
 
 def _validated_selected_sql_provider(
@@ -1692,7 +3537,12 @@ def execute_artifact_style_precompletion(
     _ = producer_boundary, host_registry
     registry = _new_executor_host_registry(root)
     boundary = registry.producer_boundary
-    artifacts, artifact_errors = _artifact_candidates(context, root)
+    operation_receipts: List[Dict[str, Any]] = []
+    artifacts, artifact_errors = _artifact_candidates(
+        context,
+        root,
+        validated_operation_receipts=operation_receipts,
+    )
     style_receipts: List[Dict[str, Any]] = []
     executor_errors = list(artifact_errors)
 
@@ -1715,6 +3565,7 @@ def execute_artifact_style_precompletion(
         from src.skills.csharp_designer_style_contract import (
             verify_csharp_designer_style,
         )
+        from src.skills.csharp_designer_style import verify_csharp_edit_contract
 
         for artifact in pair.values():
             request = {
@@ -1729,12 +3580,75 @@ def execute_artifact_style_precompletion(
                     "sha256": pair["winforms_designer"]["sha256"],
                 },
             }
+            for role, request_key in (
+                ("winforms_codebehind", "original_codebehind"),
+                ("winforms_designer", "original_designer"),
+            ):
+                original_path = str(pair[role].get("original_path") or "")
+                if original_path:
+                    request[request_key] = {
+                        "path": original_path,
+                        "sha256": pair[role]["original_sha256"],
+                    }
+            edit_evidence = pair["winforms_codebehind"].get("edit_evidence")
+            if isinstance(edit_evidence, Mapping):
+                request["edit_evidence"] = dict(edit_evidence)
 
             def run_csharp_verifier(_request: Dict[str, Any]) -> Any:
-                return verify_csharp_designer_style(
-                    request["codebehind"],
-                    request["designer"],
+                edit_result = None
+                original_codebehind = _request.get("original_codebehind")
+                if isinstance(original_codebehind, Mapping):
+                    edit_result = verify_csharp_edit_contract(
+                        Path(str(original_codebehind["path"])).read_text(
+                            encoding="utf-8"
+                        ),
+                        Path(str(_request["codebehind"]["path"])).read_text(
+                            encoding="utf-8"
+                        ),
+                        evidence=(
+                            _request.get("edit_evidence")
+                            if isinstance(_request.get("edit_evidence"), Mapping)
+                            else None
+                        ),
+                        designer_source=Path(
+                            str(_request["designer"]["path"])
+                        ).read_text(encoding="utf-8"),
+                    )
+                    if not edit_result.success:
+                        return edit_result
+                designer_edit_result = None
+                original_designer = _request.get("original_designer")
+                if isinstance(original_designer, Mapping):
+                    designer_edit_result = (
+                        _verify_csharp_designer_modification_contract(
+                            Path(str(original_designer["path"])).read_text(
+                                encoding="utf-8"
+                            ),
+                            Path(str(_request["designer"]["path"])).read_text(
+                                encoding="utf-8"
+                            ),
+                        )
+                    )
+                    if not _runtime_output_passed(designer_edit_result):
+                        return designer_edit_result
+                pair_result = verify_csharp_designer_style(
+                    _request["codebehind"],
+                    _request["designer"],
                 )
+                if edit_result is None and designer_edit_result is None:
+                    return pair_result
+                output = _runtime_output(pair_result)
+                metadata = dict(output.get("metadata") or {})
+                if edit_result is not None:
+                    metadata["source_modification_contract"] = dict(
+                        edit_result.metadata
+                    )
+                if designer_edit_result is not None:
+                    metadata["designer_modification_contract"] = dict(
+                        designer_edit_result.get("metadata") or {}
+                    )
+                output["metadata"] = metadata
+                return output
 
             execution = registry.invoke(
                 tool_name=_STYLE_TOOL_BY_GATE[CSHARP_STYLE_SKILL],
@@ -1755,6 +3669,14 @@ def execute_artifact_style_precompletion(
                 executor_errors.append(
                     f"csharp_verifier_blocked:{pair_id}:{artifact['path']}"
                 )
+                metadata = payload.get("metadata")
+                if isinstance(metadata, Mapping):
+                    for issue in _as_rows(metadata.get("issues")):
+                        code = str(issue.get("code") or "").strip()
+                        if code:
+                            executor_errors.append(
+                                f"csharp_verifier_issue:{code}:{artifact['path']}"
+                            )
             style_receipts.append(
                 _issue_style_receipt(
                     boundary=boundary,
@@ -1976,6 +3898,29 @@ def execute_artifact_style_precompletion(
         artifacts=artifacts,
         artifact_errors=artifact_errors,
     )
+    receipt_lifecycle = "not_applicable"
+    if operation_receipts:
+        if gate["style_passed"]:
+            consumption_errors = _consume_csharp_operation_receipts(
+                operation_receipts,
+                project_root=root,
+            )
+            if consumption_errors:
+                artifact_errors = [*artifact_errors, *consumption_errors]
+                executor_errors.extend(consumption_errors)
+                gate = _analyze(
+                    runtime_context,
+                    project_root=root,
+                    boundary=boundary,
+                    artifacts=artifacts,
+                    artifact_errors=artifact_errors,
+                )
+                receipt_lifecycle = "consume_blocked"
+            else:
+                receipt_lifecycle = "consumed_after_style_pass"
+        else:
+            receipt_lifecycle = "retained_for_retry"
+    gate["operation_receipt_lifecycle"] = receipt_lifecycle
     snapshot_payload = {
         "schema_version": 1,
         "receipt_type": ARTIFACT_STYLE_SNAPSHOT_KIND,
@@ -2099,10 +4044,28 @@ def validate_artifact_style_gate_snapshot(
         "deployment": bool(snapshot.get("deployment_claimed")),
         "visual_completion": bool(snapshot.get("visual_required")),
     }
+    current_artifact_errors: List[str] = []
+    for artifact in artifacts:
+        path, path_error = _canonical_project_file(
+            artifact.get("path"),
+            root,
+        )
+        if path_error:
+            current_artifact_errors.append(
+                f"{path_error}:{artifact.get('path') or ''}"
+            )
+            continue
+        assert path is not None
+        if sha256_bytes(path.read_bytes()) != _canonical_hash(
+            artifact.get("sha256")
+        ):
+            current_artifact_errors.append(f"artifact_hash_mismatch:{path}")
     recomputed = _analyze(
         context,
         project_root=root,
         boundary=boundary,
+        artifacts=artifacts,
+        artifact_errors=current_artifact_errors,
     )
     receipt_ids = [
         str(item.get("receipt_id") or "")

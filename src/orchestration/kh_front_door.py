@@ -16,7 +16,10 @@ from src.orchestration.request_classifier import (
 )
 from src.orchestration.artifact_style_gate import (
     SQL_FORMATTING_SKILL,
+    cancel_csharp_artifact_operation_retry,
+    execute_csharp_artifact_operation,
     execute_artifact_style_precompletion,
+    retry_csharp_artifact_operation,
     run_packaged_sql_formatting_provider,
     should_execute_artifact_style_precompletion,
 )
@@ -41,7 +44,6 @@ FRONT_DOOR_SKILLS = [
     "plugin-composition-policy",
     "request-complexity-router",
     "skill-catalog",
-    "token-optimizer",
 ]
 
 CODEX_COMPATIBLE_HOSTS = {
@@ -79,6 +81,103 @@ class HostSkillPathCheck:
         return asdict(self)
 
 
+def execute_kh_artifact_write_operation(
+    request: Mapping[str, Any],
+    *,
+    write_artifacts: Callable[[Dict[str, Path]], Any] | None = None,
+) -> Dict[str, Any]:
+    """Host-callable C# artifact write boundary with mandatory style gating."""
+
+    payload = dict(request) if isinstance(request, Mapping) else {}
+    action = str(payload.get("action") or "execute").strip().lower()
+
+    def serialized_writer(paths: Dict[str, Path]) -> Dict[str, Any]:
+        contents = payload.get("artifact_contents")
+        if not isinstance(contents, Mapping) or not contents:
+            raise ValueError("csharp_artifact_contents_missing")
+        allowed_roles = {"winforms_codebehind", "winforms_designer"}
+        supplied_roles = {str(role) for role in contents}
+        if not supplied_roles <= allowed_roles:
+            raise ValueError("csharp_artifact_contents_role_invalid")
+        operation = str(
+            payload.get("operation")
+            or (payload.get("retry_receipt") or {}).get("operation")
+            or ""
+        ).strip().lower()
+        if operation in {"generation", "generate", "create", "new"} and (
+            supplied_roles != allowed_roles
+        ):
+            raise ValueError("csharp_generation_pair_contents_incomplete")
+        written = []
+        for role, content in contents.items():
+            if not isinstance(content, str):
+                raise ValueError("csharp_artifact_content_not_text")
+            target = paths[str(role)]
+            target.write_text(content, encoding="utf-8", newline="")
+            written.append(str(target))
+        return {"written_artifacts": written}
+
+    writer = write_artifacts or serialized_writer
+    public_entrypoint = "execute_kh_artifact_write_operation"
+    try:
+        if action == "execute":
+            result = execute_csharp_artifact_operation(
+                project_root=payload.get("project_root") or payload.get("project"),
+                pair_id=str(payload.get("pair_id") or ""),
+                operation=str(payload.get("operation") or ""),
+                codebehind_path=payload.get("codebehind_path"),
+                designer_path=payload.get("designer_path"),
+                write_artifacts=writer,
+                completion=bool(payload.get("completion", True)),
+                visual_completion=bool(payload.get("visual_completion", False)),
+            )
+        elif action == "retry":
+            result = retry_csharp_artifact_operation(
+                retry_receipt=payload.get("retry_receipt"),
+                write_artifacts=writer,
+            )
+        elif action == "cancel":
+            result = cancel_csharp_artifact_operation_retry(
+                retry_receipt=payload.get("retry_receipt"),
+            )
+        else:
+            raise ValueError("csharp_artifact_operation_action_invalid")
+    except Exception as exc:
+        return {
+            "style_passed": False,
+            "completion_blocked": True,
+            "executor_status": "blocked",
+            "executor_errors": [
+                f"csharp_product_artifact_operation_failed:{type(exc).__name__}:{exc}"
+            ],
+            "product_operation": {
+                "status": "blocked",
+                "action": action,
+                "public_call_path": public_entrypoint,
+            },
+        }
+
+    operation_metadata = result.get("artifact_operation")
+    if isinstance(operation_metadata, Mapping):
+        result["artifact_operation"] = {
+            **dict(operation_metadata),
+            "public_call_path": (
+                f"{public_entrypoint}>"
+                f"{operation_metadata.get('public_call_path') or ''}"
+            ).rstrip(">"),
+        }
+    result["product_operation"] = {
+        "status": (
+            "passed"
+            if result.get("style_passed") or result.get("cancelled")
+            else "blocked"
+        ),
+        "action": action,
+        "public_call_path": public_entrypoint,
+    }
+    return result
+
+
 @dataclass(frozen=True)
 class KhFrontDoorResult:
     front_door_status: str
@@ -105,7 +204,7 @@ class KhFrontDoorResult:
     warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        payload = {
             "front_door_status": self.front_door_status,
             "prompt": self.prompt,
             "host": self.host,
@@ -125,11 +224,15 @@ class KhFrontDoorResult:
             "catalog_summary": dict(self.catalog_summary),
             "large_work_orchestration_bundle": self.large_work_orchestration_bundle,
             "large_work_bundle_validation": self.large_work_bundle_validation,
-            "token_optimizer_decision": dict(self.token_optimizer_decision),
-            "token_optimizer_lifecycle": _token_optimizer_lifecycle_summary(self.token_optimizer_decision),
             "memory_policy": dict(self.memory_policy),
             "warnings": list(self.warnings),
         }
+        if self.token_optimizer_decision:
+            payload["token_optimizer_decision"] = dict(self.token_optimizer_decision)
+            payload["token_optimizer_lifecycle"] = _token_optimizer_lifecycle_summary(
+                self.token_optimizer_decision
+            )
+        return payload
 
     def to_summary_dict(self) -> Dict[str, Any]:
         route_controller = self.plugin_route.get("controller", {})
@@ -144,7 +247,7 @@ class KhFrontDoorResult:
             for name, status in self.skill_statuses.items()
             if name not in runtime_applied_skills and name not in immediate_next
         ]
-        return {
+        payload = {
             "front_door_status": self.front_door_status,
             "host": self.host,
             "project": self.project,
@@ -176,9 +279,6 @@ class KhFrontDoorResult:
             "goal_activation": dict(self.goal_activation),
             "runtime_applied_skills": runtime_applied_skills,
             "selected_not_executed_skills": selected_not_executed_skills,
-            "token_optimizer_decision": dict(self.token_optimizer_decision),
-            "token_optimizer_gate": _token_optimizer_gate_summary(self.token_optimizer_decision),
-            "token_optimizer_lifecycle": _token_optimizer_lifecycle_summary(self.token_optimizer_decision),
             "memory_policy": dict(self.memory_policy),
             "skill_status_summary": {
                 name: {
@@ -191,10 +291,18 @@ class KhFrontDoorResult:
             "required_next_actions": list(self.required_next_actions),
             "warnings": list(self.warnings),
         }
+        if self.token_optimizer_decision:
+            payload["token_optimizer_decision"] = dict(self.token_optimizer_decision)
+            payload["token_optimizer_gate"] = _token_optimizer_gate_summary(
+                self.token_optimizer_decision
+            )
+            payload["token_optimizer_lifecycle"] = _token_optimizer_lifecycle_summary(
+                self.token_optimizer_decision
+            )
+        return payload
 
     def to_compact_summary_dict(self) -> Dict[str, Any]:
         route_controller = self.plugin_route.get("controller", {})
-        token_summary = _compact_token_optimizer_decision(self.token_optimizer_decision)
         plugin_route: Dict[str, Any] = {
             "route": self.plugin_route.get("route"),
         }
@@ -217,9 +325,12 @@ class KhFrontDoorResult:
             },
             "plugin_route": plugin_route,
             "execution_gate": _compact_execution_gate(self.execution_gate),
-            "token_optimizer": token_summary,
             "skill_source": _compact_skill_source(self.skill_source),
         }
+        if self.token_optimizer_decision:
+            payload["token_optimizer"] = _compact_token_optimizer_decision(
+                self.token_optimizer_decision
+            )
         if self.goal_activation.get("required") or self.goal_activation.get("status") not in {
             "not_required",
             "",
@@ -264,8 +375,17 @@ class KhFrontDoorResult:
             "r": route,
             "g": _micro_execution_gate(self.execution_gate),
             "ga": _micro_goal_activation(self.goal_activation),
-            "t": _micro_token_optimizer_decision(self.token_optimizer_decision),
         }
+        token_optimizer_selected = bool(
+            "token-optimizer" in self.recommended_skills
+            or "token-optimizer" in self.skill_statuses
+            or self.token_optimizer_decision.get("actual_optimization_used")
+            or self.token_optimizer_decision.get("optimization_applied")
+        )
+        if token_optimizer_selected:
+            payload["t"] = _micro_token_optimizer_decision(
+                self.token_optimizer_decision
+            )
         domain = self.classification.get("domain")
         if domain and domain != "general":
             payload["cls"]["d"] = _micro_domain(domain)
@@ -301,7 +421,7 @@ def build_kh_front_door(
     provider_runners: Mapping[str, Callable[[Dict[str, Any]], Any]] | None = None,
     micro: bool = False,
 ) -> KhFrontDoorResult:
-    """Run KH intake before any source exploration or implementation work."""
+    """Run explicit or governed KH routing before its protected work begins."""
     repo_root = _repo_root()
     project_path = Path(project).expanduser().resolve() if project else Path.cwd().resolve()
     cache_candidates = _discover_cache_sources()
@@ -493,8 +613,20 @@ def build_kh_front_door(
         goal_activation,
         catalog_summary,
     )
-    token_optimizer_decision = _front_door_token_optimizer_decision(prompt, classification)
-    skill_statuses = _apply_front_door_token_optimizer_gate(skill_statuses, token_optimizer_decision)
+    token_optimizer_selected = _front_door_token_optimizer_selected(
+        recommended_skills,
+        classification,
+    )
+    token_optimizer_decision: Dict[str, Any] = {}
+    if token_optimizer_selected:
+        token_optimizer_decision = _front_door_token_optimizer_decision(
+            prompt,
+            classification,
+        )
+        skill_statuses = _apply_front_door_token_optimizer_gate(
+            skill_statuses,
+            token_optimizer_decision,
+        )
     execution_gate = _execution_gate(
         classification,
         plugin_route,
@@ -1781,6 +1913,19 @@ def _front_door_token_optimizer_decision(prompt: str, classification: Dict[str, 
     return decision
 
 
+def _front_door_token_optimizer_selected(
+    recommended_skills: Sequence[str],
+    classification: Dict[str, Any],
+) -> bool:
+    if "token-optimizer" in recommended_skills:
+        return True
+    evidence_required = set(classification.get("evidence_required", []) or [])
+    return bool(
+        {"token_optimization", "token_optimizer_status"} & evidence_required
+        or "token-optimizer" in (classification.get("cross_cutting", []) or [])
+    )
+
+
 def _apply_front_door_token_optimizer_gate(
     statuses: Dict[str, Dict[str, Any]],
     decision: Dict[str, Any],
@@ -2963,7 +3108,9 @@ def _dedupe(items: Iterable[str]) -> List[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run KH front-door routing before source work.")
+    parser = argparse.ArgumentParser(
+        description="Run explicit or governed KH front-door routing before protected work."
+    )
     parser.add_argument("--prompt", default="", help="User request text. Prefer --prompt-file for non-ASCII prompts on Windows.")
     parser.add_argument("--prompt-file", default="", help="UTF-8 file containing the user request text.")
     parser.add_argument("--prompt-stdin", action="store_true", help="Read the user request text from stdin.")
@@ -2978,6 +3125,14 @@ def main() -> int:
     parser.add_argument("--providers-json", default="", help="Optional JSON provider snapshot.")
     parser.add_argument("--context-json", default="", help="Optional JSON request context from the host/session.")
     parser.add_argument("--context-file", default="", help="Optional UTF-8 JSON file containing request context.")
+    parser.add_argument(
+        "--artifact-operation-file",
+        default="",
+        help=(
+            "UTF-8 JSON request for the host-callable C# artifact write, retry, "
+            "or cancellation boundary."
+        ),
+    )
     parser.add_argument("--prefer-cache", action="store_true", help="Prefer the latest installed kh-uaf cache over repo-local skills.")
     parser.add_argument("--summary", action="store_true", help="Print a compact front-door summary.")
     parser.add_argument("--micro-summary", action="store_true", help="Print an opt-in machine-only micro front-door summary.")
@@ -2988,6 +3143,18 @@ def main() -> int:
         help="Return exit code 3 when the front-door result still blocks task work.",
     )
     args = parser.parse_args()
+    if args.artifact_operation_file:
+        operation_request = json.loads(
+            Path(args.artifact_operation_file).read_text(encoding="utf-8")
+        )
+        operation_result = execute_kh_artifact_write_operation(operation_request)
+        print(json.dumps(operation_result, ensure_ascii=False, indent=2))
+        return (
+            0
+            if operation_result.get("style_passed")
+            or operation_result.get("cancelled")
+            else 4
+        )
     prompt = _resolve_prompt_arg(args.prompt, args.prompt_file, args.prompt_stdin)
 
     providers = json.loads(args.providers_json) if args.providers_json else None

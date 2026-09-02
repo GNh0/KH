@@ -6,7 +6,7 @@ A user supplies an exact `OrderForm.cs` and `OrderForm.Designer.cs` pair and ask
 
 ## Expected steps
 
-1. Run KH front-door intake before opening either artifact. Record the selected skill, execution gate, and allowed file boundary. `SKILL.md` inspection and catalog discovery are not runtime application.
+1. Select `csharp-designer-style-harness` directly from the visible request and skill metadata, then open only the supplied pair. Run the governed KH front door only for an explicit routing audit or an already-governed high-risk workflow; ordinary pair verification needs no routing preflight.
 2. Read both files as bytes, compute SHA-256 for each, and confirm the paths are distinct. Use the exact receipts in the verifier call.
 3. Call `src.skills.csharp_designer_style_contract.verify_csharp_designer_style` with the two receipts and `analysis_only=True`. Use `applicable_operations=("query",)` only when the user explicitly requests a query-only surface.
 4. Inspect the returned `HarnessResult`. Keep the success flag, status, exit code, verification id, artifact hashes, packaged contract hash, and issue codes together.
@@ -15,7 +15,7 @@ A user supplies an exact `OrderForm.cs` and `OrderForm.Designer.cs` pair and ask
 
 ## Expected evidence
 
-- `front_door_status=ok` and a governed execution receipt, or an explicit blocked reason before verifier work.
+- `routing_mode=direct-domain` for ordinary pair verification. When governed routing was actually selected, keep its correlated front-door receipt or explicit blocked reason separately.
 - `actual_runtime_path=src.skills.csharp_designer_style_contract.verify_csharp_designer_style`.
 - `implementation_targets=src.skills.csharp_designer_style_contract.verify_csharp_designer_style,src.contracts.HarnessResult,tests.test_csharp_designer_style_contract` records the runtime and focused-test ownership.
 - `execution_level=python-module`, because the callable Python verifier is the executable authority and the host procedure only gathers and interprets receipts.
@@ -26,7 +26,7 @@ A user supplies an exact `OrderForm.cs` and `OrderForm.Designer.cs` pair and ask
 
 ## Failure cases
 
-- The front door is blocked or the selected follow-up skill was only inspected. Stop before verifier claims and report the missing runtime evidence.
+- In governed mode, a blocked front door stops verifier claims. In ordinary direct-domain mode, reading this file alone is still not execution evidence; the exact artifact-bound verifier must run.
 - One receipt points to a missing, changed, unreadable, or non-UTF-8 file. Report the exact issue and request a fresh artifact receipt.
 - The pair has a missing partial/base contract, noncanonical query/save method, code-behind static UI construction, generic identity, or Designer binding/event mismatch. Preserve the failure issue codes and do not weaken the packaged contract.
 - An identity exception lacks exact scope, reason, locator, or provenance SHA-256. Keep the result blocked.

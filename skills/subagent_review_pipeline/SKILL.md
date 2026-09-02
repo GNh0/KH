@@ -1,15 +1,15 @@
 ---
 name: subagent-review-pipeline
-description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when coordinating implementer, spec-reviewer, and code-quality-reviewer roles for independent UAF subtasks.
+description: Use when coordinating implementer, spec-reviewer, and code-quality-reviewer roles for independent UAF subtasks.
 ---
 
 # Subagent Review Pipeline
 
 ## KH Entry Contract
 
-- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
-- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
-- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Select this skill directly when its semantic trigger matches the current request; no separate routing preflight is required.
+- An active KH directive does not select this skill by itself; the current request must still match this skill's trigger or require it as a workflow gate.
+- Use this skill when its frontmatter trigger directly matches the current request or an already-selected workflow requires it.
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
@@ -50,7 +50,7 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 3. Use `dispatch` only when the task has independent write sets, bounded context packets, reviewer value, and isolation through `.worktrees/<task>`, isolated branches, or a host workspace.
 4. Use `single-controller` only with a concrete rationale: sequential dependency, tiny scope, shared-state risk, host-limited tooling, unavailable nested subagents, or another explicit blocker.
 5. In a Codex subagent, Antigravity-style worker, Claude Code worker, or local worker, first record whether nested subagents are available. If the host does not expose nested delegation, record `subagent_strategy=single-controller` with `host_limited=true` or `nested_subagents_unavailable=true`; do not silently omit this harness.
-6. Before dispatch, decide `token_optimizer_status` for task packets, command logs, and subagent transcripts. This is a decision gate, not automatic compression; use `used`, `considered_not_needed`, `passthrough`, or `blocked`.
+6. Before dispatch, check whether task packets, command logs, or subagent transcripts are large and safely reducible, or whether the user explicitly requested token telemetry. Select `token-optimizer` and record `used`, `considered_not_needed`, `passthrough`, or `blocked` only when that trigger exists; otherwise omit synthetic token status.
 7. Build a compact task packet per implementer using `references/standard-task-packets.md`: objective, workspace assignment, target repository or selected workspace, base branch/SHA, plan section, owned files, forbidden files, checks, expected artifacts, commit message, final user-language policy, and report fields.
 8. When the purpose is to test KH harness autonomy, do not preassign a worktree path. Use `workspace_assignment=worker_decides`, pass the exact target repository and constraints, and require the worker to run/apply worktree isolation policy, choose `host-worktree`, `project-local-worktree`, `isolated-branch`, or `current-checkout`, and report evidence before editing.
 9. Dispatch one implementer per task with only the needed context.
@@ -65,7 +65,7 @@ Upstream governance and downstream release roles come from `orchestration-role-g
 
 When this skill is part of `large_work_orchestration_bundle`, record `skill_statuses["subagent-review-pipeline"]` as `applied`, `considered_not_needed`, `skipped_with_rationale`, or `blocked`. If subagents are not used, the rationale should say whether the task was too small, sequentially dependent, host-limited, or better handled by the main controller.
 
-`applied` means the controller chose a real subagent/reviewer path after a dispatch decision, not that every large task must use subagents. If subagents are applied, `token-optimizer` must at least be decided and recorded for packets/transcripts; compression itself remains conditional on size, safety, and quality.
+`applied` means the controller chose a real subagent/reviewer path after a dispatch decision, not that every large task must use subagents. Subagent use alone does not select `token-optimizer`; select and record it only when packet/transcript size, safe reducibility, or an explicit telemetry request crosses that skill's trigger.
 
 In any implementation session where this skill was selected, `considered_not_needed` is not enough by itself. The evidence must name nested-subagent availability when relevant and the concrete strategy chosen. Acceptable examples are `subagent_strategy=dispatch with spec-reviewer`, `subagent_strategy=single-controller host_limited=true`, or `subagent_strategy=blocked nested_subagents_unavailable=true`.
 

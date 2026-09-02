@@ -15,7 +15,9 @@ class RequestClassifierTests(unittest.TestCase):
         self.assertEqual(result.domain, "investment")
         self.assertEqual(result.recommended_execution, "direct_answer")
         self.assertEqual(result.required_harnesses, [])
-        self.assertIn("token-optimizer", result.cross_cutting)
+        self.assertNotIn("token-optimizer", result.recommended_skills)
+        self.assertNotIn("token-optimizer", result.cross_cutting)
+        self.assertNotIn("token_optimization", result.evidence_required)
 
     def test_recent_company_summary_is_medium_not_role_dag(self):
         result = classify_request("엔비디아 최근 실적을 요약해줘")

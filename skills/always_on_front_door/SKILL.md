@@ -1,54 +1,59 @@
 ---
 name: always-on-front-door
-description: Use when starting any new user request to select the smallest matching skill or direct path from visible context. Do not run Python merely to classify a clear request.
+description: Use when the user explicitly requests KH routing evidence or audit, provider selection remains unresolved, or a governed high-risk or large workflow requires reproducible routing. Do not invoke for ordinary clear work.
 ---
 
-# Always On Front Door
+# Front Door Audit
+
+This is explicit routing-audit and governed-runtime documentation. It is not a bootstrap specialist, a prerequisite, or a file that ordinary requests should load. The plugin-level contract is sufficient for direct and single-domain-skill routing.
 
 ## Workflow
 
-1. Read the request and already-visible conversation context. Do not inspect files, memory, or tools merely to decide what the request means.
-2. Scan the available skill descriptions. If one clearly matches, read only that skill and follow it. When both process and domain skills apply, use the process skill first.
-3. If the request is self-contained and no specialist skill or tool is needed, answer directly without loading another skill or launching a routing script.
-4. If several providers genuinely conflict, the target is unclear, or the work is high-risk or large enough to require reproducible routing evidence, use the governed front-door runtime described in `references/usage.md`.
-5. Apply only the workflow depth the task needs. A small edit does not need GoalState, a role DAG, or a full audit; substantial implementation may need them.
+1. Confirm that an explicit audit, unresolved provider conflict, or governed high-risk/large-work trigger exists. If not, stop without reading support files or producing routing output.
+2. Read only the visible request and current conversation context needed for the audit. Do not search global memory, project files, or tools merely to classify it.
+3. Distinguish the expected direct, single-domain-skill, or governed path. Ordinary clear work should be direct or load only its matching domain skill; this skill itself is not part of that path.
+4. Run the governed front-door runtime described in `references/usage.md` only when reproducible routing or authorization evidence is required.
+5. Keep routing receipts internal unless the user requested them or a blocked safety decision must be explained.
 
 ## Selection Rules
 
 - Prefer semantic judgment over keyword matching. Examples in a request are evidence, not universal routing rules.
-- Do not require the user to name KH, UAF, a skill, or a harness.
+- Do not select this skill because KH is installed, because a new turn started, or because another skill might apply.
 - Do not let KH hide a better matching host or plugin skill such as SQL formatting, browser QA, documents, spreadsheets, or image generation.
-- Do not read every skill. Skill descriptions are the index; `SKILL.md` is progressive disclosure after selection.
+- Ordinary DB, SQL, C#, file, and tool work must not load this skill as a preflight step.
 - Treat a selected skill as used only when its instructions affected the work or its executable target ran. A name in a list is not execution evidence.
 - Respond in the user's current language unless the user requests another language.
 
 ## KH Entry Contract
 
-- Routing evidence is the chosen direct, specialist, or governed path.
-- Selection evidence is an observed specialist `SKILL.md` read or a governed runtime receipt; direct answers need neither.
+- Routing evidence is required only in explicit audit or governed mode.
+- Selection evidence is a governed runtime receipt or an observed domain-skill read being audited; direct answers need neither.
 - Execution evidence is the behavior, tool output, artifact, or verification produced after selection. Reading a skill alone is not execution.
 
 ## Safety And State
 
 - Keep destructive actions, credential access, live database writes, external publishing, and other high-impact mutations behind their specific authorization and safety gates.
 - Before any Git executable, use `src.orchestration.git_workspace_gate` on the exact target. Do not launch `git.exe` until the filesystem-only gate confirms Git metadata. If Git metadata is absent, skip Git and GitHub actions without retrying Git.
-- Consider Token Optimizer on every KH-routed turn, but execute it only when reducible command, log, or subagent output exists. Preserve SQL, source, rules, and other contract-sensitive text.
+- Select Token Optimizer only when a large reducible command, log, test, or subagent payload exists, or when the user explicitly requests optimization or telemetry. Do not read it merely to record a no-op decision.
+- Select Credential Safety only when actual credential material, secret configuration, or a credential-bearing command is involved. An already-configured MCP or database call is not a trigger.
 - Use scoped memory, GoalState, orchestration, review, and Compound only when their triggers are actually present.
 
 ## Runtime Audit Mode
 
-The Python front door is an optional deterministic audit and orchestration entrypoint, not a prerequisite for ordinary work. Use it when the user requests routing evidence, when provider selection remains ambiguous after semantic inspection, or when a governed high-risk/large-work packet is required. Read `references/usage.md` before running it.
+The Python front door is an optional deterministic audit and orchestration entrypoint, not a prerequisite for ordinary work. Use it only when the user requests routing evidence, provider selection remains ambiguous after semantic inspection, or a governed high-risk/large-work packet is required. Read `references/usage.md` before running it.
 
 Keep raw routing JSON in tool output or audit artifacts. Do not append it to ordinary user-facing answers unless requested.
 
 ## Required outputs
 
-- Use the smallest matching path and preserve the user's requested language and scope.
+- For explicit audit, report the smallest matching path and preserve the user's requested language and scope.
 - For governed runtime mode, retain the route, authorization state, selected-versus-applied status, and source path as internal evidence.
+- Do not narrate routing, token, credential, memory, Goal, or orchestration decisions during ordinary work.
 
 ## Common mistakes
 
-- Running Python, scanning the catalog, or reading every skill for a clear request.
+- Loading this skill for a clear SQL, DB, C#, file, or tool request.
+- Running Python, scanning the catalog, searching global memory, or reading every skill for a clear request.
 - Treating a selected skill name as proof that its workflow executed.
 - Forcing KH when another visible host or plugin skill is a better match.
 

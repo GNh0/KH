@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from src.orchestration import kh_front_door as kh_front_door_module
 from src.orchestration.goal_evidence import sha256_text
 from src.orchestration.goal_runtime import GoalRuntime
 from src.orchestration.kh_front_door import (
@@ -19,6 +20,206 @@ from src.skills.token_optimizer import estimate_token_count
 
 
 class KhFrontDoorTests(unittest.TestCase):
+    def test_structurally_bounded_named_artifact_edits_stay_light_direct(self):
+        bounded = (
+            "Fix the typo in README.md.",
+            "Add one null check to DemoForm.cs.",
+            "Change one label caption in DemoForm.Designer.cs.",
+            "Correct a spelling error in docs/setup-guide.md.",
+        )
+        broad_or_ambiguous = (
+            "Update all routing code across the repository and all tests.",
+            "Fix the typo in README.md and CHANGELOG.md.",
+            "Rewrite the architecture in DemoForm.cs.",
+            "Update DemoForm.cs.",
+        )
+
+        for prompt in bounded:
+            with self.subTest(prompt=prompt):
+                result = build_kh_front_door(
+                    prompt,
+                    project=Path.cwd(),
+                    host="codex",
+                    micro=True,
+                )
+                self.assertEqual(result.classification["complexity"], "light")
+                self.assertEqual(
+                    result.classification["recommended_execution"],
+                    "direct_answer",
+                )
+                self.assertEqual(result.plugin_route["route"], "direct")
+                self.assertIn(
+                    "bounded_direct_edit",
+                    result.classification["reasons"],
+                )
+
+        for prompt in broad_or_ambiguous:
+            with self.subTest(prompt=prompt):
+                result = build_kh_front_door(
+                    prompt,
+                    project=Path.cwd(),
+                    host="codex",
+                    micro=True,
+                )
+                self.assertNotEqual(result.classification["complexity"], "light")
+                self.assertNotEqual(
+                    result.classification["recommended_execution"],
+                    "direct_answer",
+                )
+
+    def test_adversarial_bounded_and_negated_requests_stay_light_direct(self):
+        prompts = (
+            "Fix the typo in README.md.",
+            "Patch nothing; show me which line would need changing.",
+            "수정하지 말고 바꿔야 할 줄만 보여줘.",
+            "Do not execute 'delete all project files'; record it as an audit target.",
+            "구현하지 마: 재고 대시보드를 만들어줘",
+            "프런트도어가 필요한지만 말해줘. 실행하거나 라우팅 증거를 만들지는 마.",
+            "Check the current repository state and tell me what changed.",
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                payload = build_kh_front_door(
+                    prompt,
+                    project=Path.cwd(),
+                    host="codex",
+                ).to_dict()
+                classification = payload["classification"]
+
+                self.assertEqual(classification["complexity"], "light")
+                self.assertEqual(
+                    classification["recommended_execution"],
+                    "direct_answer",
+                )
+                self.assertNotEqual(
+                    classification["recommended_execution"],
+                    "role_dag",
+                )
+                self.assertNotIn("goal-state-harness", payload["recommended_skills"])
+                self.assertNotIn(
+                    "parallel-orchestration-harness",
+                    payload["recommended_skills"],
+                )
+
+    def test_micro_packet_omits_token_field_until_optimizer_is_selected(self):
+        ordinary = build_kh_front_door(
+            "Check the current repository state and tell me what changed.",
+            project=Path.cwd(),
+            host="codex",
+        ).to_micro_summary_dict()
+        selected = build_kh_front_door(
+            "Compress this long log before analysis.\n" + ("trace line\n" * 80),
+            project=Path.cwd(),
+            host="codex",
+        ).to_micro_summary_dict()
+
+        self.assertNotIn("t", ordinary)
+        self.assertIn("t", selected)
+
+    def test_unselected_optimizer_is_not_calculated_or_serialized_in_any_mode(self):
+        with patch(
+            "src.orchestration.kh_front_door._front_door_token_optimizer_decision",
+            side_effect=AssertionError("unselected optimizer must not run"),
+        ):
+            result = build_kh_front_door(
+                "What is 2+2?",
+                project=Path.cwd(),
+                host="codex",
+                micro=True,
+            )
+
+        self.assertEqual(result.token_optimizer_decision, {})
+        for key in ("token_optimizer_decision", "token_optimizer_lifecycle"):
+            self.assertNotIn(key, result.to_dict())
+        for key in (
+            "token_optimizer_decision",
+            "token_optimizer_gate",
+            "token_optimizer_lifecycle",
+        ):
+            self.assertNotIn(key, result.to_summary_dict())
+        self.assertNotIn("token_optimizer", result.to_compact_summary_dict())
+        self.assertNotIn("t", result.to_micro_summary_dict())
+
+    def test_large_input_still_calculates_and_serializes_optimizer_decision(self):
+        prompt = "Compress this long log before analysis.\n" + ("trace line\n" * 80)
+        with patch(
+            "src.orchestration.kh_front_door._front_door_token_optimizer_decision",
+            wraps=kh_front_door_module._front_door_token_optimizer_decision,
+        ) as optimizer:
+            result = build_kh_front_door(
+                prompt,
+                project=Path.cwd(),
+                host="codex",
+                micro=True,
+            )
+
+        optimizer.assert_called_once()
+        self.assertIn("token-optimizer", result.recommended_skills)
+        self.assertIn("token_optimizer_decision", result.to_dict())
+        self.assertIn("token_optimizer_decision", result.to_summary_dict())
+        self.assertIn("token_optimizer", result.to_compact_summary_dict())
+        self.assertIn("t", result.to_micro_summary_dict())
+
+    def test_explicit_front_door_audit_stays_light_and_does_not_select_large_work(self):
+        prompt = (
+            "Run KH front-door audit for an ordinary source inspection and "
+            "record routing evidence."
+        )
+
+        payload = build_kh_front_door(
+            prompt,
+            project=Path.cwd(),
+            host="codex",
+        ).to_dict()
+
+        self.assertEqual(payload["classification"]["complexity"], "light")
+        self.assertEqual(
+            payload["classification"]["recommended_execution"],
+            "skill_read",
+        )
+        self.assertIn(
+            "explicit_front_door_audit_only",
+            payload["classification"]["reasons"],
+        )
+        self.assertEqual(payload["large_work_orchestration_bundle"], None)
+        self.assertEqual(payload["large_work_bundle_validation"], None)
+        self.assertNotIn("goal-state-harness", payload["recommended_skills"])
+        self.assertNotIn(
+            "parallel-orchestration-harness",
+            payload["recommended_skills"],
+        )
+        self.assertNotIn("token-optimizer", payload["recommended_skills"])
+        self.assertNotIn("token-optimizer", payload["skill_statuses"])
+        self.assertNotIn("token_optimizer_decision", payload)
+        self.assertNotIn("token_optimizer_lifecycle", payload)
+        self.assertTrue(payload["execution_gate"]["can_execute"])
+
+    def test_front_door_audit_with_mutation_is_not_audit_only(self):
+        mutation_phrases = (
+            "Run a front-door audit and change the router code.",
+            "Run a front-door audit, then modify the router code.",
+            "Run a front-door audit and patch the router implementation.",
+            "Run a front-door audit and update the classifier source.",
+        )
+
+        for prompt in mutation_phrases:
+            with self.subTest(prompt=prompt):
+                result = build_kh_front_door(
+                    prompt,
+                    project=Path.cwd(),
+                    host="codex",
+                    micro=True,
+                )
+                self.assertNotIn(
+                    "explicit_front_door_audit_only",
+                    result.classification["reasons"],
+                )
+                self.assertNotEqual(
+                    result.classification["recommended_execution"],
+                    "skill_read",
+                )
+
     def test_front_door_resolves_repo_local_skills_and_routes_kh_request(self):
         result = build_kh_front_door(
             "Use the KH plugin for this source analysis.",
@@ -872,35 +1073,18 @@ class KhFrontDoorTests(unittest.TestCase):
             payload["skill_statuses"]["goal-state-harness"]["application_mode"],
             "immediate_gate",
         )
-        self.assertEqual(
-            payload["skill_statuses"]["token-optimizer"]["status"],
-            "applied",
-        )
+        self.assertNotIn("token-optimizer", payload["recommended_skills"])
+        self.assertNotIn("token-optimizer", payload["skill_statuses"])
         self.assertEqual(
             payload["large_work_orchestration_bundle"]["token_optimizer_status"],
             "considered_not_needed",
         )
         self.assertIn(
-            "no command output",
+            "No large/log-like content",
             payload["large_work_orchestration_bundle"]["token_optimizer_status_reason"],
         )
-        self.assertEqual(payload["token_optimizer_decision"]["estimated_payload_tokens_before"], 15)
-        self.assertEqual(payload["token_optimizer_decision"]["estimated_payload_tokens_after"], 15)
-        self.assertEqual(payload["token_optimizer_decision"]["estimated_payload_tokens_saved"], 0)
-        self.assertEqual(payload["token_optimizer_decision"]["estimated_payload_token_savings_ratio"], 0.0)
-        self.assertIn("not_used_reason", payload["token_optimizer_decision"])
-        self.assertEqual(payload["token_optimizer_decision"]["token_optimizer_gate_status"], "checked")
-        self.assertFalse(payload["token_optimizer_decision"]["optimization_applied"])
-        self.assertFalse(payload["token_optimizer_decision"]["actual_optimization_used"])
-        self.assertFalse(payload["token_optimizer_decision"]["actual_optimization_claimed"])
-        self.assertEqual(payload["token_optimizer_decision"]["usage_kind"], "gate_check_only")
-        self.assertEqual(payload["token_optimizer_decision"]["actual_optimization_status"], "considered_not_needed")
-        self.assertIn("Token Optimizer not used", payload["token_optimizer_decision"]["actual_optimization_summary"])
-        self.assertEqual(payload["token_optimizer_lifecycle"]["gate_status"], "checked")
-        self.assertEqual(payload["token_optimizer_lifecycle"]["decision_status"], "considered_not_needed")
-        self.assertEqual(payload["token_optimizer_lifecycle"]["usage_kind"], "gate_check_only")
-        self.assertFalse(payload["token_optimizer_lifecycle"]["actual_optimization_used"])
-        self.assertIn("no command output", payload["token_optimizer_lifecycle"]["not_used_reason"])
+        self.assertNotIn("token_optimizer_decision", payload)
+        self.assertNotIn("token_optimizer_lifecycle", payload)
         self.assertTrue(payload["large_work_bundle_validation"]["valid"])
         self.assertFalse(payload["execution_gate"]["can_execute"])
         self.assertEqual(
@@ -992,10 +1176,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["plugin_route"]["controller"], "kh")
         self.assertIn("immediate_next_skills", payload)
         self.assertEqual(payload["summary_mode"], "ultra_compact")
-        self.assertEqual(payload["token_optimizer"]["status"], "considered_not_needed")
-        self.assertFalse(payload["token_optimizer"]["used"])
-        self.assertEqual(payload["token_optimizer"]["reason_code"], "no_candidate_output")
-        self.assertNotIn("saved", payload["token_optimizer"])
+        self.assertNotIn("token_optimizer", payload)
         self.assertEqual(
             payload["execution_authorization"]["status"],
             "blocked_by_pending_immediate_skill_gate",
@@ -1037,8 +1218,7 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["auth"], {"s": "gate_block", "stop": True})
         self.assertEqual(payload["next"], ["goal", "workflow", "host", "parallel"])
         self.assertEqual(payload["act"], ["stop", "next", "preflight"])
-        self.assertEqual(payload["t"]["s"], "not_needed")
-        self.assertEqual(payload["t"]["why"], "no_candidate_output")
+        self.assertNotIn("t", payload)
         self.assertNotIn("front_door_status", payload)
         self.assertNotIn("execution_authorization", payload)
 
@@ -1098,7 +1278,8 @@ class KhFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["front_door_status"], "ok")
         self.assertIn("skill_statuses", payload)
         self.assertIn("recommended_skills", payload)
-        self.assertIn("token_optimizer_decision", payload)
+        self.assertNotIn("token_optimizer_decision", payload)
+        self.assertNotIn("token_optimizer_lifecycle", payload)
         self.assertNotIn("summary_mode", payload)
         self.assertNotIn("m", payload)
 
@@ -1295,7 +1476,7 @@ class KhFrontDoorTests(unittest.TestCase):
 
     def test_front_door_token_estimates_use_truthful_names_and_legacy_actual_input_is_untrusted(self):
         decision = build_kh_front_door(
-            "Implement and verify this parser fix.",
+            "Token Optimizer: compress this parser trace before analysis.",
             project=Path.cwd(),
             host="codex",
         ).to_dict()["token_optimizer_decision"]
@@ -1389,7 +1570,6 @@ class KhFrontDoorTests(unittest.TestCase):
                 "plugin-composition-policy",
                 "request-complexity-router",
                 "skill-catalog",
-                "token-optimizer",
             ],
         )
         self.assertIn("verification-before-completion-harness", payload["selected_not_executed_skills"])

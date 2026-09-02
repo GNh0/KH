@@ -2,13 +2,13 @@
 
 ## Scenario
 
-The host must distinguish three requests without loading the whole catalog.
+An auditor checks whether the host distinguished three requests without loading the whole catalog or this explicit-only audit skill for ordinary work.
 
 ### Direct request
 
 User: `What does idempotent mean?`
 
-Expected path: answer directly. Do not run Python, open another skill, or emit routing telemetry.
+Expected path: answer directly. Do not read `always-on-front-door`, run Python, open another skill, search global memory, or emit routing telemetry.
 
 ### Specialist request
 
@@ -16,12 +16,12 @@ User: `Format this SQL without changing its behavior.`
 
 Expected path:
 
-1. Select `sql-formatting` from its description.
+1. Select `sql-formatting` directly from its description; do not read `always-on-front-door` first.
 2. Read only that skill and any support file it explicitly requires.
 3. Preserve the SQL contract and run its packaged verifier.
 4. Return the formatted SQL and concise verification result.
 
-The front-door Python runtime is not required merely to select the SQL skill.
+The front-door Python runtime is not required merely to select the SQL skill, and this explicit-only audit skill should not be read first.
 
 ### Governed request
 
@@ -29,8 +29,8 @@ User: `Review this production migration, coordinate independent reviewers, and g
 
 ## Expected steps
 
-1. Answer the direct request without Python or another skill read.
-2. Read only `sql-formatting` for the specialist request and run its verifier.
+1. Verify that the direct request was answered without this skill, Python, global memory, or another skill read.
+2. Verify that only `sql-formatting` was read for the specialist request and its verifier ran.
 3. For the governed request, select the relevant safety, orchestration, review, and verification skills.
 4. Run the deterministic front door only when a reproducible routing and authorization packet is useful.
 5. Keep applied skills distinct from skills selected for later execution and preserve role outputs and gate evidence.

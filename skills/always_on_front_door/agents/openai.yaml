@@ -1,3 +1,5 @@
 interface:
   display_name: "KH UAF Front Door"
-  short_description: "Select the smallest matching workflow"
+  short_description: "Audit explicit or governed routing"
+policy:
+  allow_implicit_invocation: false

@@ -94,6 +94,7 @@ _QUERY_LIST_LAYOUT_CONTRACT = {
 _JOIN_LAYOUT_CONTRACT = {
     "join_indent_from_from": 8,
     "join_prefix_and_token": "single_line",
+    "outer_keyword": "generation requires explicit OUTER for LEFT/RIGHT/FULL; formatting and refactor preserve the source token stream",
     "predicate_alignment": "ON and line-leading same-join continuation AND/OR align to the I column of JOIN",
     "indentation_basis": "current_query_scope_from_column",
     "ordinary_table_joins": "enforced",
@@ -108,6 +109,16 @@ _JOIN_LAYOUT_CONTRACT = {
         "CASE_internal_AND_OR",
         "nested_subquery_AND_OR",
     ],
+}
+_IF_EXISTS_LAYOUT_CONTRACT = {
+    "applies_to": "multiline EXISTS and NOT EXISTS subqueries in IF/WHERE/HAVING/ON predicates",
+    "parenthesis_alignment": "opening and closing parentheses share one column",
+    "inner_start_alignment": "first inner SQL token starts on the next line one column right of the opening parenthesis",
+    "inner_clause_alignment": "top-level SELECT/FROM/WHERE/GROUP/HAVING/ORDER/set clauses align to the inner start column",
+    "begin_alignment": "an existing BEGIN starts on the next line at the IF block column for IF pairs only",
+    "single_line_predicates": "preserved without multiline layout enforcement",
+    "nesting": "evaluated independently for every predicate EXISTS parenthesis pair",
+    "measurement": "token_line_and_zero_based_column_relationships",
 }
 _JOIN_PREFIX_WORDS = {
     "CROSS",
@@ -242,10 +253,12 @@ def verify_sql_formatting_style(
     cte_temp_table_reason: str | None = None,
     cte_temp_table_provenance: Mapping[str, Any] | None = None,
     where_subquery_source_contract: Mapping[str, Any] | None = None,
+    save_row_state_contract: Mapping[str, Any] | None = None,
     alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     scalar_function_refactor: Mapping[str, Any] | None = None,
     runtime_receipt_authenticator: Callable[[bytes, str], bool] | None = None,
     operation: str = "formatting",
+    token_optimizer_selected: bool = False,
 ) -> HarnessResult:
     """Return deterministic formatting evidence without inferring SQL semantics."""
     operation_name = str(operation or "formatting").strip().lower()
@@ -285,15 +298,35 @@ def verify_sql_formatting_style(
 
     original_scopes = _build_sql_scopes(original_tokens) if source_valid else []
     formatted_scopes = _build_sql_scopes(formatted_tokens) if output_valid else []
-    alias_changes = _find_alias_changes(original_scopes, formatted_scopes)
+    if operation_name == "generation":
+        alias_baseline_kind = "candidate_sql"
+        alias_baseline_sha256 = formatted_sha256
+        alias_baseline_tokens = formatted_tokens
+        alias_baseline_scopes = formatted_scopes
+    else:
+        alias_baseline_kind = "original_sql"
+        alias_baseline_sha256 = original_sha256
+        alias_baseline_tokens = original_tokens
+        alias_baseline_scopes = original_scopes
+    alias_changes = _find_alias_changes(alias_baseline_scopes, formatted_scopes)
     alias_metadata, alias_issues, alias_plan_valid = _validate_alias_role_plan(
-        original_sha256,
-        original_tokens,
-        original_scopes,
+        alias_baseline_sha256,
+        alias_baseline_tokens,
+        alias_baseline_scopes,
         formatted_scopes,
         alias_changes,
         alias_role_plan,
+        operation=operation_name,
     )
+    alias_metadata["validation_baseline"] = {
+        "kind": alias_baseline_kind,
+        "sha256": alias_baseline_sha256,
+        "reason": (
+            "generation validates alias roles against the exact candidate while structural policies retain the supplied original baseline"
+            if operation_name == "generation"
+            else "formatting and refactor validate alias roles against the exact original SQL"
+        ),
+    }
 
     preservation_issues: List[SqlFormattingIssue] = []
     preservation_metadata: Dict[str, Any] = {
@@ -396,6 +429,10 @@ def verify_sql_formatting_style(
         "status": "not_evaluated",
         "reason": "source_or_output_integrity_blocked",
     }
+    save_row_state_policy: Dict[str, Any] = {
+        "status": "not_evaluated",
+        "reason": "source_or_output_integrity_blocked",
+    }
     style_issues: List[SqlFormattingIssue] = []
     if source_valid and output_valid:
         style_issues.extend(
@@ -425,6 +462,15 @@ def verify_sql_formatting_style(
             source_contract=where_subquery_source_contract,
         )
         style_issues.extend(where_subquery_issues)
+        save_row_state_policy, save_row_state_issues = _validate_save_row_state_policy(
+            original,
+            formatted,
+            operation=operation_name,
+            formatted_sha256=formatted_sha256,
+            source_contract=save_row_state_contract,
+            runtime_receipt_authenticator=runtime_receipt_authenticator,
+        )
+        style_issues.extend(save_row_state_issues)
     style_metadata = {
         "status": "blocked" if _has_errors(style_issues) else "passed",
         "issues": [item.to_dict() for item in style_issues],
@@ -432,8 +478,10 @@ def verify_sql_formatting_style(
         "insert_select_layout_contract": dict(_INSERT_SELECT_LAYOUT_CONTRACT),
         "query_list_layout_contract": dict(_QUERY_LIST_LAYOUT_CONTRACT),
         "join_layout_contract": dict(_JOIN_LAYOUT_CONTRACT),
+        "if_exists_layout_contract": dict(_IF_EXISTS_LAYOUT_CONTRACT),
         "cte_temp_table_policy": cte_temp_table_policy,
         "where_subquery_policy": where_subquery_policy,
+        "save_row_state_policy": save_row_state_policy,
     }
 
     refactor_metadata, refactor_issues = _validate_scalar_function_refactor(
@@ -479,6 +527,7 @@ def verify_sql_formatting_style(
         cte_temp_table_reason=cte_temp_table_reason,
         cte_temp_table_provenance=cte_temp_table_provenance,
         where_subquery_source_contract=where_subquery_source_contract,
+        save_row_state_contract=save_row_state_contract,
     )
 
     metadata = {
@@ -575,15 +624,21 @@ def verify_sql_formatting_style(
             "does_not_prove": "database semantic equivalence",
         },
         "alias_role_verification": alias_metadata,
-        "token_optimizer_status": "passthrough",
-        "token_optimizer_status_reason": (
-            "SQL, literals, comments, and evidence were preserved without lossy compression."
-        ),
-        "not_used_reason": "Contract-sensitive SQL evidence requires passthrough.",
         "cte_temp_table_reason": cte_temp_table_reason or "",
         "cte_temp_table_provenance": cte_temp_table_policy,
         "where_subquery_source_contract": where_subquery_policy,
+        "save_row_state_contract": save_row_state_policy,
     }
+    if token_optimizer_selected:
+        metadata.update(
+            {
+                "token_optimizer_status": "passthrough",
+                "token_optimizer_status_reason": (
+                    "SQL, literals, comments, and evidence were preserved without lossy compression."
+                ),
+                "not_used_reason": "Contract-sensitive SQL evidence requires passthrough.",
+            }
+        )
     return HarnessResult(
         success=release_ready,
         stdout=json.dumps(
@@ -1019,9 +1074,10 @@ def _alias_plan_binding_conflicts(
 
 
 def normalize_sql_join_layout(sql: str) -> str:
-    """Normalize line-leading JOIN, ON, and same-join AND/OR indentation only."""
+    """Normalize IF EXISTS and line-leading JOIN predicate indentation."""
     if not isinstance(sql, str):
         raise TypeError("sql must be a string")
+    sql = _normalize_if_exists_layout(sql)
     tokens, integrity_issues = _analyze_sql_integrity(sql, check_kind="join_layout")
     if _has_errors(integrity_issues):
         raise ValueError("SQL integrity must pass before JOIN layout can be normalized")
@@ -1077,6 +1133,195 @@ def normalize_sql_join_layout(sql: str) -> str:
                 if line_leading:
                     directives[line] = expected_predicate_column
 
+    _propagate_exists_layout_directives(sql, tokens, directives)
+    if directives:
+        lines = sql.splitlines(keepends=True)
+        for line_number, indent in directives.items():
+            index = line_number - 1
+            lines[index] = re.sub(r"^[ \t]*", " " * indent, lines[index], count=1)
+        sql = "".join(lines)
+    return sql
+
+
+def _propagate_exists_layout_directives(
+    sql: str,
+    tokens: Sequence[_SqlToken],
+    directives: Dict[int, int],
+) -> None:
+    """Keep nested EXISTS blocks aligned when JOIN normalization shifts their predicate line."""
+    if not directives:
+        return
+    lines = sql.splitlines()
+    for pair in _exists_subquery_pairs(tokens):
+        open_index = pair["open"]
+        close_index = pair["close"]
+        first_index = pair["first"]
+        open_line, open_column, _ = _token_line_position(sql, tokens[open_index])
+        target_indent = directives.get(open_line)
+        if target_indent is None or open_line > len(lines):
+            continue
+        current_indent = len(lines[open_line - 1]) - len(
+            lines[open_line - 1].lstrip(" \t")
+        )
+        shifted_open_column = open_column + target_indent - current_indent
+        close_line, _, _ = _token_line_position(sql, tokens[close_index])
+        if pair["if"] < 0 and open_line == close_line:
+            continue
+
+        first_line, _, first_line_leading = _token_line_position(
+            sql,
+            tokens[first_index],
+        )
+        if first_line_leading:
+            directives[first_line] = shifted_open_column + 1
+        for index in _if_exists_inner_clause_indexes(tokens, pair):
+            line, _, line_leading = _token_line_position(sql, tokens[index])
+            if line_leading:
+                directives[line] = shifted_open_column + 1
+
+        _, _, close_line_leading = _token_line_position(sql, tokens[close_index])
+        if close_line_leading:
+            directives[close_line] = shifted_open_column
+
+
+def _normalize_if_exists_layout(sql: str) -> str:
+    tokens, integrity_issues = _analyze_sql_integrity(
+        sql,
+        check_kind="if_exists_layout",
+    )
+    if _has_errors(integrity_issues):
+        raise ValueError("SQL integrity must pass before IF EXISTS layout can be normalized")
+
+    edits: Dict[Tuple[int, int], str] = {}
+    for pair in _exists_subquery_pairs(tokens):
+        open_index = pair["open"]
+        close_index = pair["close"]
+        first_index = pair["first"]
+        if_index = pair["if"]
+        open_line, open_column, _ = _token_line_position(sql, tokens[open_index])
+        close_line, _, _ = _token_line_position(sql, tokens[close_index])
+        if if_index < 0 and open_line == close_line:
+            continue
+        inner_column = open_column + 1
+        first_line, _, _ = _token_line_position(sql, tokens[first_index])
+        if first_line != open_line + 1:
+            _queue_whitespace_line_break(
+                sql,
+                tokens[open_index],
+                tokens[first_index],
+                inner_column,
+                edits,
+            )
+
+        for index in _if_exists_inner_clause_indexes(tokens, pair):
+            if index == first_index:
+                continue
+            previous = _previous_code_token(tokens, index - 1, open_index + 1)
+            if previous is None:
+                continue
+            previous_line, _, _ = _token_line_position(sql, tokens[previous])
+            clause_line, _, _ = _token_line_position(sql, tokens[index])
+            if clause_line == previous_line:
+                _queue_whitespace_line_break(
+                    sql,
+                    tokens[previous],
+                    tokens[index],
+                    inner_column,
+                    edits,
+                )
+
+        previous = _previous_code_token(tokens, close_index - 1, open_index + 1)
+        if previous is not None:
+            previous_line, _, _ = _token_line_position(sql, tokens[previous])
+            close_line, _, _ = _token_line_position(sql, tokens[close_index])
+            if close_line == previous_line:
+                _queue_whitespace_line_break(
+                    sql,
+                    tokens[previous],
+                    tokens[close_index],
+                    open_column,
+                    edits,
+                )
+
+        begin_index = _next_code_token(tokens, close_index + 1, len(tokens))
+        if (
+            if_index >= 0
+            and begin_index is not None
+            and tokens[begin_index].normalized == "BEGIN"
+        ):
+            close_line, _, _ = _token_line_position(sql, tokens[close_index])
+            begin_line, _, _ = _token_line_position(sql, tokens[begin_index])
+            _, if_column, _ = _token_line_position(sql, tokens[if_index])
+            if begin_line != close_line + 1:
+                _queue_whitespace_line_break(
+                    sql,
+                    tokens[close_index],
+                    tokens[begin_index],
+                    if_column,
+                    edits,
+                )
+
+    if edits:
+        sql = _apply_text_edits(sql, edits)
+        tokens, integrity_issues = _analyze_sql_integrity(
+            sql,
+            check_kind="if_exists_layout",
+        )
+        if _has_errors(integrity_issues):
+            raise ValueError("IF EXISTS layout normalization damaged SQL integrity")
+
+    directives: Dict[int, int] = {}
+    lines = sql.splitlines()
+    for pair in _exists_subquery_pairs(tokens):
+        open_index = pair["open"]
+        close_index = pair["close"]
+        first_index = pair["first"]
+        if_index = pair["if"]
+        open_line, open_column, _ = _token_line_position(sql, tokens[open_index])
+        close_line, _, _ = _token_line_position(sql, tokens[close_index])
+        if if_index < 0 and open_line == close_line:
+            continue
+        target_indent = directives.get(open_line)
+        if target_indent is not None and open_line <= len(lines):
+            current_indent = len(lines[open_line - 1]) - len(
+                lines[open_line - 1].lstrip(" \t")
+            )
+            open_column += target_indent - current_indent
+        inner_column = open_column + 1
+
+        first_line, _, first_line_leading = _token_line_position(
+            sql,
+            tokens[first_index],
+        )
+        if first_line == open_line + 1 and first_line_leading:
+            directives[first_line] = inner_column
+
+        close_line, _, close_line_leading = _token_line_position(
+            sql,
+            tokens[close_index],
+        )
+        if close_line_leading:
+            directives[close_line] = open_column
+
+        for index in _if_exists_inner_clause_indexes(tokens, pair):
+            line, _, line_leading = _token_line_position(sql, tokens[index])
+            if line_leading:
+                directives[line] = inner_column
+
+        begin_index = _next_code_token(tokens, close_index + 1, len(tokens))
+        if (
+            if_index >= 0
+            and begin_index is not None
+            and tokens[begin_index].normalized == "BEGIN"
+        ):
+            begin_line, _, begin_line_leading = _token_line_position(
+                sql,
+                tokens[begin_index],
+            )
+            _, if_column, _ = _token_line_position(sql, tokens[if_index])
+            if begin_line == close_line + 1 and begin_line_leading:
+                directives[begin_line] = if_column
+
     if not directives:
         return sql
     lines = sql.splitlines(keepends=True)
@@ -1084,6 +1329,19 @@ def normalize_sql_join_layout(sql: str) -> str:
         index = line_number - 1
         lines[index] = re.sub(r"^[ \t]*", " " * indent, lines[index], count=1)
     return "".join(lines)
+
+
+def _queue_whitespace_line_break(
+    sql: str,
+    left: _SqlToken,
+    right: _SqlToken,
+    indent: int,
+    edits: Dict[Tuple[int, int], str],
+) -> None:
+    separator = sql[left.end : right.start]
+    if separator.strip():
+        return
+    edits[(left.end, right.start)] = "\n" + (" " * indent)
 
 
 def _apply_text_edits(sql: str, edits: Mapping[Tuple[int, int], str]) -> str:
@@ -1112,6 +1370,7 @@ def extract_powerbuilder_sql_fragments(
     *,
     source_name: str = "",
     max_lines_per_fragment: int = 80,
+    token_optimizer_selected: bool = False,
 ) -> List[Dict[str, Any]]:
     """Extract bounded SQL-looking fragments from exported PowerBuilder source text."""
     lines = str(source_text or "").splitlines()
@@ -1132,18 +1391,22 @@ def extract_powerbuilder_sql_fragments(
                 end = cursor - 1
                 break
         sql_text = "\n".join(lines[start : end + 1]).strip()
-        fragments.append(
-            {
-                "fragment_id": f"{Path(source_name).name or 'powerbuilder'}:{start + 1}:{match.group(1).upper()}",
-                "source_name": source_name,
-                "keyword": match.group(1).upper(),
-                "start_line": start + 1,
-                "end_line": end + 1,
-                "sql_text": sql_text,
-                "token_optimizer_status": "passthrough",
-                "token_optimizer_status_reason": "SQL source text was not compressed.",
-            }
-        )
+        fragment = {
+            "fragment_id": f"{Path(source_name).name or 'powerbuilder'}:{start + 1}:{match.group(1).upper()}",
+            "source_name": source_name,
+            "keyword": match.group(1).upper(),
+            "start_line": start + 1,
+            "end_line": end + 1,
+            "sql_text": sql_text,
+        }
+        if token_optimizer_selected:
+            fragment.update(
+                {
+                    "token_optimizer_status": "passthrough",
+                    "token_optimizer_status_reason": "SQL source text was not compressed.",
+                }
+            )
+        fragments.append(fragment)
         index = end + 1
     return fragments
 
@@ -1864,6 +2127,8 @@ def _validate_alias_role_plan(
     formatted_scopes: Sequence[_SqlScope],
     changes: Sequence[_AliasChange],
     plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None,
+    *,
+    operation: str,
 ) -> Tuple[Dict[str, Any], List[SqlFormattingIssue], bool]:
     changed_scope_ids = {item.scope_id for item in changes}
     derived_internal_exempt_scope_ids = {
@@ -1954,12 +2219,47 @@ def _validate_alias_role_plan(
         if numbered_main_conflicts
         else []
     )
-    required_scope_ids = {
-        item.scope_id for item in changes
-    } | multi_source_scope_ids
+    support_sequence_conflicts = _support_alias_sequence_conflicts(
+        formatted_scopes,
+        derived_internal_exempt_scope_ids,
+    )
+    support_sequence_issues = (
+        [
+            SqlFormattingIssue(
+                code="alias_support_family_sequence_invalid",
+                severity="error",
+                message=(
+                    "Support aliases in each multi-source scope must start at B and use "
+                    "sequential families; numbered sibling families must start at 1."
+                ),
+                evidence=support_sequence_conflicts[:16],
+                check_kind="alias_role_plan",
+            )
+        ]
+        if support_sequence_conflicts
+        else []
+    )
+    raw_scopes: Any = None
+    if isinstance(plan, Mapping):
+        raw_scopes = plan.get("scopes")
+    elif plan is not None:
+        raw_scopes = plan
+    supplied_scope_ids = {
+        str(raw_scope.get("scope_id", "")).strip()
+        for raw_scope in raw_scopes
+        if isinstance(raw_scope, Mapping)
+        and str(raw_scope.get("scope_id", "")).strip()
+    } if isinstance(raw_scopes, Sequence) and not isinstance(raw_scopes, (str, bytes)) else set()
+    required_scope_ids = changed_scope_ids | supplied_scope_ids
+    if operation == "generation":
+        required_scope_ids |= multi_source_scope_ids
     binding_conflicts: List[Tuple[str, str]] = []
-    binding_status = "not_provided" if plan is None else "legacy_unbound"
-    if _alias_plan_binding_supplied(plan):
+    binding_status = (
+        "not_required"
+        if plan is None and not required_scope_ids
+        else ("not_provided" if plan is None else "missing")
+    )
+    if plan is not None:
         binding_conflicts = _alias_plan_binding_conflicts(
             original_sha256,
             original_tokens,
@@ -1991,15 +2291,17 @@ def _validate_alias_role_plan(
         *missing_alias_issues,
         *canonical_main_issues,
         *main_alias_issues,
+        *support_sequence_issues,
         *binding_issues,
     ]
     pre_plan_conflicts = [
         *missing_alias_conflicts,
         *canonical_main_conflicts,
         *numbered_main_conflicts,
+        *support_sequence_conflicts,
         *(message for _, message in binding_conflicts),
     ]
-    if not required_scope_ids:
+    if plan is None and not required_scope_ids:
         return (
             {
                 "status": "conflict" if pre_plan_issues else "not_needed",
@@ -2021,11 +2323,21 @@ def _validate_alias_role_plan(
         issue = SqlFormattingIssue(
             code="alias_role_plan_required",
             severity="error",
-            message="Alias changes and every multi-source formatted scope require a complete explicit per-scope role plan.",
-            evidence=(
-                [f"{item.scope_id}:{item.original_alias}->{item.formatted_alias}" for item in changes]
-                or [f"{scope_id}:multi-source scope" for scope_id in sorted(multi_source_scope_ids)]
+            message=(
+                "Every alias-changed scope and every non-exempt generated multi-source "
+                "scope requires a complete explicit per-scope role plan."
             ),
+            evidence=[
+                *[
+                    f"{item.scope_id}:{item.original_alias}->{item.formatted_alias}"
+                    for item in changes
+                ],
+                *[
+                    f"{scope_id}:generation_multi_source_scope"
+                    for scope_id in sorted(multi_source_scope_ids)
+                    if operation == "generation"
+                ],
+            ],
             check_kind="alias_role_plan",
         )
         return (
@@ -2034,7 +2346,11 @@ def _validate_alias_role_plan(
                 "reason": (
                     "alias_conflict_and_plan_missing"
                     if pre_plan_issues
-                    else "complete_multi_source_or_changed_scope_plan_missing"
+                    else (
+                        "generation_multi_source_plan_missing"
+                        if operation == "generation" and multi_source_scope_ids
+                        else "changed_scope_plan_missing"
+                    )
                 ),
                 "plan_provided": False,
                 "verified_scopes": [],
@@ -2046,11 +2362,6 @@ def _validate_alias_role_plan(
             False,
         )
 
-    raw_scopes: Any
-    if isinstance(plan, Mapping):
-        raw_scopes = plan.get("scopes")
-    else:
-        raw_scopes = plan
     conflicts: List[str] = list(pre_plan_conflicts)
     issue_codes: set[str] = {item.code for item in pre_plan_issues}
     if not isinstance(raw_scopes, Sequence) or isinstance(raw_scopes, (str, bytes)):
@@ -2086,7 +2397,7 @@ def _validate_alias_role_plan(
             continue
         plan_scope_ids.add(scope_id)
         if scope_id not in required_scope_ids:
-            conflicts.append(f"scope {scope_id!r} is not a changed or multi-source scope")
+            conflicts.append(f"scope {scope_id!r} is not a validated alias scope")
             issue_codes.add("alias_plan_incomplete")
             continue
         roles = raw_scope.get("roles", [])
@@ -2246,7 +2557,8 @@ def _validate_alias_role_plan(
 
     if plan_scope_ids != required_scope_ids:
         conflicts.append(
-            f"plan scopes must exactly cover changed and multi-source scopes: "
+            "plan scopes must cover every alias-changed, supplied, and generated "
+            "multi-source scope: "
             f"missing={sorted(required_scope_ids - plan_scope_ids)!r}, "
             f"extra={sorted(plan_scope_ids - required_scope_ids)!r}"
         )
@@ -2296,6 +2608,56 @@ def _numbered_main_alias_conflicts(scopes: Sequence[_SqlScope]) -> List[str]:
         if declaration.alias_start is not None
         and _NUMBERED_MAIN_ALIAS_PATTERN.fullmatch(declaration.effective_alias)
     ]
+
+
+def _support_alias_sequence_conflicts(
+    scopes: Sequence[_SqlScope],
+    exempt_scope_ids: set[str],
+) -> List[str]:
+    conflicts: List[str] = []
+    for scope in scopes:
+        if len(scope.declarations) < 2 or scope.scope_id in exempt_scope_ids:
+            continue
+        aliases = [item.effective_alias for item in scope.declarations[1:]]
+        family_index = 0
+        alias_index = 0
+        while alias_index < len(aliases):
+            alias = aliases[alias_index]
+            match = re.fullmatch(r"([B-SU-Z])(\d*)", alias)
+            expected_family = (
+                _support_family_alias(family_index)
+                if family_index < len(_SUPPORT_ALIAS_SYMBOLS)
+                else ""
+            )
+            if match is None or match.group(1) != expected_family:
+                conflicts.append(
+                    f"{scope.scope_id}:support alias {alias} at position {alias_index + 1} "
+                    f"must use family {expected_family or '<exhausted>'}"
+                )
+                family_index += 1
+                alias_index += 1
+                continue
+
+            number = match.group(2)
+            if not number:
+                family_index += 1
+                alias_index += 1
+                continue
+
+            expected_number = 1
+            while alias_index < len(aliases):
+                sibling = re.fullmatch(rf"{re.escape(expected_family)}(\d+)", aliases[alias_index])
+                if sibling is None:
+                    break
+                if int(sibling.group(1)) != expected_number:
+                    conflicts.append(
+                        f"{scope.scope_id}:numbered support alias {aliases[alias_index]} "
+                        f"must be {expected_family}{expected_number}"
+                    )
+                expected_number += 1
+                alias_index += 1
+            family_index += 1
+    return conflicts
 
 
 def _is_derived_internal_scope(
@@ -3267,11 +3629,122 @@ def _style_lint(
     issues.extend(_check_select_leading_commas(formatted))
     issues.extend(_check_insert_select_layout(formatted))
     issues.extend(
-        _check_join_layout(formatted, formatted_tokens)
+        _check_join_layout(
+            formatted,
+            formatted_tokens,
+            operation=operation,
+        )
     )
+    issues.extend(_check_if_exists_layout(formatted, formatted_tokens))
     issues.extend(_check_query_list_layout(formatted, formatted_tokens))
     if operation != "formatting":
         issues.extend(_check_case_parentheses(formatted, formatted_tokens))
+    return issues
+
+
+def _check_if_exists_layout(
+    sql: str,
+    tokens: Sequence[_SqlToken],
+) -> List[SqlFormattingIssue]:
+    issues: List[SqlFormattingIssue] = []
+    for pair in _exists_subquery_pairs(tokens):
+        if_index = pair["if"]
+        open_index = pair["open"]
+        close_index = pair["close"]
+        first_index = pair["first"]
+        open_line, open_column, _ = _token_line_position(sql, tokens[open_index])
+        close_line, close_column, close_line_leading = _token_line_position(
+            sql,
+            tokens[close_index],
+        )
+        if if_index < 0 and open_line == close_line:
+            continue
+        if not close_line_leading or close_column != open_column:
+            issues.append(
+                SqlFormattingIssue(
+                    code="if_exists_parenthesis_alignment_invalid",
+                    severity="error",
+                    message="EXISTS opening and closing parentheses must occupy the same column.",
+                    evidence=[
+                        f"line {open_line}:open column={open_column}, "
+                        f"line {close_line}:close column={close_column}"
+                    ],
+                    check_kind="style",
+                )
+            )
+
+        first_line, first_column, first_line_leading = _token_line_position(
+            sql,
+            tokens[first_index],
+        )
+        expected_inner_column = open_column + 1
+        if (
+            first_line != open_line + 1
+            or not first_line_leading
+            or first_column != expected_inner_column
+        ):
+            issues.append(
+                SqlFormattingIssue(
+                    code="if_exists_inner_start_alignment_invalid",
+                    severity="error",
+                    message="The first EXISTS SQL token must start on the next line one column right of the opening parenthesis.",
+                    evidence=[
+                        f"line {first_line}:{tokens[first_index].normalized} "
+                        f"column={first_column}, expected line={open_line + 1}, "
+                        f"column={expected_inner_column}"
+                    ],
+                    check_kind="style",
+                )
+            )
+
+        clause_conflicts: List[str] = []
+        for index in _if_exists_inner_clause_indexes(tokens, pair):
+            line, column, line_leading = _token_line_position(sql, tokens[index])
+            if line_leading and column == expected_inner_column:
+                continue
+            clause_conflicts.append(
+                f"line {line}:{tokens[index].normalized} column={column}, "
+                f"expected={expected_inner_column}"
+            )
+        if clause_conflicts:
+            issues.append(
+                SqlFormattingIssue(
+                    code="if_exists_inner_clause_alignment_invalid",
+                    severity="error",
+                    message="Top-level EXISTS query clauses must align to the inner SQL start column.",
+                    evidence=clause_conflicts[:16],
+                    check_kind="style",
+                )
+            )
+
+        begin_index = _next_code_token(tokens, close_index + 1, len(tokens))
+        if (
+            if_index >= 0
+            and begin_index is not None
+            and tokens[begin_index].normalized == "BEGIN"
+        ):
+            begin_line, begin_column, begin_line_leading = _token_line_position(
+                sql,
+                tokens[begin_index],
+            )
+            _, if_column, _ = _token_line_position(sql, tokens[if_index])
+            if (
+                begin_line != close_line + 1
+                or not begin_line_leading
+                or begin_column != if_column
+            ):
+                issues.append(
+                    SqlFormattingIssue(
+                        code="if_exists_begin_alignment_invalid",
+                        severity="error",
+                        message="BEGIN after IF EXISTS must start on the next line at the IF block column.",
+                        evidence=[
+                            f"line {begin_line}:BEGIN column={begin_column}, "
+                            f"expected line={close_line + 1}, column={if_column}"
+                        ],
+                        check_kind="style",
+                    )
+                )
     return issues
 
 
@@ -3297,6 +3770,8 @@ def _check_tab_indentation(formatted_sql: str) -> List[SqlFormattingIssue]:
 def _check_join_layout(
     formatted_sql: str,
     formatted_tokens: Sequence[_SqlToken],
+    *,
+    operation: str,
 ) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
     for scope in _build_sql_scopes(formatted_tokens):
@@ -3383,6 +3858,24 @@ def _check_join_layout(
                 for index in range(clause_start, join_index + 1)
                 if formatted_tokens[index].kind not in {"line_comment", "block_comment"}
             }
+            directional_outer = {"LEFT", "RIGHT", "FULL"} & clause_words
+            if (
+                operation == "generation"
+                and directional_outer
+                and "OUTER" not in clause_words
+            ):
+                issues.append(
+                    SqlFormattingIssue(
+                        code="outer_join_keyword_required",
+                        severity="error",
+                        message="LEFT, RIGHT, and FULL joins require the explicit OUTER keyword.",
+                        evidence=[
+                            f"{scope.scope_id}:line {line}:"
+                            f"join_type={sorted(directional_outer)[0]}"
+                        ],
+                        check_kind="style",
+                    )
+                )
             if not predicate_indexes and "CROSS" not in clause_words:
                 issues.append(
                     SqlFormattingIssue(
@@ -4059,6 +4552,106 @@ def _matching_parenthesis_token(
         if tokens[index].text == ")" and tokens[index].depth == target_depth:
             return index
     return None
+
+
+def _exists_subquery_pairs(tokens: Sequence[_SqlToken]) -> List[Dict[str, int]]:
+    pairs: List[Dict[str, int]] = []
+    for exists_index, token in enumerate(tokens):
+        if token.kind in {"line_comment", "block_comment"} or token.normalized != "EXISTS":
+            continue
+        previous = _previous_code_token(tokens, exists_index - 1, 0)
+        if previous is None or tokens[previous].text == ".":
+            continue
+        anchor = _exists_predicate_anchor(tokens, exists_index)
+        if anchor is None:
+            continue
+        if_index = anchor if tokens[anchor].normalized == "IF" else -1
+        open_index = _next_code_token(tokens, exists_index + 1, len(tokens))
+        if open_index is None or tokens[open_index].text != "(":
+            continue
+        close_index = _matching_parenthesis_token(tokens, open_index, len(tokens))
+        if close_index is None:
+            continue
+        first_index = _next_code_token(tokens, open_index + 1, close_index)
+        if first_index is None or tokens[first_index].normalized != "SELECT":
+            continue
+        pairs.append(
+            {
+                "if": if_index,
+                "exists": exists_index,
+                "open": open_index,
+                "close": close_index,
+                "first": first_index,
+            }
+        )
+    return pairs
+
+
+def _exists_predicate_anchor(
+    tokens: Sequence[_SqlToken],
+    exists_index: int,
+) -> int | None:
+    """Return the IF/WHERE/HAVING/ON clause that owns an EXISTS predicate."""
+    cursor = _previous_code_token(tokens, exists_index - 1, 0)
+    if cursor is None:
+        return None
+    if tokens[cursor].normalized == "NOT":
+        cursor = _previous_code_token(tokens, cursor - 1, 0)
+        if cursor is None:
+            return None
+
+    exists_depth = tokens[exists_index].depth
+    predicate_clauses = {"IF", "WHERE", "HAVING", "ON"}
+    expression_boundaries = {
+        "CASE",
+        "ELSE",
+        "FROM",
+        "SELECT",
+        "SET",
+        "THEN",
+        "WHEN",
+    }
+    while cursor is not None:
+        token = tokens[cursor]
+        if token.normalized in predicate_clauses and token.depth <= exists_depth:
+            return cursor
+        if (
+            token.depth <= exists_depth
+            and (
+                token.normalized in expression_boundaries
+                or token.text in {",", ";"}
+            )
+        ):
+            return None
+        cursor = _previous_code_token(tokens, cursor - 1, 0)
+    return None
+
+
+def _if_exists_inner_clause_indexes(
+    tokens: Sequence[_SqlToken],
+    pair: Mapping[str, int],
+) -> List[int]:
+    open_index = pair["open"]
+    close_index = pair["close"]
+    inner_depth = tokens[open_index].depth + 1
+    clause_words = {
+        "SELECT",
+        "FROM",
+        "WHERE",
+        "GROUP",
+        "HAVING",
+        "ORDER",
+        "UNION",
+        "INTERSECT",
+        "EXCEPT",
+    }
+    return [
+        index
+        for index in range(open_index + 1, close_index)
+        if tokens[index].kind not in {"line_comment", "block_comment"}
+        and tokens[index].depth == inner_depth
+        and tokens[index].normalized in clause_words
+    ]
 
 
 def _is_identifier_token(token: _SqlToken) -> bool:
@@ -4892,6 +5485,467 @@ def _structured_receipt_errors(
     return errors
 
 
+def _validate_save_row_state_policy(
+    original_sql: str,
+    formatted_sql: str,
+    *,
+    operation: str,
+    formatted_sha256: str,
+    source_contract: Mapping[str, Any] | None,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None,
+) -> Tuple[Dict[str, Any], List[SqlFormattingIssue]]:
+    if operation == "formatting":
+        return ({"status": "preservation_only", "reason": "formatting_preserves_existing_dml"}, [])
+
+    records = _full_replace_records(formatted_sql)
+    original_records = Counter(
+        (record["table"], record["shape_sha256"])
+        for record in _full_replace_records(original_sql)
+    )
+    remaining = original_records.copy()
+    introduced: List[Dict[str, str]] = []
+    for record in records:
+        key = (record["table"], record["shape_sha256"])
+        if remaining[key] > 0:
+            remaining[key] -= 1
+        else:
+            introduced.append(record)
+    if not introduced:
+        return ({"status": "passed", "reason": "no_full_delete_reinsert_introduced"}, [])
+
+    contract_metadata, contract_errors = _validate_save_row_state_source_contract(
+        source_contract,
+        introduced=introduced,
+        formatted_sha256=formatted_sha256,
+        runtime_receipt_authenticator=runtime_receipt_authenticator,
+    )
+    tables = list(dict.fromkeys(record["table"] for record in introduced))
+    if not contract_errors:
+        return (
+            {
+                **contract_metadata,
+                "status": "verified_source_preservation",
+                "tables": tables,
+            },
+            [],
+        )
+
+    issues = [
+        SqlFormattingIssue(
+            code="full_delete_reinsert_without_evidence",
+            severity="error",
+            message=(
+                "Generated detail SAVE logic must preserve Added/New, Modified, and Deleted/Del deltas; "
+                "full delete/reinsert requires exact source or user evidence."
+            ),
+            evidence=[record["table"], *contract_errors[:8]],
+            check_kind="generation_structure",
+        )
+        for record in introduced
+    ]
+    return (
+        {
+            **contract_metadata,
+            "status": "blocked",
+            "tables": tables,
+            "errors": contract_errors[:16],
+        },
+        issues,
+    )
+
+
+def _validate_save_row_state_source_contract(
+    source_contract: Mapping[str, Any] | None,
+    *,
+    introduced: Sequence[Mapping[str, str]],
+    formatted_sha256: str,
+    runtime_receipt_authenticator: Callable[[bytes, str], bool] | None,
+) -> Tuple[Dict[str, Any], List[str]]:
+    required_shapes = Counter(
+        (str(record.get("table", "")), str(record.get("shape_sha256", "")))
+        for record in introduced
+    )
+    shape_sha256 = _full_replace_contract_sha256(introduced)
+    if not isinstance(source_contract, Mapping):
+        return (
+            {
+                "authority": "none",
+                "full_replace_shape_sha256": shape_sha256,
+            },
+            ["hash-bound target source or authenticated user receipt is required"],
+        )
+
+    authority = _evidence_text(source_contract.get("authority")).lower()
+    metadata: Dict[str, Any] = {"authority": authority}
+    errors: List[str] = []
+    if _evidence_text(source_contract.get("mode")).lower() != "full_replace":
+        errors.append("source contract mode must be full_replace")
+    if not _evidence_text(source_contract.get("reason")):
+        errors.append("source contract reason is required")
+    if _evidence_text(source_contract.get("formatted_sha256")).lower() != formatted_sha256.lower():
+        errors.append("source contract formatted_sha256 is not correlated")
+
+    metadata["full_replace_shape_sha256"] = shape_sha256
+
+    if authority == "target_source":
+        artifact_text, artifact_metadata, artifact_errors = _read_bound_utf8_artifact(
+            source_contract.get("artifact_path"),
+            source_contract.get("artifact_sha256"),
+        )
+        metadata.update(artifact_metadata)
+        errors.extend(artifact_errors)
+        if not artifact_errors:
+            _, integrity_issues = _analyze_sql_integrity(
+                artifact_text,
+                check_kind="save_row_state_source_contract",
+            )
+            if _has_errors(integrity_issues):
+                errors.append("target source artifact SQL integrity is invalid")
+            else:
+                artifact_shapes = Counter(
+                    (record["table"], record["shape_sha256"])
+                    for record in _full_replace_records(artifact_text)
+                )
+                if any(
+                    artifact_shapes[key] < count
+                    for key, count in required_shapes.items()
+                ):
+                    errors.append(
+                        "target source artifact does not contain every identical full-replace shape"
+                    )
+    elif authority == "user":
+        receipt = source_contract.get("receipt")
+        if not isinstance(receipt, Mapping):
+            errors.append("authenticated user receipt is required")
+        else:
+            errors.extend(
+                _structured_receipt_errors(
+                    receipt,
+                    runtime_receipt_authenticator=runtime_receipt_authenticator,
+                    required_fields={
+                        "formatted_sha256": formatted_sha256.lower(),
+                        "full_replace_shape_sha256": shape_sha256,
+                    },
+                    required_constructs=["full_replace"],
+                )
+            )
+            metadata["receipt_id"] = _evidence_text(receipt.get("receipt_id"))
+    else:
+        errors.append("source contract authority must be target_source or authenticated user")
+    return metadata, errors
+
+
+def _full_replace_contract_sha256(
+    records: Sequence[Mapping[str, str]],
+) -> str:
+    payload = [
+        {
+            "table": str(record.get("table", "")),
+            "shape_sha256": str(record.get("shape_sha256", "")),
+        }
+        for record in records
+    ]
+    return _sha256_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+
+def _full_replace_pairs(sql: str) -> List[str]:
+    return list(
+        dict.fromkeys(record["table"] for record in _full_replace_records(sql))
+    )
+
+
+def _full_replace_records(sql: str) -> List[Dict[str, str]]:
+    tokens, _ = _scan_sql_tokens(sql)
+    inserts = _insert_target_tables(tokens)
+    records: List[Dict[str, str]] = []
+    for start, token in enumerate(tokens):
+        if token.normalized != "DELETE" or not _is_sql_scope_start(tokens, start):
+            continue
+        end = _dml_statement_end(tokens, start)
+        table = _delete_target_table(tokens, start, end)
+        if not table:
+            continue
+        matching_inserts = [
+            record
+            for record in inserts
+            if record["position"] > start
+            and record["table"] == table
+            and not _simple_if_else_mutually_exclusive(
+                tokens,
+                start,
+                int(record["position"]),
+            )
+        ]
+        if not matching_inserts:
+            continue
+        delete_states = _explicit_row_state_values(tokens, start, end)
+        delta_delete = bool(delete_states) and delete_states <= _DELETE_ROW_STATE_VALUES
+        offending_inserts = (
+            matching_inserts
+            if not delta_delete
+            else [
+                record
+                for record in matching_inserts
+                if bool(record["has_select"])
+                and not _valid_insert_delta_states(set(record["row_state_values"]))
+            ]
+        )
+        delete_signature = _sql_token_slice_signature(tokens, start, end)
+        for insert in offending_inserts:
+            records.append(
+                {
+                    "table": table,
+                    "shape_sha256": _sha256_text(
+                        delete_signature
+                        + "\x1e"
+                        + _sql_token_slice_signature(
+                            tokens,
+                            int(insert["position"]),
+                            int(insert["end"]),
+                        )
+                    ),
+                }
+            )
+    unique: Dict[Tuple[str, str], Dict[str, str]] = {}
+    for record in records:
+        unique[(record["table"], record["shape_sha256"])] = record
+    return list(unique.values())
+
+
+def _sql_token_slice_signature(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    end: int,
+) -> str:
+    return "\x1f".join(
+        token.normalized
+        for token in tokens[start:end]
+        if token.kind not in {"line_comment", "block_comment"}
+    )
+
+
+def _insert_target_tables(tokens: Sequence[_SqlToken]) -> List[Dict[str, Any]]:
+    targets: List[Dict[str, Any]] = []
+    for position, token in enumerate(tokens):
+        if token.normalized != "INSERT":
+            continue
+        into = _next_code_token(tokens, position + 1, len(tokens))
+        if into is None or tokens[into].normalized != "INTO":
+            continue
+        source = _next_code_token(tokens, into + 1, len(tokens))
+        if source is None:
+            continue
+        table, _ = _identifier_path_at(tokens, source, len(tokens))
+        if table:
+            end = _insert_statement_end(tokens, position)
+            targets.append(
+                {
+                    "position": position,
+                    "end": end,
+                    "table": _normalize_table_name(table),
+                    "has_select": any(
+                        item.depth == token.depth and item.normalized == "SELECT"
+                        for item in tokens[position + 1 : end]
+                    ),
+                    "row_state_values": sorted(
+                        _explicit_row_state_values(tokens, position, end)
+                    ),
+                }
+            )
+    return targets
+
+
+def _insert_statement_end(tokens: Sequence[_SqlToken], start: int) -> int:
+    depth = tokens[start].depth
+    for position in range(start + 1, len(tokens)):
+        token = tokens[position]
+        if token.kind in {"line_comment", "block_comment"}:
+            continue
+        if token.depth < depth:
+            return position
+        if token.depth != depth:
+            continue
+        if token.normalized == ";":
+            return position
+        if token.normalized in {"INSERT", "UPDATE", "DELETE", "MERGE"}:
+            return position
+    return len(tokens)
+
+
+def _dml_statement_end(tokens: Sequence[_SqlToken], start: int) -> int:
+    depth = tokens[start].depth
+    for position in range(start + 1, len(tokens)):
+        token = tokens[position]
+        if token.kind in {"line_comment", "block_comment"}:
+            continue
+        if token.depth < depth:
+            return position
+        if token.depth != depth:
+            continue
+        if token.normalized == ";":
+            return position
+        if token.normalized in {"SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"}:
+            return position
+    return len(tokens)
+
+
+def _delete_target_table(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    end: int,
+) -> str:
+    target = _next_after_top_modifier(tokens, start + 1, end)
+    if target is None:
+        return ""
+
+    declarations = _parse_scope_declarations(
+        tokens,
+        "full_replace_delete",
+        start,
+        end,
+        tokens[start].depth,
+    )
+    if tokens[target].normalized == "FROM":
+        return _normalize_table_name(declarations[0].source) if declarations else ""
+
+    target_name, _ = _identifier_path_at(tokens, target, end)
+    normalized_target = _normalize_table_name(target_name)
+    target_base = _base_source(normalized_target)
+    matches = [
+        declaration
+        for declaration in declarations
+        if declaration.effective_alias == target_base
+        or declaration.source == normalized_target
+    ]
+    if len(matches) != 1:
+        return ""
+    return _normalize_table_name(matches[0].source)
+
+
+def _identifier_path_at(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    end: int,
+) -> Tuple[str, int]:
+    if start >= end or not _is_identifier_token(tokens[start]):
+        return "", start
+    parts = [_identifier_value(tokens[start])]
+    last = start
+    while True:
+        dot = _next_code_token(tokens, last + 1, end)
+        if dot is None or tokens[dot].text != ".":
+            break
+        name = _next_code_token(tokens, dot + 1, end)
+        if name is None or not _is_identifier_token(tokens[name]):
+            break
+        parts.append(_identifier_value(tokens[name]))
+        last = name
+    return ".".join(parts), last
+
+
+_ROW_STATE_COLUMNS = {"GBN", "ROW_STATE", "ROWSTATE", "ROW_STATUS", "ROWSTATUS", "STATE"}
+_DELETE_ROW_STATE_VALUES = {"D", "DEL", "DELETED"}
+_INSERT_ROW_STATE_VALUES = {"I", "N", "ADD", "ADDED", "INSERTED", "NEW"}
+
+
+def _explicit_row_state_values(
+    tokens: Sequence[_SqlToken],
+    start: int,
+    end: int,
+) -> set[str]:
+    matched: set[str] = set()
+    for position in range(start + 1, end):
+        if _identifier_value(tokens[position]) not in _ROW_STATE_COLUMNS:
+            continue
+        operator = _next_code_token(tokens, position + 1, end)
+        if operator is None:
+            continue
+        if tokens[operator].text == "=":
+            value = _next_code_token(tokens, operator + 1, end)
+            if value is not None:
+                row_state = _sql_string_value(tokens[value])
+                if row_state:
+                    matched.add(row_state)
+        if tokens[operator].normalized == "IN":
+            opening = _next_code_token(tokens, operator + 1, end)
+            if opening is None or tokens[opening].text != "(":
+                continue
+            closing = _matching_parenthesis_token(tokens, opening, end)
+            if closing is None:
+                continue
+            matched.update(
+                _sql_string_value(token)
+                for token in tokens[opening + 1 : closing]
+                if token.kind in {"string", "unicode_string"}
+            )
+    matched.discard("")
+    return matched
+
+
+def _valid_insert_delta_states(values: set[str]) -> bool:
+    return bool(values) and values <= _INSERT_ROW_STATE_VALUES
+
+
+def _simple_if_else_mutually_exclusive(
+    tokens: Sequence[_SqlToken],
+    delete_start: int,
+    insert_start: int,
+) -> bool:
+    depth = tokens[delete_start].depth
+    else_positions = [
+        position
+        for position in range(delete_start + 1, insert_start)
+        if tokens[position].depth == depth and tokens[position].normalized == "ELSE"
+    ]
+    for else_position in else_positions:
+        if_positions = [
+            position
+            for position in range(0, delete_start)
+            if tokens[position].depth == depth and tokens[position].normalized == "IF"
+        ]
+        if not if_positions:
+            continue
+        if_position = if_positions[-1]
+        if any(
+            tokens[position].depth == depth and tokens[position].normalized == "ELSE"
+            for position in range(if_position + 1, delete_start)
+        ):
+            continue
+        first_branch_dml = [
+            position
+            for position in range(if_position + 1, else_position)
+            if tokens[position].depth == depth
+            and tokens[position].normalized in {"DELETE", "INSERT", "MERGE", "UPDATE"}
+        ]
+        second_branch_dml = [
+            position
+            for position in range(else_position + 1, insert_start)
+            if tokens[position].depth == depth
+            and tokens[position].normalized in {"DELETE", "INSERT", "MERGE", "UPDATE"}
+        ]
+        if first_branch_dml == [delete_start] and not second_branch_dml:
+            return True
+    return False
+
+
+def _sql_string_value(token: _SqlToken) -> str:
+    if token.kind == "unicode_string":
+        return token.text[2:-1].replace("''", "'").upper()
+    if token.kind == "string":
+        return token.text[1:-1].replace("''", "'").upper()
+    return ""
+
+
+def _normalize_table_name(value: str) -> str:
+    normalized = value.replace("[", "").replace("]", "").upper()
+    parts = normalized.split(".")
+    if len(parts) == 2 and parts[0] == "DBO":
+        return parts[1]
+    return normalized
+
+
 def _validate_where_subquery_policy(
     original_tokens: Sequence[_SqlToken],
     formatted_tokens: Sequence[_SqlToken],
@@ -4902,15 +5956,14 @@ def _validate_where_subquery_policy(
 ) -> Tuple[Dict[str, Any], List[SqlFormattingIssue]]:
     original_records = _collect_where_subqueries(original_tokens)
     formatted_records = _collect_where_subqueries(formatted_tokens)
-    original_scalars = Counter(
-        item["signature_sha256"] for item in original_records if item["kind"] == "scalar"
+    original_signatures = Counter(
+        (item["kind"], item["predicate"], item["signature_sha256"])
+        for item in original_records
     )
-    remaining = original_scalars.copy()
+    remaining = original_signatures.copy()
     introduced: List[Dict[str, Any]] = []
     for record in formatted_records:
-        if record["kind"] != "scalar":
-            continue
-        signature = record["signature_sha256"]
+        signature = (record["kind"], record["predicate"], record["signature_sha256"])
         if remaining[signature] > 0:
             remaining[signature] -= 1
         else:
@@ -4918,16 +5971,24 @@ def _validate_where_subquery_policy(
 
     base = {
         "operation": operation,
-        "original_scalar_count": sum(original_scalars.values()),
+        "original_scalar_count": sum(
+            count
+            for (kind, _, _), count in original_signatures.items()
+            if kind == "scalar"
+        ),
         "formatted_scalar_count": sum(
             item["kind"] == "scalar" for item in formatted_records
         ),
-        "introduced_scalar_count": len(introduced),
+        "introduced_scalar_count": sum(item["kind"] == "scalar" for item in introduced),
+        "introduced_subquery_count": len(introduced),
         "exists_not_exists_count": sum(
             item["kind"] == "semi_join" for item in formatted_records
         ),
         "set_subquery_count": sum(
             item["kind"] == "set_predicate" for item in formatted_records
+        ),
+        "introduced_not_in_count": sum(
+            item["predicate"] == "NOT IN" for item in introduced
         ),
     }
     if operation == "formatting":
@@ -4939,12 +6000,25 @@ def _validate_where_subquery_policy(
             },
             [],
         )
-    if not introduced:
-        return ({**base, "status": "passed", "reason": "no_scalar_where_subquery_introduced"}, [])
+    blocked = [
+        record
+        for record in introduced
+        if record["kind"] == "scalar" or record["predicate"] == "NOT IN"
+    ]
+    base["blocked_subquery_count"] = len(blocked)
+    if not blocked:
+        return (
+            {
+                **base,
+                "status": "passed",
+                "reason": "no_restricted_where_subquery_introduced",
+            },
+            [],
+        )
 
     contract_metadata, contract_errors = _validate_where_subquery_source_contract(
         source_contract,
-        introduced=introduced,
+        introduced=blocked,
         formatted_sha256=formatted_sha256,
     )
     if not contract_errors:
@@ -4959,20 +6033,33 @@ def _validate_where_subquery_policy(
         )
 
     issues: List[SqlFormattingIssue] = []
-    for record in introduced:
+    for record in blocked:
+        is_scalar = record["kind"] == "scalar"
         issues.append(
             SqlFormattingIssue(
                 code=(
                     "if_exists_where_scalar_subquery"
-                    if record["inside_if_exists"]
-                    else "where_scalar_subquery_introduced"
+                    if is_scalar and record["inside_if_exists"]
+                    else (
+                        "where_scalar_subquery_introduced"
+                        if is_scalar
+                        else "where_subquery_introduced"
+                    )
                 ),
                 severity="error",
                 message=(
-                    "Do not introduce a scalar subquery in a WHERE predicate. Preserve an artifact-bound source "
-                    "requirement, or perform a separately requested JOIN/APPLY refactor with equivalence evidence."
+                    "Do not introduce a scalar WHERE subquery without artifact-bound source evidence."
+                    if is_scalar
+                    else (
+                        "Do not introduce WHERE ... NOT IN (SELECT ...). Preserve an exact artifact-bound "
+                        "requirement, or use an established source-backed JOIN/NOT EXISTS anti-join shape."
+                    )
                 ),
-                evidence=[f"offset={record['offset']}", *contract_errors[:8]],
+                evidence=[
+                    f"offset={record['offset']}",
+                    f"predicate={record['predicate']}",
+                    *contract_errors[:8],
+                ],
                 check_kind="generation_structure",
             )
         )
@@ -4981,7 +6068,7 @@ def _validate_where_subquery_policy(
             **base,
             **contract_metadata,
             "status": "blocked",
-            "reason": "scalar_where_subquery_introduced_without_artifact_contract",
+            "reason": "restricted_where_subquery_introduced_without_artifact_contract",
             "errors": contract_errors[:16],
         },
         issues,
@@ -5026,12 +6113,26 @@ def _collect_where_subqueries(tokens: Sequence[_SqlToken]) -> List[Dict[str, Any
             continue
         wrapper_position = _previous_code_position(tokens, open_position - 1)
         wrapper = tokens[wrapper_position].normalized if wrapper_position is not None else ""
+        negation_position = (
+            _previous_code_position(tokens, wrapper_position - 1)
+            if wrapper_position is not None
+            else None
+        )
+        negated = (
+            negation_position is not None
+            and tokens[negation_position].normalized == "NOT"
+        )
         if wrapper == "EXISTS":
             kind = "semi_join"
         elif wrapper in {"IN", "ANY", "ALL", "SOME"}:
             kind = "set_predicate"
         else:
             kind = "scalar"
+        predicate = (
+            f"NOT {wrapper}"
+            if negated and wrapper in {"EXISTS", "IN"}
+            else (wrapper if kind != "scalar" else "SCALAR")
+        )
         normalized = [
             token.normalized
             for token in tokens[open_position : close_position + 1]
@@ -5040,6 +6141,7 @@ def _collect_where_subqueries(tokens: Sequence[_SqlToken]) -> List[Dict[str, Any
         records.append(
             {
                 "kind": kind,
+                "predicate": predicate,
                 "offset": tokens[open_position].start,
                 "signature_sha256": _sha256_text("\x1f".join(normalized)),
                 "inside_if_exists": _scope_is_exists_wrapped(tokens, parent),
@@ -5098,8 +6200,13 @@ def _validate_where_subquery_source_contract(
     errors: List[str] = []
     if metadata["source_contract_kind"] != "source_artifact":
         errors.append("source contract kind must be source_artifact")
-    if _evidence_text(source_contract.get("requirement")) != "preserve_where_scalar_subquery":
-        errors.append("source contract requirement must be preserve_where_scalar_subquery")
+    requirement = _evidence_text(source_contract.get("requirement"))
+    introduced_kinds = {str(item.get("kind", "")) for item in introduced}
+    valid_requirement = requirement == "preserve_where_subquery" or (
+        requirement == "preserve_where_scalar_subquery" and introduced_kinds == {"scalar"}
+    )
+    if not valid_requirement:
+        errors.append("source contract requirement must authorize the introduced WHERE subquery kind")
     if _evidence_text(source_contract.get("formatted_sha256")).lower() != formatted_sha256.lower():
         errors.append("source contract formatted_sha256 is not correlated")
     artifact_text, artifact_metadata, artifact_errors = _read_bound_utf8_artifact(
@@ -5117,13 +6224,17 @@ def _validate_where_subquery_source_contract(
             errors.append("source artifact SQL integrity is invalid")
         else:
             artifact_signatures = Counter(
-                item["signature_sha256"]
+                (item["kind"], item["predicate"], item["signature_sha256"])
                 for item in _collect_where_subqueries(artifact_tokens)
-                if item["kind"] == "scalar"
             )
-            required_signatures = Counter(item["signature_sha256"] for item in introduced)
+            required_signatures = Counter(
+                (item["kind"], item["predicate"], item["signature_sha256"])
+                for item in introduced
+            )
             if any(artifact_signatures[key] < count for key, count in required_signatures.items()):
-                errors.append("source artifact does not contain every introduced scalar WHERE subquery")
+                errors.append(
+                    "source artifact does not contain every introduced WHERE subquery with matching predicate polarity"
+                )
     return metadata, errors
 
 

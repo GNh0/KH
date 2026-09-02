@@ -155,6 +155,8 @@ private void btnSave_Click(object sender, EventArgs e)
 - Validate required fields first.
 - Collect inserted, modified, and deleted rows according to the supplied save contract.
 - Serialize only the row states expected by the selected procedure branch.
+- Preserve the target-local edit/save calls. Do not introduce `PostEditor`, `UpdateCurrentRow`, whole-table row rewrites, parent-key propagation, inferred composite-key assignments, or helper abstractions without exact target-source or user evidence.
+- Treat Added/New, Modified, and Deleted/Del as delta operations. Full delete/reinsert is not a default detail-save strategy.
 - Use the existing transaction-capable client method when the KoneLib family is selected and declared.
 - Refresh or clear only after successful save completion.
 
@@ -428,6 +430,7 @@ The metadata parser accepts the normal SSMS `USE`/`GO`, Object block comment, `S
 - Validate before opening the transaction where possible.
 - Use an explicit transaction for writes and the supplied error/logging contract.
 - Prefer separate `UPDATE` and `INSERT` statements when no upsert primitive is supplied.
+- Apply each detail row by its explicit row-state contract. A `DELETE` followed by reinserting the same target is blocked unless an exact bound source/user contract explicitly authorizes full replacement.
 - Preserve logical-delete behavior only when supplied evidence defines it.
 
 ## Forbidden Generation Patterns
@@ -492,6 +495,6 @@ A generated artifact is release-ready only when its evidence record includes:
 - forbidden-pattern scan;
 - syntax/build/verifier/manual-test results;
 - blocked assumptions and unsupported parity claims;
-- `token_optimizer_status=passthrough` for source text.
+- exact, uncompressed source text; add `token_optimizer_status=passthrough` only when `token-optimizer` was actually selected for surrounding large output.
 
 Normal generation records evidence about the current request only. It never mutates this packaged contract.

@@ -21,6 +21,7 @@ from src.orchestration.artifact_style_gate import (
     SQL_STYLE_SKILL,
     analyze_artifact_style_context,
     execute_artifact_style_precompletion,
+    issue_csharp_modification_preedit_receipt,
     issue_visual_qa_receipt,
     validate_artifact_style_gate_snapshot,
 )
@@ -197,6 +198,22 @@ def _csharp_context(
     *,
     visual_completion: bool = False,
 ) -> dict:
+    snapshot_directory = root / ".artifact-preedit"
+    snapshot_directory.mkdir(exist_ok=True)
+    source_receipt = issue_csharp_modification_preedit_receipt(
+        project_root=root,
+        artifact_path=source,
+        artifact_role="winforms_codebehind",
+        pair_id="demo-form",
+        snapshot_directory=snapshot_directory,
+    )
+    designer_receipt = issue_csharp_modification_preedit_receipt(
+        project_root=root,
+        artifact_path=designer,
+        artifact_role="winforms_designer",
+        pair_id="demo-form",
+        snapshot_directory=snapshot_directory,
+    )
     return {
         "project": str(root.resolve()),
         "changed_artifacts": [
@@ -205,12 +222,14 @@ def _csharp_context(
                 "artifact_role": "winforms_codebehind",
                 "pair_id": "demo-form",
                 "operation": "modified",
+                "modification_preedit_receipt": source_receipt,
             },
             {
                 "path": str(designer.resolve()),
                 "artifact_role": "winforms_designer",
                 "pair_id": "demo-form",
                 "operation": "modified",
+                "modification_preedit_receipt": designer_receipt,
             },
         ],
         "completion": True,
@@ -985,6 +1004,108 @@ class ArtifactStyleRoutingTests(unittest.TestCase):
         formatter.assert_called_once()
         self.assertTrue(gate["style_passed"], gate)
         self.assertFalse(gate["completion_blocked"], gate)
+
+    def test_product_cli_reaches_csharp_prewrite_write_validate_consume_boundary(self):
+        passed = HarnessResult(
+            success=True,
+            exit_code=0,
+            metadata={"status": "passed"},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "DemoForm.cs"
+            designer = root / "DemoForm.Designer.cs"
+            operation_file = root / "artifact-operation.json"
+            operation_file.write_text(
+                json.dumps(
+                    {
+                        "action": "execute",
+                        "project_root": str(root.resolve()),
+                        "pair_id": "demo-form",
+                        "operation": "generation",
+                        "codebehind_path": str(source.resolve()),
+                        "designer_path": str(designer.resolve()),
+                        "artifact_contents": {
+                            "winforms_codebehind": VALID_SOURCE,
+                            "winforms_designer": VALID_DESIGNER,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            argv = [
+                "kh_front_door.py",
+                "--artifact-operation-file",
+                str(operation_file),
+            ]
+            with (
+                mock.patch("sys.argv", argv),
+                mock.patch(
+                    "src.skills.csharp_designer_style_contract."
+                    "verify_csharp_designer_style",
+                    return_value=passed,
+                ),
+                redirect_stdout(stdout),
+            ):
+                exit_code = kh_front_door_main()
+            payload = json.loads(stdout.getvalue())
+            source_output = source.read_text(encoding="utf-8")
+            designer_output = designer.read_text(encoding="utf-8")
+
+        self.assertEqual(0, exit_code, payload)
+        self.assertTrue(payload["style_passed"], payload)
+        self.assertEqual(VALID_SOURCE, source_output)
+        self.assertEqual(VALID_DESIGNER, designer_output)
+        self.assertEqual(
+            "execute_kh_artifact_write_operation>"
+            "execute_csharp_artifact_operation>prewrite_or_preedit_receipt>"
+            "write_artifacts>execute_artifact_style_precompletion",
+            payload["artifact_operation"]["public_call_path"],
+        )
+        self.assertEqual(
+            "consumed_after_style_pass",
+            payload["operation_receipt_lifecycle"],
+        )
+
+    def test_frontdoor_completion_fails_closed_when_csharp_write_boundary_bypassed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, designer = _write_pair(root)
+            result = build_kh_front_door(
+                "Complete the generated C# screen.",
+                project=root,
+                host="codex",
+                request_context={
+                    "project": str(root.resolve()),
+                    "generated_artifacts": [
+                        {
+                            "path": str(source.resolve()),
+                            "artifact_role": "winforms_codebehind",
+                            "pair_id": "demo-form",
+                            "operation": "generation",
+                        },
+                        {
+                            "path": str(designer.resolve()),
+                            "artifact_role": "winforms_designer",
+                            "pair_id": "demo-form",
+                            "operation": "generation",
+                        },
+                    ],
+                    "completion": True,
+                },
+            )
+            gate = result.classification["intent"]["artifact_style_gate"]
+
+        self.assertFalse(gate["style_passed"], gate)
+        self.assertTrue(gate["completion_blocked"], gate)
+        self.assertTrue(
+            any(
+                item.startswith("csharp_generation_prewrite_receipt_required:")
+                for item in gate["executor_errors"]
+            ),
+            gate,
+        )
 
     def test_production_cli_executes_default_packaged_sql_runner(self):
         with tempfile.TemporaryDirectory() as tmp:

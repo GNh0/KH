@@ -4170,6 +4170,7 @@ def _analyze_session_skills_impl(session_path: str | Path) -> SessionSkillAudit:
         if analysis_summary and "catalog_observations" in analysis_summary
         else _catalog_observations(observation_records, skills)
     )
+    front_door_issues, front_door_evidence = _kh_front_door_audit(path)
     required = _required_skills(
         postmortem_data,
         combined_text,
@@ -4183,17 +4184,16 @@ def _analyze_session_skills_impl(session_path: str | Path) -> SessionSkillAudit:
             "pb-to-csharp-migration-harness",
             "PB migration scope or routing requires post-write C#/Designer validation evidence",
         )
-    if _has_auditable_user_request(path):
+    if int(front_door_evidence.get("governed_request_count", 0) or 0) > 0:
         required.setdefault(
             "always-on-front-door",
-            "every new user request or task must enter KH front-door before another skill, work command, or final answer",
+            "an explicit front-door request, active Goal, or actual front-door runtime call requires a governed receipt",
         )
     if front_door_token_receipts:
         required.setdefault(
             "token-optimizer",
             "KH front-door runtime receipt recorded an auditable token-optimizer decision",
         )
-    front_door_issues, front_door_evidence = _kh_front_door_audit(path)
     skill_rows = []
     issues = []
 
@@ -4853,15 +4853,16 @@ def _kh_front_door_audit(
     front_door_seen = False
     trigger_sample = ""
     trigger_kind = ""
-    kh_active_directive_seen = False
-    kh_active_directive_sample = ""
     task_unfinished = False
     task_route_checked = False
     active_goal = False
+    request_satisfied = False
     latest_assistant_text = ""
     trigger_text = ""
     work_activity_since_trigger = False
     runtime_attempted_for_request = False
+    governed_request_count = 0
+    current_request_governed = False
     if not isinstance(events, DiskBackedSessionEvents):
         raise RuntimeError("front-door audit requires indexed event facts")
     relevant_types = (
@@ -4912,39 +4913,44 @@ def _kh_front_door_audit(
                 task_unfinished = True
                 continue
             request_count += 1
-            active_directive = _is_kh_active_directive(text)
-            if active_directive:
-                kh_active_directive_seen = True
-                kh_active_directive_sample = _short(text)
-            direct_code_question = _looks_like_direct_code_question(lowered)
-            waiting_for_front_door = True
+            request_satisfied = False
+            requires_front_door = bool(
+                active_goal or _is_kh_front_door_request(lowered)
+            )
+            current_request_governed = requires_front_door
+            if current_request_governed:
+                governed_request_count += 1
+            waiting_for_front_door = requires_front_door
             front_door_seen = False
-            task_route_checked = False
+            task_route_checked = not requires_front_door
             task_unfinished = True
             trigger_sample = _short(text)
             trigger_text = text
             work_activity_since_trigger = False
             runtime_attempted_for_request = False
             if _is_kh_front_door_request(lowered):
-                trigger_kind = "explicit_kh"
-            elif is_sql_output_request:
-                trigger_kind = "sql_formatting_request"
-            elif direct_code_question:
-                trigger_kind = "direct_code_question"
-            elif active_directive:
-                trigger_kind = "kh_active_directive"
-            elif kh_active_directive_seen:
-                trigger_kind = "deferred_kh_active"
+                trigger_kind = "explicit_front_door"
+            elif active_goal:
+                trigger_kind = "governed_goal"
             else:
-                trigger_kind = "deferred_automatic_intake"
-            if _host_native_fast_path_trigger_is_eligible(trigger_text):
-                trigger_kind = "host_semantic_direct"
+                trigger_kind = "direct"
                 front_door_seen = True
-                task_route_checked = True
                 waiting_for_front_door = False
                 satisfied_request_count += 1
+                request_satisfied = True
                 selection_modes.append("direct")
             continue
+
+        front_door_command = _audit_fact_invokes_front_door(payload_type, text)
+        if task_unfinished and front_door_command:
+            if not current_request_governed:
+                governed_request_count += 1
+                current_request_governed = True
+            waiting_for_front_door = True
+            front_door_seen = False
+            task_route_checked = False
+            runtime_attempted_for_request = True
+            trigger_kind = "runtime_selected_front_door"
 
         if (
             waiting_for_front_door
@@ -4955,11 +4961,15 @@ def _kh_front_door_audit(
             front_door_seen = True
             task_route_checked = True
             waiting_for_front_door = False
-            satisfied_request_count += 1
+            if not request_satisfied:
+                satisfied_request_count += 1
+                request_satisfied = True
             selection_modes.append("host_receipt")
             continue
 
         if not waiting_for_front_door:
+            if task_unfinished and is_non_kh_work_start:
+                work_activity_since_trigger = True
             if payload_type == "task_complete":
                 task_unfinished = False
                 active_goal = False
@@ -4969,59 +4979,32 @@ def _kh_front_door_audit(
             front_door_seen = True
             task_route_checked = True
             waiting_for_front_door = False
-            satisfied_request_count += 1
+            if not request_satisfied:
+                satisfied_request_count += 1
+                request_satisfied = True
             selection_modes.append("runtime")
             continue
 
-        if (
-            payload_type in {"function_call", "custom_tool_call"}
-            and any(marker in lowered for marker in ("kh_front_door", "front_door.py"))
-        ):
+        if front_door_command:
             runtime_attempted_for_request = True
-
-        if (
-            not runtime_attempted_for_request
-            and _is_host_semantic_specialist_skill_read(payload_type, lowered)
-        ):
-            front_door_seen = True
-            task_route_checked = True
-            waiting_for_front_door = False
-            satisfied_request_count += 1
-            selection_modes.append("specialist")
-            continue
 
         if is_non_kh_work_start and not front_door_seen:
             work_activity_since_trigger = True
-            if trigger_kind == "deferred_kh_active":
-                if _is_kh_active_followup_request(trigger_text):
-                    trigger_kind = "kh_active_directive"
-                elif _is_automatic_intake_request(trigger_text):
-                    trigger_kind = "automatic_intake"
-                else:
-                    trigger_kind = "universal_request"
-            elif trigger_kind == "deferred_automatic_intake":
-                trigger_kind = (
-                    "automatic_intake"
-                    if _is_automatic_intake_request(trigger_text)
-                    else "universal_request"
-                )
             issues.append(
                 {
                     "skill": "always-on-front-door",
                     "status": "missing_front_door",
                     "severity": "P1",
                     "reason": (
-                        "A KH-capable session started governed work before recording either a matching "
-                        "specialist skill selection or a deterministic front-door receipt."
+                        "The request explicitly selected front-door or governed routing, but work started "
+                        "before a deterministic front-door receipt was recorded."
                     ),
                     "action": (
-                        "For clear requests, select and read only the matching specialist SKILL.md before governed work. "
-                        "Use the Python front door only when deterministic audit evidence, provider conflict resolution, "
-                        "or governed high-risk/large-workflow routing is required. Direct self-contained answers need neither."
+                        "Record a correlated front-door receipt before governed work. Ordinary clear requests and "
+                        "direct specialist work must stay on the direct path instead of being retroactively gated."
                     ),
                     "trigger_kind": trigger_kind,
                     "trigger": trigger_sample,
-                    "kh_active_directive": kh_active_directive_sample if trigger_kind == "kh_active_directive" else "",
                     "first_work": _short(text),
                 }
             )
@@ -5035,6 +5018,7 @@ def _kh_front_door_audit(
         "request_count": request_count,
         "satisfied_request_count": satisfied_request_count,
         "selection_modes": selection_modes,
+        "governed_request_count": governed_request_count,
         "all_requests_satisfied": bool(
             request_count > 0
             and satisfied_request_count == request_count
@@ -14537,8 +14521,7 @@ def _is_valid_verbose_blocked_front_door_packet(data: Dict[str, Any]) -> bool:
     gate = data.get("execution_gate", {})
     authorization = data.get("execution_authorization", {})
     return bool(
-        isinstance(data.get("token_optimizer_decision"), dict)
-        and isinstance(classification, dict)
+        isinstance(classification, dict)
         and str(classification.get("complexity", "")).strip()
         and str(classification.get("recommended_execution", "")).strip()
         and isinstance(route, dict)
@@ -14760,13 +14743,27 @@ def _apply_front_door_token_optimizer_evidence(
             latest_front_door_decision = token_decision
 
     latest_actual = _latest_actual_runtime_token_optimizer_decision(events)
-    has_correlated_runtime_activity = any(
-        not _is_front_door_runtime_command(
-            receipt.call,
-            _payload_text(receipt.call).lower(),
+    runtime_optimizer_attempted = any(
+        _is_token_optimizer_runtime_command(_payload_text(payload).lower())
+        for _event_index, payload in events.iter_payloads(
+            payload_types=("function_call", "custom_tool_call")
         )
-        for receipt in _correlated_tool_receipts(events, include_failed=True)
     )
+    correlated_runtime_receipts = _correlated_tool_receipts(events, include_failed=True)
+    has_correlated_runtime_activity = False
+    unaccepted_runtime_optimizer_activity = False
+    for receipt in correlated_runtime_receipts:
+        call_text = _payload_text(receipt.call).lower()
+        if _is_front_door_runtime_command(receipt.call, call_text):
+            continue
+        has_correlated_runtime_activity = True
+        if _is_token_optimizer_runtime_command(call_text) and (
+            not _runtime_tool_output_succeeded(receipt.output)
+            or not _actual_runtime_token_optimizer_decision(
+                _payload_text(receipt.output)
+            )
+        ):
+            unaccepted_runtime_optimizer_activity = True
 
     evidence = dict(postmortem.get("token_optimizer_evidence", {}) or {})
     evidence["front_door_runtime_provenance"] = {
@@ -14830,6 +14827,32 @@ def _apply_front_door_token_optimizer_evidence(
         token_gate["decision_source"] = "kh_front_door_runtime_receipt"
         evidence["front_door_runtime_receipts"] = decision_count
         evidence["latest_front_door_decision"] = dict(latest)
+    elif _threshold_token_gate_required(token_gate):
+        status = "blocked"
+        if runtime_optimizer_attempted or unaccepted_runtime_optimizer_activity:
+            decision_source = "runtime_token_optimizer_attempt_insufficient"
+            reason = (
+                "Token gate required by cumulative/context threshold, but the runtime "
+                "token-optimizer call did not produce a successful correlated decision."
+            )
+        else:
+            decision_source = "missing_required_runtime_token_evidence"
+            reason = (
+                "Token gate required by cumulative/context threshold, but no runtime optimizer "
+                "decision with successful call/output correlation was recorded."
+            )
+        token_gate["checked"] = False
+        token_gate["satisfied"] = False
+        token_gate["decision_source"] = decision_source
+        postmortem["token_optimizer_status"] = status
+        postmortem["token_optimizer_status_reason"] = reason
+    elif unaccepted_runtime_optimizer_activity:
+        token_gate["checked"] = False
+        token_gate.pop("decision_source", None)
+        postmortem["token_optimizer_status"] = "not_checked"
+        postmortem["token_optimizer_status_reason"] = (
+            "no successful runtime token-optimizer receipt"
+        )
     else:
         evidence.setdefault("front_door_runtime_receipts", 0)
         if not existing_receipts and full_summary_only_evidence:
@@ -15329,22 +15352,93 @@ def _is_bounded_same_task_continuation(text: str) -> bool:
 
 
 def _is_kh_front_door_request(lowered: str) -> bool:
-    if "kh" not in lowered:
+    normalized = re.sub(r"\s+", " ", str(lowered or "").strip().lower())
+    if not normalized:
         return False
-    return any(
-        marker in lowered
-        for marker in [
-            "plugin",
-            "플러그",
-            "skill",
-            "스킬",
-            "harness",
-            "하네스",
-            "uaf",
-            "사용",
-            "써",
-            "쓰",
-        ]
+    front_door_markers = (
+        "front-door",
+        "front door",
+        "front_door",
+        "always-on-front-door",
+        "always_on_front_door",
+        "프런트도어",
+        "프론트도어",
+    )
+    routing_markers = (
+        "routing",
+        "route",
+        "automatic intake",
+        "automatic-intake",
+        "automatic_intake",
+        "라우팅",
+        "자동 인테이크",
+    )
+    evidence_markers = (
+        "evidence",
+        "receipt",
+        "audit",
+        "proof",
+        "증거",
+        "영수증",
+        "감사",
+    )
+    action_markers = (
+        "run",
+        "execute",
+        "invoke",
+        "apply",
+        "use",
+        "inspect",
+        "verify",
+        "check",
+        "record",
+        "실행",
+        "호출",
+        "적용",
+        "사용",
+        "확인",
+        "검증",
+        "기록",
+        "먼저",
+    )
+    has_front_door = any(marker in normalized for marker in front_door_markers)
+    has_routing = any(marker in normalized for marker in routing_markers)
+    has_evidence = any(marker in normalized for marker in evidence_markers)
+    has_action = any(marker in normalized for marker in action_markers)
+    explicitly_disabled = any(
+        marker in normalized
+        for marker in (
+            "do not run front-door",
+            "do not run front door",
+            "don't run front-door",
+            "don't run front door",
+            "do not use front-door",
+            "do not use front door",
+            "without front-door",
+            "without front door",
+            "skip front-door",
+            "skip the front-door",
+            "front-door is not required",
+            "front door is not required",
+            "프런트도어를 실행하지",
+            "프론트도어를 실행하지",
+            "프런트도어를 사용하지",
+            "프론트도어를 사용하지",
+            "프런트도어 쓰지",
+            "프론트도어 쓰지",
+            "프런트도어 없이",
+            "프론트도어 없이",
+        )
+    )
+    if explicitly_disabled:
+        return False
+    names_kh_controller = any(
+        marker in normalized
+        for marker in ("kh", "uaf", "automatic intake", "automatic-intake", "automatic_intake")
+    )
+    return bool(
+        (has_front_door and (has_action or has_evidence))
+        or (names_kh_controller and has_routing and (has_action or has_evidence))
     )
 
 
@@ -15621,6 +15715,38 @@ def _is_front_door_runtime_command(payload: Dict[str, Any], lowered: str) -> boo
         _command_invokes_front_door(command)
         for command in _runtime_command_candidates(payload)
     )
+
+
+def _audit_fact_invokes_front_door(payload_type: str, text: str) -> bool:
+    """Recover a front-door invocation from the audit index's narrow call facts."""
+    if payload_type not in {"function_call", "custom_tool_call"}:
+        return False
+    tool_name, _, raw_arguments = str(text or "").partition(" ")
+    normalized_name = tool_name.strip().lower()
+    if "front_door" in normalized_name or "front-door" in normalized_name:
+        return True
+    payload: Dict[str, Any] = {
+        "type": payload_type,
+        "name": tool_name,
+    }
+    if payload_type == "custom_tool_call":
+        payload["input"] = raw_arguments
+    else:
+        payload["arguments"] = raw_arguments
+    if _is_front_door_runtime_command(payload, str(text or "").lower()):
+        return True
+    for command in _runtime_command_candidates(payload):
+        tokens = _shell_command_tokens(command)
+        if not tokens:
+            continue
+        executable = tokens[0].strip('"\'').replace("\\", "/").rsplit("/", 1)[-1].lower()
+        command_lowered = command.lower()
+        if executable in {"python", "python.exe", "py", "py.exe"} and (
+            "front_door.py" in command_lowered
+            or "src.orchestration.kh_front_door" in command_lowered
+        ):
+            return True
+    return False
 
 
 def _is_trusted_front_door_tool_name(tool_name: str) -> bool:
@@ -16844,9 +16970,7 @@ def _front_door_json(text: str) -> Dict[str, Any]:
         return data
     if not _looks_like_front_door_runtime_output(text.lower()):
         return {}
-    if "token_optimizer_decision" in data:
-        return _normalize_full_summary_front_door_packet(data)
-    return data
+    return _normalize_full_summary_front_door_packet(data)
 
 
 def _is_valid_host_native_front_door_packet(text: str) -> bool:
@@ -16907,7 +17031,7 @@ def _host_native_fast_path_trigger_is_eligible(trigger_text: str) -> bool:
     if _host_native_explicit_noop_lookup(trigger_text, request_act):
         return True
     lowered = str(trigger_text).lower()
-    if _is_kh_front_door_request(lowered) or _is_kh_active_directive(trigger_text):
+    if _is_kh_front_door_request(lowered):
         return False
     if _host_native_fast_path_trigger_requires_runtime(trigger_text, request_act):
         return False
@@ -17266,8 +17390,10 @@ def _is_valid_micro_front_door_packet(data: Dict[str, Any]) -> bool:
     route = data.get("r")
     gate = data.get("g")
     goal = data.get("ga")
+    if not all(isinstance(value, dict) for value in [classification, route, gate, goal]):
+        return False
     token = data.get("t")
-    if not all(isinstance(value, dict) for value in [classification, route, gate, goal, token]):
+    if "t" in data and not isinstance(token, dict):
         return False
     if str(classification.get("c", "")) not in {"l", "m", "h", "a"}:
         return False
@@ -17303,19 +17429,20 @@ def _is_valid_micro_front_door_packet(data: Dict[str, Any]) -> bool:
     if str(goal.get("b", "")) not in {"k", "h", "y", "u"}:
         return False
 
-    token_status = str(token.get("s", ""))
-    if token_status not in {"used", "not_needed", "pass", "blocked"}:
-        return False
-    if type(token.get("u")) is not bool or not str(token.get("why", "")).strip():
-        return False
-    if bool(token["u"]) != (token_status == "used"):
-        return False
-    if token_status == "used":
-        if type(token.get("saved")) is not int or token.get("saved", -1) < 0:
+    if token is not None:
+        token_status = str(token.get("s", ""))
+        if token_status not in {"used", "not_needed", "pass", "blocked"}:
             return False
-        ratio = token.get("ratio")
-        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
+        if type(token.get("u")) is not bool or not str(token.get("why", "")).strip():
             return False
+        if bool(token["u"]) != (token_status == "used"):
+            return False
+        if token_status == "used":
+            if type(token.get("saved")) is not int or token.get("saved", -1) < 0:
+                return False
+            ratio = token.get("ratio")
+            if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not 0 <= ratio <= 1:
+                return False
 
     authorization = data.get("auth")
     if authorization is not None:
@@ -17336,6 +17463,13 @@ def _is_valid_compact_front_door_packet(data: Dict[str, Any]) -> bool:
     gate = data.get("execution_gate", {})
     token_decision = data.get("token_optimizer", {})
     skill_source = data.get("skill_source", {})
+    token_decision_valid = bool(
+        "token_optimizer" not in data
+        or (
+            isinstance(token_decision, dict)
+            and _is_valid_normalized_front_door_token_decision(token_decision)
+        )
+    )
     return bool(
         data.get("summary_mode") == "ultra_compact"
         and str(data.get("front_door_status", "")).strip()
@@ -17347,8 +17481,7 @@ def _is_valid_compact_front_door_packet(data: Dict[str, Any]) -> bool:
         and isinstance(gate, dict)
         and "status" in gate
         and "can_execute" in gate
-        and isinstance(token_decision, dict)
-        and _is_valid_normalized_front_door_token_decision(token_decision)
+        and token_decision_valid
         and isinstance(skill_source, dict)
         and bool(skill_source)
     )
@@ -17359,6 +17492,13 @@ def _is_valid_normalized_micro_front_door_packet(data: Dict[str, Any]) -> bool:
     route = data.get("plugin_route", {})
     gate = data.get("execution_gate", {})
     token_decision = data.get("token_optimizer", {})
+    token_decision_valid = bool(
+        "token_optimizer" not in data
+        or (
+            isinstance(token_decision, dict)
+            and _is_valid_normalized_front_door_token_decision(token_decision)
+        )
+    )
     authorization = data.get("execution_authorization", {})
     actions = data.get("required_next_action_codes")
     return bool(
@@ -17369,8 +17509,7 @@ def _is_valid_normalized_micro_front_door_packet(data: Dict[str, Any]) -> bool:
         and route.get("route") in {"direct", "single", "hybrid", "clarify"}
         and isinstance(gate, dict)
         and type(gate.get("can_execute")) is bool
-        and isinstance(token_decision, dict)
-        and _is_valid_normalized_front_door_token_decision(token_decision)
+        and token_decision_valid
         and isinstance(authorization, dict)
         and type(authorization.get("must_stop_before_execution")) is bool
         and isinstance(actions, list)
@@ -18265,12 +18404,6 @@ def _required_skills(
         )
         return required
 
-    if _has_nontrivial_work_signals(postmortem, lowered):
-        _add(required, "always-on-front-door", "each new user request or task should enter KH front-door before any other work")
-        _add(required, "automatic-intake-harness", "each new user request or task should start with automatic intake")
-        _add(required, "plugin-composition-policy", "automatic intake should choose direct, single-provider, hybrid, or clarify route")
-        _add(required, "request-complexity-router", "automatic intake should classify request complexity before work")
-        _add(required, "skill-catalog", "automatic intake should resolve the packaged skill source before claiming skill use")
     if sql_output_request:
         _add(
             required,
@@ -18291,11 +18424,6 @@ def _required_skills(
         _add(required, "token-optimizer", "subagent packets/transcripts require a token decision")
         if int(subagents.get("spawned", 0) or 0) > 1 or "parallel" in lowered:
             _add(required, "parallel-orchestration-harness", "multiple subagents or parallel work appeared")
-    if _has_implementation_execution_signal(lowered):
-        _add(required, "host-agent-orchestration", "implementation work should record host/subagent strategy before silently continuing")
-        _add(required, "subagent-review-pipeline", "implementation work should record dispatch, review-only, single-controller, or blocked strategy")
-        _add(required, "parallel-orchestration-harness", "implementation work should record parallel, sequential, read-only side-agent, or blocked strategy")
-        _add(required, "role-execution-audit-harness", "implementation work should record role execution audit or explicit skipped/blocked rationale")
     if postmortem.get("review_status") != "pending" or "reviewer" in lowered or "with fixes" in lowered:
         _add(required, "review-gate-harness", "review findings or reviewer activity appeared")
         _add(required, "quality-gates-harness", "reviewed development work needs quality gates")

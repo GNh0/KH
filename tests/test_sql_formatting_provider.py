@@ -28,6 +28,7 @@ from src.skills.sql_formatting_provider import (
     guard_authoritative_sql_formatting_provider_path,
     inspect_host_sql_formatting_provider,
     inspect_packaged_sql_formatting_provider,
+    issue_direct_packaged_sql_provider_selection,
     load_sql_formatting_cli_artifacts,
     packaged_sql_formatting_provider,
     sql_provider_selection_sha256,
@@ -318,6 +319,7 @@ Join `BA011T` with `MAINCD`, `SUBCD`, and `USEYN`, then select `SUBNM`.
                     "harness": "sql-formatting-style-harness",
                     "operation": "formatting",
                     "token_optimizer_status": "passthrough",
+                    "token_optimizer_status_reason": "SQL evidence was preserved exactly.",
                     "not_used_reason": "Exact SQL evidence requires passthrough.",
                     "original_sha256": hashes["original_text_sha256"],
                     "formatted_sha256": hashes["candidate_text_sha256"],
@@ -989,6 +991,186 @@ Join `BA011T` with `MAINCD`, `SUBCD`, and `USEYN`, then select `SUBNM`.
                 "reason": "SQL formatting provider selected after required skill setup.",
             },
         })
+
+    def test_direct_packaged_selection_is_module_derived_and_rejects_forgery(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        expected_path = (repo_root / "skills" / "sql_formatting" / "SKILL.md").resolve()
+        with patch.dict(
+            os.environ,
+            {"CODEX_HOME": str(repo_root / "caller-controlled-codex-home")},
+        ):
+            selection = issue_direct_packaged_sql_provider_selection(
+                host="local",
+                project=repo_root,
+            )
+
+        self.assertEqual(selection["selection_origin"], "direct-packaged")
+        self.assertEqual(Path(selection["provider_path"]), expected_path)
+        self.assertEqual(
+            selection["provider_selection_receipt"]["producer_module"],
+            "src.skills.sql_formatting_provider",
+        )
+        self.assertEqual(
+            selection["provider_selection_receipt"]["receipt_type"],
+            "direct_packaged_sql_provider_selection",
+        )
+        self.assertEqual(validate_sql_provider_selection_runtime_receipt(selection), [])
+
+        forged = json.loads(json.dumps(selection))
+        forged["provider_path"] = str(repo_root / "copied" / "SKILL.md")
+        self.assertIn(
+            "provider_selection_direct_packaged_path_mismatch",
+            validate_sql_provider_selection_runtime_receipt(forged),
+        )
+
+        override = dict(selection)
+        override["skills_root"] = str(repo_root / "copied-skills")
+        self.assertIn(
+            "provider_selection_unexpected_skills_root",
+            validate_sql_provider_selection_runtime_receipt(override),
+        )
+
+        wrong_producer = json.loads(json.dumps(selection))
+        receipt_payload = {
+            key: value
+            for key, value in wrong_producer["provider_selection_receipt"].items()
+            if key
+            not in {
+                "producer_boundary",
+                "authority",
+                "external_authenticity",
+                "provider_selection_receipt_id",
+                "producer_claim",
+            }
+        }
+        receipt_payload["producer_module"] = "src.orchestration.kh_front_door"
+        wrong_producer["provider_selection_receipt"] = (
+            _sql_provider_selection_runtime_boundary("direct-packaged").issue_claim(
+                receipt_payload,
+                claim_kind=SQL_PROVIDER_SELECTION_RECEIPT_CLAIM_KIND,
+                claim_id_field="provider_selection_receipt_id",
+                claim_id_prefix="direct-selection",
+            )
+        )
+        self.assertIn(
+            "provider_selection_runtime_receipt_producer_module_mismatch",
+            validate_sql_provider_selection_runtime_receipt(wrong_producer),
+        )
+
+    def test_direct_packaged_cli_issuer_and_final_binding_do_not_run_front_door(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        provider_path = (repo_root / "skills" / "sql_formatting" / "SKILL.md").resolve()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime_root = root / "runtime"
+            env = os.environ.copy()
+            env["UAF_RUNTIME_ROOT"] = str(runtime_root)
+            original_path = root / "original.sql"
+            candidate_path = root / "candidate.sql"
+            response_path = root / "response.md"
+            selection_path = root / "provider-selection.json"
+            history_path = root / "verifier-history.json"
+            original = "SELECT ORDER_ID FROM ORDER_HEADER;"
+            candidate = "SELECT ORDER_ID\nFROM ORDER_HEADER;"
+            original_path.write_text(original, encoding="utf-8")
+            candidate_path.write_text(candidate, encoding="utf-8")
+            response_path.write_text(f"```sql\n{candidate}\n```", encoding="utf-8")
+            history_path.write_text(
+                json.dumps([verify_sql_formatting_style(original, candidate).to_dict()]),
+                encoding="utf-8",
+            )
+
+            issued = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.skills.sql_formatting_provider",
+                    "issue-direct-selection",
+                    "--host",
+                    "local",
+                    "--project",
+                    str(repo_root),
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+                env=env,
+            )
+            self.assertEqual(issued.returncode, 0, issued.stderr or issued.stdout)
+            selection = json.loads(issued.stdout)
+            selection_path.write_text(json.dumps(selection), encoding="utf-8")
+            bound = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.skills.sql_formatting_provider",
+                    "--original-file",
+                    str(original_path),
+                    "--candidate-file",
+                    str(candidate_path),
+                    "--response-file",
+                    str(response_path),
+                    "--provider-path",
+                    str(provider_path),
+                    "--selected-active-provider-path",
+                    str(provider_path),
+                    "--provider-selection-file",
+                    str(selection_path),
+                    "--verifier-history-file",
+                    str(history_path),
+                    "--session-id",
+                    "direct-packaged-session",
+                    "--invocation-nonce",
+                    "direct-packaged-nonce-0001",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+                env=env,
+            )
+
+        self.assertEqual(selection["selection_origin"], "direct-packaged")
+        self.assertNotIn("front_door_status", selection)
+        self.assertEqual(bound.returncode, 0, bound.stderr or bound.stdout)
+        receipt = json.loads(bound.stdout)
+        self.assertEqual(receipt["status"], "passed")
+        self.assertEqual(
+            receipt["provider_path_guard"]["provider_selection_sha256"],
+            sql_provider_selection_sha256(selection),
+        )
+        self.assertNotIn(
+            "token_optimizer_status",
+            receipt["verification"]["metadata"],
+        )
+
+    def test_direct_packaged_cli_rejects_caller_provider_path_override(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "src.skills.sql_formatting_provider",
+                "issue-direct-selection",
+                "--host",
+                "local",
+                "--project",
+                str(repo_root),
+                "--provider-path",
+                str(repo_root / "copied" / "SKILL.md"),
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("unrecognized arguments: --provider-path", completed.stderr)
 
     def test_provider_selection_requires_local_runtime_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,25 +1,26 @@
 ---
 name: token-optimizer
-description: Use when kh-uaf:always-on-front-door has already run; run it as an explicit decision gate for every KH-routed turn, then record used, considered_not_needed, passthrough, or blocked with before/after token telemetry and not-used rationale.
+description: Use when the current task contains a large reducible command, log, test, retrieval, or subagent payload that can be safely compressed, or when the user explicitly requests token optimization or telemetry. Do not invoke for short ordinary work or contract-sensitive SQL/C# alone.
 ---
 # Token Optimizer Skill
 
 ## KH Entry Contract
 
-- Start every new request through `always-on-front-door`; a light/direct route still records this token decision gate without forcing compression.
-- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
-- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- This skill is not a per-turn prerequisite. Do not read it merely to record `considered_not_needed` or `passthrough`.
+- Select it only after visible context shows a large reducible payload, anticipated high-volume retrieval/output, or an explicit optimization/telemetry request.
+- Contract-sensitive SQL, stored procedures, C# source, rules, and short ordinary requests are non-triggers unless a separate large reducible payload is also present.
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
+- Keep selection, status, provider, and telemetry internal unless the user asks for them or optimization is blocked in a way that affects the requested work.
 
-This skill is the UAF context budget gate. Every KH-routed turn must pass through its decision gate, even when no compression is eventually applied. It prevents token exhaustion during large or long-running development workflows, complex debugging, subagent review loops, command validation, or code reading loops.
+This skill is the UAF context budget gate for payloads that cross its trigger boundary. It prevents token exhaustion during large or long-running development workflows, complex debugging, subagent review loops, command validation, or code reading loops without taxing ordinary turns.
 
 Default behavior is quality-first: the host may route any large or uncertain content through `optimize_context_content`, but the skill only compresses when required facts can be preserved. Token optimization must never reduce answer quality. Contract-sensitive text such as SQL, stored procedures, license headers, security comments, business rules, exact source-of-truth prose, and ordinary text that cannot be classified safely must pass through unchanged.
 Large arbitrary prose also passes through by default; this is intentional because a generic summary can silently change meaning. Use command-family log filtering or explicit user-approved summarization when reduction is more important than exact wording.
 
 ## Context budget gate
 
-Use this as an early decision gate for every KH-routed turn, not only as a rescue step after logs get too long. During heavy UAF development, design, review, QA, or subagent workflows, or whenever `estimated_context_tokens` is expected to cross the context budget threshold, the controller must decide whether the run needs optimization and record `token_optimizer_status`:
+After a trigger is present, use this as an early decision gate rather than waiting until logs are already too long. During heavy UAF development, design, review, QA, or subagent workflows, or whenever `estimated_context_tokens` is expected to cross the context budget threshold, the controller records `token_optimizer_status`:
 
 - `used`: content was compressed, filtered, minified, or summarized with before/after statistics.
 - `considered_not_needed`: the workflow stayed small enough, but the gate was explicitly checked.
@@ -62,7 +63,7 @@ If any of those facts would be lost, do not compress that item; use `passthrough
 - Run `python scripts/demo.py --output-dir <tmp>` to execute the runnable success/blocked mini-demo and verify contract-shaped JSON plus any demo artifacts.
 
 ## Instructions
-1. At the start of every KH-routed turn, record the token optimizer decision gate before broad reads, subagent dispatch, long command output, or implementation. If nothing is compressible yet, use `considered_not_needed`; if exact content must be preserved, use `passthrough`; if safe preservation cannot be proven, use `blocked`.
+1. Once the trigger matches, record the token optimizer decision before the large retrieval, subagent dispatch, or long command output. If the anticipated output proves small, use `considered_not_needed`; if a large mixed payload contains exact content that must be preserved, use `passthrough`; if safe preservation cannot be proven, use `blocked`.
 2. For mixed content, call `src.skills.token_optimizer.optimize_context_content`; it classifies logs, Python code, and contract-sensitive text before deciding whether compression is safe.
 3. Agent/subagent transcripts and general prose are passthrough unless a separate caller contract supplies and verifies every required fact. `summarize_agent_transcript` remains an explicit utility, not an automatic runtime compression path.
 4. If you run a command and it produces an extremely long error log (hundreds of lines) that clutters your context, you can run the python script directly to truncate it:
@@ -73,7 +74,7 @@ If any of those facts would be lost, do not compress that item; use `passthrough
 7. For workflow task results, call `optimize_workflow_task_results(...)` with `token_optimizer_canonical_view=true`, `token_optimizer_raw_scope={project,chat,run}`, and either `token_optimizer_raw_owner=caller` or an external `raw_store`. Serialize only the returned tasks with `serialize_canonical_model_view(...)`; keep the original input or raw store outside model context.
 8. For before/after reporting, call `compare_token_usage` or `aggregate_token_usage_stats`. Optimizer-local chars/4 fields use only `estimated_payload_*` names. Exact model-tokenizer counts are labeled exact when a real tokenizer callback is supplied. Host `token_count` and GoalState `tokensUsed` values are observed totals only when a runtime-invoked adapter callable supplies them. Caller strings named `trusted_host_token_event_jsonl` remain `claimed_unverified`. Keep `billing_tokens_available=false` and `billing_counterfactual_available=false`. Do not emit optimizer-local `actual_*` fields.
 9. For real log files, prefer the module CLI: `python -m src.skills.token_optimizer --log-file path/to/log.txt --max-lines 40`.
-10. Final workflow state must include `token_optimizer_status` and one concise `token_optimizer_status_reason`/`reason_code`. Do not duplicate the same no-op reason across task metadata and report fields.
+10. A workflow that selected this skill must include internal `token_optimizer_status` and one concise `token_optimizer_status_reason`/`reason_code`. Do not attach no-op telemetry to ordinary tasks that never selected the skill.
 11. For broad retrieval, call `build_retrieval_budget_plan` before executing the command. Block or revise the retrieval when fields, selectors, limits, or output paths are missing.
 12. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 
@@ -90,6 +91,8 @@ Use this skill as a quality-first context gate:
 Pressure scenario: if compression would remove the only assertion value or a business rule comment, return passthrough or append the missing fact; do not trade answer quality for token savings.
 
 ## Required outputs
+
+These are internal harness outputs by default. Do not add a token-optimizer section to an ordinary user response unless the user requested telemetry or a blocked decision affects the work.
 
 - `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
 - `token_optimizer_provider`: `kh`, `rtk`, or `hybrid` when provider policy is relevant. Use `token_optimizer_status=passthrough` for quality-preserving no-compression decisions.
@@ -113,6 +116,7 @@ Pressure scenario: if compression would remove the only assertion value or a bus
 - Do not optimize SQL, stored procedures, contract text, license headers, security comments, or exact source-of-truth prose unless the user explicitly accepts loss.
 - Do not serialize both raw and compact task views, and do not append no-op optimizer metadata to every task.
 - Do not report RTK from `rtk_available=true` or caller-supplied receipt dictionaries; require a runtime-invoked adapter callable and internal receipt.
+- Do not load this skill on every request merely to say it was considered, not needed, or passthrough.
 
 ## UAF implementation targets
 

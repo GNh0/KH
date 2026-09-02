@@ -1,15 +1,15 @@
 ---
 name: development-lifecycle-harness
-description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when running UAF development work through design, isolated workspace setup, planning, TDD implementation, review, verification, and branch finishing.
+description: Use when running UAF development work through design, isolated workspace setup, planning, TDD implementation, review, verification, and branch finishing.
 ---
 
 # Development Lifecycle Harness
 
 ## KH Entry Contract
 
-- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
-- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
-- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Select this skill directly when its semantic trigger matches the current request; no separate routing preflight is required.
+- An active KH directive does not select this skill by itself; the current request must still match this skill's trigger or require it as a workflow gate.
+- Use this skill when its frontmatter trigger directly matches the current request or an already-selected workflow requires it.
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
@@ -41,7 +41,7 @@ This is a personal UAF development workflow. It packages the useful Plan -> Work
 
 - For large or long-running implementation, design, review, QA, or resume work, run `token-optimizer` as a context budget gate before broad reads, long commands, or subagent handoffs.
 - Use `command-output-harness` plus `token-optimizer` for repeated test, lint, build, traceback, or install logs so exit codes and actionable failures are preserved without flooding context.
-- Final status must include `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`, plus `token_optimizer_status_reason`; non-`used` decisions must also expose `not_used_reason`.
+- For large or long-running work where the token gate was selected, final status must include `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`, plus `token_optimizer_status_reason`; non-`used` decisions must also expose `not_used_reason`. Omit these fields for ordinary work where the gate was not selected.
 
 ## Large Work Orchestration Bundle Policy
 
@@ -117,7 +117,7 @@ Pressure scenario: if the agent says "small change, no test needed", it must pro
 - Failing-first test or smoke evidence for behavior changes when practical.
 - Review findings or an explicit no-findings review note.
 - Fresh verification output and final integration status: local only, committed, pushed, or PR-ready.
-- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, `token_optimizer_status`, `token_optimizer_status_reason`, and `skill_statuses`.
+- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, and `skill_statuses`; add `token_optimizer_status` and `token_optimizer_status_reason` only for large or long-running work where the token gate was selected.
 - Compound note, distilled skill candidate, scenario regression, or explicit no-reusable-learning rationale when the work produced a repeatable lesson.
 
 ## Common mistakes

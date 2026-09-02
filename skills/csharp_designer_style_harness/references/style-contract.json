@@ -32,7 +32,7 @@
     "native_helpers": ["InitControl", "DataRowToPanel", "GridToPanel", "dtMasterToDataTable", "MasterToDataTable", "Usr_ControlsProtect"],
     "designer_owns": ["static controls", "static columns", "static repositories", "static bindings", "TabIndex", "VisibleIndex", "event subscriptions"],
     "codebehind_owns": ["event handler bodies", "procedure calls", "validation", "runtime data binding", "command logic"],
-    "forbidden_generated_shapes": ["DTO", "Request/Criteria wrapper", "runtime grid column factory", "runtime Designer helper", "generic gridView1/gridColumn1/repositoryItem1"],
+    "forbidden_generated_shapes": ["DTO", "Request/Criteria wrapper", "runtime grid column factory", "runtime Designer helper", "generic gridView1/gridColumn1/repositoryItem1", "source-unbacked PostEditor/UpdateCurrentRow", "whole-table row rewrite or key propagation", "full delete and reinsert replacing row-state delta"],
     "field_binding": "BindingField/FieldName/DataPropertyName values are explicit Designer string assignments; a col<Role>_<FIELD> field maps to FIELD.",
     "tab_index": "Input TabIndex values are explicit, unique, contiguous, and scoped to the supplied form.",
     "db_call": "Canonical wrappers use SelectType for query and parameterless CallSaveProcedure for the normal save path; direct DB parameters are uppercase @ names and procedure identities end with _SELECT/_SAVE.",

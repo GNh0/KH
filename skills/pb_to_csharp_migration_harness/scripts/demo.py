@@ -193,9 +193,9 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
         build_csharp_grid_column_designer_plan,
         generate_devexpress_grid_xml,
         load_packaged_migration_profile,
+        run_pb_to_csharp_runtime_generation,
         verify_composite_business_key_display_contract,
         verify_devexpress_grid_xml_contract,
-        verify_migration_generated_csharp_style,
         verify_pb_migration_save_field_contract,
         verify_pb_migration_sp_generation_contract,
         verify_pb_migration_sp_with_sql_formatting,
@@ -262,26 +262,43 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     baseline_designer_path = output_dir / "CatalogBrowseForm.baseline.Designer.cs"
     unrelated_csharp_path = output_dir / "UnmappedWidget.cs"
     misplaced_csharp_path = output_dir / "CatalogBrowseForm.misplaced.cs"
+    misplaced_designer_path = output_dir / "CatalogBrowseForm.misplaced.Designer.cs"
     sql_path = output_dir / "SP_CATALOG_SELECT.sql"
     grid_xml_path = output_dir / "CatalogBrowseGrid.xml"
     evidence_path = output_dir / "offline_generation_evidence.json"
+    contract_path = Path(__file__).resolve().parents[1] / "references" / "packaged-style-contract.json"
+    profile_hash = "sha256:" + hashlib.sha256(contract_path.read_bytes()).hexdigest()
+    profile = load_packaged_migration_profile(
+        contract["contract_id"],
+        contract["contract_version"],
+        profile_hash,
+    )
+    for generated_target in (
+        csharp_path,
+        designer_path,
+        unrelated_csharp_path,
+        misplaced_csharp_path,
+        misplaced_designer_path,
+    ):
+        generated_target.unlink(missing_ok=True)
+
     unrelated_csharp = "public class UnmappedWidget {}"
     misplaced_csharp = csharp.replace(
         "InitializeComponent();",
         'InitializeComponent(); this.txtFilterText.Name = "txtFilterText";',
     )
-    csharp_sha256 = _write_utf8_artifact(csharp_path, csharp)
-    designer_sha256 = _write_utf8_artifact(designer_path, designer)
+    csharp_sha256 = "sha256:" + hashlib.sha256(csharp.encode("utf-8")).hexdigest()
+    designer_sha256 = "sha256:" + hashlib.sha256(designer.encode("utf-8")).hexdigest()
+    unrelated_csharp_sha256 = "sha256:" + hashlib.sha256(
+        unrelated_csharp.encode("utf-8")
+    ).hexdigest()
+    misplaced_csharp_sha256 = "sha256:" + hashlib.sha256(
+        misplaced_csharp.encode("utf-8")
+    ).hexdigest()
+    misplaced_designer_sha256 = designer_sha256
     baseline_designer_sha256 = _write_utf8_artifact(baseline_designer_path, designer)
-    unrelated_csharp_sha256 = _write_utf8_artifact(
-        unrelated_csharp_path,
-        unrelated_csharp,
-    )
-    misplaced_csharp_sha256 = _write_utf8_artifact(
-        misplaced_csharp_path,
-        misplaced_csharp,
-    )
     _write_utf8_artifact(grid_xml_path, grid_xml)
+
     evidence_registry = {
         "demo:generated-source": {
             "evidence_id": "demo:generated-source",
@@ -345,66 +362,165 @@ def _sanitized_offline_scenario(skill_name: str, output_dir: Path, repo_root: Pa
     if not mapped["success"] or empty["success"] or unrelated["success"] or not ownership["success"]:
         raise RuntimeError("packaged C# structural rules do not distinguish mapped output")
 
-    contract_path = Path(__file__).resolve().parents[1] / "references" / "packaged-style-contract.json"
-    profile_hash = "sha256:" + hashlib.sha256(contract_path.read_bytes()).hexdigest()
-    profile = load_packaged_migration_profile(
-        contract["contract_id"],
-        contract["contract_version"],
-        profile_hash,
+    runtime_sql = sql.replace("-- AUTHOR:      KH demo\n", "").replace(
+        "-- CREATE DATE: 2026-01-01\n", ""
     )
-    runtime_mapped = verify_migration_generated_csharp_style(
-        csharp,
-        standalone_surface_kind="form",
-        designer_source_text=designer,
-        profile_evidence=profile,
-        form_class="CatalogBrowseForm",
-        source_role="code-behind",
-        result_fields=[item["field_name"] for item in grid_columns],
-        expected_control_contracts=control_contracts,
-        evidence_registry=evidence_registry,
-        target_source_path=str(csharp_path),
-        target_source_sha256=csharp_sha256,
-        target_designer_path=str(designer_path),
-        target_designer_sha256=designer_sha256,
-        baseline_designer_path=str(baseline_designer_path),
-        baseline_designer_sha256=baseline_designer_sha256,
-        expected_grid_role="list",
-        expected_grid_suffix="List",
-        expected_grid_columns=grid_columns,
-        layout_load_artifact_path=str(grid_xml_path),
-    )
-    runtime_unrelated = verify_migration_generated_csharp_style(
-        unrelated_csharp,
-        standalone_surface_kind="form",
-        profile_evidence=profile,
-        form_class="CatalogBrowseForm",
-        source_role="code-behind",
-        expected_control_contracts=[],
-        no_control_contract_evidence={
-            "reason": "The unrelated negative fixture intentionally has no generated controls.",
-            "evidence_refs": ["demo:no-generated-controls"],
+    runtime_sql_fragment = """IF @WORKTYPE = 'LIST'
+BEGIN
+    SELECT A.ENTITY_ID
+         , A.DISPLAY_NAME
+    FROM [dbo].[ENTITY_RECORD] A
+    WHERE A.DISPLAY_NAME LIKE ISNULL(@FILTER_TEXT, N'') + N'%';
+END;"""
+    runtime_sql_source_path = output_dir / "runtime-generation-source.sql"
+    _write_utf8_artifact(runtime_sql_source_path, runtime_sql_fragment)
+    runtime_source_evidence = {
+        "kind": "pasted_sql",
+        "verified": True,
+        "evidence_role": "body_fragment",
+        "definition_path": str(runtime_sql_source_path),
+        "definition_text": runtime_sql_fragment,
+        "sha256": hashlib.sha256(runtime_sql_fragment.encode("utf-8")).hexdigest(),
+    }
+    runtime_sql_provider_path = (repo_root / "skills" / "sql_formatting" / "SKILL.md").resolve()
+    runtime_provider_selection = attach_sql_provider_selection_runtime_receipt({
+        "schema_version": 1,
+        "front_door_status": "ok",
+        "host": "local-demo",
+        "project": str(output_dir.resolve()),
+        "provider_id": "sql-formatting",
+        "provider_path": str(runtime_sql_provider_path),
+        "selected_active_provider_path": str(runtime_sql_provider_path),
+        "provider_source": "packaged-kh-skill",
+        "compatibility": "compatible",
+        "selection_status": "selected",
+        "plugin_route": {
+            "route": "single",
+            "controller": {
+                "provider_id": "sql-formatting",
+                "capability": "sql_formatting",
+                "metadata": {
+                    "path": str(runtime_sql_provider_path),
+                    "source": "packaged-kh-skill",
+                    "compatibility": "compatible",
+                },
+            },
+            "assistants": [],
         },
-        evidence_registry=evidence_registry,
-        target_source_path=str(unrelated_csharp_path),
-        target_source_sha256=unrelated_csharp_sha256,
+        "execution_gate": {
+            "can_execute": True,
+            "status": "execution_allowed_after_selected_skill_setup",
+            "reason": "SQL formatting provider selected after required skill setup.",
+        },
+    })
+
+    def runtime_orchestration_kwargs(**overrides) -> dict:
+        values = {
+            "original_sql_text": runtime_sql,
+            "formatted_sql_text": runtime_sql,
+            "source_evidence": [runtime_source_evidence],
+            "program_key": "CatalogBrowseForm",
+            "form_class": "CatalogBrowseForm",
+            "csharp_source_role": "code-behind",
+            "standalone_surface_kind": "form",
+            "caller_parameter_contract": ["@WORKTYPE", "@FILTER_TEXT"],
+            "draft_final_response": f"```sql\n{runtime_sql}\n```",
+            "sql_provider_path": runtime_sql_provider_path,
+            "selected_active_sql_provider_path": runtime_sql_provider_path,
+            "sql_provider_selection": runtime_provider_selection,
+        }
+        values.update(overrides)
+        return values
+
+    def artifact_writer(source_text: str, designer_text: str = ""):
+        def write(source_target: Path, designer_target: Path | None) -> None:
+            _write_utf8_artifact(source_target, source_text)
+            if designer_text:
+                if designer_target is None:
+                    raise RuntimeError("Designer target is required")
+                _write_utf8_artifact(designer_target, designer_text)
+
+        return write
+
+    mapped_runtime_operation = run_pb_to_csharp_runtime_generation(
+        "Generate and validate the mapped synthetic C# and Designer pair.",
+        writer=artifact_writer(csharp, designer),
+        target_source_path=csharp_path,
+        target_designer_path=designer_path,
+        profile_id=contract["contract_id"],
+        profile_version=contract["contract_version"],
+        profile_hash=profile_hash,
+        orchestration_kwargs=runtime_orchestration_kwargs(
+            result_fields=[item["field_name"] for item in grid_columns],
+            expected_control_contracts=control_contracts,
+            evidence_registry=evidence_registry,
+            baseline_designer_path=str(baseline_designer_path),
+            baseline_designer_sha256=baseline_designer_sha256,
+            expected_grid_role="list",
+            expected_grid_suffix="List",
+            expected_grid_columns=grid_columns,
+            layout_load_artifact_path=str(grid_xml_path),
+        ),
     )
-    runtime_misplaced = verify_migration_generated_csharp_style(
-        misplaced_csharp,
-        standalone_surface_kind="form",
-        designer_source_text=designer,
-        profile_evidence=profile,
-        form_class="CatalogBrowseForm",
-        source_role="code-behind",
-        result_fields=[item["field_name"] for item in grid_columns],
-        expected_control_contracts=control_contracts,
-        evidence_registry=evidence_registry,
-        target_source_path=str(misplaced_csharp_path),
-        target_source_sha256=misplaced_csharp_sha256,
-        target_designer_path=str(designer_path),
-        target_designer_sha256=designer_sha256,
-        baseline_designer_path=str(baseline_designer_path),
-        baseline_designer_sha256=baseline_designer_sha256,
+    unrelated_runtime_operation = run_pb_to_csharp_runtime_generation(
+        "Generate and reject an unrelated negative C# fixture.",
+        writer=artifact_writer(unrelated_csharp),
+        target_source_path=unrelated_csharp_path,
+        profile_id=contract["contract_id"],
+        profile_version=contract["contract_version"],
+        profile_hash=profile_hash,
+        orchestration_kwargs=runtime_orchestration_kwargs(
+            expected_control_contracts=[],
+            no_control_contract_evidence={
+                "reason": "The unrelated negative fixture intentionally has no generated controls.",
+                "evidence_refs": ["demo:no-generated-controls"],
+            },
+            evidence_registry=evidence_registry,
+        ),
     )
+    misplaced_runtime_operation = run_pb_to_csharp_runtime_generation(
+        "Generate and reject misplaced static UI in a C# and Designer pair.",
+        writer=artifact_writer(misplaced_csharp, designer),
+        target_source_path=misplaced_csharp_path,
+        target_designer_path=misplaced_designer_path,
+        profile_id=contract["contract_id"],
+        profile_version=contract["contract_version"],
+        profile_hash=profile_hash,
+        orchestration_kwargs=runtime_orchestration_kwargs(
+            result_fields=[item["field_name"] for item in grid_columns],
+            expected_control_contracts=control_contracts,
+            evidence_registry=evidence_registry,
+            baseline_designer_path=str(baseline_designer_path),
+            baseline_designer_sha256=baseline_designer_sha256,
+        ),
+    )
+
+    def csharp_stage_result(operation_result: HarnessResult) -> HarnessResult:
+        orchestration = operation_result.metadata.get("orchestration", {})
+        orchestration_metadata = orchestration.get("metadata", {})
+        csharp_metadata = orchestration_metadata.get("evidence", {}).get("csharp", {})
+        success = csharp_metadata.get("status") == "passed"
+        return HarnessResult(
+            success=success,
+            stdout=json.dumps({"status": csharp_metadata.get("status", "blocked")}),
+            stderr="" if success else "Generated C# validation failed closed.",
+            exit_code=0 if success else 1,
+            metadata=dict(csharp_metadata),
+        )
+
+    runtime_mapped = csharp_stage_result(mapped_runtime_operation)
+    runtime_unrelated = csharp_stage_result(unrelated_runtime_operation)
+    runtime_misplaced = csharp_stage_result(misplaced_runtime_operation)
+    if not mapped_runtime_operation.success:
+        raise RuntimeError(
+            json.dumps(mapped_runtime_operation.to_dict(), ensure_ascii=False)
+        )
+    if unrelated_runtime_operation.success or misplaced_runtime_operation.success:
+        raise RuntimeError("negative runtime generation fixtures were not rejected")
+    if mapped_runtime_operation.metadata.get("target_source_sha256") != csharp_sha256:
+        raise RuntimeError("mapped runtime source hash drifted")
+    if mapped_runtime_operation.metadata.get("target_designer_sha256") != designer_sha256:
+        raise RuntimeError("mapped runtime Designer hash drifted")
     caller_body = (
         'return dbClient.GetDataSetFromSP("SP_CATALOG_SELECT"\n'
         '    , new DbParameter("@WORKTYPE", workType)\n'

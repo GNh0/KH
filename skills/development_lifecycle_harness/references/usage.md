@@ -56,14 +56,14 @@ Do not use this skill only because it is available. Use it when the current task
 - Concrete input summary and target workspace or artifact paths.
 - `large_work_orchestration_bundle` with `skill_statuses`, `parallel_strategy_decision`, `memory_candidates`, `compound_handoff`, and no-learning or skip rationales.
 - `workspace_strategy` and its evidence: current checkout rationale, worktree path, host workspace id, or isolated branch name.
-- `token_optimizer_status`, `token_optimizer_status_reason`, and its evidence: savings statistics, `considered_not_needed` rationale, `passthrough` quality reason, blocked reason, or `not_used_reason`.
+- For large or long-running work where the token gate was selected: `token_optimizer_status`, `token_optimizer_status_reason`, and its evidence such as savings statistics, `considered_not_needed` rationale, `passthrough` quality reason, blocked reason, or `not_used_reason`.
 - GoalState and goal ledger evidence: objective, status, success criteria, evidence required, evidence collected, missing evidence, and next recommended action.
 - Development progress evidence: `.kh/development/<run-id>/state/progress.json`, active task, task statuses, RED/GREEN/review/fix/re-review/commit loop state, and stable final report fields.
 - Skill transition evidence: `skill_transition_handoff`, `required_next_skills`, transition issues, or `skill_transition_policy_passed`.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
 - Verification command or review evidence, including failures and blocked states.
-- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, `token_optimizer_status`, `token_optimizer_status_reason`, and `skill_statuses`.
+- Stable final report fields: `task_status`, `review_status`, `commit_sha`, `next_task`, `workspace_strategy`, and `skill_statuses`; include token-optimizer fields only for large or long-running work where that gate was selected.
 
 ## Failure handling
 

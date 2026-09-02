@@ -1,18 +1,18 @@
 ---
 name: request-complexity-router
-description: Use when kh-uaf:always-on-front-door has already run and selected this skill; use it when deciding whether a user request should be answered directly, handled with a lightweight skill/module, or escalated to GoalState, role DAG, evidence gates, or high-risk review.
+description: Use when the user explicitly requests an execution-depth or complexity audit, or a governed workflow has genuine unresolved ambiguity or risk. Do not invoke for an ordinary clear request.
 ---
 # Request Complexity Router
 
 ## KH Entry Contract
 
-- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
-- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
-- Use this skill only when front-door routing, an explicit user request, or a required follow-up gate selects it.
+- Select this skill only for an explicit complexity audit or a genuine unresolved execution-depth decision inside governed work.
+- Do not select it merely because KH is active, a tool or file is needed, or another domain skill clearly matches.
+- A governed workflow may call it when the lightest safe execution depth is materially uncertain.
 - Report this skill as `applied` only after its implementation target, gate, artifact, command-output handling, or explicit passthrough/blocked rationale produces evidence.
 - Reading this SKILL.md, listing the catalog, or seeing the skill in `selected_not_executed_skills` is not execution evidence.
 
-This skill is the lightweight intake gate for UAF. It prevents over-orchestration by classifying the request before running heavier skills, harnesses, roles, or gates.
+This skill is a governed complexity-analysis module, not a prerequisite for ordinary requests.
 
 Source label: Request complexity routing.
 
@@ -31,7 +31,7 @@ Source label: Request complexity routing.
 4. Use `skill_read` or a narrow Python module for bounded summaries, comparisons, and analysis.
 5. Escalate to GoalState, role DAG, and review/QA gates for implementation, deliverables, persistent state, or high-impact decisions.
 6. For ambiguous prompts, ask a short clarification instead of starting a full workflow.
-7. Keep `token-optimizer` available as cross-cutting infrastructure. For every non-trivial KH-routed request, record the token gate as `used`, `considered_not_needed`, `passthrough`, or `blocked`; apply compression only when content is large, log-like, safely classifiable, or expected to exceed the context budget. If `estimated_context_tokens`, broad file reads, expected tool calls, or subagent transcripts cross the threshold, the token gate must be applied even when the user-facing question sounds simple.
+7. Select `token-optimizer` only when a large reducible payload or explicit telemetry request crosses its own trigger; ordinary and contract-sensitive work does not need a no-op token record.
 8. Workspace strategy is a cross-cutting output for implementation routes. Prefer `host-worktree`, `project-local-worktree`, or `isolated-branch` for Git-backed implementation unless the task is documentation-only, a single-file small patch, or explicitly in-place.
 9. Heavy implementation routes should include `goal-state-harness` so completion criteria, evidence requirements, and blocked states survive context compaction.
 10. For heavy implementation routes or threshold-crossing contexts, final status must include `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`. Do not make a light request heavy just because this gate is considered.

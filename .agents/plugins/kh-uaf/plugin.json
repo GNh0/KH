@@ -1,5 +1,5 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.145",
-  "description": "KH UAF provides semantically selected workflow skills, optional governed runtime audits, scoped state, development progress state, role-based orchestration, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows."
+  "version": "2.9.146",
+  "description": "KH UAF provides opt-in domain and workflow skills. Ordinary clear requests run directly or load only the matching domain skill; routing audits, token optimization, credential safety, memory, Goal, and orchestration load only on concrete triggers and stay silent unless blocked or requested."
 }

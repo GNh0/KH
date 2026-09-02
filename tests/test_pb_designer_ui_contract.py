@@ -651,6 +651,130 @@ private void ConfigureRuntime()
         self.assertIn("static_designer_property_in_code_behind", issue_codes(result))
         self.assertIn("static_collection_wiring_in_code_behind", issue_codes(result))
 
+    def test_rejects_singular_column_and_repository_wiring_in_code_behind(self):
+        designer = valid_designer_source().replace(
+            "private DevExpress.XtraGrid.GridControl grdList;",
+            "private DevExpress.XtraGrid.GridControl grdList;\n"
+            "private DevExpress.XtraGrid.Views.Grid.GridView gvwList;",
+        ).replace(
+            "this.grdList = new DevExpress.XtraGrid.GridControl();",
+            "this.grdList = new DevExpress.XtraGrid.GridControl();\n"
+            "this.gvwList = new DevExpress.XtraGrid.Views.Grid.GridView();",
+        )
+        for statement in (
+            "this.gvwList.Columns.Add(this.colList_AMT);",
+            "this.grdList.RepositoryItems.Add(this.rpsSpinAMT);",
+        ):
+            with self.subTest(statement=statement):
+                code_behind = f"""
+private void ConfigureRuntime()
+{{
+    {statement}
+}}
+"""
+                result = validate_static_designer_ownership_contract(
+                    designer,
+                    code_behind,
+                )
+
+                self.assertFalse(result.success, result.to_dict())
+                self.assertIn(
+                    "static_collection_wiring_in_code_behind",
+                    issue_codes(result),
+                )
+
+    def test_rejects_qualified_and_unqualified_designer_owned_wiring(self):
+        statements = (
+            "gvwList.Columns.Add(colList_AMT);",
+            "gvwList.Columns.AddRange(new[] { colList_AMT });",
+            "grdList.RepositoryItems.Add(rpsSpinAMT);",
+            "grdList.RepositoryItems.AddRange(new[] { rpsSpinAMT });",
+            "pnMain.Controls.Add(SpinAMT);",
+            "colList_AMT.Caption = \"Runtime caption\";",
+            "colList_AMT.AppearanceHeader.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.Center;",
+            "colList_AMT.AppearanceCell.Font = new System.Drawing.Font(\"Arial\", 9F);",
+            "gvwList.RowCellClick += gvwList_RowCellClick;",
+            "this.gvwList.RowCellClick += gvwList_RowCellClick;",
+            "this.Load += Form_Load;",
+        )
+        designer = valid_designer_source().replace(
+            "private DevExpress.XtraGrid.GridControl grdList;",
+            "private DevExpress.XtraGrid.GridControl grdList;\n"
+            "private DevExpress.XtraGrid.Views.Grid.GridView gvwList;",
+        ).replace(
+            "this.grdList = new DevExpress.XtraGrid.GridControl();",
+            "this.grdList = new DevExpress.XtraGrid.GridControl();\n"
+            "this.gvwList = new DevExpress.XtraGrid.Views.Grid.GridView();",
+        )
+
+        for statement in statements:
+            with self.subTest(statement=statement):
+                result = validate_static_designer_ownership_contract(
+                    designer,
+                    f"private void ConfigureRuntime() {{ {statement} }}",
+                )
+                self.assertFalse(result.success, result.to_dict())
+
+    def test_ignores_comments_literals_locals_parameters_and_other_objects(self):
+        code_behind = r'''
+private void ConfigureRuntime(OtherGrid gvwList)
+{
+    // colList_AMT.Caption = "comment";
+    string text = @"grdList.RepositoryItems.Add(rpsSpinAMT);
+colList_AMT.AppearanceHeader.TextOptions.HAlignment = Center;";
+    gvwList.Columns.Add(new object());
+
+    var colList_AMT = new RuntimeColumn();
+    colList_AMT.Caption = "local";
+
+    var holder = GetHolder();
+    holder.grdList.RepositoryItems.Add(new object());
+    holder.colList_AMT.AppearanceCell.Font = null;
+}
+'''
+        result = validate_static_designer_ownership_contract(valid_designer_source(), code_behind)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_expired_nested_local_does_not_shadow_later_designer_field_assignment(self):
+        code_behind = r'''
+private void ConfigureRuntime()
+{
+    {
+        var grdList = GetOther();
+        grdList.Location = new System.Drawing.Point(5, 5);
+    }
+
+    grdList.Location = new System.Drawing.Point(10, 10);
+}
+'''
+
+        result = validate_static_designer_ownership_contract(
+            valid_designer_source(),
+            code_behind,
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("static_designer_property_in_code_behind", issue_codes(result))
+
+    def test_active_nested_local_still_shadows_designer_field(self):
+        code_behind = r'''
+private void ConfigureRuntime()
+{
+    {
+        var grdList = GetOther();
+        grdList.Location = new System.Drawing.Point(5, 5);
+    }
+}
+'''
+
+        result = validate_static_designer_ownership_contract(
+            valid_designer_source(),
+            code_behind,
+        )
+
+        self.assertTrue(result.success, result.to_dict())
+
     def test_aggregate_contract_passes_with_a_temp_srd(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "detail.srd"

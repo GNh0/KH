@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.145",
-  "description": "KH UAF provides semantically selected workflow skills, optional governed runtime audits, scoped state, development progress state, role-based orchestration, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows.",
+  "version": "2.9.146",
+  "description": "KH UAF provides opt-in domain and workflow skills. Ordinary clear requests run directly or load only the matching domain skill; routing audits, token optimization, credential safety, memory, Goal, and orchestration load only on concrete triggers and stay silent unless blocked or requested.",
   "author": "KH UAF",
   "entrypoint": "cli.py",
   "artifact_layout": {
@@ -31,17 +31,17 @@
     },
     {
       "name": "always-on-front-door",
-      "description": "Host-visible bootstrap skill that semantically selects the smallest matching direct, specialist, or governed workflow without requiring Python for clear requests.",
-      "usage": "Read skills/always_on_front_door/SKILL.md; run scripts/front_door.py only for deterministic audit or governed routing."
+      "description": "Explicit routing-audit and governed-runtime documentation; never select it as an ordinary specialist or prerequisite for clear domain work.",
+      "usage": "Read only for an explicit routing audit, unresolved provider conflict, or governed high-risk or large workflow."
     },
     {
       "name": "automatic-intake-harness",
-      "description": "Support semantic intake without requiring KH names; use deterministic runtime classification only when its evidence is needed.",
+      "description": "Audit or integrate deterministic KH intake only when explicitly requested or required by a governed host runtime; ordinary clear requests bypass it.",
       "usage": "python skills/always_on_front_door/scripts/front_door.py --prompt-file \"<utf8 prompt file>\" --project \"<target project>\" --host codex --summary --strict-execution-gate"
     },
     {
       "name": "plugin-composition-policy",
-      "description": "Choose direct, single-provider, hybrid, or clarify routing across dynamic plugins, tools, skills, connectors, and future capability providers without letting any provider self-force selection before it is delegated scope.",
+      "description": "Resolve genuine multi-provider conflicts or explicit composition audits; clear direct and single-provider requests bypass this policy.",
       "usage": "python -m src.skills.uaf_skill_catalog --read plugin-composition-policy"
     },
     {
@@ -136,7 +136,7 @@
     },
     {
       "name": "token-optimizer",
-      "description": "Apply the required KH-routed-turn token decision gate with quality-first used, considered_not_needed, passthrough, or blocked evidence and before/after telemetry.",
+      "description": "Compress a large reducible command, log, test, or subagent payload with quality-preserving evidence, or provide telemetry when explicitly requested; do not select for short work or contract-sensitive SQL/C# alone.",
       "usage": "python -m src.skills.uaf_skill_catalog --read token-optimizer"
     },
     {
@@ -291,7 +291,7 @@
     },
     {
       "name": "request-complexity-router",
-      "description": "Classify user requests as light, medium, heavy, high-risk, or ambiguous before choosing direct answer, skill/module, or role-DAG execution depth.",
+      "description": "Classify execution depth only for explicit complexity audits or genuinely ambiguous or risky governed workflows; ordinary clear requests bypass it.",
       "usage": "python -m src.skills.uaf_skill_catalog --read request-complexity-router"
     },
     {
@@ -366,12 +366,12 @@
     },
     {
       "name": "pb-to-csharp-migration-harness",
-      "description": "Plan and verify PowerBuilder/PBL/DataWindow/GWERP migration work into target-project C# WinForms/DevExpress screens and SELECT/SAVE SQL Server stored procedures without requiring local PB tools or live DB access.",
+      "description": "Plan, generate, modify, and verify PowerBuilder-to-C# WinForms/DevExpress/KoneLib screens, Designer code, DataWindow mappings, and SELECT/SAVE SQL Server procedures using the packaged fixed style contract without author or sibling-source discovery.",
       "usage": "python -m src.skills.uaf_skill_catalog --read pb-to-csharp-migration-harness"
     },
     {
       "name": "csharp-designer-style-harness",
-      "description": "Verify one exact C# WinForms/DevExpress/KoneLib code-behind and Designer pair against the packaged fixed style contract with byte-hash-bound evidence.",
+      "description": "Generate, modify, and verify one exact C# WinForms/DevExpress/KoneLib code-behind and Designer pair against the packaged fixed style contract with target-bound, byte-hash-bound evidence.",
       "usage": "python -m src.skills.uaf_skill_catalog --read csharp-designer-style-harness"
     },
     {
@@ -461,7 +461,7 @@
     },
     {
       "name": "credential-safety-harness",
-      "description": "UAF-native credential presence and secret exposure safety harness for API keys, tokens, connection strings, and secret-bearing environment variables.",
+      "description": "Protect actual credential material and secret-bearing commands; an already-configured MCP, database, API, or connector call does not trigger this harness unless the task accesses or changes its secret configuration.",
       "usage": "python -m src.skills.uaf_skill_catalog --read credential-safety-harness"
     },
     {

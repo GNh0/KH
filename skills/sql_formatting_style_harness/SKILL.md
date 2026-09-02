@@ -1,29 +1,29 @@
 ---
 name: sql-formatting-style-harness
-description: Use when SQL/T-SQL formatting or a separately requested scalar-function refactor needs deterministic preservation, style, alias-plan, and evidence gates.
+description: Use when SQL/T-SQL is generated, modified, cleaned up, formatted, or separately refactored and needs deterministic style, alias, DML-shape, and evidence gates.
 ---
 
 # SQL Formatting Style Harness
 
 ## KH Entry Contract
 
-- Start non-trivial work through `always-on-front-door` unless the current turn was classified as light/direct.
-- Use this harness only after routing selects SQL formatting or a separately requested scalar-function refactor.
+- Select this harness directly for matching SQL generation, modification, cleanup, formatting, or refactor verification; no separate routing preflight is required.
+- Select this harness for SQL generation and modification as well as formatting or a separately requested scalar-function refactor. Do not require the user to say `formatting` or name the harness.
 - Provider selection, catalog listing, and `SKILL.md` reads are inspection only.
 - Report this harness as applied only when an actual `verify_sql_formatting_style(...)` call is correlated to its structured `HarnessResult` and the exact final SQL hash.
 - Require `alias_role_plan_validation`; legacy `alias_checks`, flat `alias_status`, and assistant prose cannot satisfy verifier binding.
 
 ## Purpose
 
-Use this harness after selecting the host-local `sql-formatting` contract or the packaged fallback. The reviewer/LLM decides business roles and evaluates source authority. Python produces deterministic evidence only: it lexes SQL, checks integrity, compares the complete token stream, validates a declared alias plan, and validates structured refactor evidence. It does not infer roles or database equivalence.
+Use this harness after ordinary direct-packaged `sql-formatting` selection or an already-authenticated host-local selection. Do not invoke the front door merely to discover a host-local provider. The reviewer/LLM decides business roles and evaluates source authority. Python produces deterministic evidence only: it lexes SQL, checks integrity, compares the complete token stream, validates a declared alias plan, and validates structured refactor evidence. It does not infer roles or database equivalence.
 
 ## Workflow
 
 1. Preserve the exact original. Pass `bytes` or `Path` for strict UTF-8 decoding and a raw hash; plain `str` is reported as `encoding_unverified`.
-2. Select one style contract and record its path and SHA-256. Prefer the host-local skill when present; otherwise use `references/style-contract.md` as a standalone fallback.
-3. Declare `operation="formatting"` or `operation="refactor"`.
+2. Select one style contract and record its path and SHA-256. Use an already-authenticated host-local contract when supplied; otherwise use `references/style-contract.md` directly without a routing preflight.
+3. Declare `operation="formatting"`, `operation="generation"`, or `operation="refactor"`.
 4. For formatting, preserve every token except whitespace, safe case normalization, and substitutions from a complete verified alias plan. Every scalar function remains present.
-5. For every outer multi-source formatted scope, create a complete per-scope role plan. Prefer a source-bound host/caller rationale tied to the current SQL; use legacy reviewer evidence only when it actually exists. An unchanged derived-internal multi-source scope whose explicit aliases stay in the documented `T` family is exempt; alias changes in any scope still require a complete plan.
+5. For generation, create a complete bound plan for every non-exempt multi-source scope. For formatting/refactor, create plans only for alias-changed scopes and validate any supplied plan. Prefer a source-bound host/caller rationale tied to the current SQL; use legacy reviewer evidence only when it actually exists. An unchanged derived-internal multi-source scope whose explicit aliases stay in the documented `T` family is exempt; alias changes in any scope still require a complete plan.
 6. For a scalar-function-to-join request, inspect the actual function definition through DB/MCP/project source when available. Supply `scalar_function_refactor`; never infer behavior from a function or table name.
 7. Run the packaged `prepare_candidate.py` path when mechanical JOIN/alias preparation is needed, then run `verify_sql_formatting_style(...)` or the packaged module CLI against the exact original and exact final candidate. Do not substitute a task-local formatter or a checker derived from the same task-local indentation formula. Skill selection, file reads, and self-consistent ad hoc checks are not verifier evidence.
 
@@ -44,7 +44,7 @@ Use this harness after selecting the host-local `sql-formatting` contract or the
 - An unchanged unaliased single-source scope is `not_needed`. If the sole source in an outer statement scope is explicitly aliased, its main alias is `A`; another alias blocks even when unchanged. Existing nested/CTE internal alias conventions remain separate.
 - Every source in a multi-source formatted scope has an explicit alias. Unaliased multi-source output blocks even when the original was also unaliased.
 - Comma-separated `FROM` sources count as multi-source exactly like explicit joins.
-- Every non-exempt multi-source formatted scope requires a complete source-bound role plan even when its aliases are unchanged. Missing role evidence blocks; it never permits the unaliased or non-canonical candidate to pass.
+- Every generated non-exempt multi-source scope requires a complete source-bound role plan. Canonical unchanged formatting/refactor scopes are plan-free. Missing required role evidence blocks; it never permits an unaliased or non-canonical candidate to pass.
 - An unchanged multi-source scope inside a derived table is exempt from the outer A/B plan only when every declaration is explicitly aliased with the documented `T`, `T1`, or related internal family. Any alias change removes that exemption and requires a scope plan.
 - Alias change without a complete plan: block.
 - Canonical preservation treats SQL inside a parent `(DERIVED)` declaration as child-scope SQL; the parent declaration range must not hide child alias references from scope-aware substitution.
@@ -71,9 +71,14 @@ The authenticated path uses the Python API's host-supplied `runtime_receipt_auth
 
 For mappings with eight or more items, canonical non-comment expression text of at most 72 characters remains horizontally grouped. Expressions of 73 or more characters may use vertical fallback. At most one short singleton line is allowed as a row remainder; additional short singleton mappings block. The exact thresholds and measurement name are emitted as `style_lint.insert_select_layout_contract`.
 
+## Generated SAVE DML Contract
+
+- Generated validation may use established `IN`, `EXISTS`, and `NOT EXISTS` set/semi-join predicates. A newly introduced scalar `WHERE ... (SELECT ...)` or `WHERE ... NOT IN (SELECT ...)` is blocked unless an exact bound source contract requires it; prefer an established source-backed JOIN or `NOT EXISTS` anti-join shape when applicable.
+- Detail SAVE logic follows its explicit row-state contract. Added/New inserts, Modified updates, and Deleted/Del deletes. A delta DELETE whose paired INSERT SELECT is unfiltered or can reinsert Deleted/Del rows is blocked, as is a full DELETE followed by reinserting the same target, unless exact source/user evidence authorizes that behavior.
+
 ## Query Layout Contract
 
-For every join, including one whose source is a derived table, use spaces only: leading tabs are invalid. The complete join type/hint prefix and `JOIN` token stay on one line starting eight columns to the right of the current query scope's `FROM` column. `ON` and each actual line-leading same-join continuation `AND` or `OR` align to the `I` column of that join's `JOIN` token. For a derived source, its top-level `SELECT`, `FROM`, `WHERE`, `GROUP`, `HAVING`, `ORDER`, and set-operator clauses start four columns inside the outer join clause, while the closing parenthesis and alias realign with the outer join clause and remain on the same physical line. Inline `AND`/`OR`, `BETWEEN` delimiters, `CASE`-internal predicates, and nested-query predicates are not outer alignment targets.
+For every join, including one whose source is a derived table, use spaces only: leading tabs are invalid. Generation spells directional joins with explicit `OUTER`; formatting/refactor preserves the existing join-type token stream. The complete join type/hint prefix and `JOIN` token stay on one line starting eight columns to the right of the current query scope's `FROM` column. `ON` and each actual line-leading same-join continuation `AND` or `OR` align to the `I` column of that join's `JOIN` token. For a derived source, its top-level `SELECT`, `FROM`, `WHERE`, `GROUP`, `HAVING`, `ORDER`, and set-operator clauses start four columns inside the outer join clause, while the closing parenthesis and alias realign with the outer join clause and remain on the same physical line. Inline `AND`/`OR`, `BETWEEN` delimiters, `CASE`-internal predicates, and nested-query predicates are not outer alignment targets.
 
 Query-level `GROUP BY` and `ORDER BY` lists use a 100-column preferred width and 120-column hard ceiling. Short simple lists stay inline. Long lists split only at top-level commas and pack compactly across continuation rows; complex items stay atomic. Direction and collation modifiers stay attached. Window `ORDER BY` is excluded by query-depth detection. The exact policy is emitted as `style_lint.query_list_layout_contract`.
 
@@ -104,7 +109,7 @@ Query-level `GROUP BY` and `ORDER BY` lists use a 100-column preferred width and
 - `mechanical_checks.status=passed` for an accepted formatting result.
 - Structured `alias_role_plan_validation.status=not_needed|verified`; `required` and `conflict` block acceptance.
 - Exact final SQL whose UTF-8 SHA-256 equals `formatted_sha256`.
-- `token_optimizer_status=passthrough` with the quality-preserving reason.
+- When `token-optimizer` was actually selected, `token_optimizer_status=passthrough` with the quality-preserving reason. Otherwise omit token-optimizer fields.
 
 ## Common mistakes
 

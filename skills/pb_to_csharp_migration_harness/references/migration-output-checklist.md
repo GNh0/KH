@@ -13,7 +13,7 @@ Use this checklist before handoff or completion.
 - Contract identifier/version, selected screen, command/event handler family, provider, canonical query/save methods, and procedure family are recorded.
 - Exact current target class, direct base type, and paired code-behind/`.Designer.cs` identity are recorded. A custom base has a readable SHA-256-bound source/binary type-chain proof to `Form` or `UserControl`.
 - The maintenance-only profile-update workflow did not run.
-- Source text has `token_optimizer_status=passthrough`.
+- PB, C#, Designer, and SQL source text remains exact and uncompressed. If `token-optimizer` was actually selected for surrounding large output, record source text as `passthrough`; otherwise omit token fields.
 
 ## Analysis And Mapping
 

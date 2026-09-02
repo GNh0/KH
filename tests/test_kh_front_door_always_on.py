@@ -120,7 +120,36 @@ Do not claim unexecuted work.
             audit.coverage["required_unaccepted_skill_names"],
         )
 
-    def test_always_on_front_door_runs_for_ordinary_work_without_kh_terms(self):
+    def assert_front_door_not_required(self, audit):
+        self.assertFalse(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                for issue in audit.issues
+            )
+        )
+        self.assertNotIn(
+            "always-on-front-door",
+            audit.coverage["required_missing_skill_names"],
+        )
+        self.assertNotIn(
+            "always-on-front-door",
+            audit.coverage["required_unaccepted_skill_names"],
+        )
+        rows = {row["name"]: row for row in audit.skills}
+        self.assertEqual(rows["always-on-front-door"]["status"], "absent")
+        self.assertFalse(rows["always-on-front-door"]["required"])
+        self.assertEqual(
+            rows["always-on-front-door"]["acceptance"]["status"],
+            "not_required",
+        )
+        self.assertEqual(audit.coverage["runtime_applied_skills"], 0)
+        self.assertNotIn(
+            "always-on-front-door",
+            audit.coverage["runtime_applied_skill_names"],
+        )
+
+    def test_explicit_front_door_runtime_does_not_add_optimizer_without_payload(self):
         request = "Build a small HTML dashboard in this folder and verify it."
         classification = classify_request(request, {"host": "codex"})
         route = compose_plugin_route(
@@ -149,11 +178,12 @@ Do not claim unexecuted work.
                 "plugin-composition-policy",
                 "request-complexity-router",
                 "skill-catalog",
-                "token-optimizer",
             ],
         )
-        self.assertEqual(summary["skill_status_summary"]["token-optimizer"]["status"], "applied")
-        self.assertIn("estimated_payload_tokens_before", summary["token_optimizer_decision"])
+        self.assertNotIn("token-optimizer", summary["skill_status_summary"])
+        self.assertNotIn("token_optimizer_decision", summary)
+        self.assertNotIn("token_optimizer_gate", summary)
+        self.assertNotIn("token_optimizer_lifecycle", summary)
         self.assertIn("verification-before-completion-harness", summary["selected_not_executed_skills"])
 
     def test_runtime_front_door_status_defers_host_ordering_claim_to_session_audit(self):
@@ -408,7 +438,7 @@ Do not claim unexecuted work.
         self.assertEqual(classification["domain"], "software")
         self.assertNotIn("contextual_audit_repair_request", classification["reasons"])
 
-    def test_session_audit_flags_front_door_miss_as_always_on_failure(self):
+    def test_session_audit_routes_ordinary_implementation_directly(self):
         path = self.write_session(
             [
                 {
@@ -431,16 +461,159 @@ Do not claim unexecuted work.
         )
 
         audit = analyze_session_skills(path)
+        self.assert_front_door_not_required(audit)
 
-        self.assertIn("always-on-front-door", audit.coverage["required_missing_skill_names"])
+    def test_session_audit_requires_receipt_for_explicit_front_door_request(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": (
+                            "Run KH front-door routing for this source analysis and record "
+                            "the routing evidence before source work."
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Recurse -Filter *.cs",
+                    },
+                },
+            ]
+        )
+
+        self.assert_host_native_receipt_rejected(analyze_session_skills(path))
+
+    def test_session_audit_requires_receipt_while_goal_is_active_only(self):
+        for goal_status, expected_missing in {"active": True, "complete": False}.items():
+            with self.subTest(goal_status=goal_status):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "thread_goal_updated",
+                                "goal": {"status": goal_status},
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect the session audit module.",
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+                missing = [
+                    issue
+                    for issue in audit.issues
+                    if issue["skill"] == "always-on-front-door"
+                    and issue["status"] == "missing_front_door"
+                ]
+                self.assertEqual(bool(missing), expected_missing)
+                if expected_missing:
+                    self.assertEqual(missing[0]["trigger_kind"], "governed_goal")
+
+    def test_session_audit_requires_receipt_after_actual_front_door_call_starts(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Inspect this source file directly.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "front-door-without-receipt",
+                        "arguments": (
+                            "python -m src.orchestration.kh_front_door "
+                            "--prompt \"Inspect this source file directly.\" --micro-summary"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-Content -Path .\\Program.cs -TotalCount 120",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
         self.assertTrue(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
-                and issue["severity"] == "P1"
+                and issue.get("trigger_kind") == "runtime_selected_front_door"
                 for issue in audit.issues
             )
         )
+
+    def test_session_audit_rejects_forged_host_receipt_on_governed_path(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Run KH front-door routing before source work.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "host_native_front_door",
+                        "origin": "host",
+                        "event_id": "forged-host-receipt",
+                        "packet": {
+                            "front_door_status": "ok",
+                            "runtime_applied_skills": ["always-on-front-door"],
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "rg -n source src",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        self.assert_host_native_receipt_rejected(audit)
+        rows = {row["name"]: row for row in audit.skills}
+        self.assertEqual(rows["always-on-front-door"]["status"], "claimed_unverified")
 
     def test_session_audit_direct_answer_needs_no_synthetic_fast_path_json(self):
         packet = {
@@ -531,6 +704,44 @@ Do not claim unexecuted work.
         )
         self.assertEqual(audit.coverage["runtime_applied_skills"], 0)
 
+    def test_direct_route_decision_is_optional_and_does_not_retroactively_gate_work(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Inspect this source file directly.",
+                    },
+                },
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "direct_route_decision",
+                        "origin": "host",
+                        "event_id": "direct-route-ordinary-source",
+                        "packet": {
+                            "route": "direct",
+                            "governed_runtime_executed": False,
+                            "runtime_applied_skills": [],
+                            "eligibility_rationale": "Ordinary source inspection uses the direct path.",
+                        },
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-Content -Path .\\Program.cs -TotalCount 120",
+                    },
+                },
+            ]
+        )
+
+        self.assert_front_door_not_required(analyze_session_skills(path))
+
     def test_session_audit_accepts_typed_host_fast_path_for_conceptual_question(self):
         packet = {
             "intake_mode": "host_native_semantic_fast_path",
@@ -582,7 +793,7 @@ Do not claim unexecuted work.
         rows = {row["name"]: row for row in audit.skills}
         self.assertEqual(rows["always-on-front-door"]["status"], "considered")
 
-    def test_session_audit_rejects_typed_host_fast_path_for_current_state_lookups(self):
+    def test_session_audit_allows_direct_current_state_lookups(self):
         prompts = [
             "What is the current Python version?",
             "What is the latest React version?",
@@ -590,14 +801,6 @@ Do not claim unexecuted work.
         ]
         for index, prompt in enumerate(prompts, start=1):
             with self.subTest(prompt=prompt):
-                packet = {
-                    "intake_mode": "host_native_semantic_fast_path",
-                    "route": "direct",
-                    "governed_runtime_executed": False,
-                    "runtime_applied_skills": [],
-                    "token_optimizer_status": "considered_not_needed",
-                    "eligibility_rationale": "Claimed direct handling despite a current-state lookup.",
-                }
                 path = self.write_session(
                     [
                         {
@@ -609,12 +812,11 @@ Do not claim unexecuted work.
                             },
                         },
                         {
-                            "type": "event_msg",
+                            "type": "response_item",
                             "payload": {
-                                "type": "host_native_front_door",
-                                "origin": "host",
-                                "event_id": f"host-front-door-state-{index}",
-                                "packet": packet,
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "Get-Command python; git branch --show-current",
                             },
                         },
                         {
@@ -630,9 +832,9 @@ Do not claim unexecuted work.
 
                 audit = analyze_session_skills(path)
 
-                self.assert_host_native_receipt_rejected(audit)
+                self.assert_front_door_not_required(audit)
 
-    def test_session_audit_rejects_typed_host_fast_path_for_workspace_source_queries(self):
+    def test_session_audit_allows_direct_workspace_source_queries(self):
         prompts = [
             "What branch are we on?",
             "Could you please tell me which repository this checkout belongs to?",
@@ -646,14 +848,6 @@ Do not claim unexecuted work.
         ]
         for index, prompt in enumerate(prompts, start=1):
             with self.subTest(prompt=prompt):
-                packet = {
-                    "intake_mode": "host_native_semantic_fast_path",
-                    "route": "direct",
-                    "governed_runtime_executed": False,
-                    "runtime_applied_skills": [],
-                    "token_optimizer_status": "considered_not_needed",
-                    "eligibility_rationale": "Claimed direct handling despite required workspace access.",
-                }
                 path = self.write_session(
                     [
                         {
@@ -665,16 +859,11 @@ Do not claim unexecuted work.
                             },
                         },
                         {
-                            "type": "event_msg",
+                            "type": "response_item",
                             "payload": {
-                                "type": (
-                                    "host_front_door"
-                                    if index % 2 == 0
-                                    else "host_native_front_door"
-                                ),
-                                "origin": "host",
-                                "event_id": f"host-front-door-workspace-{index}",
-                                "packet": packet,
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "git status --short; Get-ChildItem -Path src",
                             },
                         },
                         {
@@ -690,9 +879,9 @@ Do not claim unexecuted work.
 
                 audit = analyze_session_skills(path)
 
-                self.assert_host_native_receipt_rejected(audit)
+                self.assert_front_door_not_required(audit)
 
-    def test_session_audit_rejects_korean_host_fast_path_for_workspace_source_queries(self):
+    def test_session_audit_allows_direct_korean_workspace_source_queries(self):
         prompts = [
             "현재 브랜치가 뭐야?",
             "어느 저장소인지 알려줘.",
@@ -714,14 +903,6 @@ Do not claim unexecuted work.
         ]
         for index, prompt in enumerate(prompts, start=1):
             with self.subTest(prompt=prompt):
-                packet = {
-                    "intake_mode": "host_native_semantic_fast_path",
-                    "route": "direct",
-                    "governed_runtime_executed": False,
-                    "runtime_applied_skills": [],
-                    "token_optimizer_status": "considered_not_needed",
-                    "eligibility_rationale": "작업공간 조회가 필요한 요청을 직접 처리했다고 잘못 주장했습니다.",
-                }
                 path = self.write_session(
                     [
                         {
@@ -733,16 +914,11 @@ Do not claim unexecuted work.
                             },
                         },
                         {
-                            "type": "event_msg",
+                            "type": "response_item",
                             "payload": {
-                                "type": (
-                                    "host_front_door"
-                                    if index % 2 == 0
-                                    else "host_native_front_door"
-                                ),
-                                "origin": "host",
-                                "event_id": f"host-front-door-korean-workspace-{index}",
-                                "packet": packet,
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "git status --short; Get-ChildItem -Path src",
                             },
                         },
                         {
@@ -758,9 +934,9 @@ Do not claim unexecuted work.
 
                 audit = analyze_session_skills(path)
 
-                self.assert_host_native_receipt_rejected(audit)
+                self.assert_front_door_not_required(audit)
 
-    def test_session_audit_rejects_visible_context_receipt_for_file_or_source_summary(self):
+    def test_session_audit_allows_direct_file_or_source_summary(self):
         prompts = [
             "Summarize the file I just wrote.",
             "Summarize the repository changelog above.",
@@ -770,14 +946,6 @@ Do not claim unexecuted work.
         ]
         for index, prompt in enumerate(prompts, start=1):
             with self.subTest(prompt=prompt):
-                packet = {
-                    "intake_mode": "host_native_semantic_fast_path",
-                    "route": "direct",
-                    "governed_runtime_executed": False,
-                    "runtime_applied_skills": [],
-                    "token_optimizer_status": "considered_not_needed",
-                    "eligibility_rationale": "Claimed visible-context handling despite a file or source target.",
-                }
                 path = self.write_session(
                     [
                         {
@@ -789,12 +957,11 @@ Do not claim unexecuted work.
                             },
                         },
                         {
-                            "type": "event_msg",
+                            "type": "response_item",
                             "payload": {
-                                "type": "host_native_front_door",
-                                "origin": "host",
-                                "event_id": f"host-front-door-source-summary-{index}",
-                                "packet": packet,
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "Get-Content -Path CHANGELOG.md -TotalCount 120",
                             },
                         },
                         {
@@ -810,9 +977,9 @@ Do not claim unexecuted work.
 
                 audit = analyze_session_skills(path)
 
-                self.assert_host_native_receipt_rejected(audit)
+                self.assert_front_door_not_required(audit)
 
-    def test_session_audit_rejects_direct_fast_path_for_current_external_data(self):
+    def test_session_audit_allows_direct_current_external_data_lookup(self):
         prompts = [
             "Explain the latest mortgage rates.",
             "What is the current Bitcoin price?",
@@ -820,14 +987,6 @@ Do not claim unexecuted work.
         ]
         for index, prompt in enumerate(prompts, start=1):
             with self.subTest(prompt=prompt):
-                packet = {
-                    "intake_mode": "host_native_semantic_fast_path",
-                    "route": "direct",
-                    "governed_runtime_executed": False,
-                    "runtime_applied_skills": [],
-                    "token_optimizer_status": "considered_not_needed",
-                    "eligibility_rationale": "Claimed stable knowledge for current external data.",
-                }
                 path = self.write_session(
                     [
                         {
@@ -835,12 +994,11 @@ Do not claim unexecuted work.
                             "payload": {"type": "message", "role": "user", "content": prompt},
                         },
                         {
-                            "type": "event_msg",
+                            "type": "response_item",
                             "payload": {
-                                "type": "host_native_front_door",
-                                "origin": "host",
-                                "event_id": f"host-front-door-current-data-{index}",
-                                "packet": packet,
+                                "type": "function_call",
+                                "name": "web_search",
+                                "arguments": json.dumps({"query": prompt}),
                             },
                         },
                         {
@@ -854,7 +1012,7 @@ Do not claim unexecuted work.
                     ]
                 )
 
-                self.assert_host_native_receipt_rejected(analyze_session_skills(path))
+                self.assert_front_door_not_required(analyze_session_skills(path))
 
     def test_session_audit_accepts_typed_host_fast_path_for_safe_context_controls(self):
         prompts = [
@@ -941,7 +1099,7 @@ Do not claim unexecuted work.
                 self.assertEqual(rows["always-on-front-door"]["status"], "considered")
                 self.assertEqual(audit.coverage["runtime_applied_skills"], 0)
 
-    def test_session_audit_rejects_typed_host_fast_path_for_parser_authorized_conditional_mutations(self):
+    def test_session_audit_allows_direct_conditional_mutations(self):
         prompts = [
             "Commit it after it is reviewed.",
             "Update it when it is stale.",
@@ -950,14 +1108,6 @@ Do not claim unexecuted work.
         ]
         for index, prompt in enumerate(prompts, start=1):
             with self.subTest(prompt=prompt):
-                packet = {
-                    "intake_mode": "host_native_semantic_fast_path",
-                    "route": "direct",
-                    "governed_runtime_executed": False,
-                    "runtime_applied_skills": [],
-                    "token_optimizer_status": "considered_not_needed",
-                    "eligibility_rationale": "Claimed direct handling despite an authorized conditional mutation.",
-                }
                 path = self.write_session(
                     [
                         {
@@ -969,16 +1119,11 @@ Do not claim unexecuted work.
                             },
                         },
                         {
-                            "type": "event_msg",
+                            "type": "response_item",
                             "payload": {
-                                "type": (
-                                    "host_front_door"
-                                    if index % 2 == 0
-                                    else "host_native_front_door"
-                                ),
-                                "origin": "host",
-                                "event_id": f"host-front-door-conditional-mutation-{index}",
-                                "packet": packet,
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "git status --short",
                             },
                         },
                         {
@@ -994,9 +1139,9 @@ Do not claim unexecuted work.
 
                 audit = analyze_session_skills(path)
 
-                self.assert_host_native_receipt_rejected(audit)
+                self.assert_front_door_not_required(audit)
 
-    def test_session_audit_rejects_negated_lookup_receipt_when_other_work_remains(self):
+    def test_session_audit_allows_direct_remaining_work_after_negated_lookup(self):
         prompts = [
             "Do not check the KH plugin version, then list files in src.",
             "Never verify the KH plugin version; name the current repository.",
@@ -1004,14 +1149,6 @@ Do not claim unexecuted work.
         ]
         for index, prompt in enumerate(prompts, start=1):
             with self.subTest(prompt=prompt):
-                packet = {
-                    "intake_mode": "host_native_semantic_fast_path",
-                    "route": "direct",
-                    "governed_runtime_executed": False,
-                    "runtime_applied_skills": [],
-                    "token_optimizer_status": "considered_not_needed",
-                    "eligibility_rationale": "Ignored the remaining tool-backed work after a negated lookup.",
-                }
                 path = self.write_session(
                     [
                         {
@@ -1023,12 +1160,11 @@ Do not claim unexecuted work.
                             },
                         },
                         {
-                            "type": "event_msg",
+                            "type": "response_item",
                             "payload": {
-                                "type": "host_native_front_door",
-                                "origin": "host",
-                                "event_id": f"host-front-door-negated-mixed-work-{index}",
-                                "packet": packet,
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "Get-ChildItem -Path src",
                             },
                         },
                         {
@@ -1044,17 +1180,9 @@ Do not claim unexecuted work.
 
                 audit = analyze_session_skills(path)
 
-                self.assert_host_native_receipt_rejected(audit)
+                self.assert_front_door_not_required(audit)
 
-    def test_session_audit_rejects_typed_host_fast_path_for_edit_and_commit(self):
-        packet = {
-            "intake_mode": "host_native_semantic_fast_path",
-            "route": "direct",
-            "governed_runtime_executed": False,
-            "runtime_applied_skills": [],
-            "token_optimizer_status": "considered_not_needed",
-            "eligibility_rationale": "Claimed direct handling despite mutation work.",
-        }
+    def test_session_audit_allows_direct_edit_and_commit(self):
         path = self.write_session(
             [
                 {
@@ -1066,12 +1194,11 @@ Do not claim unexecuted work.
                     },
                 },
                 {
-                    "type": "event_msg",
+                    "type": "response_item",
                     "payload": {
-                        "type": "host_native_front_door",
-                        "origin": "host",
-                        "event_id": "host-front-door-edit-1",
-                        "packet": packet,
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Set-Content -Path src/app.py -Value '# updated'; git commit -am update",
                     },
                 },
                 {
@@ -1087,17 +1214,9 @@ Do not claim unexecuted work.
 
         audit = analyze_session_skills(path)
 
-        self.assert_host_native_receipt_rejected(audit)
+        self.assert_front_door_not_required(audit)
 
-    def test_session_audit_rejects_typed_host_fast_path_for_read_request(self):
-        packet = {
-            "intake_mode": "host_native_semantic_fast_path",
-            "route": "direct",
-            "governed_runtime_executed": False,
-            "runtime_applied_skills": [],
-            "token_optimizer_status": "considered_not_needed",
-            "eligibility_rationale": "Claimed direct handling despite required file access.",
-        }
+    def test_session_audit_allows_direct_read_request(self):
         path = self.write_session(
             [
                 {
@@ -1109,12 +1228,11 @@ Do not claim unexecuted work.
                     },
                 },
                 {
-                    "type": "event_msg",
+                    "type": "response_item",
                     "payload": {
-                        "type": "host_front_door",
-                        "origin": "host",
-                        "event_id": "host-front-door-read-1",
-                        "packet": packet,
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-ChildItem -Path src/orchestration",
                     },
                 },
                 {
@@ -1130,7 +1248,7 @@ Do not claim unexecuted work.
 
         audit = analyze_session_skills(path)
 
-        self.assert_host_native_receipt_rejected(audit)
+        self.assert_front_door_not_required(audit)
 
     def test_session_audit_never_counts_assistant_front_door_dict_as_runtime(self):
         packet = {
@@ -1260,15 +1378,7 @@ Do not claim unexecuted work.
             )
         )
 
-    def test_session_audit_rejects_forged_standalone_fast_path_for_destructive_request(self):
-        packet = {
-            "intake_mode": "host_native_semantic_fast_path",
-            "route": "direct",
-            "governed_runtime_executed": False,
-            "runtime_applied_skills": [],
-            "token_optimizer_status": "considered_not_needed",
-            "eligibility_rationale": "Assistant-authored JSON is not host provenance.",
-        }
+    def test_session_audit_routes_destructive_request_to_guard_policy_not_front_door(self):
         path = self.write_session(
             [
                 {
@@ -1277,14 +1387,6 @@ Do not claim unexecuted work.
                         "type": "message",
                         "role": "user",
                         "content": "Please obliterate every production Kubernetes namespace.",
-                    },
-                },
-                {
-                    "type": "response_item",
-                    "payload": {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": json.dumps(packet),
                     },
                 },
                 {
@@ -1300,15 +1402,17 @@ Do not claim unexecuted work.
 
         audit = analyze_session_skills(path)
 
+        self.assert_front_door_not_required(audit)
         self.assertTrue(
             any(
-                issue["skill"] == "always-on-front-door"
-                and issue["status"] == "missing_front_door"
+                issue["skill"] == "guard-policy-harness"
+                and issue["status"] == "absent"
+                and issue["severity"] == "P1"
                 for issue in audit.issues
             )
         )
 
-    def test_skill_trigger_defines_semantic_first_selection(self):
+    def test_skill_trigger_is_explicit_audit_not_ordinary_selection(self):
         repo_root = Path(__file__).resolve().parents[1]
         skill_text = (repo_root / "skills/always_on_front_door/SKILL.md").read_text(
             encoding="utf-8"
@@ -1319,13 +1423,12 @@ Do not claim unexecuted work.
         combined = f"{skill_text}\n{usage_text}".lower()
 
         self.assertNotIn("non-trivial", combined)
-        self.assertIn("scan the available skill descriptions", combined)
-        self.assertIn("read only that skill", combined)
-        self.assertIn("do not run the python router merely", combined)
+        self.assertIn("do not load this skill to perform ordinary", combined)
+        self.assertIn("do not read this skill or run the python router merely", combined)
         for required_contract in [
             "direct answer when the request is self-contained",
             "one matching specialist skill",
-            "deterministic runtime only when",
+            "use the deterministic runtime only when",
             "multiple providers genuinely conflict",
             "high-risk operation",
             "reading a skill proves inspection, not successful execution",
@@ -1336,16 +1439,15 @@ Do not claim unexecuted work.
         self.assertIn("direct answers need neither", combined)
         self.assertIn("reading a skill alone is not execution", combined)
 
-    def test_skill_frontmatter_is_a_direct_universal_trigger(self):
+    def test_skill_frontmatter_is_explicit_only_and_not_universal(self):
         repo_root = Path(__file__).resolve().parents[1]
         skill_path = repo_root / "skills/always_on_front_door/SKILL.md"
         skill_text = skill_path.read_text(encoding="utf-8")
         frontmatter = skill_text.split("---", 2)[1].lower()
 
-        self.assertIn("use when starting any new user request", frontmatter)
-        self.assertIn("smallest matching skill or direct path", frontmatter)
-        self.assertIn("do not run python merely", frontmatter)
-        self.assertNotIn("when plugin instructions request", frontmatter)
+        self.assertIn("use when the user explicitly requests kh routing evidence", frontmatter)
+        self.assertIn("do not invoke for ordinary clear work", frontmatter)
+        self.assertNotIn("starting any new user request", frontmatter)
 
         combined = "\n".join(
             path.read_text(encoding="utf-8").lower()
@@ -1355,8 +1457,8 @@ Do not claim unexecuted work.
                 repo_root / "skills/always_on_front_door/examples/minimal-workflow.md",
             )
         )
-        self.assertIn("automatic discovery still depends on the host", combined)
-        self.assertIn("no manifest or skill can guarantee host invocation", combined)
+        self.assertIn("explicit-only in codex metadata", combined)
+        self.assertIn("must not self-select on every new request", combined)
         self.assertIn("observable path", combined)
 
     def test_always_on_front_door_packages_openai_skill_metadata(self):
@@ -1367,9 +1469,10 @@ Do not claim unexecuted work.
         metadata = metadata_path.read_text(encoding="utf-8")
         self.assertIn('display_name: "KH UAF Front Door"', metadata)
         self.assertIn(
-            'short_description: "Select the smallest matching workflow"',
+            'short_description: "Audit explicit or governed routing"',
             metadata,
         )
+        self.assertIn("allow_implicit_invocation: false", metadata)
 
     def test_minimal_workflow_distinguishes_host_native_from_governed_runtime(self):
         repo_root = Path(__file__).resolve().parents[1]
@@ -1405,7 +1508,7 @@ Do not claim unexecuted work.
         front_door_classifier.assert_called_once()
         composition_classifier.assert_not_called()
 
-    def test_plugin_manifests_match_the_universal_front_door_trigger(self):
+    def test_plugin_manifests_do_not_force_universal_front_door_selection(self):
         repo_root = Path(__file__).resolve().parents[1]
         manifest_paths = [
             repo_root / ".codex-plugin/plugin.json",
@@ -1420,7 +1523,11 @@ Do not claim unexecuted work.
         self.assertNotIn("non-trivial", combined)
         for manifest in manifests:
             with self.subTest(manifest=manifest["name"]):
-                self.assertIn("semantically selected workflow skills", manifest["description"].lower())
+                description = manifest["description"].lower()
+                self.assertIn("ordinary clear requests run directly", description)
+                self.assertIn("load only the matching domain skill", description)
+                self.assertIn("load only on concrete triggers", description)
+                self.assertIn("stay silent unless blocked or requested", description)
         default_prompt = manifests[0]["interface"]["defaultPrompt"]
         self.assertGreaterEqual(len(default_prompt), 2)
         self.assertLessEqual(len(default_prompt), 4)
@@ -1445,7 +1552,7 @@ Do not claim unexecuted work.
         collect_catalog.assert_not_called()
         discover_host_skills.assert_not_called()
         packet = result.to_micro_summary_dict()
-        self.assertEqual(packet["src"]["v"], "2.9.145")
+        self.assertEqual(packet["src"]["v"], "2.9.146")
         self.assertEqual(packet["cls"], {"c": "l", "x": "direct"})
         self.assertNotIn("next", packet)
 
@@ -2065,7 +2172,7 @@ When SQL contains this function, replace it with `LEFT OUTER JOIN BA011T` and se
                     )
                 )
 
-    def test_new_work_bearing_request_after_valid_front_door_requires_new_intake(self):
+    def test_new_ordinary_work_after_valid_front_door_returns_to_direct_path(self):
         front_door_output = {
             "front_door_status": "ok",
             "classification": {"complexity": "heavy"},
@@ -2111,7 +2218,7 @@ When SQL contains this function, replace it with `LEFT OUTER JOIN BA011T` and se
         )
 
         audit = analyze_session_skills(path)
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"

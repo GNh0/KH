@@ -1,14 +1,14 @@
 # Token Optimizer Skill Usage Reference
 
-This reference expands the portable operating contract for `token-optimizer`. Read it when the task is real work, when deciding whether this skill applies, or when a review needs evidence beyond the concise `SKILL.md`.
+This reference expands the portable operating contract for `token-optimizer`. Read it only after the frontmatter trigger matches or when reviewing an actual optimizer run.
 
 ## When to use
 
-Use as a decision gate for every KH-routed turn after `always-on-front-door` has run. Actual compression is still quality-gated: use it only for large or compressible command output, transcripts, logs, or code where required facts can be preserved.
+Use when visible context contains a large reducible command, log, test, retrieval, or subagent payload, when upcoming work is expected to emit such a payload, or when the user explicitly requests token optimization or telemetry.
 
-Context summary: This skill is the UAF context budget gate. It must produce an explicit used, considered_not_needed, passthrough, or blocked decision for each KH-routed turn. It prevents token exhaustion during large development, debugging, review, QA, subagent, command-validation, or code-reading loops.
+Do not select or read it for short ordinary work, routine file inspection, normal MCP/database calls, or contract-sensitive SQL/C# that must pass through unchanged. Silent host judgment that no compressible payload exists does not count as skill selection and requires no status record.
 
-Do not claim compression only because the skill is available. The decision gate is always executed for KH-routed work, but compression is applied only when it preserves required facts. State whether the skill was used, considered_not_needed, passthrough, or blocked.
+Once selected, produce an internal `used`, `considered_not_needed`, `passthrough`, or `blocked` decision. Do not claim compression only because the skill is available, and do not narrate the decision unless requested or blocked.
 
 Quality rule: token savings must never hide source-of-truth details and must never reduce answer quality. Treat `optimize_context_content` as the universal entrypoint for large or uncertain content, but allow it to return passthrough. For SQL, stored procedures, license headers, security comments, business rules, exact contract prose, or ordinary text that cannot be safely classified as compressible output, use passthrough and record why compression was skipped.
 
@@ -42,7 +42,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 
 1. Read `SKILL.md` first and confirm the trigger applies to the current task.
 2. Read this reference before applying `token-optimizer` to real work.
-3. For every KH-routed turn, decide the `token_optimizer_status` before the first broad file read, long-running command, implementation, or subagent dispatch.
+3. After the trigger matches, decide `token_optimizer_status` before the large retrieval, long-running command, or subagent dispatch that created the need.
 4. For broad retrieval, call `build_retrieval_budget_plan(...)` before running the retrieval. Require count/scope first, sample before full read, required fields/selectors, explicit limits, and output-file handling for large results.
 5. Prefer `optimize_context_content` as the default entrypoint. It passes through contract-sensitive text, source code, and general prose, and only invokes known command-family filters for logs with verifiable required facts. Direct `minify_code` remains an explicit caller utility, not automatic compression.
 6. Keep agent/subagent transcripts and general prose as passthrough unless a separate caller contract supplies and verifies every required fact. `summarize_agent_transcript` is explicit utility behavior, not automatic workflow compression.
@@ -70,7 +70,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
    - `by_strategy` for workflow summaries
    The `estimated_payload_*` fields describe optimizer-local measurements. `host_actual_*` fields describe observed Codex/host totals only when a runtime-invoked adapter callable supplies them. Caller strings or dictionaries are `claimed_unverified`. Host totals are never savings. Optimizer-local `actual_*` fields are not emitted.
 11. Report `provider=rtk` only when a runtime-invoked adapter callable returns the compact output and the runtime emits an internal per-item receipt matching the exact canonical input/output hashes. Preserve every accepted item receipt in `provider_receipts`, including hybrid runs. `rtk_available=true` and caller-supplied receipts are never RTK-use evidence. KH's own family filter is `provider=kh`.
-12. Every workflow-level token decision must include one concise status/reason record in external/internal state. Do not mutate each task with no-op telemetry.
+12. Every selected optimizer run must include one concise status/reason record in internal state. Do not mutate ordinary tasks or user answers with no-op telemetry.
 13. If compression would hide an error, omit a requirement, weaken a review finding, or change user-facing meaning, do not compress; use `passthrough` or `blocked`.
 14. Run `python scripts/smoke_check.py` when validating this packaged skill in the repository.
 15. Report the difference between capability available in the repository and behavior actually executed in the current run.
@@ -79,7 +79,7 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 
 - Skill name and execution level used for the run.
 - Concrete input summary and target workspace or artifact paths.
-- `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`.
+- `token_optimizer_status`: `used`, `considered_not_needed`, `passthrough`, or `blocked`, only after this skill was selected.
 - One concise `token_optimizer_status_reason` and `reason_code` for every status.
 - Implementation targets touched, imported, called, resolved by smoke check, or explicitly not needed.
 - Output files, gate results, state records, or role results created by the skill.
@@ -102,5 +102,5 @@ Quality rule: token savings must never hide source-of-truth details and must nev
 
 ## Quality bar
 
-A valid use of `token-optimizer` must leave enough evidence for another agent to answer: why this skill applied, whether it was used or deliberately not used, which exact canonical payload reached the model, where raw recovery lives, whether every required fact survived, whether token counts are estimated or exact-model-tokenizer counts, and what still needs attention.
+A valid use of `token-optimizer` must leave enough internal evidence for another agent to answer: why this skill applied, whether it was used or deliberately not used, which exact canonical payload reached the model, where raw recovery lives, whether every required fact survived, whether token counts are estimated or exact-model-tokenizer counts, and what still needs attention. A valid non-use leaves no skill read or synthetic status behind.
 A valid run should also reduce upstream retrieval volume before output enters context whenever a count/sample/field/limit/output-file plan can preserve quality.

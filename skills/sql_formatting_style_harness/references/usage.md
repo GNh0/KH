@@ -4,7 +4,7 @@ This file defines the runtime procedure for contract version `2.0`. Style rules 
 
 ## When to use
 
-Use this harness after routing selects SQL formatting or a separately requested scalar-function refactor. It verifies the exact original/formatted SQL pair; it does not infer database semantics or replace the selected style contract.
+Use this harness after routing selects SQL generation, modification, cleanup, formatting, or a separately requested scalar-function refactor. It verifies the exact candidate's style and generated-DML restrictions; it does not invent database semantics.
 
 All line-leading indentation is spaces-only. A leading tab fails style verification. For a derived-table join, the closing parenthesis and alias must stay on the same physical line at the outer JOIN indentation; a detached hard-left alias fails verification.
 
@@ -13,10 +13,10 @@ All line-leading indentation is spaces-only. A leading tab fails style verificat
 Capture:
 
 - exact original and formatted SQL;
-- `operation`: `formatting` or `refactor`;
+- `operation`: `formatting`, `generation`, or `refactor`;
 - selected style-contract path and SHA-256;
 - explicit user constraints;
-- a complete alias plan for every non-exempt multi-source formatted scope and every alias-changed single-source scope;
+- a complete bound alias plan for every generated non-exempt multi-source scope and every alias-changed formatting/refactor scope;
 - `scalar_function_refactor` only for a separately requested conversion.
 
 Pass a `Path` or UTF-8 `bytes` when encoding evidence matters. The verifier decodes strictly and records the raw SHA-256. A Python `str` has no source-encoding provenance and is reported as `encoding_unverified`.
@@ -112,7 +112,7 @@ Each changed scope's `basis_references` is a non-empty array. The preferred obje
 
 For compatibility, structured `reviewer_approved_business_role` objects and compact `review://<review-id>/<declared-role-names>-roles` strings remain accepted when they represent real reviewer evidence. Do not create a `review://` URI merely to satisfy the verifier. Metadata reports `basis_modes` and external authentication by mode so a source-bound host rationale cannot be mistaken for externally authenticated review. Table identity, repeated table identity, and source order alone do not qualify as rationale.
 
-The plan cannot use an all-support or multi-source main plan, omit aliases, mix scopes, skip role letters, or start a multi-member non-main family unnumbered. Scope-aware binding covers nested/correlated `SELECT`, `UPDATE ... FROM`, joined `DELETE`, and `MERGE`; shadowed inner references do not belong to an outer rename. If aliases do not change and no numbered main-family declaration is present, the state is `not_needed` and a plan is not normative.
+The plan cannot use an all-support or multi-source main plan, omit aliases, mix scopes, skip role letters, or start a multi-member non-main family unnumbered. Scope-aware binding covers nested/correlated `SELECT`, `UPDATE ... FROM`, joined `DELETE`, and `MERGE`; shadowed inner references do not belong to an outer rename. For formatting/refactor, unchanged canonical aliases produce `not_needed`. Generation still requires a plan for every non-exempt multi-source scope. Any supplied plan is always normative and fully validated.
 
 ### Scalar-Function Refactor
 
@@ -223,7 +223,7 @@ python -m src.skills.sql_formatting_style `
   --operation formatting
 ```
 
-Actual verifier execution is mandatory. Preserve `token_optimizer_status=passthrough`; do not compress SQL or evidence to manufacture token savings.
+Actual verifier execution is mandatory. When token optimization was actually selected, preserve `token_optimizer_status=passthrough`; otherwise omit token-optimizer fields. Do not compress SQL or evidence to manufacture token savings.
 
 ## Evidence to produce
 

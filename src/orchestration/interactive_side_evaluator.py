@@ -486,8 +486,8 @@ def default_skill_side_turns() -> List[SkillSideTurn]:
         _skill_turn(
             "routing-evaluation",
             1,
-            "Build a small HTML todo tool and verify it, without naming any KH internals.",
-            "Use always-on front-door first: run KH front-door routing before source reads, record runtime_applied_skills, and keep follow-up skills in selected_not_executed until they produce evidence.",
+            "Run KH front-door routing for a small HTML todo tool and record deterministic routing evidence before any source reads.",
+            "Because the user explicitly selected front-door routing, run it before source reads, record runtime_applied_skills, and keep follow-up skills in selected_not_executed until they produce evidence.",
             "always-on-front-door",
             ["runtime_applied_skills", "selected_not_executed_skills"],
             "skill_call",

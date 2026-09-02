@@ -33,7 +33,7 @@ Use this harness when a request needs an offline PB-to-C# plan, C#/Designer gene
 - For an explicitly named comparator: exact path/SHA-256, allowed property/behavior scope, comparator-role to target-role map, and stale-identifier rejection inventory.
 - Exact target `.csproj`, dependency declarations, generated-file ownership/inclusion mode, and evaluated inclusion evidence before build.
 
-Mark PB, C#, Designer, and SQL source as `token_optimizer_status=passthrough`.
+Keep PB, C#, Designer, and SQL source exact and uncompressed. Record `token_optimizer_status=passthrough` only when `token-optimizer` was actually selected for the surrounding large payload; otherwise omit token fields.
 
 ## Execution pattern
 

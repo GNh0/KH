@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from src.skills import sql_formatting_style as sql_style
 from src.orchestration.kh_front_door import build_kh_front_door
 from src.skills.sql_formatting_style import (
     _extract_insert_select_statements,
@@ -74,7 +75,13 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.metadata["mechanical_checks"]["status"], "passed")
         self.assertEqual(result.metadata["semantic_checks"]["status"], "not_proven")
-        self.assertEqual(result.metadata["token_optimizer_status"], "passthrough")
+        self.assertNotIn("token_optimizer_status", result.metadata)
+        selected = verify_sql_formatting_style(
+            original,
+            formatted,
+            token_optimizer_selected=True,
+        )
+        self.assertEqual(selected.metadata["token_optimizer_status"], "passthrough")
 
     def test_verifier_blocks_literal_comment_predicate_or_else_changes(self):
         original = (
@@ -166,7 +173,11 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=bind_sql_alias_role_plan(sql, plan),
+        )
 
         self.assertTrue(result.success, result.to_dict())
         self.assertNotIn("join_indentation", _issue_codes(result))
@@ -395,7 +406,11 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
 
         self.assertTrue(result.success, result.to_dict())
         self.assertEqual(result.metadata["mechanical_checks"]["status"], "passed")
@@ -546,7 +561,11 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=bind_sql_alias_role_plan(sql, plan),
+        )
 
         self.assertTrue(result.success, result.to_dict())
 
@@ -752,12 +771,12 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
     def test_verifier_accepts_nested_join_indentation_relative_to_nested_from(self):
         source_block = (
             "        IF EXISTS (\n"
-            "                    SELECT 1\n"
-            "                    FROM DEV000T A\n"
-            "                            INNER JOIN @TMP B\n"
-            "                                    ON A.ID = B.ID\n"
-            "                                    AND A.QCCODE = B.QCCODE\n"
-            "                    --WHERE ISNULL(B.GBN, '') <> 'DEL'\n"
+            "                   SELECT 1\n"
+            "                   FROM DEV000T A\n"
+            "                           INNER JOIN @TMP B\n"
+            "                                   ON A.ID = B.ID\n"
+            "                                   AND A.QCCODE = B.QCCODE\n"
+            "                   --WHERE ISNULL(B.GBN, '') <> 'DEL'\n"
             "                  )\n"
             "        BEGIN\n"
             "            RAISERROR('이미 확인완료된 프로그램입니다.', 16, 1);\n"
@@ -797,7 +816,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             source_block,
             source_block,
-            alias_role_plan=plan,
+            alias_role_plan=bind_sql_alias_role_plan(source_block, plan),
         )
 
         self.assertTrue(result.success, result.to_dict())
@@ -855,6 +874,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
                     "    RETURN;\n"
                     "END\n"
                 )
+                bad_block = normalize_sql_join_layout(bad_block)
 
                 result = verify_sql_formatting_style(bad_block, bad_block)
 
@@ -907,6 +927,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
                     "    RETURN;\n"
                     "END\n"
                 )
+                candidate = normalize_sql_join_layout(candidate)
                 result = verify_sql_formatting_style("", candidate, operation="generation")
                 codes = {
                     issue["code"]
@@ -931,6 +952,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             "    RETURN;\n"
             "END\n"
         )
+        guard_block = normalize_sql_join_layout(guard_block)
 
         result = verify_sql_formatting_style(guard_block, guard_block)
         codes = {
@@ -959,6 +981,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
             "    RETURN;\n"
             "END\n"
         )
+        guard_block = normalize_sql_join_layout(guard_block)
 
         result = verify_sql_formatting_style(guard_block, guard_block)
         codes = {
@@ -967,6 +990,92 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         }
 
         self.assertNotIn("if_exists_where_subquery", codes)
+
+    def test_exists_layout_ignores_ordinary_in_and_scalar_subqueries(self):
+        candidate = (
+            "SELECT A.ID\n"
+            "FROM HEADER_TABLE A\n"
+            "WHERE A.ID IN (\n"
+            "                   SELECT B.ID\n"
+            "                   FROM DETAIL_TABLE B\n"
+            "                  )\n"
+            "  AND A.VALUE = (\n"
+            "                   SELECT MAX(C.VALUE)\n"
+            "                   FROM VALUE_TABLE C\n"
+            "                  );\n"
+        )
+
+        result = verify_sql_formatting_style(candidate, candidate)
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertFalse(
+            any(code.startswith("if_exists_") for code in _issue_codes(result))
+        )
+
+    def test_exists_layout_validates_parenthesized_and_nested_predicates_independently(self):
+        candidate = normalize_sql_join_layout(
+            "SELECT A.ID\n"
+            "FROM HEADER_TABLE A\n"
+            "WHERE (EXISTS (\n"
+            "               SELECT 1\n"
+            "               FROM DETAIL_TABLE B\n"
+            "               WHERE B.ID = A.ID\n"
+            "                 AND NOT EXISTS (\n"
+            "                                 SELECT 1\n"
+            "                                 FROM BLOCK_TABLE C\n"
+            "                                 WHERE C.ID = B.ID\n"
+            "                                )\n"
+            "              ));\n"
+        )
+
+        result = verify_sql_formatting_style(candidate, candidate)
+
+        self.assertTrue(result.success, result.to_dict())
+        broken = candidate.replace("FROM BLOCK_TABLE C", " FROM BLOCK_TABLE C")
+        broken_result = verify_sql_formatting_style(broken, broken)
+        self.assertIn(
+            "if_exists_inner_clause_alignment_invalid",
+            _issue_codes(broken_result),
+        )
+
+    def test_exists_layout_binds_if_where_having_and_on_predicate_contexts(self):
+        candidates = {
+            "if": "IF EXISTS (\nSELECT 1\nFROM T A\n) RETURN;\n",
+            "where": (
+                "SELECT A.ID\n"
+                "FROM T A\n"
+                "WHERE EXISTS (\n"
+                "SELECT 1\n"
+                "FROM U B\n"
+                ");\n"
+            ),
+            "having": (
+                "SELECT A.ID\n"
+                "FROM T A\n"
+                "GROUP BY A.ID\n"
+                "HAVING EXISTS (\n"
+                "SELECT 1\n"
+                "FROM U B\n"
+                ");\n"
+            ),
+            "on": (
+                "SELECT A.ID\n"
+                "FROM T A\n"
+                "        INNER JOIN U B\n"
+                "                ON EXISTS (\n"
+                "SELECT 1\n"
+                "FROM V C\n"
+                ");\n"
+            ),
+        }
+
+        for label, candidate in candidates.items():
+            with self.subTest(label=label):
+                result = verify_sql_formatting_style(candidate, candidate)
+                self.assertIn(
+                    "if_exists_inner_start_alignment_invalid",
+                    _issue_codes(result),
+                )
 
     def test_verifier_allows_grouped_insert_with_wrapped_long_expression(self):
         grouped = (
@@ -1705,7 +1814,8 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
 
         self.assertIn("sql-formatting-style-harness", names)
         content = read_packaged_skill("sql-formatting-style-harness")
-        self.assertIn("host-local `sql-formatting`", content)
+        self.assertIn("ordinary direct-packaged `sql-formatting`", content)
+        self.assertIn("already-authenticated host-local selection", content)
         self.assertIn("verify_sql_formatting_style", content)
         description = next(line for line in content.splitlines() if line.startswith("description:"))
         self.assertTrue(description.startswith("description: Use when"))
@@ -1738,6 +1848,7 @@ class SqlFormattingStyleHarnessTests(unittest.TestCase):
         fragments = extract_powerbuilder_sql_fragments(
             _fixture("powerbuilder_sample.sru"),
             source_name="powerbuilder_sample.sru",
+            token_optimizer_selected=True,
         )
 
         self.assertEqual([fragment["keyword"] for fragment in fragments], ["UPDATE", "SELECT"])
@@ -2090,7 +2201,11 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
                 }
             ]
         }
-        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
 
         self.assertTrue(result.success, result.to_dict())
         self.assertEqual(result.metadata["mechanical_equivalence"]["status"], "verified")
@@ -2170,14 +2285,15 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
                 self.assertFalse(result.metadata["formatter_output_integrity"]["formatter_caused"])
                 self.assertIn(expected_code, _issue_codes(result))
 
-    def test_alias_roles_need_explicit_evidence_and_do_not_group_repeated_tables(self):
-        result = verify_sql_formatting_style(self.CODE_LOOKUPS_EF, self.CODE_LOOKUPS_EF)
+    def test_alias_changes_need_explicit_role_evidence_for_repeated_tables(self):
+        result = verify_sql_formatting_style(self.CODE_LOOKUPS_EF, self.CODE_LOOKUPS_E12)
 
         self.assertFalse(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_verification"]["status"], "required")
+        self.assertEqual(result.metadata["alias_role_verification"]["status"], "conflict")
         self.assertIn("alias_role_plan_required", _issue_codes(result))
+        self.assertIn("alias_support_family_sequence_invalid", _issue_codes(result))
 
-    def test_alias_role_plan_is_required_when_multi_source_aliases_are_unchanged(self):
+    def test_alias_role_plan_is_not_required_when_multi_source_aliases_are_unchanged(self):
         sql = (
             "SELECT A.ORDNUM\n"
             "     , B.ORDSEQ\n"
@@ -2189,47 +2305,14 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
             "        LEFT OUTER JOIN BA020T C\n"
             "                     ON A.CUSTCD = C.CUSTCD;\n"
         )
-        plan = {
-            "scopes": [
-                {
-                    "scope_id": "scope_1",
-                    "basis_references": _approved_role_basis(
-                        "review://SQL-GENERIC/order-detail-customer-roles",
-                        "main",
-                        "order_detail",
-                        "customer",
-                    ),
-                    "roles": [
-                        {
-                            "name": "main",
-                            "kind": "main",
-                            "members": [
-                                {"source": "SA100T", "original_alias": "A", "alias": "A"}
-                            ],
-                        },
-                        {
-                            "name": "order_detail",
-                            "kind": "support",
-                            "members": [
-                                {"source": "SA110T", "original_alias": "B", "alias": "B"}
-                            ],
-                        },
-                        {
-                            "name": "customer",
-                            "kind": "support",
-                            "members": [
-                                {"source": "BA020T", "original_alias": "C", "alias": "C"}
-                            ],
-                        },
-                    ],
-                }
-            ]
-        }
-
-        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
+        result = verify_sql_formatting_style(sql, sql)
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_verification"]["status"], "verified")
+        self.assertEqual(result.metadata["alias_role_verification"]["status"], "not_needed")
+        self.assertEqual(
+            result.metadata["alias_role_plan_validation"]["source_binding"]["status"],
+            "not_required",
+        )
 
     def test_alias_role_plan_rejects_noncanonical_unchanged_support_aliases(self):
         result = verify_sql_formatting_style(
@@ -2238,7 +2321,9 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
         )
 
         self.assertFalse(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_verification"]["status"], "required")
+        self.assertEqual(result.metadata["alias_role_verification"]["status"], "conflict")
+        self.assertIn("alias_support_family_sequence_invalid", _issue_codes(result))
+        self.assertNotIn("alias_role_plan_required", _issue_codes(result))
 
     def test_alias_role_plan_is_normative_without_an_alias_change_in_multi_source_scope(self):
         sql = (
@@ -2277,10 +2362,18 @@ class SqlFormattingStructuralGateTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            sql,
+            sql,
+            alias_role_plan=bind_sql_alias_role_plan(sql, plan),
+        )
 
         self.assertTrue(result.success, result.to_dict())
         self.assertEqual(result.metadata["alias_role_verification"]["status"], "verified")
+        self.assertEqual(
+            result.metadata["alias_role_plan_validation"]["source_binding"]["status"],
+            "verified",
+        )
 
     def test_scalar_refactor_without_evidence_is_blocked(self):
         result = verify_sql_formatting_style(
@@ -2570,6 +2663,27 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             ]
         }
 
+    def _bound_complete_alias_plan(self, sql: str):
+        return bind_sql_alias_role_plan(sql, self._complete_alias_plan())
+
+    def _bound_blind_role_plan(
+        self,
+        sql: str,
+        *,
+        main_line_family: bool = False,
+        status_alias: str = "C",
+    ):
+        return bind_sql_alias_role_plan(
+            sql,
+            self._blind_role_plan(
+                main_line_family=main_line_family,
+                status_alias=status_alias,
+            ),
+        )
+
+    def _bound_lookup_refactor_alias_plan(self, sql: str):
+        return bind_sql_alias_role_plan(sql, self._lookup_refactor_alias_plan())
+
     @staticmethod
     def _complete_refactor_evidence(original: str, formatted: str, *, correlated: bool):
         original_hash = hashlib.sha256(original.encode("utf-8")).hexdigest()
@@ -2788,12 +2902,23 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             self.ALIAS_ORIGINAL,
             self.ALIAS_FORMATTED,
-            alias_role_plan=self._complete_alias_plan(),
+            alias_role_plan=self._bound_complete_alias_plan(self.ALIAS_ORIGINAL),
         )
 
         self.assertTrue(result.success, result.to_dict())
         self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
         self.assertEqual(result.metadata["formatting_preservation"]["status"], "verified")
+
+    def test_verifier_rejects_unbound_legacy_alias_plan(self):
+        result = verify_sql_formatting_style(
+            self.ALIAS_ORIGINAL,
+            self.ALIAS_FORMATTED,
+            alias_role_plan=self._complete_alias_plan(),
+        )
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("alias_plan_source_sql_sha256_missing", _issue_codes(result))
+        self.assertIn("alias_plan_scope_fingerprint_missing", _issue_codes(result))
 
     def test_nested_derived_alias_plan_canonicalizes_child_scope_references(self):
         original = (
@@ -2986,7 +3111,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(original, captured, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            original,
+            captured,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
 
         self.assertFalse(result.success, result.to_dict())
         self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
@@ -3029,7 +3158,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
 
         self.assertTrue(result.success, result.to_dict())
 
@@ -3170,7 +3303,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         }
         for label, (original, formatted) in cases.items():
             with self.subTest(label=label):
-                result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+                result = verify_sql_formatting_style(
+                    original,
+                    formatted,
+                    alias_role_plan=bind_sql_alias_role_plan(original, plan),
+                )
                 self.assertTrue(result.success, result.to_dict())
                 self.assertEqual(
                     result.metadata["alias_role_plan_validation"]["status"],
@@ -3260,7 +3397,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         }
         for label, (original, formatted) in cases.items():
             with self.subTest(label=label):
-                result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+                result = verify_sql_formatting_style(
+                    original,
+                    formatted,
+                    alias_role_plan=bind_sql_alias_role_plan(original, plan),
+                )
                 self.assertTrue(result.success, result.to_dict())
                 self.assertEqual(
                     result.metadata["alias_role_plan_validation"]["status"],
@@ -3319,7 +3460,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
 
         self.assertFalse(result.success, result.to_dict())
         self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
@@ -3349,7 +3494,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
 
         self.assertFalse(result.success, result.to_dict())
         self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
@@ -3396,7 +3545,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
 
         self.assertTrue(result.success, result.to_dict())
         self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
@@ -3410,6 +3563,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         fragments = extract_powerbuilder_sql_fragments(source, source_name="w_merge.srw")
 
         self.assertEqual(len(fragments), 1)
+        self.assertNotIn("token_optimizer_status", fragments[0])
         self.assertEqual(fragments[0]["keyword"], "MERGE")
         self.assertIn("MERGE TARGET_T", fragments[0]["sql_text"])
 
@@ -3419,7 +3573,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             self.ALIAS_ORIGINAL,
             formatted,
-            alias_role_plan=self._complete_alias_plan(),
+            alias_role_plan=self._bound_complete_alias_plan(self.ALIAS_ORIGINAL),
         )
 
         self.assertFalse(result.success, result.to_dict())
@@ -3487,7 +3641,10 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             self.BLIND_ROLE_ORIGINAL,
             self.BLIND_ROLE_WRONG,
-            alias_role_plan=self._blind_role_plan(main_line_family=True),
+            alias_role_plan=self._bound_blind_role_plan(
+                self.BLIND_ROLE_ORIGINAL,
+                main_line_family=True,
+            ),
         )
 
         self.assertFalse(result.success, result.to_dict())
@@ -3499,7 +3656,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             self.BLIND_ROLE_ORIGINAL,
             self.BLIND_ROLE_REQUIRED,
-            alias_role_plan=self._blind_role_plan(),
+            alias_role_plan=self._bound_blind_role_plan(self.BLIND_ROLE_ORIGINAL),
         )
 
         self.assertTrue(result.success, result.to_dict())
@@ -3515,7 +3672,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         accepted = verify_sql_formatting_style(
             self.BLIND_ROLE_ORIGINAL,
             self.BLIND_ROLE_REQUIRED,
-            alias_role_plan=self._blind_role_plan(),
+            alias_role_plan=self._bound_blind_role_plan(self.BLIND_ROLE_ORIGINAL),
         )
         skipped_output = self.BLIND_ROLE_REQUIRED.replace("C.STATUS_NAME", "D.STATUS_NAME").replace(
             "STATUS_CODE C", "STATUS_CODE D"
@@ -3523,7 +3680,10 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
         skipped = verify_sql_formatting_style(
             self.BLIND_ROLE_ORIGINAL,
             skipped_output,
-            alias_role_plan=self._blind_role_plan(status_alias="D"),
+            alias_role_plan=self._bound_blind_role_plan(
+                self.BLIND_ROLE_ORIGINAL,
+                status_alias="D",
+            ),
         )
 
         self.assertTrue(accepted.success, accepted.to_dict())
@@ -3806,7 +3966,11 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(original, formatted, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            original,
+            formatted,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
 
         self.assertFalse(result.success, result.to_dict())
         self.assertIn("alias_cross_scope_mixing", _issue_codes(result))
@@ -3866,7 +4030,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
                 )
                 self.assertIn("alias_main_family_numbered_invalid", _issue_codes(result))
 
-    def test_unchanged_numbered_non_main_family_aliases_require_sibling_plan(self):
+    def test_unchanged_numbered_non_main_family_aliases_need_no_plan(self):
         sql = (
             "SELECT A.ID\n"
             "     , B1.VALUE AS PRIMARY_VALUE\n"
@@ -3878,40 +4042,10 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             "                     ON A.ID = B2.ID;\n"
         )
 
-        plan = {
-            "scopes": [
-                {
-                    "scope_id": "scope_1",
-                    "basis_references": _approved_role_basis(
-                        "review://SQL-GENERIC/header-and-detail-sibling-roles",
-                        "header",
-                        "detail",
-                    ),
-                    "roles": [
-                        {
-                            "name": "header",
-                            "kind": "main",
-                            "members": [
-                                {"source": "HEADER_TABLE", "original_alias": "A", "alias": "A"}
-                            ],
-                        },
-                        {
-                            "name": "detail",
-                            "kind": "support",
-                            "members": [
-                                {"source": "DETAIL_TABLE", "original_alias": "B1", "alias": "B1"},
-                                {"source": "DETAIL_TABLE", "original_alias": "B2", "alias": "B2"},
-                            ],
-                        },
-                    ],
-                }
-            ]
-        }
-
-        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
+        result = verify_sql_formatting_style(sql, sql)
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "verified")
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "not_needed")
         self.assertNotIn("alias_main_family_numbered_invalid", _issue_codes(result))
 
     def test_physical_table_named_a1_is_not_misclassified_as_an_alias(self):
@@ -4075,7 +4209,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
-            alias_role_plan=self._lookup_refactor_alias_plan(),
+            alias_role_plan=self._bound_lookup_refactor_alias_plan(original),
             scalar_function_refactor=self._complete_refactor_evidence(
                 original,
                 formatted,
@@ -4086,7 +4220,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
-            alias_role_plan=self._lookup_refactor_alias_plan(),
+            alias_role_plan=self._bound_lookup_refactor_alias_plan(original),
             scalar_function_refactor=self._complete_refactor_evidence(
                 original,
                 formatted,
@@ -4097,7 +4231,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             unqualified_formatted,
             operation="refactor",
-            alias_role_plan=self._lookup_refactor_alias_plan(),
+            alias_role_plan=self._bound_lookup_refactor_alias_plan(original),
             scalar_function_refactor=self._complete_refactor_evidence(
                 original,
                 unqualified_formatted,
@@ -4114,7 +4248,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
-            alias_role_plan=self._lookup_refactor_alias_plan(),
+            alias_role_plan=self._bound_lookup_refactor_alias_plan(original),
             scalar_function_refactor=definition_mismatch_evidence,
         )
 
@@ -4164,7 +4298,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
-            alias_role_plan=self._lookup_refactor_alias_plan(),
+            alias_role_plan=self._bound_lookup_refactor_alias_plan(original),
             scalar_function_refactor=evidence,
             runtime_receipt_authenticator=authenticate,
         )
@@ -4191,7 +4325,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
-            alias_role_plan=self._lookup_refactor_alias_plan(),
+            alias_role_plan=self._bound_lookup_refactor_alias_plan(original),
             scalar_function_refactor=evidence,
         )
 
@@ -4205,7 +4339,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
-            alias_role_plan=self._lookup_refactor_alias_plan(),
+            alias_role_plan=self._bound_lookup_refactor_alias_plan(original),
             scalar_function_refactor=tampered,
             runtime_receipt_authenticator=authenticate,
         )
@@ -4215,7 +4349,7 @@ class SqlFormattingRedesignAdversarialTests(unittest.TestCase):
             original,
             formatted,
             operation="refactor",
-            alias_role_plan=self._lookup_refactor_alias_plan(),
+            alias_role_plan=self._bound_lookup_refactor_alias_plan(original),
             scalar_function_refactor=missing_definition,
             runtime_receipt_authenticator=authenticate,
         )
@@ -4703,6 +4837,79 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
             ]
         }
 
+    def _bound_role_plan(self, sql: str, *, numbered_support: bool = False):
+        return bind_sql_alias_role_plan(
+            sql,
+            self._role_plan(numbered_support=numbered_support),
+        )
+
+    def _bound_derived_role_plan(
+        self,
+        sql: str,
+        *,
+        original_main_alias: str = "H",
+        original_summary_alias: str = "S",
+    ):
+        return bind_sql_alias_role_plan(
+            sql,
+            self._derived_role_plan(
+                original_main_alias=original_main_alias,
+                original_summary_alias=original_summary_alias,
+            ),
+        )
+
+    def test_formatting_preserves_bare_directional_join_without_optional_token_drift(self):
+        sql = normalize_sql_join_layout(
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "LEFT JOIN DETAIL_PRIMARY B\n"
+            "ON A.ID = B.ID;\n"
+        )
+
+        unchanged = verify_sql_formatting_style(sql, sql)
+        outer_added = verify_sql_formatting_style(
+            sql,
+            normalize_sql_join_layout(sql.replace("LEFT JOIN", "LEFT OUTER JOIN")),
+        )
+
+        self.assertTrue(unchanged.success, unchanged.to_dict())
+        self.assertNotIn("outer_join_keyword_required", _issue_codes(unchanged))
+        self.assertFalse(outer_added.success, outer_added.to_dict())
+        self.assertIn("token_stream_changed", _issue_codes(outer_added))
+
+    def test_generation_multi_source_requires_bound_role_plan_even_when_aliases_are_canonical(self):
+        sql = normalize_sql_join_layout(
+            "SELECT A.ID\n"
+            "     , B1.VALUE AS PRIMARY_VALUE\n"
+            "     , B2.VALUE AS SECONDARY_VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "LEFT OUTER JOIN DETAIL_PRIMARY B1\n"
+            "ON A.ID = B1.ID\n"
+            "LEFT OUTER JOIN DETAIL_SECONDARY B2\n"
+            "ON A.ID = B2.ID;\n"
+        )
+
+        missing_plan = verify_sql_formatting_style("", sql, operation="generation")
+        approved = verify_sql_formatting_style(
+            "",
+            sql,
+            operation="generation",
+            alias_role_plan=self._bound_role_plan(sql, numbered_support=True),
+        )
+
+        self.assertFalse(missing_plan.success, missing_plan.to_dict())
+        self.assertIn("alias_role_plan_required", _issue_codes(missing_plan))
+        self.assertEqual(
+            "required",
+            missing_plan.metadata["alias_role_plan_validation"]["status"],
+        )
+        self.assertTrue(approved.success, approved.to_dict())
+        self.assertEqual(
+            "verified",
+            approved.metadata["alias_role_plan_validation"]["status"],
+        )
+
     def test_unaliased_multi_source_scope_blocks_instead_of_passing_without_role_evidence(self):
         sql = (
             "SELECT HEADER_TABLE.ID\n"
@@ -4716,9 +4923,9 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
 
         self.assertFalse(result.success, result.to_dict())
         self.assertIn("alias_missing_in_multi_source_scope", _issue_codes(result))
-        self.assertIn("alias_role_plan_required", _issue_codes(result))
+        self.assertNotIn("alias_role_plan_required", _issue_codes(result))
 
-    def test_canonical_multi_source_aliases_still_require_complete_role_plan(self):
+    def test_canonical_unchanged_multi_source_aliases_pass_without_role_plan(self):
         sql = (
             "SELECT A.ID\n"
             "     , B.VALUE\n"
@@ -4729,9 +4936,9 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
 
         result = verify_sql_formatting_style(sql, sql)
 
-        self.assertFalse(result.success, result.to_dict())
-        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "required")
-        self.assertIn("alias_role_plan_required", _issue_codes(result))
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(result.metadata["alias_role_plan_validation"]["status"], "not_needed")
+        self.assertNotIn("alias_role_plan_required", _issue_codes(result))
 
     def test_multi_source_main_alias_must_be_a_even_when_aliases_are_unchanged(self):
         sql = (
@@ -4747,7 +4954,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         self.assertFalse(result.success, result.to_dict())
         self.assertIn("alias_main_role_invalid", _issue_codes(result))
 
-    def test_comma_separated_from_sources_require_aliases_and_a_complete_role_plan(self):
+    def test_comma_separated_from_sources_require_structural_canonical_aliases(self):
         unaliased = (
             "SELECT HEADER_TABLE.ID\n"
             "     , DETAIL_PRIMARY.VALUE\n"
@@ -4762,15 +4969,20 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         )
 
         unaliased_result = verify_sql_formatting_style(unaliased, unaliased)
-        missing_plan = verify_sql_formatting_style(canonical, canonical)
+        plan_free = verify_sql_formatting_style(canonical, canonical)
         approved = verify_sql_formatting_style(
             canonical,
             canonical,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(canonical),
         )
 
         self.assertIn("alias_missing_in_multi_source_scope", _issue_codes(unaliased_result))
-        self.assertIn("alias_role_plan_required", _issue_codes(missing_plan))
+        self.assertNotIn("alias_role_plan_required", _issue_codes(unaliased_result))
+        self.assertTrue(plan_free.success, plan_free.to_dict())
+        self.assertEqual(
+            plan_free.metadata["alias_role_plan_validation"]["status"],
+            "not_needed",
+        )
         self.assertTrue(approved.success, approved.to_dict())
         self.assertEqual(
             approved.metadata["alias_role_plan_validation"]["semantic_authentication"],
@@ -4812,7 +5024,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         self.assertNotIn("A/A1", messages[0])
         self.assertIn("A for the sole main source", messages[0])
 
-    def test_numbered_support_aliases_require_and_accept_declared_sibling_membership(self):
+    def test_numbered_support_aliases_pass_plan_free_and_validate_supplied_plan(self):
         sql = (
             "SELECT A.ID\n"
             "     , B1.VALUE AS PRIMARY_VALUE\n"
@@ -4824,15 +5036,18 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
             "                     ON A.ID = B2.ID;\n"
         )
 
-        missing_plan = verify_sql_formatting_style(sql, sql)
+        plan_free = verify_sql_formatting_style(sql, sql)
         approved = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(numbered_support=True),
+            alias_role_plan=self._bound_role_plan(sql, numbered_support=True),
         )
 
-        self.assertFalse(missing_plan.success, missing_plan.to_dict())
-        self.assertIn("alias_role_plan_required", _issue_codes(missing_plan))
+        self.assertTrue(plan_free.success, plan_free.to_dict())
+        self.assertEqual(
+            plan_free.metadata["alias_role_plan_validation"]["status"],
+            "not_needed",
+        )
         self.assertTrue(approved.success, approved.to_dict())
         self.assertEqual(
             approved.metadata["alias_role_plan_validation"]["status"],
@@ -4855,7 +5070,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertTrue(result.success, result.to_dict())
@@ -4880,7 +5095,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertFalse(result.success, result.to_dict())
@@ -4912,12 +5127,12 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         wrong_on = verify_sql_formatting_style(
             correct_join_wrong_on,
             correct_join_wrong_on,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(correct_join_wrong_on),
         )
         wrong_and = verify_sql_formatting_style(
             correct_on_wrong_and,
             correct_on_wrong_and,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(correct_on_wrong_and),
         )
 
         self.assertIn("join_predicate_alignment_invalid", _issue_codes(wrong_on))
@@ -4940,13 +5155,13 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         invalid = verify_sql_formatting_style(
             malformed,
             malformed,
-            alias_role_plan=self._role_plan(numbered_support=True),
+            alias_role_plan=self._bound_role_plan(malformed, numbered_support=True),
         )
         normalized = normalize_sql_join_layout(malformed)
         repaired = verify_sql_formatting_style(
             normalized,
             normalized,
-            alias_role_plan=self._role_plan(numbered_support=True),
+            alias_role_plan=self._bound_role_plan(normalized, numbered_support=True),
         )
         lines = normalized.splitlines()
 
@@ -4974,13 +5189,13 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         invalid = verify_sql_formatting_style(
             malformed,
             malformed,
-            alias_role_plan=self._role_plan(numbered_support=True),
+            alias_role_plan=self._bound_role_plan(malformed, numbered_support=True),
         )
         normalized = normalize_sql_join_layout(malformed)
         repaired = verify_sql_formatting_style(
             malformed,
             normalized,
-            alias_role_plan=self._role_plan(numbered_support=True),
+            alias_role_plan=self._bound_role_plan(malformed, numbered_support=True),
         )
         lines = normalized.splitlines()
 
@@ -5046,6 +5261,40 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
             "join_predicate_alignment_invalid",
             _issue_codes(verified),
         )
+
+    def test_join_normalizer_uses_one_exists_pass_per_idempotent_nested_run(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "  LEFT OUTER JOIN DETAIL_PRIMARY B\n"
+            "       ON EXISTS (\n"
+            "SELECT 1\n"
+            "FROM MATCH_TABLE C\n"
+            "WHERE C.ID = B.ID\n"
+            "AND NOT EXISTS (\n"
+            "SELECT 1\n"
+            "FROM BLOCK_TABLE D\n"
+            "WHERE D.ID = C.ID\n"
+            ")\n"
+            ");\n"
+        )
+
+        with patch.object(
+            sql_style,
+            "_normalize_if_exists_layout",
+            wraps=sql_style._normalize_if_exists_layout,
+        ) as exists_pass:
+            normalized = normalize_sql_join_layout(sql)
+            repeated = normalize_sql_join_layout(normalized)
+
+        result = verify_sql_formatting_style(sql, normalized)
+
+        self.assertEqual(exists_pass.call_count, 2)
+        self.assertEqual(repeated, normalized)
+        self.assertTrue(result.success, result.to_dict())
+        self.assertNotIn("if_exists_layout_invalid", _issue_codes(result))
+        self.assertNotIn("join_predicate_alignment_invalid", _issue_codes(result))
 
     def test_join_on_expression_cannot_start_with_cross_or_outer_apply(self):
         for apply_clause in ("CROSS APPLY", "OUTER APPLY"):
@@ -5117,13 +5366,14 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
 
     def test_tsql_join_hints_are_part_of_the_line_leading_join_clause(self):
         cases = {
-            "loop": ("INNER LOOP JOIN", 21),
-            "hash": ("LEFT HASH JOIN", 20),
-            "merge": ("FULL MERGE JOIN", 21),
-            "remote": ("REMOTE JOIN", 17),
+            "loop": "INNER LOOP JOIN",
+            "hash": "LEFT OUTER HASH JOIN",
+            "merge": "FULL OUTER MERGE JOIN",
+            "remote": "REMOTE JOIN",
         }
-        for label, (clause, on_column) in cases.items():
+        for label, clause in cases.items():
             with self.subTest(label=label):
+                on_column = 8 + clause.index("JOIN") + 2
                 sql = (
                     "SELECT A.ID\n"
                     "     , B.VALUE\n"
@@ -5134,7 +5384,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
                 result = verify_sql_formatting_style(
                     sql,
                     sql,
-                    alias_role_plan=self._role_plan(),
+                    alias_role_plan=self._bound_role_plan(sql),
                 )
 
                 self.assertTrue(result.success, result.to_dict())
@@ -5155,7 +5405,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertTrue(result.success, result.to_dict())
@@ -5176,7 +5426,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertFalse(result.success, result.to_dict())
@@ -5195,13 +5445,13 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         invalid = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
         normalized = normalize_sql_join_layout(sql)
         repaired = verify_sql_formatting_style(
             normalized,
             normalized,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(normalized),
         )
 
         self.assertIn("join_predicate_alignment_invalid", _issue_codes(invalid))
@@ -5231,13 +5481,13 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
         normalized = normalize_sql_join_layout(sql)
         repaired = verify_sql_formatting_style(
             normalized,
             normalized,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(normalized),
         )
 
         self.assertFalse(result.success, result.to_dict())
@@ -5265,7 +5515,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertTrue(result.success, result.to_dict())
@@ -5287,7 +5537,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertTrue(result.success, result.to_dict())
@@ -5312,7 +5562,8 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._derived_role_plan(
+            alias_role_plan=self._bound_derived_role_plan(
+                sql,
                 original_main_alias="A",
                 original_summary_alias="B",
             ),
@@ -5331,7 +5582,8 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         changed_result = verify_sql_formatting_style(
             sql,
             changed,
-            alias_role_plan=self._derived_role_plan(
+            alias_role_plan=self._bound_derived_role_plan(
+                sql,
                 original_main_alias="A",
                 original_summary_alias="B",
             ),
@@ -5368,7 +5620,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             original,
             candidate,
-            alias_role_plan=self._derived_role_plan(),
+            alias_role_plan=self._bound_derived_role_plan(original),
         )
 
         self.assertTrue(result.success, result.to_dict())
@@ -5393,7 +5645,8 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             original,
             candidate,
-            alias_role_plan=self._derived_role_plan(
+            alias_role_plan=self._bound_derived_role_plan(
+                original,
                 original_main_alias="A",
                 original_summary_alias="B",
             ),
@@ -5422,7 +5675,8 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._derived_role_plan(
+            alias_role_plan=self._bound_derived_role_plan(
+                sql,
                 original_main_alias="A",
                 original_summary_alias="B",
             ),
@@ -5448,7 +5702,8 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._derived_role_plan(
+            alias_role_plan=self._bound_derived_role_plan(
+                sql,
                 original_main_alias="A",
                 original_summary_alias="B",
             ),
@@ -5471,7 +5726,8 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._derived_role_plan(
+            alias_role_plan=self._bound_derived_role_plan(
+                sql,
                 original_main_alias="A",
                 original_summary_alias="B",
             ),
@@ -5498,7 +5754,8 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._derived_role_plan(
+            alias_role_plan=self._bound_derived_role_plan(
+                sql,
                 original_main_alias="A",
                 original_summary_alias="B",
             ),
@@ -5524,7 +5781,8 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._derived_role_plan(
+            alias_role_plan=self._bound_derived_role_plan(
+                sql,
                 original_main_alias="A",
                 original_summary_alias="B",
             ),
@@ -5555,7 +5813,11 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         plan["scopes"][0]["roles"][0]["members"][0]["original_alias"] = "H"
         plan["scopes"][0]["roles"][1]["members"][0]["original_alias"] = "D"
 
-        result = verify_sql_formatting_style(original, candidate, alias_role_plan=plan)
+        result = verify_sql_formatting_style(
+            original,
+            candidate,
+            alias_role_plan=bind_sql_alias_role_plan(original, plan),
+        )
 
         self.assertFalse(result.success, result.to_dict())
         self.assertEqual(result.metadata["formatting_preservation"]["status"], "verified")
@@ -5590,14 +5852,14 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             original,
             normalized,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(original),
         )
 
         self.assertEqual(normalized, expected)
         self.assertEqual(normalize_sql_join_layout(normalized), normalized)
         self.assertTrue(result.success, result.to_dict())
 
-    def test_alias_plan_applier_renames_declarations_and_bound_references(self):
+    def test_changed_scope_with_correctly_bound_plan_succeeds(self):
         original = (
             "SELECT H.ID\n"
             "     , P.VALUE AS PRIMARY_VALUE\n"
@@ -5639,6 +5901,31 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         self.assertEqual(
             result.metadata["alias_role_plan_validation"]["source_binding"]["status"],
             "verified",
+        )
+
+    def test_alias_change_without_plan_is_blocked(self):
+        original = (
+            "SELECT H.ID\n"
+            "     , D.VALUE\n"
+            "FROM HEADER_TABLE H\n"
+            "        INNER JOIN DETAIL_PRIMARY D\n"
+            "                ON H.ID = D.ID;\n"
+        )
+        candidate = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        INNER JOIN DETAIL_PRIMARY B\n"
+            "                ON A.ID = B.ID;\n"
+        )
+
+        result = verify_sql_formatting_style(original, candidate)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("alias_role_plan_required", _issue_codes(result))
+        self.assertEqual(
+            result.metadata["alias_role_plan_validation"]["source_binding"]["status"],
+            "not_provided",
         )
 
     def test_alias_plan_applier_rejects_inserted_preceding_select_as_stale(self):
@@ -5748,6 +6035,26 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "declaration fingerprint does not match"):
             apply_sql_alias_role_plan(original, bound_plan)
 
+    def test_supplied_tampered_scope_fingerprint_is_blocked_without_alias_changes(self):
+        sql = (
+            "SELECT A.ID\n"
+            "     , B.VALUE\n"
+            "FROM HEADER_TABLE A\n"
+            "        INNER JOIN DETAIL_PRIMARY B\n"
+            "                ON A.ID = B.ID;\n"
+        )
+        bound_plan = self._bound_role_plan(sql)
+        bound_plan["scopes"][0]["scope_declaration_fingerprint"] = "0" * 64
+
+        result = verify_sql_formatting_style(sql, sql, alias_role_plan=bound_plan)
+
+        self.assertFalse(result.success, result.to_dict())
+        self.assertIn("alias_plan_scope_fingerprint_mismatch", _issue_codes(result))
+        self.assertEqual(
+            result.metadata["alias_role_plan_validation"]["source_binding"]["status"],
+            "conflict",
+        )
+
     def test_alias_role_families_must_follow_first_sql_appearance(self):
         sql = (
             "SELECT A.ID\n"
@@ -5796,7 +6103,8 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
             ]
         }
 
-        result = verify_sql_formatting_style(sql, sql, alias_role_plan=plan)
+        bound_plan = bind_sql_alias_role_plan(sql, plan)
+        result = verify_sql_formatting_style(sql, sql, alias_role_plan=bound_plan)
 
         self.assertFalse(result.success, result.to_dict())
         self.assertIn("alias_role_family_order_invalid", _issue_codes(result))
@@ -5814,7 +6122,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertFalse(result.success, result.to_dict())
@@ -5832,7 +6140,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertFalse(result.success, result.to_dict())
@@ -5849,7 +6157,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             sql,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertTrue(result.success, result.to_dict())
@@ -5865,7 +6173,7 @@ class SqlFormattingCanonicalJoinAndAliasTests(unittest.TestCase):
         result = verify_sql_formatting_style(
             sql,
             normalized,
-            alias_role_plan=self._role_plan(),
+            alias_role_plan=self._bound_role_plan(sql),
         )
 
         self.assertEqual(normalized, sql)

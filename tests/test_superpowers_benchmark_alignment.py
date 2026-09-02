@@ -212,9 +212,9 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         ]:
             self.assertIn(expected, packets)
 
-        self.assertIn("development progress state", plugin["description"])
-        self.assertIn("role-based task command packets", plugin["description"])
-        self.assertIn("Development Progress", plugin["interface"]["capabilities"])
+        capabilities = set(plugin["interface"]["capabilities"])
+        for capability in ["Large Work Bundle", "Development Progress", "Role Commands"]:
+            self.assertIn(capability, capabilities)
         self.assertIn("workflow-usability-harness", selected)
         self.assertIn("subagent-review-pipeline", selected)
 
@@ -222,26 +222,37 @@ class SuperpowersBenchmarkAlignmentTests(unittest.TestCase):
         subagent = read_text("skills/subagent_review_pipeline/SKILL.md")
         packets = read_text("skills/subagent_review_pipeline/references/standard-task-packets.md")
         token = read_text("skills/token_optimizer/SKILL.md")
+        token_usage = read_text("skills/token_optimizer/references/usage.md")
         readme = read_text("README.md")
         selected = routed_skills(
             "Use subagents for a multi-file implementation and review, with explicit token optimization decisions."
         )
-        combined = "\n".join([subagent, packets, token, readme])
+        ordinary_selected = routed_skills("Fix one typo in README.md.")
+        combined = "\n".join([subagent, packets, token, token_usage, readme])
 
         for expected in [
             "subagent_strategy",
             "`dispatch`, `single-controller`, `review-only`, or `blocked`",
             "Dispatch subagents only when",
-            "This is a decision gate, not automatic compression",
-            "not automatic compression",
-            "short or exact reviewer output",
             "considered_not_needed",
             "passthrough",
         ]:
             self.assertIn(expected, combined)
 
+        for expected in [
+            "large reducible packet",
+            "command log",
+            "transcript",
+            "explicit telemetry request",
+            "otherwise omit it",
+        ]:
+            self.assertIn(expected, packets)
+
+        self.assertIn("Do not select or read it for short ordinary work", token_usage)
+        self.assertIn("requires no status record", token_usage)
         self.assertIn("subagent-review-pipeline", selected)
         self.assertIn("token-optimizer", selected)
+        self.assertNotIn("token-optimizer", ordinary_selected)
 
     def test_exact_target_and_memory_guards_are_visible_to_hosts(self):
         guard = read_text("skills/guard_policy_harness/SKILL.md")

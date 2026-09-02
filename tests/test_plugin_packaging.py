@@ -425,9 +425,9 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
 
         self.assertIn("sql-formatting", catalog_names)
         self.assertIn("sql-formatting", root_skill_names)
-        self.assertEqual(root_manifest["version"], "2.9.145")
-        self.assertEqual(codex_manifest["version"], "2.9.145")
-        self.assertEqual(agent_manifest["version"], "2.9.145")
+        self.assertEqual(root_manifest["version"], "2.9.146")
+        self.assertEqual(codex_manifest["version"], "2.9.146")
+        self.assertEqual(agent_manifest["version"], "2.9.146")
         for manifest in [root_manifest, codex_manifest]:
             with self.subTest(manifest=manifest["description"]):
                 layout = manifest["artifact_layout"]
@@ -479,7 +479,9 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
             {manifest["description"] for manifest in manifests},
             {root_manifest["description"]},
         )
-        self.assertIn("semantically selected workflow skills", root_manifest["description"])
+        self.assertIn("Ordinary clear requests run directly", root_manifest["description"])
+        self.assertIn("load only the matching domain skill", root_manifest["description"])
+        self.assertIn("load only on concrete triggers", root_manifest["description"])
 
         self.assertGreaterEqual(_version_tuple(root_manifest["version"]), (2, 9, 10))
 
@@ -528,9 +530,10 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
         )
 
         for marker in (
-            "Automatic discovery still depends on the host",
-            "no manifest or skill can guarantee host invocation",
-            "host-native semantic selection",
+            "This skill is explicit-only in Codex metadata",
+            "must not self-select on every new request",
+            "direct answer when the request is self-contained",
+            "one matching specialist skill",
             "current unfinished task",
             "task completion",
             "new task",
@@ -702,6 +705,8 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
         ]
         self.assertEqual(len(root_entries), 1)
         self.assertIn("C# WinForms/DevExpress/KoneLib", root_entries[0]["description"])
+        self.assertIn("Generate, modify, and verify", root_entries[0]["description"])
+        self.assertIn("packaged fixed style contract", root_entries[0]["description"])
         for relative_path in (
             "SKILL.md",
             "references/usage.md",
@@ -721,6 +726,7 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
             if path.is_file() and path.suffix.lower() in {".md", ".py", ".json"}
         )
         self.assertNotIn("import src.skills.demo_scenarios", package_text)
+
         self.assertNotIn("user://", package_text)
         self.assertNotIn("artifact://", package_text)
         self.assertIn("fail closed", package_text.lower())
@@ -729,6 +735,17 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
         self.assertNotIn("_verify_csharp_designer_style_authenticated", package_text)
         self.assertNotIn("trusted_runtime_roots", package_text)
         self.assertNotIn("provenance_authenticator", package_text)
+
+    def test_pb_to_csharp_manifest_description_matches_fixed_contract(self):
+        entry = next(
+            skill
+            for skill in _manifest(Path("plugin.json"))["skills"]
+            if skill["name"] == "pb-to-csharp-migration-harness"
+        )
+
+        self.assertIn("Plan, generate, modify, and verify", entry["description"])
+        self.assertIn("packaged fixed style contract", entry["description"])
+        self.assertIn("without author or sibling-source discovery", entry["description"])
 
     def test_new_skill_is_path_discovered_but_fails_static_runtime_release_exposure(self):
         with tempfile.TemporaryDirectory() as tmp:

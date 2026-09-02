@@ -8,6 +8,7 @@ from pathlib import Path
 
 import src.skills.csharp_designer_style_contract as style_contract_module
 from src.contracts import HarnessResult
+from src.skills.csharp_designer_style import verify_csharp_edit_contract
 from src.skills.csharp_designer_style_contract import (
     PACKAGED_CONTRACT_PATH,
     load_packaged_style_contract,
@@ -115,6 +116,129 @@ def _issues(result):
 
 
 class CSharpDesignerStyleContractTests(unittest.TestCase):
+    def test_edit_guard_blocks_no_modifier_type_method_removal(self):
+        original = """
+public class DemoForm
+{
+    void ImportantHelper()
+    {
+        RefreshList();
+    }
+}
+"""
+        candidate = """
+public class DemoForm
+{
+}
+"""
+
+        result = verify_csharp_edit_contract(original, candidate)
+
+        self.assertFalse(result.success)
+        self.assertIn("target_local_helper_removed", _issues(result))
+        self.assertIn(
+            "ImportantHelper`0()",
+            {
+                item.get("evidence", {}).get("signature")
+                for item in result.metadata["issues"]
+            },
+        )
+
+    def test_edit_guard_does_not_inventory_local_functions_or_control_flow(self):
+        original = """
+public class DemoForm
+{
+    void RunWork()
+    {
+        void ImportantHelper()
+        {
+            RefreshList();
+        }
+
+        if (IsReady())
+        {
+            ImportantHelper();
+        }
+    }
+}
+"""
+        candidate = """
+public class DemoForm
+{
+    void RunWork()
+    {
+        while (IsReady())
+        {
+            RefreshList();
+        }
+    }
+}
+"""
+
+        result = verify_csharp_edit_contract(original, candidate)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_edit_guard_exempts_no_modifier_event_handler_signature(self):
+        original = """
+public class DemoForm
+{
+    void btnSave_Click(object sender, EventArgs e)
+    {
+        SaveData();
+    }
+}
+"""
+        candidate = """
+public class DemoForm
+{
+}
+"""
+
+        result = verify_csharp_edit_contract(original, candidate)
+
+        self.assertTrue(result.success, result.to_dict())
+
+    def test_edit_guard_blocks_suffix_named_zero_parameter_helper_removal(self):
+        original = """
+private void ApplyDefaults_Changed()
+{
+    ApplyDefaults();
+}
+"""
+
+        result = verify_csharp_edit_contract(original, "")
+
+        self.assertFalse(result.success)
+        self.assertIn("target_local_helper_removed", _issues(result))
+
+    def test_edit_guard_exempts_real_event_signature_and_designer_wiring(self):
+        signature_handler = """
+private void btnSave_Click(object sender, EventArgs e)
+{
+    SaveData();
+}
+"""
+        wired_handler = """
+private void CustomRefresh_Changed()
+{
+    RefreshList();
+}
+"""
+        designer = """
+this.btnRefresh.Click += new System.EventHandler(this.CustomRefresh_Changed);
+"""
+
+        signature_result = verify_csharp_edit_contract(signature_handler, "")
+        wired_result = verify_csharp_edit_contract(
+            wired_handler,
+            "",
+            designer_source=designer,
+        )
+
+        self.assertTrue(signature_result.success, signature_result.to_dict())
+        self.assertTrue(wired_result.success, wired_result.to_dict())
+
     def test_valid_canonical_pair_returns_harness_result_with_exact_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:
             source, designer = _write_pair(Path(tmp))

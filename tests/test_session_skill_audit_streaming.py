@@ -227,7 +227,7 @@ FROZEN_EMPTY_AUDIT_GOLDEN = json.loads(
     "runtime_applied_skills": [],
     "selected_not_executed_skills": [],
     "session_event_index_diagnostics": {
-      "check_count": 26,
+      "check_count": 25,
       "finalized_reducer_count": 31,
       "original_passes": 1,
       "reducer_count": 31,
@@ -1169,17 +1169,11 @@ class SessionSkillAuditStreamingContractTests(unittest.TestCase):
         self.assertEqual(
             self.issue_projection(audit),
             [
-                ("always-on-front-door", "absent", "P1"),
-                ("automatic-intake-harness", "absent", "P1"),
                 ("command-output-harness", "absent", "P1"),
                 ("harness-evaluator", "absent", "P1"),
-                ("plugin-composition-policy", "absent", "P1"),
                 ("qa-gate-harness", "absent", "P1"),
                 ("quality-gates-harness", "absent", "P1"),
-                ("request-complexity-router", "absent", "P1"),
-                ("skill-catalog", "absent", "P1"),
                 ("verification-before-completion-harness", "absent", "P1"),
-                ("always-on-front-door", "missing_front_door", "P1"),
                 ("goal-state-harness", "blocked", "P1"),
                 ("verification-before-completion-harness", "blocked", "P1"),
                 ("context-state-harness", "blocked", "P1"),

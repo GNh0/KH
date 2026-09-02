@@ -1,18 +1,19 @@
 ---
 name: credential-safety-harness
-description: Use when kh-uaf:always-on-front-door has already run and a UAF workflow, helper script, API call, MCP server, plugin, or subagent needs credentials, API keys, tokens, connection strings, or secret-bearing environment variables; verify presence without reading or printing secret values and block secret exposure commands.
+description: Use when a task will read, create, update, transmit, validate, or expose actual credentials, API keys, tokens, connection strings, secret-bearing environment variables, or commands that may reveal them. Do not invoke merely because an already-configured MCP, database, API, or connector is used.
 ---
 
 # Credential Safety Harness
 
 ## KH Entry Contract
 
-- Start every non-trivial turn through `always-on-front-door` unless this skill is that bootstrap step or the current turn was classified as light/direct.
-- If `kh_active_directive=active` was set by an earlier user instruction, treat later work-bearing requests as KH-routed even when KH names are omitted.
-- Use this skill only when front-door routing, an explicit user request, another selected KH skill, or a helper script requires credentials or secret-bearing settings.
+- This skill is not a generic MCP, database, API, plugin, or subagent preflight.
+- Select it only when the task accesses or changes secret material/configuration, verifies credential presence, accepts hidden credential input, or proposes a command that could expose a secret.
+- Calling an already-configured MCP/database/API/connector through its normal tool interface is not credential handling and must not load this skill.
 - If this skill appears only in `selected_not_executed_skills`, report it as selected but not run until credential safety evidence exists.
 - Report this skill as `applied` only after a safe presence plan, command classification, validation result, explicit passthrough, or blocked rationale exists.
 - Reading this `SKILL.md`, listing the skill, or saying "credential safety applies" is not execution evidence.
+- Keep internal credential-safety status out of ordinary user-facing narration. Explain only a block, required outside-chat setup, or explicitly requested audit.
 
 This harness imports the useful Science Skills credential pattern into KH without depending on Antigravity or local science folders. It checks only whether a credential exists. It must never print, read, summarize, store in chat, pass as a CLI argument, or expose a secret value to the agent context.
 
@@ -35,6 +36,8 @@ This harness imports the useful Science Skills credential pattern into KH withou
 
 ## Required outputs
 
+These outputs remain internal unless the user must resolve a blocked credential step or explicitly requested an audit.
+
 - `credential_safety_status`.
 - Credential name, secret scope, and environment file path without the secret value.
 - Safe check command or explicit reason no credential access is needed.
@@ -48,6 +51,7 @@ This harness imports the useful Science Skills credential pattern into KH withou
 - Do not pass secret values as command-line arguments.
 - Do not store secret values in KH memory, GoalState, progress panels, artifacts, or subagent packets.
 - Do not claim a credential exists unless the presence check succeeded or the user confirms it externally.
+- Do not load or report this harness merely because a configured MCP or database connection was used successfully.
 
 ## UAF implementation targets
 

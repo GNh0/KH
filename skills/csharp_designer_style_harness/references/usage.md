@@ -2,7 +2,7 @@
 
 ## When to use
 
-Use this runtime-backed verifier when a current task supplies one exact C# WinForms/DevExpress/KoneLib code-behind file and one exact `.Designer.cs` file and the requested outcome is deterministic style-contract verification. It is appropriate for analysis-only review, generated-pair acceptance, and a narrowly scoped query-only check. It is not a PB export tool, project build tool, live DevExpress layout loader, database checker, or source editor.
+Use this harness when generating, modifying, or reviewing an exact C# WinForms/DevExpress/KoneLib code-behind and `.Designer.cs` pair. Read the current target first, preserve its local helper/save/row-state patterns, run `verify_csharp_edit_contract` before accepting a modification, and run the pair verifier when both artifacts are in scope.
 
 ## Inputs to collect
 
@@ -20,6 +20,7 @@ Do not substitute a sibling form, backup file, project-wide style scan, cached r
 
 - Execution level: `python-module`.
 - Implementation targets:
+  - `src.skills.csharp_designer_style.verify_csharp_edit_contract` compares the pre-edit and candidate code-behind and blocks invented edit-commit calls, established helper removal, and whole-table row rewrites. Ordinary new methods require contextual review and are not deterministic failures by themselves.
   - `src.skills.csharp_designer_style_contract.verify_csharp_designer_style` performs the deterministic source/Designer contract check.
   - `src.contracts.HarnessResult` is the structured result boundary.
   - `skills/csharp_designer_style_harness/scripts/smoke_check.py` checks package wiring, target resolution, AST, and demo execution.

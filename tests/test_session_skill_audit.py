@@ -26,7 +26,59 @@ from src.skills.sql_formatting_provider import (
 from src.skills.sql_formatting_style import verify_sql_formatting_style
 
 
+_TOKEN_SELECTED_FRONT_DOOR_PROMPT = (
+    "Use Token Optimizer as a decision gate for this request."
+)
+
+
 class SessionSkillAuditTests(unittest.TestCase):
+    def test_single_apply_patch_does_not_require_multi_agent_orchestration(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Fix the typo in this source file.",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "apply_patch",
+                        "arguments": "*** Begin Patch\n*** Update File: sample.py\n@@\n-old\n+new\n*** End Patch",
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "output": "Done!",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+        rows = {row["name"]: row for row in audit.skills}
+        for skill_name in (
+            "host-agent-orchestration",
+            "subagent-review-pipeline",
+            "parallel-orchestration-harness",
+            "role-execution-audit-harness",
+        ):
+            self.assertFalse(rows[skill_name]["required"], skill_name)
+            self.assertNotIn(
+                skill_name,
+                audit.coverage["required_missing_skill_names"],
+            )
+            self.assertNotIn(
+                skill_name,
+                audit.coverage["required_unaccepted_skill_names"],
+            )
+
     def write_session(self, events, *, artifacts=None):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -630,8 +682,13 @@ class SessionSkillAuditTests(unittest.TestCase):
         return events
 
     @staticmethod
-    def front_door_call(call_id="front-door-1", summary_mode="micro-summary"):
+    def front_door_call(
+        call_id="front-door-1",
+        summary_mode="micro-summary",
+        prompt="Inspect this module.",
+    ):
         boundary_id = f"front-door-boundary-{call_id}"
+        escaped_prompt = str(prompt).replace('"', '\\"')
         return {
             "type": "response_item",
             "payload": {
@@ -645,7 +702,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                 "boundary_id": boundary_id,
                 "arguments": (
                     "python -m src.orchestration.kh_front_door "
-                    f'--prompt "Inspect this module." --{summary_mode}'
+                    f'--prompt "{escaped_prompt}" --{summary_mode}'
                 ),
             },
         }
@@ -785,6 +842,13 @@ class SessionSkillAuditTests(unittest.TestCase):
         ).to_micro_summary_dict()
 
     @staticmethod
+    def producer_token_selected_full_receipt():
+        return build_kh_front_door(
+            _TOKEN_SELECTED_FRONT_DOOR_PROMPT,
+            project=Path(__file__).resolve().parents[1],
+        ).to_summary_dict()
+
+    @staticmethod
     def legacy_2_9_129_pending_front_door_receipt():
         return {
             "summary_mode": "ultra_compact",
@@ -909,6 +973,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         verification_id="9" * 64,
         artifact_initial_bytes=None,
         artifact_mutations=None,
+        token_optimizer_selected=False,
     ):
         draft_response = f"```sql\n{formatted_sql}\n```"
         artifact_tmp = tempfile.TemporaryDirectory()
@@ -1025,8 +1090,6 @@ class SessionSkillAuditTests(unittest.TestCase):
                 "metadata": {
                     "harness": "sql-formatting-style-harness",
                     "operation": "formatting",
-                    "token_optimizer_status": "passthrough",
-                    "not_used_reason": "Exact SQL evidence requires passthrough.",
                     "original_sha256": hashlib.sha256(
                         original_sql.encode("utf-8")
                     ).hexdigest(),
@@ -1038,6 +1101,17 @@ class SessionSkillAuditTests(unittest.TestCase):
                 },
             },
         }
+        if token_optimizer_selected:
+            receipt["cli_inputs"]["arguments"]["token_optimizer_selected"] = True
+            receipt["verification"]["metadata"].update(
+                {
+                    "token_optimizer_status": "passthrough",
+                    "token_optimizer_status_reason": (
+                        "SQL, literals, comments, and evidence were preserved without lossy compression."
+                    ),
+                    "not_used_reason": "Contract-sensitive SQL evidence requires passthrough.",
+                }
+            )
         receipt = attach_sql_formatting_cli_runtime_receipt(
             receipt,
             session_id=session_id,
@@ -1069,6 +1143,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                         f'--provider-selection-file "{provider_selection_file}" '
                         f'--session-id "{session_id}" '
                         f'--invocation-nonce "{invocation_nonce}"'
+                        + (" --token-optimizer-selected" if token_optimizer_selected else "")
                     ),
                 },
             },
@@ -1250,6 +1325,46 @@ class SessionSkillAuditTests(unittest.TestCase):
                 },
             },
         ]
+
+    def test_sql_binding_fixture_emits_optimizer_telemetry_only_when_selected(self):
+        original_sql = "SELECT * FROM BA011T;"
+        formatted_sql = "SELECT *\nFROM BA011T;"
+
+        default_events = self.sql_binding_events(original_sql, formatted_sql)
+        default_receipt = self.sql_binding_receipt(default_events[1])
+        default_metadata = default_receipt["verification"]["metadata"]
+
+        self.assertNotIn(
+            "token_optimizer_selected",
+            default_receipt["cli_inputs"]["arguments"],
+        )
+        self.assertNotIn("token_optimizer_status", default_metadata)
+        self.assertNotIn("token_optimizer_status_reason", default_metadata)
+        self.assertNotIn("not_used_reason", default_metadata)
+        self.assertNotIn(
+            "--token-optimizer-selected",
+            default_events[0]["payload"]["arguments"],
+        )
+
+        selected_events = self.sql_binding_events(
+            original_sql,
+            formatted_sql,
+            token_optimizer_selected=True,
+        )
+        selected_receipt = self.sql_binding_receipt(selected_events[1])
+        selected_metadata = selected_receipt["verification"]["metadata"]
+
+        self.assertIs(
+            selected_receipt["cli_inputs"]["arguments"]["token_optimizer_selected"],
+            True,
+        )
+        self.assertEqual(selected_metadata["token_optimizer_status"], "passthrough")
+        self.assertTrue(selected_metadata["token_optimizer_status_reason"])
+        self.assertTrue(selected_metadata["not_used_reason"])
+        self.assertIn(
+            "--token-optimizer-selected",
+            selected_events[0]["payload"]["arguments"],
+        )
 
     def test_sql_verifier_binds_actual_alias_role_plan_validation_field(self):
         original_sql = "SELECT ORDER_ID FROM ORDER_HEADER;"
@@ -2298,7 +2413,6 @@ class SessionSkillAuditTests(unittest.TestCase):
                                 "verification_id": "verify-sql-1",
                                 "mechanical_checks": {"status": "passed"},
                                 "alias_role_plan_validation": {"status": "not_needed"},
-                                "token_optimizer_status": "passthrough",
                             }
                         ),
                     },
@@ -4942,9 +5056,13 @@ class SessionSkillAuditTests(unittest.TestCase):
         rows = {row["name"]: row for row in audit.skills}
 
         self.assertNotIn(("always-on-front-door", "missing_front_door"), issues)
-        self.assertEqual(rows["always-on-front-door"]["status"], "considered")
+        self.assertEqual(rows["always-on-front-door"]["status"], "absent")
+        self.assertFalse(rows["always-on-front-door"]["required"])
         self.assertEqual(rows["always-on-front-door"]["runtime_hits"], 0)
-        self.assertEqual(rows["always-on-front-door"]["acceptance"]["status"], "passed")
+        self.assertEqual(
+            rows["always-on-front-door"]["acceptance"]["status"],
+            "not_required",
+        )
         self.assertIn(("sql-formatting", "missing_before_sql_output"), issues)
         self.assertIn(("sql-formatting", "formatter_application_not_proven"), issues)
         self.assertNotIn("provider_inspected", evidence["states"])
@@ -5786,7 +5904,19 @@ class SessionSkillAuditTests(unittest.TestCase):
                 {
                     "type": "response_item",
                     "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "call_id": "runtime-token-evidence",
+                        "arguments": (
+                            "python -m src.skills.token_optimizer --log-file audit.log"
+                        ),
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
                         "type": "function_call_output",
+                        "call_id": "runtime-token-evidence",
                         "output": json.dumps(
                             {
                                 "runtime_token_optimization": {
@@ -7629,7 +7759,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_kh_plugin_request_requires_front_door_before_source_work(self):
+    def test_explicit_front_door_request_requires_receipt_before_source_work(self):
         path = self.write_session(
             [
                 {
@@ -7637,7 +7767,10 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "user",
-                        "content": "Use the KH plugin for this source analysis.",
+                        "content": (
+                            "Run KH front-door routing for this source analysis and record "
+                            "the routing evidence before source work."
+                        ),
                     },
                 },
                 {
@@ -7662,7 +7795,126 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_korean_kh_request_requires_front_door_before_source_work(self):
+    def test_explicit_front_door_opt_out_stays_on_direct_path(self):
+        prompts = (
+            "Do not run front-door; inspect audit evidence",
+            "프런트도어 없이 감사 증거만 확인해줘",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": prompt,
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "Get-Content -Path .\\audit.json -TotalCount 120",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+
+                self.assertFalse(
+                    any(
+                        issue["skill"] == "always-on-front-door"
+                        and issue["status"] == "missing_front_door"
+                        for issue in audit.issues
+                    )
+                )
+                self.assertNotIn(
+                    "always-on-front-door",
+                    audit.coverage["required_missing_skill_names"],
+                )
+
+    def test_front_door_execution_after_opt_out_still_requires_honest_receipt(self):
+        path = self.write_session(
+            [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": "Do not run front-door. Inspect this source file directly.",
+                    },
+                },
+                self.front_door_call("front-door-after-opt-out"),
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": "shell_command",
+                        "arguments": "Get-Content -Path .\\Program.cs -TotalCount 120",
+                    },
+                },
+            ]
+        )
+
+        audit = analyze_session_skills(path)
+
+        self.assertTrue(
+            any(
+                issue["skill"] == "always-on-front-door"
+                and issue["status"] == "missing_front_door"
+                and issue.get("trigger_kind") == "runtime_selected_front_door"
+                for issue in audit.issues
+            )
+        )
+
+    def test_only_active_goal_selects_governed_front_door_audit(self):
+        for goal_status, expected_missing in {"active": True, "complete": False}.items():
+            with self.subTest(goal_status=goal_status):
+                path = self.write_session(
+                    [
+                        {
+                            "type": "event_msg",
+                            "payload": {
+                                "type": "thread_goal_updated",
+                                "goal": {"status": goal_status},
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "message",
+                                "role": "user",
+                                "content": "Inspect the session audit module.",
+                            },
+                        },
+                        {
+                            "type": "response_item",
+                            "payload": {
+                                "type": "function_call",
+                                "name": "shell_command",
+                                "arguments": "rg -n session_skill_audit src",
+                            },
+                        },
+                    ]
+                )
+
+                audit = analyze_session_skills(path)
+                missing = [
+                    issue
+                    for issue in audit.issues
+                    if issue["skill"] == "always-on-front-door"
+                    and issue["status"] == "missing_front_door"
+                ]
+
+                self.assertEqual(bool(missing), expected_missing)
+                if expected_missing:
+                    self.assertEqual(missing[0]["trigger_kind"], "governed_goal")
+
+    def test_kh_plugin_mention_does_not_select_front_door(self):
         path = self.write_session(
             [
                 {
@@ -7686,16 +7938,15 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
-                and issue["severity"] == "P1"
                 for issue in audit.issues
             )
         )
 
-    def test_ordinary_non_trivial_request_requires_automatic_intake_before_source_work(self):
+    def test_ordinary_non_trivial_source_work_does_not_require_automatic_intake(self):
         path = self.write_session(
             [
                 {
@@ -7719,16 +7970,15 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
-                and issue["severity"] == "P1"
                 for issue in audit.issues
             )
         )
 
-    def test_kh_active_directive_carries_to_later_ordinary_work(self):
+    def test_kh_active_directive_does_not_select_front_door_for_later_work(self):
         path = self.write_session(
             [
                 {
@@ -7760,17 +8010,15 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
-                and issue["trigger_kind"] == "kh_active_directive"
-                and issue["kh_active_directive"]
                 for issue in audit.issues
             )
         )
 
-    def test_kh_active_directive_detects_real_korean_usage_phrase(self):
+    def test_real_korean_kh_usage_directive_does_not_select_front_door(self):
         path = self.write_session(
             [
                 {
@@ -7810,17 +8058,15 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
-                and issue["trigger_kind"] == "kh_active_directive"
-                and issue["kh_active_directive"]
                 for issue in audit.issues
             )
         )
 
-    def test_kh_active_directive_without_host_provenance_remains_unverified(self):
+    def test_runtime_selected_front_door_without_host_provenance_remains_unverified(self):
         path = self.write_session(
             [
                 {
@@ -7890,12 +8136,12 @@ class SessionSkillAuditTests(unittest.TestCase):
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
-                and issue.get("trigger_kind") == "kh_active_directive"
+                and issue.get("trigger_kind") == "runtime_selected_front_door"
                 for issue in audit.issues
             )
         )
 
-    def test_skill_catalog_or_doc_read_does_not_satisfy_front_door_order(self):
+    def test_general_kh_request_and_catalog_read_do_not_select_front_door(self):
         path = self.write_session(
             [
                 {
@@ -7941,7 +8187,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
@@ -7949,7 +8195,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_matching_kh_skill_read_satisfies_semantic_front_door(self):
+    def test_matching_kh_skill_read_keeps_ordinary_work_on_direct_path(self):
         path = self.write_session(
             [
                 {
@@ -7976,10 +8222,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "function_call",
                         "name": "shell_command",
-                        "arguments": (
-                            "python -m src.orchestration.kh_front_door "
-                            "--prompt \"Build a small static KPI dashboard and verify it.\" --summary"
-                        ),
+                        "arguments": "Get-ChildItem -Path . -Filter *.html",
                     },
                 },
             ]
@@ -7995,7 +8238,8 @@ class SessionSkillAuditTests(unittest.TestCase):
                 for issue in audit.issues
             )
         )
-        self.assertEqual(rows["always-on-front-door"]["status"], "considered")
+        self.assertEqual(rows["always-on-front-door"]["status"], "absent")
+        self.assertFalse(rows["always-on-front-door"]["required"])
         self.assertEqual(rows["always-on-front-door"]["runtime_hits"], 0)
 
     def test_kh_plugin_request_without_host_provenance_remains_unverified(self):
@@ -8317,7 +8561,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_front_door_error_output_does_not_count_as_front_door_evidence(self):
+    def test_uncorrelated_front_door_error_output_does_not_select_front_door(self):
         path = self.write_session(
             [
                 {
@@ -8355,7 +8599,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
@@ -8433,7 +8677,10 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "user",
-                        "content": "Build an operations support product in this folder.",
+                        "content": (
+                            "Run KH front-door routing before building an operations support "
+                            "product in this folder."
+                        ),
                     },
                 },
                 {
@@ -8478,7 +8725,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_memory_quick_pass_batched_with_always_on_read_is_a_front_door_miss(self):
+    def test_explicit_front_door_request_rejects_memory_work_before_receipt(self):
         path = self.write_session(
             [
                 {
@@ -8488,7 +8735,8 @@ class SessionSkillAuditTests(unittest.TestCase):
                         "role": "user",
                         "content": (
                             "C:\\Users\\KONEIT\\Desktop\\Jang\\SKillsTest\\BlindProductRequest "
-                            "folder needs an operations support product built."
+                            "folder needs an operations support product built. Run KH front-door "
+                            "routing and record its receipt before any memory or source work."
                         ),
                     },
                 },
@@ -9944,7 +10192,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         )
         self.assertEqual(issue["severity"], "P0")
 
-    def test_report_procedure_csharp_question_skips_sql_harness_but_requires_front_door(self):
+    def test_report_procedure_csharp_question_skips_sql_and_front_door_harnesses(self):
         path = self.write_session(
             [
                 {
@@ -9986,7 +10234,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             "sql-formatting-style-harness",
             audit.coverage["required_missing_skill_names"],
         )
-        self.assertIn(
+        self.assertNotIn(
             "always-on-front-door",
             audit.coverage["required_missing_skill_names"],
         )
@@ -9995,7 +10243,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             audit.coverage["required_missing_skill_names"],
         )
 
-    def test_report_procedure_question_followed_by_source_read_requires_front_door(self):
+    def test_report_procedure_question_followed_by_source_read_stays_direct(self):
         path = self.write_session(
             [
                 {
@@ -10024,11 +10272,10 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
-                and issue.get("trigger_kind") == "direct_code_question"
                 for issue in audit.issues
             )
         )
@@ -10181,7 +10428,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_bare_direct_ultra_compact_front_door_output_does_not_count_as_order_evidence(self):
+    def test_bare_direct_ultra_compact_output_does_not_select_front_door(self):
         front_door_output = {
             "summary_mode": "ultra_compact",
             "front_door_status": "ok",
@@ -10221,7 +10468,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
@@ -10404,16 +10651,21 @@ class SessionSkillAuditTests(unittest.TestCase):
         front_door = next(skill for skill in audit.skills if skill["name"] == "always-on-front-door")
 
         self.assertEqual(front_door["status"], "claimed_unverified")
-        self.assertEqual(front_door["acceptance"]["status"], "missing_application")
+        self.assertEqual(front_door["acceptance"]["status"], "not_required")
         self.assertEqual(front_door["acceptance"]["satisfied_outputs"], [])
 
     def test_micro_front_door_token_decision_is_auditable_runtime_evidence(self):
-        receipt = self.producer_micro_receipt()
+        prompt = "Compress this long log before analysis.\n" + ("trace line\n" * 80)
+        receipt = build_kh_front_door(
+            prompt,
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+        self.assertIn("t", receipt)
         path = self.write_session(
             [
                 {
                     "type": "response_item",
-                    "payload": {"type": "message", "role": "user", "content": "Inspect this module."},
+                    "payload": {"type": "message", "role": "user", "content": prompt},
                 },
                 self.front_door_call("front-door-token"),
                 self.front_door_output(receipt, "front-door-token"),
@@ -10423,7 +10675,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         audit = analyze_session_skills(path)
         token_optimizer = next(skill for skill in audit.skills if skill["name"] == "token-optimizer")
 
-        self.assertEqual(token_optimizer["token_optimizer_status"], "considered_not_needed")
+        self.assertEqual(token_optimizer["token_optimizer_status"], "passthrough")
         self.assertEqual(token_optimizer["acceptance"]["status"], "passed")
         self.assertTrue(audit.postmortem["token_gate"]["checked"])
         self.assertEqual(
@@ -10431,7 +10683,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             1,
         )
 
-    def test_paired_producer_micro_receipt_satisfies_order_and_token_gates(self):
+    def test_paired_producer_micro_receipt_does_not_invent_token_gate(self):
         receipt = build_kh_front_door(
             "What is 1 + 1?",
             project=Path(__file__).resolve().parents[1],
@@ -10464,17 +10716,15 @@ class SessionSkillAuditTests(unittest.TestCase):
                 for issue in audit.issues
             )
         )
-        self.assertEqual(audit.postmortem["token_optimizer_status"], "considered_not_needed")
+        self.assertEqual(audit.postmortem["token_optimizer_status"], "not_checked")
+        self.assertFalse(audit.postmortem["token_gate"]["checked"])
         self.assertEqual(
             audit.postmortem["token_optimizer_evidence"]["front_door_runtime_receipts"],
-            1,
+            0,
         )
 
     def test_paired_producer_full_summary_receipt_satisfies_token_gate(self):
-        receipt = build_kh_front_door(
-            "What is 1 + 1?",
-            project=Path(__file__).resolve().parents[1],
-        ).to_summary_dict()
+        receipt = self.producer_token_selected_full_receipt()
         self.assertIn("token_optimizer_decision", receipt)
         path = self.write_session(
             [
@@ -10483,17 +10733,21 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "user",
-                        "content": "What is 1 + 1?",
+                        "content": _TOKEN_SELECTED_FRONT_DOOR_PROMPT,
                     },
                 },
-                self.front_door_call("front-door-full-summary", "summary"),
+                self.front_door_call(
+                    "front-door-full-summary",
+                    "summary",
+                    _TOKEN_SELECTED_FRONT_DOOR_PROMPT,
+                ),
                 self.front_door_output(receipt, "front-door-full-summary"),
             ]
         )
 
         audit = analyze_session_skills(path)
 
-        self.assertEqual(audit.postmortem["token_optimizer_status"], "considered_not_needed")
+        self.assertEqual(audit.postmortem["token_optimizer_status"], "passthrough")
         self.assertTrue(audit.postmortem["token_gate"]["checked"])
         self.assertEqual(
             audit.postmortem["token_optimizer_evidence"]["front_door_runtime_receipts"],
@@ -10631,7 +10885,10 @@ class SessionSkillAuditTests(unittest.TestCase):
                             "payload": {
                                 "type": "message",
                                 "role": "user",
-                                "content": "Inspect the session audit module.",
+                                "content": (
+                                    "Run KH front-door routing for the session audit module and "
+                                    "record a valid receipt before inspection."
+                                ),
                             },
                         },
                         {
@@ -10750,7 +11007,9 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "user",
-                        "content": "Fix the audit implementation.",
+                        "content": (
+                            "Run KH front-door routing before fixing the audit implementation."
+                        ),
                     },
                 },
                 {
@@ -10808,7 +11067,9 @@ class SessionSkillAuditTests(unittest.TestCase):
                             "payload": {
                                 "type": "message",
                                 "role": "user",
-                                "content": "Fix the audit implementation.",
+                                "content": (
+                                    "Run KH front-door routing before fixing the audit implementation."
+                                ),
                             },
                         },
                         {
@@ -10994,10 +11255,18 @@ class SessionSkillAuditTests(unittest.TestCase):
                 )
 
     def test_required_large_session_rejects_front_door_planning_considered_not_needed(self):
-        receipt = build_kh_front_door(
-            "What is 1 + 1?",
-            project=Path(__file__).resolve().parents[1],
-        ).to_summary_dict()
+        receipt = self.producer_token_selected_full_receipt()
+        receipt["token_optimizer_decision"].update(
+            {
+                "token_optimizer_status": "considered_not_needed",
+                "token_optimizer_status_reason": "no_candidate_output",
+                "optimization_applied": False,
+                "actual_optimization_used": False,
+                "actual_optimization_claimed": False,
+                "actual_optimization_status": "considered_not_needed",
+                "not_used_reason": "no_candidate_output",
+            }
+        )
         self.assertEqual(
             receipt["token_optimizer_decision"]["token_optimizer_status"],
             "considered_not_needed",
@@ -11009,10 +11278,14 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "user",
-                        "content": "What is 1 + 1?",
+                        "content": _TOKEN_SELECTED_FRONT_DOOR_PROMPT,
                     },
                 },
-                self.front_door_call("large-session-front-door", "summary"),
+                self.front_door_call(
+                    "large-session-front-door",
+                    "summary",
+                    _TOKEN_SELECTED_FRONT_DOOR_PROMPT,
+                ),
                 self.front_door_output(receipt, "large-session-front-door"),
                 {
                     "type": "response_item",
@@ -11090,7 +11363,7 @@ class SessionSkillAuditTests(unittest.TestCase):
         self.assertEqual(token_optimizer["acceptance"]["status"], "blocked")
         self.assertEqual(
             audit.postmortem["token_gate"].get("decision_source"),
-            "kh_front_door_planning_insufficient",
+            "runtime_token_optimizer_attempt_insufficient",
         )
         self.assertNotIn(
             "latest_actual_runtime_status",
@@ -11161,10 +11434,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                 )
 
     def test_full_summary_token_decision_statuses_are_normalized(self):
-        produced = build_kh_front_door(
-            "What is 1 + 1?",
-            project=Path(__file__).resolve().parents[1],
-        ).to_summary_dict()
+        produced = self.producer_token_selected_full_receipt()
         cases = {
             "considered_not_needed": False,
             "used": True,
@@ -11201,10 +11471,14 @@ class SessionSkillAuditTests(unittest.TestCase):
                             "payload": {
                                 "type": "message",
                                 "role": "user",
-                                "content": "Inspect this module.",
+                                "content": _TOKEN_SELECTED_FRONT_DOOR_PROMPT,
                             },
                         },
-                        self.front_door_call(call_id, "summary"),
+                        self.front_door_call(
+                            call_id,
+                            "summary",
+                            _TOKEN_SELECTED_FRONT_DOOR_PROMPT,
+                        ),
                         self.front_door_output(receipt, call_id),
                     ]
                 )
@@ -11219,10 +11493,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                 )
 
     def test_invalid_full_summary_token_decisions_fail_closed(self):
-        produced = build_kh_front_door(
-            "What is 1 + 1?",
-            project=Path(__file__).resolve().parents[1],
-        ).to_summary_dict()
+        produced = self.producer_token_selected_full_receipt()
         invalid_mutations = {
             "unsupported_status": {"token_optimizer_status": "unknown"},
             "non_boolean_used": {"actual_optimization_used": 1},
@@ -11248,10 +11519,14 @@ class SessionSkillAuditTests(unittest.TestCase):
                             "payload": {
                                 "type": "message",
                                 "role": "user",
-                                "content": "Inspect this module.",
+                                "content": _TOKEN_SELECTED_FRONT_DOOR_PROMPT,
                             },
                         },
-                        self.front_door_call(call_id, "summary"),
+                        self.front_door_call(
+                            call_id,
+                            "summary",
+                            _TOKEN_SELECTED_FRONT_DOOR_PROMPT,
+                        ),
                         self.front_door_output(receipt, call_id),
                     ]
                 )
@@ -11296,7 +11571,10 @@ class SessionSkillAuditTests(unittest.TestCase):
                                 "payload": {
                                     "type": "message",
                                     "role": "user",
-                                    "content": "Inspect this module.",
+                                    "content": (
+                                        "Run KH front-door routing for this module and record a "
+                                        "valid receipt before inspection."
+                                    ),
                                 },
                             },
                             *evidence_events,
@@ -11432,12 +11710,9 @@ class SessionSkillAuditTests(unittest.TestCase):
 
                 self.assertEqual(
                     audit.postmortem["token_optimizer_status"],
-                    "considered_not_needed",
+                    "not_checked",
                 )
-                self.assertEqual(
-                    audit.postmortem["token_gate"].get("decision_source"),
-                    "kh_front_door_runtime_receipt",
-                )
+                self.assertNotIn("decision_source", audit.postmortem["token_gate"])
                 self.assertNotIn(
                     "latest_actual_runtime_status",
                     audit.postmortem["token_optimizer_evidence"],
@@ -11446,6 +11721,10 @@ class SessionSkillAuditTests(unittest.TestCase):
     def test_invalid_micro_front_door_packets_fail_closed(self):
         valid = build_kh_front_door(
             "What is 1 + 1?",
+            project=Path(__file__).resolve().parents[1],
+        ).to_micro_summary_dict()
+        token_selected = build_kh_front_door(
+            "Compress this long log before analysis.\n" + ("trace line\n" * 80),
             project=Path(__file__).resolve().parents[1],
         ).to_micro_summary_dict()
 
@@ -11466,7 +11745,10 @@ class SessionSkillAuditTests(unittest.TestCase):
             "invalid_gate_status": changed("g", "s", "unknown"),
             "non_boolean_execute": changed("g", "ok", 1),
             "invalid_front_door_status": changed("s", "success"),
-            "invalid_token_status": changed("t", "s", "unknown"),
+            "invalid_token_status": {
+                **token_selected,
+                "t": {**token_selected["t"], "s": "unknown"},
+            },
             "invalid_goal_status": changed("ga", "s", "done"),
         }
         for label, packet in invalid_packets.items():
@@ -11598,7 +11880,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_task_complete_resets_same_task_acknowledgement_reuse(self):
+    def test_task_complete_acknowledgement_does_not_force_front_door(self):
         path = self.write_session(
             [
                 {
@@ -11641,11 +11923,10 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
-                and issue["trigger"].lower() == "yes"
                 for issue in audit.issues
             )
         )
@@ -11695,7 +11976,7 @@ class SessionSkillAuditTests(unittest.TestCase):
                     )
                 )
 
-    def test_mixed_acknowledgement_and_new_work_starts_a_new_task_boundary(self):
+    def test_mixed_acknowledgement_and_new_work_stays_on_direct_path(self):
         path = self.write_session(
             [
                 {
@@ -11738,7 +12019,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
         audit = analyze_session_skills(path)
 
-        self.assertTrue(
+        self.assertFalse(
             any(
                 issue["skill"] == "always-on-front-door"
                 and issue["status"] == "missing_front_door"
@@ -11746,7 +12027,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             )
         )
 
-    def test_same_task_screenshot_and_correction_followups_reuse_front_door_but_new_objective_does_not(self):
+    def test_same_task_followups_and_new_ordinary_objective_do_not_force_front_door(self):
         receipt = self.producer_micro_receipt()
         path = self.write_session(
             [
@@ -11839,8 +12120,7 @@ class SessionSkillAuditTests(unittest.TestCase):
             and issue["status"] == "missing_front_door"
         ]
 
-        self.assertEqual(len(missing), 1)
-        self.assertIn("SA100100 Designer", missing[0]["trigger"])
+        self.assertEqual(missing, [])
 
     def test_unphased_assistant_answer_is_work_but_progress_commentary_is_not(self):
         cases = {
@@ -11856,7 +12136,9 @@ class SessionSkillAuditTests(unittest.TestCase):
                             "payload": {
                                 "type": "message",
                                 "role": "user",
-                                "content": "Fix the audit implementation.",
+                                "content": (
+                                    "Run KH front-door routing before fixing the audit implementation."
+                                ),
                             },
                         },
                         {
@@ -12217,7 +12499,10 @@ class SessionSkillAuditTests(unittest.TestCase):
                     "payload": {
                         "type": "message",
                         "role": "user",
-                        "content": "Inspect the session audit module.",
+                        "content": (
+                            "Run KH front-door routing for the session audit module and record "
+                            "a valid receipt before inspection."
+                        ),
                     },
                 },
                 self.front_door_output(receipt, "pre-request-front-door"),
@@ -12368,7 +12653,7 @@ class SessionSkillAuditTests(unittest.TestCase):
 
                 self.assertEqual(
                     audit.postmortem["token_optimizer_status"],
-                    "considered_not_needed",
+                    "not_checked",
                 )
                 self.assertNotIn(
                     "latest_actual_runtime_status",

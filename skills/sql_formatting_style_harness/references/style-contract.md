@@ -31,7 +31,7 @@ Business grouping is reviewer/LLM judgment supported by concrete source referenc
 
 - The structural first `FROM` source, or parsed DML target source, is main `A`; that structural rule does not assign semantic support families from the order of later sources.
 - An explicitly aliased sole source in an outer statement scope uses `A`. An unchanged unaliased sole source remains `not_needed`; nested/CTE internal alias conventions remain separate.
-- Comma-separated `FROM` sources are multi-source and require the same explicit aliases and complete approved role plan as joined sources.
+- Comma-separated `FROM` sources count as multi-source. Generation requires their complete plan; unchanged formatting/refactor aliases do not.
 - Each scope has exactly one main source, and it is `A`. Main aliases `A1`, `A2`, and later are invalid.
 - Each subsequent distinct business-role family advances through `B`, `C`, `D`, and so on.
 - A singleton non-main family uses its bare letter.
@@ -39,9 +39,9 @@ Business grouping is reviewer/LLM judgment supported by concrete source referenc
 - Role letters are sequential; do not skip a family.
 - `T`, `T1`, and related families are reserved for derived-query internals.
 - An unchanged multi-source scope inside a derived table does not need the outer A/B plan when every source has an explicit documented `T`-family alias. An alias change inside that scope still requires a complete scope plan.
-- A plan is per scope and covers every declaration/reference in each multi-source formatted scope, plus every declaration/reference affected by an alias change in any other scope.
+- A plan is per scope and covers every declaration/reference in each generated multi-source scope and every alias-changed scope.
 - Numbered main-family declaration aliases (`A1`, `A2`, and later) are invalid in every parsed scope even when aliases are unchanged. Numbered non-main families such as `B1`/`B2` are valid only when the approved role plan declares their sibling membership.
-- Every multi-source or alias-changed scope supplies one or more basis objects. Prefer `kind="source_bound_role_rationale"` with a `query://` or `sql://` `source`, exact non-empty `role_names`, and a non-empty `rationale`; bind it to the exact SQL hash and scope fingerprint with `bind_sql_alias_role_plan(...)`. This is host/caller-declared and not externally authenticated. Structured `reviewer_approved_business_role` objects and `review://<review-id>/<declared-role-names>-roles` strings remain compatibility forms for real reviewer evidence only; hosts must not fabricate them.
+- Every generated multi-source or alias-changed scope supplies one or more basis objects. Every supplied plan is validated. Prefer `kind="source_bound_role_rationale"` with a `query://` or `sql://` `source`, exact non-empty `role_names`, and a non-empty `rationale`; bind it to the exact SQL hash and scope fingerprint with `bind_sql_alias_role_plan(...)`. This is host/caller-declared and not externally authenticated. Structured `reviewer_approved_business_role` objects and `review://<review-id>/<declared-role-names>-roles` strings remain compatibility forms for real reviewer evidence only; hosts must not fabricate them.
 - Multi-source formatted output never passes with missing aliases or missing role evidence. Produce a complete source-bound approved plan and canonical aliases, or block the candidate. Never guess a role.
 
 ### Non-Normative Example
@@ -94,6 +94,7 @@ The non-null default above is an example of a caller/source-provided default, no
 - Use spaces only for SQL indentation. Any leading tab is a style error.
 - For every join, including one whose source is a derived table, indent the join clause exactly eight columns from the current query scope's `FROM` column. Treat valid `LOOP`, `HASH`, `MERGE`, and `REMOTE` hints as part of the line-leading join clause.
 - Keep the complete join type/hint prefix and `JOIN` token on one line; do not split `LEFT OUTER` from `JOIN`.
+- Generated directional joins use `LEFT OUTER JOIN`, `RIGHT OUTER JOIN`, or `FULL OUTER JOIN`. Formatting/refactor preserves an existing bare or explicit `OUTER` token exactly; adding or removing it is not formatting. The normalizer never adds, removes, or contracts join-type tokens. `INNER JOIN` remains unchanged.
 - Align `ON` and each actual line-leading same-join continuation `AND` or `OR`, including continuations inside grouping parentheses, to the `I` column of that join's `JOIN` token. Do not classify inline `AND`/`OR`, `BETWEEN`'s delimiter `AND`, `CASE`-internal predicates, or tokens inside a nested `SELECT` as outer continuation targets. Resolve nested `CASE` and `BETWEEN` ownership by ordered predicate context, so a `CASE` operand cannot consume an enclosing `BETWEEN` delimiter.
 - Determine the predicate column from each actual `JOIN` token. A fixed space count, `ON`-relative offset, or source-shaped exception is noncanonical and must be rejected.
 - Every non-`CROSS` join requires `ON` followed by a predicate expression. Bare `ON`, comment-only `ON`, and a join whose next top-level token starts another clause are invalid.
@@ -136,7 +137,11 @@ For wide business mappings, keep target columns and source expressions in compar
 
 Formatting preserves existing CTEs and temporary tables and never introduces or removes them. A concrete reason may document a separately scoped design change, but it cannot waive token preservation.
 
-Preserve existing `IF EXISTS` shape. New guards should use established direct joins or simple predicates; do not introduce nested `WHERE ... IN/EXISTS/(SELECT ...)` as a formatting preference.
+For every `IF EXISTS (` and `IF NOT EXISTS (` control-flow predicate, the opening `(` and its matching closing `)` occupy the same vertical column. The first inner SQL token starts on the immediately following line exactly one column to the right of the opening parenthesis. Top-level inner `SELECT`, `FROM`, `WHERE`, `GROUP`, `HAVING`, `ORDER`, and set-operator clauses align to that inner start column; inner joins continue to use the relative JOIN/ON/AND contract above. When the branch has a `BEGIN`, it starts on the line immediately after the closing parenthesis at the same block column as `IF`. Apply these relationships independently to nested `IF [NOT] EXISTS` pairs. Derive every position from token, matching-parenthesis, and column relationships rather than fixed indentation counts.
+
+Established `IN`, `EXISTS`, and `NOT EXISTS` set/semi-join predicates are valid. Do not introduce scalar `WHERE ... (SELECT ...)` or `WHERE ... NOT IN (SELECT ...)` predicates unless an exact bound source contract requires the same subquery; prefer a source-backed JOIN or `NOT EXISTS` anti-join shape when applicable.
+
+Generated detail SAVE logic preserves its explicit Added/New, Modified, and Deleted/Del delta contract. A DEL/Deleted DELETE must pair only with an explicitly Added/New INSERT SELECT; an unfiltered insert or one that includes deleted states is invalid. Do not delete all rows for a target and reinsert the same target unless exact bound source/user evidence explicitly requires full replacement.
 
 ## Scalar-Function-to-Join Refactors
 

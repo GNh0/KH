@@ -2,6 +2,7 @@ import copy
 import hashlib
 import inspect
 import json
+import os
 import re
 import runpy
 import subprocess
@@ -21,6 +22,7 @@ from src.skills.pb_to_csharp_migration import (
     CompositeBusinessKeyDisplayObservation,
     CompositeBusinessKeyDisplaySpec,
     MigrationInputState,
+    begin_pb_to_csharp_runtime_generation,
     build_migration_profile_update,
     build_offline_pb_to_csharp_runtime_generation,
     build_pbl_export_strategy,
@@ -40,11 +42,13 @@ from src.skills.pb_to_csharp_migration import (
     verify_devexpress_grid_xml_contract,
     verify_composite_business_key_display_contract,
     get_packaged_csharp_style_contract,
+    issue_pb_to_csharp_runtime_generation_receipt,
     load_packaged_migration_profile,
     normalize_procedure_program_key,
     orchestrate_pb_migration_validation as _raw_orchestrate_pb_migration_validation,
+    run_pb_to_csharp_runtime_generation,
     resolve_packaged_migration_profile,
-    verify_migration_generated_csharp_style as _raw_verify_migration_generated_csharp_style,
+    verify_migration_generated_csharp_style as _product_verify_migration_generated_csharp_style,
     verify_pb_migration_analysis_document,
     verify_pb_migration_save_field_contract,
     verify_pb_migration_sp_generation_contract as _verify_pb_migration_sp_generation_contract,
@@ -140,11 +144,17 @@ def target_artifact_kwargs(source_text, designer_text="", *, prefix="generated")
     pair_digest = hashlib.sha256(
         f"{source_text}\0{designer_text}".encode("utf-8")
     ).hexdigest()[:12]
-    root = Path(tempfile.gettempdir()) / "kh-uaf-pb-migration-tests"
-    root.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix="kh-uaf-pb-migration-tests-"))
     safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "-", prefix)
     pair_stem = f"{safe_prefix}-{pair_digest}"
     source_path = root / f"{pair_stem}.cs"
+    designer_path = root / f"{pair_stem}.Designer.cs" if designer_text else None
+    generation_run = begin_pb_to_csharp_runtime_generation(
+        target_source_path=source_path,
+        target_designer_path=designer_path or "",
+    )
+    if not generation_run.success:
+        raise RuntimeError(generation_run.stderr or generation_run.stdout)
     source_path.write_text(source_text, encoding="utf-8", newline="")
     source_digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
     result = {
@@ -152,7 +162,7 @@ def target_artifact_kwargs(source_text, designer_text="", *, prefix="generated")
         "target_source_sha256": f"sha256:{source_digest}",
     }
     if designer_text:
-        designer_path = root / f"{pair_stem}.Designer.cs"
+        assert designer_path is not None
         designer_path.write_text(designer_text, encoding="utf-8", newline="")
         designer_digest = hashlib.sha256(designer_path.read_bytes()).hexdigest()
         result.update(
@@ -161,7 +171,21 @@ def target_artifact_kwargs(source_text, designer_text="", *, prefix="generated")
                 "target_designer_sha256": f"sha256:{designer_digest}",
             }
         )
+    generation_receipt = issue_pb_to_csharp_runtime_generation_receipt(
+        generation_run.metadata["generation_run_receipt"],
+        expected_source_sha256=result["target_source_sha256"],
+        expected_designer_sha256=result.get("target_designer_sha256", ""),
+    )
+    if not generation_receipt.success:
+        raise RuntimeError(generation_receipt.stderr or generation_receipt.stdout)
+    result["source_operation_receipt"] = generation_receipt.metadata[
+        "generation_receipt"
+    ]
     return result
+
+
+def _raw_verify_migration_generated_csharp_style(source, **kwargs):
+    return _product_verify_migration_generated_csharp_style(source, **kwargs)
 
 
 def test_evidence_registry(*entries):
@@ -718,6 +742,7 @@ def patch_runtime_profile_path(path):
 
 def _prepare_csharp_verifier_kwargs(source, kwargs):
     prepared = dict(kwargs)
+    prepared.setdefault("source_operation", "generation")
     prepared.setdefault(
         "standalone_surface_kind",
         "usercontrol"
@@ -750,6 +775,12 @@ def _verify_migration_generated_csharp_style(*args, **kwargs):
 
 def _orchestrate_pb_migration_validation(*args, **kwargs):
     prepared = dict(kwargs)
+    prepared.setdefault("csharp_source_operation", "generation")
+    if prepared.get("source_operation_receipt"):
+        prepared.setdefault(
+            "csharp_source_operation_receipt",
+            prepared.pop("source_operation_receipt"),
+        )
     source = str(prepared.get("csharp_source_text") or "")
     designer = str(prepared.get("designer_source_text") or "")
     prepared.setdefault(
@@ -758,8 +789,22 @@ def _orchestrate_pb_migration_validation(*args, **kwargs):
         if re.search(r"\b(?:System\.Windows\.Forms\.)?UserControl\b", source)
         else "form",
     )
-    for key, value in target_artifact_kwargs(source, designer, prefix="orchestrated").items():
-        prepared.setdefault(key, value)
+    if not (
+        prepared.get("target_source_path")
+        and (
+            prepared.get("runtime_generation_run_receipt")
+            or prepared.get("csharp_source_operation_receipt")
+        )
+    ):
+        generated_targets = target_artifact_kwargs(
+            source,
+            designer,
+            prefix="orchestrated",
+        )
+        generation_receipt = generated_targets.pop("source_operation_receipt")
+        for key, value in generated_targets.items():
+            prepared.setdefault(key, value)
+        prepared.setdefault("csharp_source_operation_receipt", generation_receipt)
     if "expected_control_contracts" not in prepared:
         contracts = inferred_test_control_contracts(designer)
         prepared["expected_control_contracts"] = contracts
@@ -2210,8 +2255,11 @@ END
                 )
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(2, formatting.call_count)
-        for call in formatting.call_args_list:
+        self.assertEqual(3, formatting.call_count)
+        self.assertEqual("", formatting.call_args_list[0].args[0])
+        self.assertIs(formatting.call_args_list[0].kwargs["alias_role_plan"], alias_plan)
+        self.assertEqual("generation", formatting.call_args_list[0].kwargs["operation"])
+        for call in formatting.call_args_list[1:]:
             self.assertIs(call.kwargs["alias_role_plan"], alias_plan)
             self.assertEqual(call.kwargs["operation"], "formatting")
             self.assertEqual(call.kwargs["cte_temp_table_reason"], "")
@@ -2582,35 +2630,35 @@ END
         self.assertIn("src.skills.pb_to_csharp_migration", content)
         self.assertIn("Normal generation is offline", content)
 
-    def test_demo_cli_satisfies_fail_closed_csharp_artifact_contract(self):
+    def test_demo_scenario_satisfies_fail_closed_csharp_artifact_contract(self):
+        script_path = Path("skills/pb_to_csharp_migration_harness/scripts/demo.py")
+        demo_module = runpy.run_path(str(script_path))
         with tempfile.TemporaryDirectory() as temp_dir:
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "skills.pb_to_csharp_migration_harness.scripts.demo",
-                    "--output-dir",
-                    temp_dir,
-                ],
-                cwd=REPO_ROOT,
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
+            with mock.patch.object(
+                pb_migration,
+                "verify_migration_generated_csharp_style",
+                _raw_verify_migration_generated_csharp_style,
+            ):
+                demo_payload = demo_module["_sanitized_offline_scenario"](
+                    "pb-to-csharp-migration-harness",
+                    Path(temp_dir),
+                    Path.cwd(),
+                )
             evidence = json.loads(
                 (Path(temp_dir) / "offline_generation_evidence.json").read_text(
                     encoding="utf-8"
                 )
             )
 
-        self.assertEqual(0, completed.returncode, completed.stderr)
-        demo_payload = json.loads(completed.stdout)
         self.assertEqual("passed", demo_payload["success_case"]["status"])
-        self.assertEqual(0, demo_payload["verification"]["exit_code"])
         runtime = evidence["runtime_validation"]
         self.assertEqual(
-            {"source": "passed", "designer": "passed", "baseline_designer": "passed"},
+            {
+                "source": "passed",
+                "designer": "passed",
+                "baseline_designer": "passed",
+                "original_source": "not_applicable",
+            },
             {
                 role: binding["status"]
                 for role, binding in runtime["target_artifact_binding"].items()
@@ -2630,11 +2678,16 @@ END
         demo_module = runpy.run_path(str(script_path))
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir)
-            payload = demo_module["_sanitized_offline_scenario"](
-                "pb-to-csharp-migration-harness",
-                output_dir,
-                Path.cwd(),
-            )
+            with mock.patch.object(
+                pb_migration,
+                "verify_migration_generated_csharp_style",
+                _raw_verify_migration_generated_csharp_style,
+            ):
+                payload = demo_module["_sanitized_offline_scenario"](
+                    "pb-to-csharp-migration-harness",
+                    output_dir,
+                    Path.cwd(),
+                )
             evidence = json.loads((output_dir / "offline_generation_evidence.json").read_text(encoding="utf-8"))
             sql_artifact = next(
                 item for item in payload["artifacts"] if item["kind"] == "synthetic-select-procedure"
@@ -2644,7 +2697,12 @@ END
         self.assertEqual("passed", evidence["runtime_validation"]["sp_generation_contract"])
         runtime_validation = evidence["runtime_validation"]
         self.assertEqual(
-            {"source": "passed", "designer": "passed", "baseline_designer": "passed"},
+            {
+                "source": "passed",
+                "designer": "passed",
+                "baseline_designer": "passed",
+                "original_source": "not_applicable",
+            },
             {
                 role: binding["status"]
                 for role, binding in runtime_validation["target_artifact_binding"].items()
@@ -3665,6 +3723,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
     def _raw_control_verification(self, designer, **kwargs):
         source, _ = valid_csharp_contract_sources(form_class="TestBrowseForm")
         call_kwargs = {
+            "source_operation": "generation",
             "designer_source_text": designer,
             "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
             "program_key": "TestBrowse",
@@ -3890,6 +3949,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         profile = loaded_test_profile(csharp_required_patterns=[])
         missing = _raw_verify_migration_generated_csharp_style(
             source,
+            source_operation="generation",
             designer_source_text=designer,
             profile_evidence=profile,
             program_key="TestBrowse",
@@ -3904,6 +3964,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
         artifact_args["target_designer_sha256"] = f"sha256:{wrong_digest}"
         mismatched = _raw_verify_migration_generated_csharp_style(
             source,
+            source_operation="generation",
             designer_source_text=designer,
             profile_evidence=profile,
             program_key="TestBrowse",
@@ -3931,6 +3992,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
 
         result = _raw_verify_migration_generated_csharp_style(
             source,
+            source_operation="generation",
             designer_source_text=designer,
             profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
             program_key="TestBrowse",
@@ -4136,6 +4198,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
 
         result = _raw_verify_migration_generated_csharp_style(
             source,
+            source_operation="generation",
             designer_source_text=designer,
             profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
             program_key="TestBrowse",
@@ -4268,6 +4331,7 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
                 )
                 result = _raw_orchestrate_pb_migration_validation(
                     csharp_source_text=csharp,
+                    csharp_source_operation="generation",
                     designer_source_text=self._control_contract_designer(),
                     original_sql_text="",
                     formatted_sql_text="",
@@ -4275,7 +4339,16 @@ text(band=detail text="Sequence" x="10" y="10" height="50" width="80" name=t_seq
                     profile_version="1.0",
                     profile_hash=profile_hash,
                     program_key="TestBrowse",
-                    **artifact_kwargs,
+                    **{
+                        **{
+                            key: value
+                            for key, value in artifact_kwargs.items()
+                            if key != "source_operation_receipt"
+                        },
+                        "csharp_source_operation_receipt": artifact_kwargs[
+                            "source_operation_receipt"
+                        ],
+                    },
                 )
 
         self.assertFalse(result.success)
@@ -10950,8 +11023,11 @@ WHERE A.SCOPE_CODE = @SCOPE_CODE;"""
             )
 
         self.assertTrue(result.success, result.to_dict())
-        self.assertEqual(2, formatting.call_count)
-        for call in formatting.call_args_list:
+        self.assertEqual(3, formatting.call_count)
+        self.assertEqual("", formatting.call_args_list[0].args[0])
+        self.assertIs(formatting.call_args_list[0].kwargs["alias_role_plan"], alias_plan)
+        self.assertEqual("generation", formatting.call_args_list[0].kwargs["operation"])
+        for call in formatting.call_args_list[1:]:
             self.assertIs(call.kwargs["alias_role_plan"], alias_plan)
             self.assertEqual(call.kwargs["operation"], "formatting")
             self.assertEqual(call.kwargs["cte_temp_table_reason"], "")
@@ -12283,6 +12359,7 @@ string xml = DataTableToXml(saveRows);
 """
         artifact_args = target_artifact_kwargs(source, prefix="surface-authority")
         common = {
+            "source_operation": "generation",
             "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
             "program_key": "TargetBrowse",
             "result_fields": [],
@@ -12304,7 +12381,12 @@ string xml = DataTableToXml(saveRows);
             source.replace("UserControl", "Form"),
             standalone_surface_kind="usercontrol",
             **target_artifact_kwargs(source.replace("UserControl", "Form"), prefix="surface-wrong"),
-            **{key: value for key, value in common.items() if not key.startswith("target_")},
+            **{
+                key: value
+                for key, value in common.items()
+                if not key.startswith("target_")
+                and key != "source_operation_receipt"
+            },
         )
 
         self.assertFalse(missing.success)
@@ -12349,6 +12431,11 @@ this.txtITEMCD.BindingField = "ITEMCD";
             source_path = root / "TargetBrowse.cs"
             designer_path = root / "TargetBrowse.Designer.cs"
             sql_path = root / "SP_TARGETBROWSE_SELECT.sql"
+            generation_run = begin_pb_to_csharp_runtime_generation(
+                target_source_path=source_path,
+                target_designer_path=designer_path,
+            )
+            self.assertTrue(generation_run.success, generation_run.to_dict())
             source_path.write_text(source, encoding="utf-8", newline="")
             designer_path.write_text(designer, encoding="utf-8", newline="")
             sql_path.write_text(
@@ -12359,7 +12446,14 @@ this.txtITEMCD.BindingField = "ITEMCD";
             lineage = self._write_field_lineage_fixture(
                 root, source_path, designer_path, sql_path
             )
+            generation_receipt = issue_pb_to_csharp_runtime_generation_receipt(
+                generation_run.metadata["generation_run_receipt"],
+                expected_source_sha256=self._artifact_sha256(source_path),
+                expected_designer_sha256=self._artifact_sha256(designer_path),
+            )
+            self.assertTrue(generation_receipt.success, generation_receipt.to_dict())
             common = {
+                "source_operation": "generation",
                 "designer_source_text": designer,
                 "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
                 "program_key": "TargetBrowse",
@@ -12369,6 +12463,9 @@ this.txtITEMCD.BindingField = "ITEMCD";
                 "target_source_sha256": self._artifact_sha256(source_path),
                 "target_designer_path": str(designer_path),
                 "target_designer_sha256": self._artifact_sha256(designer_path),
+                "source_operation_receipt": generation_receipt.metadata[
+                    "generation_receipt"
+                ],
                 "expected_grid_role": "list",
                 "expected_grid_columns": columns,
                 "layout_load_artifact_text": generate_devexpress_grid_xml(columns),
@@ -12403,6 +12500,7 @@ this.txtITEMCD.BindingField = "ITEMCD";
         )
         source, _ = valid_csharp_contract_sources("NumericBrowseForm", "QTY")
         common = {
+            "source_operation": "generation",
             "designer_source_text": designer,
             "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
             "program_key": "NumericBrowse",
@@ -12619,6 +12717,693 @@ END
             "existing_sp_cleanup_preserves_authenticated_existing_sql",
             result.metadata["pb_sql_generation_policy"]["reason"],
         )
+
+
+class TestPbCsharpSourceOperationAdversarialContract(unittest.TestCase):
+    def _host_operation_orchestration_kwargs(self, designer, sql):
+        return {
+            "original_sql_text": sql,
+            "formatted_sql_text": sql,
+            "source_evidence": [
+                pasted_sql_evidence(
+                    "SELECT @WORKTYPE AS WORKTYPE;",
+                    evidence_role="body_fragment",
+                )
+            ],
+            "program_key": "InventoryBrowse",
+            "result_fields": ["ENTITY_ID"],
+            "expected_control_contracts": inferred_test_control_contracts(designer),
+            "standalone_surface_kind": "form",
+            "caller_parameter_contract": ["@WORKTYPE"],
+            "draft_final_response": sql_final_response(sql),
+            "sql_provider_path": SQL_PROVIDER_PATH,
+            "selected_active_sql_provider_path": SQL_PROVIDER_PATH,
+            "sql_provider_selection": sql_provider_selection(),
+        }
+
+    def _isolated_runtime_state(self):
+        return mock.patch.multiple(
+            pb_migration,
+            _PB_MIGRATION_GENERATION_RUNS={},
+            _PB_MIGRATION_GENERATION_RECEIPTS={},
+            _PB_MIGRATION_GENERATION_TOMBSTONES=pb_migration.OrderedDict(),
+        )
+
+    def _generation_fixture(self):
+        source, designer = valid_csharp_contract_sources()
+        prepared = _prepare_csharp_verifier_kwargs(
+            source,
+            {
+                "source_operation": "generation",
+                "designer_source_text": designer,
+                "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
+                "program_key": "InventoryBrowse",
+                "result_fields": ["ENTITY_ID"],
+                "standalone_surface_kind": "form",
+            },
+        )
+        return source, designer, prepared
+
+    def _modification_kwargs(self, original, candidate, designer, *, prefix):
+        original_path, original_digest = write_test_artifact(
+            f"{prefix}-original.cs",
+            original,
+        )
+        pair_digest = hashlib.sha256(
+            f"{candidate}\0{designer}".encode("utf-8")
+        ).hexdigest()[:12]
+        root = Path(tempfile.gettempdir()) / "kh-uaf-pb-migration-tests"
+        root.mkdir(parents=True, exist_ok=True)
+        pair_stem = f"{prefix}-{pair_digest}"
+        candidate_path = root / f"{pair_stem}.cs"
+        designer_path = root / f"{pair_stem}.Designer.cs"
+        candidate_path.write_text(candidate, encoding="utf-8", newline="")
+        designer_path.write_text(designer, encoding="utf-8", newline="")
+        candidate_digest = hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+        designer_digest = hashlib.sha256(designer_path.read_bytes()).hexdigest()
+        return {
+            "source_operation": "modification",
+            "original_source_text": original,
+            "original_source_path": str(original_path),
+            "original_source_sha256": f"sha256:{original_digest}",
+            "designer_source_text": designer,
+            "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
+            "program_key": "InventoryBrowse",
+            "result_fields": ["ENTITY_ID"],
+            "expected_control_contracts": inferred_test_control_contracts(designer),
+            "target_source_path": str(candidate_path),
+            "target_source_sha256": f"sha256:{candidate_digest}",
+            "target_designer_path": str(designer_path),
+            "target_designer_sha256": f"sha256:{designer_digest}",
+            "standalone_surface_kind": "form",
+        }
+
+    def test_generation_requires_authenticated_host_correlated_receipt(self):
+        source, _, prepared = self._generation_fixture()
+        missing_kwargs = dict(prepared)
+        trusted_receipt = missing_kwargs.pop("source_operation_receipt")
+        forged_receipt = copy.deepcopy(trusted_receipt)
+        forged_receipt["signature"] = "0" * 64
+
+        missing = _product_verify_migration_generated_csharp_style(
+            source,
+            **missing_kwargs,
+        )
+        forged = _product_verify_migration_generated_csharp_style(
+            source,
+            **{
+                **missing_kwargs,
+                "source_operation_receipt": forged_receipt,
+                "source_operation_receipt_authenticator": lambda _payload, _signature: True,
+            },
+        )
+        trusted = _product_verify_migration_generated_csharp_style(
+            source,
+            **prepared,
+        )
+
+        self.assertFalse(missing.success)
+        self.assertFalse(forged.success)
+        self.assertIn(
+            "csharp_generation_source_operation_receipt_required",
+            {item["code"] for item in missing.metadata["issues"]},
+        )
+        self.assertIn(
+            "csharp_generation_source_operation_receipt_authentication_failed",
+            {item["code"] for item in forged.metadata["issues"]},
+        )
+        self.assertTrue(trusted.success, trusted.metadata["issues"])
+        self.assertEqual(
+            "host_correlated_generation_receipt_verified",
+            trusted.metadata["source_modification_contract"]["reason"],
+        )
+
+    def test_successful_generation_receipt_is_single_use(self):
+        source, _, prepared = self._generation_fixture()
+
+        first = _product_verify_migration_generated_csharp_style(source, **prepared)
+        replay = _product_verify_migration_generated_csharp_style(source, **prepared)
+
+        self.assertTrue(first.success, first.metadata["issues"])
+        self.assertEqual(
+            "consumed",
+            first.metadata["source_modification_contract"]["receipt_state"],
+        )
+        self.assertFalse(replay.success)
+        self.assertIn(
+            "csharp_generation_source_operation_receipt_replayed",
+            {item["code"] for item in replay.metadata["issues"]},
+        )
+
+    def test_failed_generation_can_issue_corrected_retry_before_consumption(self):
+        valid_source, designer = valid_csharp_contract_sources()
+        invalid_source = valid_source.replace(
+            "private void CallSelectProcedure()",
+            "private string GetEditValue() { return string.Empty; }\n\n"
+            "        private void CallSelectProcedure()",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_path = root / "InventoryBrowse.cs"
+            designer_path = root / "InventoryBrowse.Designer.cs"
+            generation_run = begin_pb_to_csharp_runtime_generation(
+                target_source_path=source_path,
+                target_designer_path=designer_path,
+            )
+            self.assertTrue(generation_run.success, generation_run.to_dict())
+            source_path.write_text(invalid_source, encoding="utf-8", newline="")
+            designer_path.write_text(designer, encoding="utf-8", newline="")
+            first_issue = issue_pb_to_csharp_runtime_generation_receipt(
+                generation_run.metadata["generation_run_receipt"]
+            )
+            self.assertTrue(first_issue.success, first_issue.to_dict())
+            common = {
+                "source_operation": "generation",
+                "designer_source_text": designer,
+                "profile_evidence": loaded_test_profile(csharp_required_patterns=[]),
+                "program_key": "InventoryBrowse",
+                "result_fields": ["ENTITY_ID"],
+                "expected_control_contracts": inferred_test_control_contracts(designer),
+                "target_source_path": str(source_path),
+                "target_designer_path": str(designer_path),
+                "target_designer_sha256": "sha256:"
+                + hashlib.sha256(designer_path.read_bytes()).hexdigest(),
+                "standalone_surface_kind": "form",
+            }
+            failed = _product_verify_migration_generated_csharp_style(
+                invalid_source,
+                **{
+                    **common,
+                    "target_source_sha256": "sha256:"
+                    + hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                    "source_operation_receipt": first_issue.metadata[
+                        "generation_receipt"
+                    ],
+                },
+            )
+            source_path.write_text(valid_source, encoding="utf-8", newline="")
+            corrected_issue = issue_pb_to_csharp_runtime_generation_receipt(
+                generation_run.metadata["generation_run_receipt"]
+            )
+            corrected = _product_verify_migration_generated_csharp_style(
+                valid_source,
+                **{
+                    **common,
+                    "target_source_sha256": "sha256:"
+                    + hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                    "source_operation_receipt": corrected_issue.metadata[
+                        "generation_receipt"
+                    ],
+                },
+            )
+
+        self.assertFalse(failed.success)
+        self.assertTrue(
+            failed.metadata["source_modification_contract"]["retry_allowed"]
+        )
+        self.assertTrue(corrected_issue.success, corrected_issue.to_dict())
+        self.assertEqual("corrected_retry", corrected_issue.metadata["issuance"])
+        self.assertNotEqual(
+            first_issue.metadata["receipt_id"],
+            corrected_issue.metadata["receipt_id"],
+        )
+        self.assertTrue(corrected.success, corrected.metadata["issues"])
+
+    def test_actual_runtime_build_and_orchestration_issue_receipt_without_external_authenticator(self):
+        source, designer = valid_csharp_contract_sources()
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        evidence = [
+            pasted_sql_evidence(
+                "SELECT @WORKTYPE AS WORKTYPE;",
+                evidence_role="body_fragment",
+            )
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            source_path = root / "InventoryBrowse.cs"
+            designer_path = root / "InventoryBrowse.Designer.cs"
+            with patch_runtime_profile_path(profile_path):
+                runtime = build_offline_pb_to_csharp_runtime_generation(
+                    "Generate and validate one PB migration screen.",
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    target_source_path=source_path,
+                    target_designer_path=designer_path,
+                )
+                self.assertTrue(runtime.success, runtime.to_dict())
+                source_path.write_text(source, encoding="utf-8", newline="")
+                designer_path.write_text(designer, encoding="utf-8", newline="")
+                result = orchestrate_pb_migration_validation(
+                    csharp_source_text=source,
+                    csharp_source_operation="generation",
+                    runtime_generation_run_receipt=runtime.metadata[
+                        "generation_run"
+                    ]["generation_run_receipt"],
+                    designer_source_text=designer,
+                    original_sql_text=sql,
+                    formatted_sql_text=sql,
+                    source_evidence=evidence,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    program_key="InventoryBrowse",
+                    result_fields=["ENTITY_ID"],
+                    target_source_path=str(source_path),
+                    target_source_sha256="sha256:"
+                    + hashlib.sha256(source_path.read_bytes()).hexdigest(),
+                    target_designer_path=str(designer_path),
+                    target_designer_sha256="sha256:"
+                    + hashlib.sha256(designer_path.read_bytes()).hexdigest(),
+                )
+
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual(
+            "passed",
+            result.metadata["evidence"]["generation_receipt_issuance"]["status"],
+        )
+        self.assertEqual(
+            "consumed",
+            result.metadata["evidence"]["csharp"]["source_modification_contract"][
+                "receipt_state"
+            ],
+        )
+
+    def test_runtime_generation_state_is_bounded_for_hundreds_of_abandoned_pending_and_retry_runs(self):
+        clock = [1000.0]
+        last_run = {}
+        last_receipt = {}
+        with tempfile.TemporaryDirectory() as temp_dir, self._isolated_runtime_state(), mock.patch.object(
+            pb_migration,
+            "_pb_migration_runtime_now",
+            side_effect=lambda: clock[0],
+        ):
+            root = Path(temp_dir)
+            for index in range(300):
+                opened = begin_pb_to_csharp_runtime_generation(
+                    target_source_path=root / f"abandoned-{index}.cs"
+                )
+                self.assertTrue(opened.success, opened.to_dict())
+                clock[0] += 0.01
+            self.assertLessEqual(
+                len(pb_migration._PB_MIGRATION_GENERATION_RUNS),
+                pb_migration._PB_MIGRATION_MAX_ACTIVE_RUNS,
+            )
+
+            for index in range(300):
+                source_path = root / f"pending-{index}.cs"
+                opened = begin_pb_to_csharp_runtime_generation(
+                    target_source_path=source_path
+                )
+                self.assertTrue(opened.success, opened.to_dict())
+                source_path.write_text(f"pending-{index}", encoding="utf-8")
+                issued = issue_pb_to_csharp_runtime_generation_receipt(
+                    opened.metadata["generation_run_receipt"]
+                )
+                self.assertTrue(issued.success, issued.to_dict())
+                clock[0] += 0.01
+            self.assertLessEqual(
+                len(pb_migration._PB_MIGRATION_GENERATION_RECEIPTS),
+                pb_migration._PB_MIGRATION_MAX_ACTIVE_RECEIPTS,
+            )
+
+            for index in range(300):
+                source_path = root / f"completed-{index}.cs"
+                opened = begin_pb_to_csharp_runtime_generation(
+                    target_source_path=source_path
+                )
+                self.assertTrue(opened.success, opened.to_dict())
+                source_path.write_text(f"first-{index}", encoding="utf-8")
+                first = issue_pb_to_csharp_runtime_generation_receipt(
+                    opened.metadata["generation_run_receipt"]
+                )
+                self.assertTrue(first.success, first.to_dict())
+                source_path.write_text(f"corrected-{index}", encoding="utf-8")
+                corrected = issue_pb_to_csharp_runtime_generation_receipt(
+                    opened.metadata["generation_run_receipt"]
+                )
+                self.assertTrue(corrected.success, corrected.to_dict())
+                self.assertEqual("corrected_retry", corrected.metadata["issuance"])
+                self.assertTrue(
+                    pb_migration._consume_host_generation_receipt(
+                        corrected.metadata["generation_receipt"]
+                    )
+                )
+                last_run = opened.metadata["generation_run_receipt"]
+                last_receipt = corrected.metadata["generation_receipt"]
+                clock[0] += 0.01
+
+            snapshot = pb_migration._cleanup_pb_migration_generation_state(
+                now=clock[0]
+            )
+            self.assertLessEqual(
+                snapshot["active_runs"],
+                pb_migration._PB_MIGRATION_MAX_ACTIVE_RUNS,
+            )
+            self.assertLessEqual(
+                snapshot["active_receipts"],
+                pb_migration._PB_MIGRATION_MAX_ACTIVE_RECEIPTS,
+            )
+            self.assertLessEqual(
+                snapshot["replay_tombstones"],
+                pb_migration._PB_MIGRATION_MAX_REPLAY_TOMBSTONES,
+            )
+            self.assertEqual(
+                "completed",
+                pb_migration._authenticate_pb_migration_generation_run(last_run)[0],
+            )
+            self.assertEqual(
+                "consumed",
+                pb_migration._host_generation_receipt_authentication_status(
+                    pb_migration._canonical_source_operation_receipt_payload(
+                        last_receipt
+                    ),
+                    last_receipt["signature"],
+                ),
+            )
+            replay = issue_pb_to_csharp_runtime_generation_receipt(last_run)
+            self.assertFalse(replay.success)
+            self.assertIn(
+                "csharp_generation_run_receipt_replayed",
+                {item["code"] for item in replay.metadata["issues"]},
+            )
+
+            clock[0] += pb_migration._PB_MIGRATION_REPLAY_TOMBSTONE_TTL_SECONDS + 1
+            expired = pb_migration._cleanup_pb_migration_generation_state(
+                now=clock[0]
+            )
+            self.assertEqual(0, expired["replay_tombstones"])
+            self.assertEqual(
+                "unknown_receipt",
+                pb_migration._host_generation_receipt_authentication_status(
+                    pb_migration._canonical_source_operation_receipt_payload(
+                        last_receipt
+                    ),
+                    last_receipt["signature"],
+                ),
+            )
+
+    def test_public_runtime_generation_entrypoint_writes_source_and_designer_and_blocks_replay(self):
+        source, designer = valid_csharp_contract_sources()
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        with tempfile.TemporaryDirectory() as temp_dir, self._isolated_runtime_state():
+            root = Path(temp_dir)
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            source_path = root / "InventoryBrowse.cs"
+            designer_path = root / "InventoryBrowse.Designer.cs"
+            observed_paths = []
+
+            def writer(source_target, designer_target):
+                observed_paths.append((source_target, designer_target))
+                source_target.write_text(source, encoding="utf-8", newline="")
+                designer_target.write_text(designer, encoding="utf-8", newline="")
+
+            with patch_runtime_profile_path(profile_path):
+                result = run_pb_to_csharp_runtime_generation(
+                    "Generate and validate one PB migration screen.",
+                    writer=writer,
+                    target_source_path=source_path,
+                    target_designer_path=designer_path,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    orchestration_kwargs=self._host_operation_orchestration_kwargs(
+                        designer, sql
+                    ),
+                )
+                replay = run_pb_to_csharp_runtime_generation(
+                    "Replay a completed PB migration screen.",
+                    writer=writer,
+                    target_source_path=source_path,
+                    target_designer_path=designer_path,
+                    profile_id="pb-csharp-offline-generalized",
+                    profile_version="1.0",
+                    profile_hash=profile_hash,
+                    orchestration_kwargs=self._host_operation_orchestration_kwargs(
+                        designer, sql
+                    ),
+                    generation_run_receipt=result.metadata[
+                        "generation_run_receipt"
+                    ],
+                )
+
+        self.assertIn(
+            "writer", inspect.signature(run_pb_to_csharp_runtime_generation).parameters
+        )
+        self.assertTrue(result.success, result.to_dict())
+        self.assertEqual([(source_path, designer_path)], observed_paths)
+        self.assertEqual("complete", result.metadata["stage"])
+        self.assertEqual(
+            "consumed",
+            result.metadata["orchestration"]["metadata"]["evidence"]["csharp"][
+                "source_modification_contract"
+            ]["receipt_state"],
+        )
+        self.assertFalse(replay.success)
+        self.assertEqual("open-run", replay.metadata["stage"])
+        self.assertEqual(1, len(observed_paths))
+
+    def test_public_runtime_generation_fails_closed_for_missing_or_changed_exact_paths(self):
+        source, designer = valid_csharp_contract_sources()
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        with tempfile.TemporaryDirectory() as temp_dir, self._isolated_runtime_state():
+            root = Path(temp_dir)
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            common = {
+                "profile_id": "pb-csharp-offline-generalized",
+                "profile_version": "1.0",
+                "profile_hash": profile_hash,
+                "orchestration_kwargs": self._host_operation_orchestration_kwargs(
+                    designer, sql
+                ),
+            }
+            with patch_runtime_profile_path(profile_path):
+                missing_designer = run_pb_to_csharp_runtime_generation(
+                    "Writer omits the exact Designer target.",
+                    writer=lambda source_target, _designer_target: source_target.write_text(
+                        source, encoding="utf-8", newline=""
+                    ),
+                    target_source_path=root / "MissingDesigner.cs",
+                    target_designer_path=root / "MissingDesigner.Designer.cs",
+                    **common,
+                )
+
+                changed_source_path = root / "ChangedPath.cs"
+
+                def changed_path_writer(source_target, _designer_target):
+                    source_target.with_name("Different.cs").write_text(
+                        source, encoding="utf-8", newline=""
+                    )
+
+                changed_path = run_pb_to_csharp_runtime_generation(
+                    "Writer writes a sibling instead of the bound source target.",
+                    writer=changed_path_writer,
+                    target_source_path=changed_source_path,
+                    **common,
+                )
+
+        self.assertFalse(missing_designer.success)
+        self.assertEqual("postwrite-binding", missing_designer.metadata["stage"])
+        self.assertTrue(missing_designer.metadata["retry_allowed"])
+        self.assertIn(
+            "csharp_generation_designer_postwrite_binding_required",
+            {item["code"] for item in missing_designer.metadata["issues"]},
+        )
+        self.assertFalse(changed_path.success)
+        self.assertEqual("postwrite-binding", changed_path.metadata["stage"])
+        self.assertIn(
+            "csharp_generation_source_postwrite_binding_required",
+            {item["code"] for item in changed_path.metadata["issues"]},
+        )
+
+    def test_public_runtime_generation_retries_after_validation_failure_and_rejects_forged_run(self):
+        source, designer = valid_csharp_contract_sources()
+        invalid_source = source.replace(
+            "private void CallSelectProcedure()",
+            "private string GetEditValue() { return string.Empty; }\n\n"
+            "        private void CallSelectProcedure()",
+        )
+        sql = sp_metadata_header("Generalized screen") + """
+CREATE PROCEDURE DBO.SP_GENERALIZED_SELECT
+    @WORKTYPE VARCHAR(20)
+AS
+BEGIN
+    SELECT @WORKTYPE AS WORKTYPE;
+END
+"""
+        with tempfile.TemporaryDirectory() as temp_dir, self._isolated_runtime_state():
+            root = Path(temp_dir)
+            profile_path, profile_hash = write_packaged_profile(temp_dir)
+            source_path = root / "InventoryBrowse.cs"
+            designer_path = root / "InventoryBrowse.Designer.cs"
+            common = {
+                "target_source_path": source_path,
+                "target_designer_path": designer_path,
+                "profile_id": "pb-csharp-offline-generalized",
+                "profile_version": "1.0",
+                "profile_hash": profile_hash,
+                "orchestration_kwargs": self._host_operation_orchestration_kwargs(
+                    designer, sql
+                ),
+            }
+
+            def write_pair(source_text):
+                def writer(source_target, designer_target):
+                    source_target.write_text(
+                        source_text, encoding="utf-8", newline=""
+                    )
+                    designer_target.write_text(
+                        designer, encoding="utf-8", newline=""
+                    )
+
+                return writer
+
+            with patch_runtime_profile_path(profile_path):
+                failed = run_pb_to_csharp_runtime_generation(
+                    "Generate an invalid draft before correction.",
+                    writer=write_pair(invalid_source),
+                    **common,
+                )
+                forged_receipt = copy.deepcopy(
+                    failed.metadata["generation_run_receipt"]
+                )
+                forged_receipt["signature"] = "0" * 64
+                forged = run_pb_to_csharp_runtime_generation(
+                    "Attempt a forged correction.",
+                    writer=write_pair(source),
+                    generation_run_receipt=forged_receipt,
+                    **common,
+                )
+                corrected = run_pb_to_csharp_runtime_generation(
+                    "Correct and revalidate the same exact targets.",
+                    writer=write_pair(source),
+                    generation_run_receipt=failed.metadata[
+                        "generation_run_receipt"
+                    ],
+                    **common,
+                )
+
+        self.assertFalse(failed.success)
+        self.assertEqual("orchestration", failed.metadata["stage"])
+        self.assertTrue(failed.metadata["retry_allowed"])
+        self.assertFalse(forged.success)
+        self.assertEqual("open-run", forged.metadata["stage"])
+        self.assertTrue(corrected.success, corrected.to_dict())
+        self.assertEqual("complete", corrected.metadata["stage"])
+        self.assertEqual(
+            "corrected_retry",
+            corrected.metadata["receipt_issuance"]["metadata"]["issuance"],
+        )
+
+    def test_modification_rejects_hardlinked_original_and_candidate(self):
+        source, designer = valid_csharp_contract_sources()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            original_path = root / "InventoryBrowse.original.cs"
+            candidate_path = root / "InventoryBrowse.cs"
+            designer_path = root / "InventoryBrowse.Designer.cs"
+            original_path.write_text(source, encoding="utf-8", newline="")
+            try:
+                os.link(original_path, candidate_path)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"Hard links are unavailable: {exc}")
+            designer_path.write_text(designer, encoding="utf-8", newline="")
+            source_digest = hashlib.sha256(original_path.read_bytes()).hexdigest()
+            designer_digest = hashlib.sha256(designer_path.read_bytes()).hexdigest()
+
+            result = _product_verify_migration_generated_csharp_style(
+                source,
+                source_operation="modification",
+                original_source_text=source,
+                original_source_path=str(original_path),
+                original_source_sha256=f"sha256:{source_digest}",
+                designer_source_text=designer,
+                profile_evidence=loaded_test_profile(csharp_required_patterns=[]),
+                program_key="InventoryBrowse",
+                result_fields=["ENTITY_ID"],
+                expected_control_contracts=inferred_test_control_contracts(designer),
+                target_source_path=str(candidate_path),
+                target_source_sha256=f"sha256:{source_digest}",
+                target_designer_path=str(designer_path),
+                target_designer_sha256=f"sha256:{designer_digest}",
+                standalone_surface_kind="form",
+            )
+
+        self.assertFalse(result.success)
+        self.assertIn(
+            "csharp_modification_original_candidate_path_same",
+            {item["code"] for item in result.metadata["issues"]},
+        )
+
+    def test_designer_wiring_exempts_only_the_wired_nonstandard_handler(self):
+        candidate, designer = valid_csharp_contract_sources()
+        wired_helper = (
+            "\n        private void RefreshLookupAfterBind(object sender, CustomSignal signal)\n"
+            "        {\n"
+            "            CallSelectProcedure();\n"
+            "        }\n"
+        )
+        original = candidate.rsplit("}", 1)[0] + wired_helper + "    }\n"
+        wired_designer = designer.replace(
+            "this.grdList.Columns.AddRange(this.colList_ENTITY_ID);",
+            "this.grdList.Columns.AddRange(this.colList_ENTITY_ID);\n"
+            "            this.grdList.DataBindingComplete += this.RefreshLookupAfterBind;",
+        )
+        wired = _product_verify_migration_generated_csharp_style(
+            candidate,
+            **self._modification_kwargs(
+                original,
+                candidate,
+                wired_designer,
+                prefix="wired-handler",
+            ),
+        )
+
+        suffix_helper = (
+            "\n        private void ApplyDefaults_Changed()\n"
+            "        {\n"
+            "            CallSelectProcedure();\n"
+            "        }\n"
+        )
+        suffix_original = candidate.rsplit("}", 1)[0] + suffix_helper + "    }\n"
+        suffix_only = _product_verify_migration_generated_csharp_style(
+            candidate,
+            **self._modification_kwargs(
+                suffix_original,
+                candidate,
+                designer,
+                prefix="suffix-helper",
+            ),
+        )
+
+        wired_codes = {item["code"] for item in wired.metadata["issues"]}
+        suffix_codes = {item["code"] for item in suffix_only.metadata["issues"]}
+        self.assertNotIn("target_local_helper_removed", wired_codes)
+        self.assertTrue(wired.success, wired.metadata["issues"])
+        self.assertFalse(suffix_only.success)
+        self.assertIn("target_local_helper_removed", suffix_codes)
 
 
 if __name__ == "__main__":

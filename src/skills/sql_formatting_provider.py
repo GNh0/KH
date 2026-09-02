@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 from typing import Any, Dict, List, Sequence, Tuple
 
 from src.orchestration.goal_evidence import RuntimeProducerBoundary
@@ -34,11 +35,11 @@ REQUIRED_SKILL_MARKERS = (
     "src.skills.sql_formatting_style.verify_sql_formatting_style",
     "src.skills.sql_formatting_provider.guard_and_bind_verified_sql_final_response",
     "python -m src.skills.sql_formatting_provider",
-    "correlated front-door provider selection",
+    "signed direct-packaged or front-door provider selection",
     "`cli_inputs`",
     "Paste-ready full SQL first.",
     "Every user correction invalidates the previous verification.",
-    "Complete alias plans for every multi-source formatted scope",
+    "For generation, complete a bound alias plan for every non-exempt multi-source candidate scope",
 )
 HOST_DIVERGENCE_PATTERNS = (
     re.compile(r"\b(?:may|can|should|must|will)\s+(?:change|rewrite)\s+(?:query\s+)?(?:behavior|logic|semantics)\b"),
@@ -178,9 +179,18 @@ SQL_PROVIDER_RECEIPT_PRODUCER = "sql-formatting-provider-cli-v1"
 SQL_PROVIDER_RECEIPT_CLAIM_KIND = "sql_final_response_release"
 SQL_PROVIDER_RECEIPT_SCHEMA_VERSION = 1
 SQL_PROVIDER_SELECTION_RECEIPT_PRODUCER = "kh-front-door-sql-provider-selection-v1"
+DIRECT_PACKAGED_SQL_PROVIDER_SELECTION_RECEIPT_PRODUCER = (
+    "sql-formatting-provider-direct-selection-v1"
+)
 SQL_PROVIDER_SELECTION_RECEIPT_CLAIM_KIND = "sql_provider_selection"
 SQL_PROVIDER_SELECTION_RECEIPT_SCHEMA_VERSION = 1
 SQL_PROVIDER_SELECTION_SCHEMA_VERSION = 1
+SQL_PROVIDER_SELECTION_ORIGIN_FRONT_DOOR = "front-door"
+SQL_PROVIDER_SELECTION_ORIGIN_DIRECT_PACKAGED = "direct-packaged"
+SQL_PROVIDER_SELECTION_ORIGINS = {
+    SQL_PROVIDER_SELECTION_ORIGIN_FRONT_DOOR,
+    SQL_PROVIDER_SELECTION_ORIGIN_DIRECT_PACKAGED,
+}
 SQL_PROVIDER_SELECTION_SOURCES = {"host-local-skill", "packaged-kh-skill"}
 SQL_PROVIDER_SELECTION_GATE_STATUSES = {
     "execution_allowed_after_selected_skill_setup",
@@ -197,6 +207,7 @@ SQL_CLI_PATH_ARGUMENTS = (
     "selected_active_provider_path",
 )
 SQL_CLI_SCOPE_ARGUMENTS = ("session_id", "invocation_nonce")
+SQL_CLI_OPTIONAL_ARGUMENT_FIELDS = {"token_optimizer_selected"}
 SQL_CLI_REQUIRED_HASHES = (
     "original_text_sha256",
     "candidate_text_sha256",
@@ -214,7 +225,11 @@ SQL_CLI_INPUT_FIELDS = {
     "resolved_paths",
     "hashes",
 }
-SQL_CLI_ARGUMENT_FIELDS = {*SQL_CLI_PATH_ARGUMENTS, *SQL_CLI_SCOPE_ARGUMENTS}
+SQL_CLI_ARGUMENT_FIELDS = {
+    *SQL_CLI_PATH_ARGUMENTS,
+    *SQL_CLI_SCOPE_ARGUMENTS,
+    *SQL_CLI_OPTIONAL_ARGUMENT_FIELDS,
+}
 SQL_CLI_RESOLVED_PATH_FIELDS = set(SQL_CLI_PATH_ARGUMENTS)
 SQL_CLI_HASH_FIELDS = set(SQL_CLI_REQUIRED_HASHES)
 SQL_FINAL_RELEASE_FIELDS = {
@@ -249,6 +264,49 @@ SQL_FINAL_VERIFICATION_FIELDS = {
     "exit_code",
     "execution_time",
     "metadata",
+}
+SQL_PROVIDER_SELECTION_RECEIPT_FIELDS = {
+    "schema_version",
+    "receipt_type",
+    "selection_origin",
+    "producer_module",
+    "provider_selection_sha256",
+    "provider_id",
+    "provider_source",
+    "provider_path",
+    "selected_active_provider_path",
+    "compatibility",
+    "selection_status",
+    "host",
+    "project",
+    "issued_at",
+    "producer_boundary",
+    "authority",
+    "external_authenticity",
+    "provider_selection_receipt_id",
+    "producer_claim",
+}
+DIRECT_PACKAGED_SQL_PROVIDER_METADATA_FIELDS = {
+    "source",
+    "path",
+    "contract_path",
+    "compatibility",
+    "execution_actor",
+    "verification_provider",
+}
+DIRECT_PACKAGED_SQL_PROVIDER_SELECTION_FIELDS = {
+    "schema_version",
+    "selection_origin",
+    "host",
+    "project",
+    "provider_id",
+    "provider_path",
+    "selected_active_provider_path",
+    "provider_source",
+    "compatibility",
+    "selection_status",
+    "provider_metadata",
+    "provider_selection_receipt",
 }
 
 
@@ -499,7 +557,7 @@ def sql_provider_selection_sha256(provider_selection: Mapping[str, Any]) -> str:
     if not isinstance(provider_selection, Mapping) or not provider_selection:
         raise SqlFormattingProviderPathError(
             "provider_selection_missing",
-            "Correlated front-door provider selection evidence is required",
+            "Signed SQL provider selection evidence is required",
             "",
         )
     payload = json.dumps(
@@ -515,6 +573,16 @@ def attach_sql_provider_selection_runtime_receipt(
     provider_selection: Mapping[str, Any],
 ) -> Dict[str, Any]:
     unsigned = _unsigned_sql_provider_selection(provider_selection)
+    unsigned.setdefault(
+        "selection_origin",
+        SQL_PROVIDER_SELECTION_ORIGIN_FRONT_DOOR,
+    )
+    if unsigned.get("selection_origin") != SQL_PROVIDER_SELECTION_ORIGIN_FRONT_DOOR:
+        raise SqlFormattingProviderPathError(
+            "provider_selection_origin_not_front_door",
+            "The front-door receipt issuer accepts only front-door selections",
+            "",
+        )
     schema_errors = _sql_provider_selection_schema_errors(unsigned)
     if schema_errors:
         raise SqlFormattingProviderPathError(
@@ -526,6 +594,7 @@ def attach_sql_provider_selection_runtime_receipt(
     receipt_payload = {
         "schema_version": SQL_PROVIDER_SELECTION_RECEIPT_SCHEMA_VERSION,
         "receipt_type": "kh_front_door_sql_provider_selection",
+        "selection_origin": SQL_PROVIDER_SELECTION_ORIGIN_FRONT_DOOR,
         "producer_module": "src.orchestration.kh_front_door",
         "provider_selection_sha256": sql_provider_selection_sha256(unsigned),
         "provider_id": selected["provider_id"],
@@ -550,6 +619,93 @@ def attach_sql_provider_selection_runtime_receipt(
     return result
 
 
+def issue_direct_packaged_sql_provider_selection(
+    *,
+    host: str,
+    project: str | Path,
+) -> Dict[str, Any]:
+    """Issue a signed selection for the current module-derived packaged SQL skill."""
+    normalized_host = host.strip() if type(host) is str else ""
+    if not normalized_host:
+        raise SqlFormattingProviderPathError(
+            "provider_selection_host_missing",
+            "Direct packaged selection requires a non-empty host",
+            "",
+        )
+    try:
+        project_path = Path(project).expanduser().resolve()
+    except (OSError, TypeError, ValueError) as exc:
+        raise SqlFormattingProviderPathError(
+            "provider_selection_project_invalid",
+            str(exc),
+            "",
+        ) from exc
+    inspection = inspect_packaged_sql_formatting_provider()
+    if not inspection.compatible:
+        raise SqlFormattingProviderPathError(
+            "packaged_provider_not_compatible",
+            ",".join(inspection.issues),
+            inspection.skill_path,
+        )
+    provider_path = str(_absolute_provider_path(Path(inspection.skill_path)))
+    contract_path = str(_absolute_provider_path(Path(inspection.contract_path)))
+    unsigned = {
+        "schema_version": SQL_PROVIDER_SELECTION_SCHEMA_VERSION,
+        "selection_origin": SQL_PROVIDER_SELECTION_ORIGIN_DIRECT_PACKAGED,
+        "host": normalized_host,
+        "project": str(project_path),
+        "provider_id": PACKAGED_PROVIDER_ID,
+        "provider_path": provider_path,
+        "selected_active_provider_path": provider_path,
+        "provider_source": "packaged-kh-skill",
+        "compatibility": "compatible",
+        "selection_status": "selected",
+        "provider_metadata": {
+            "source": "packaged-kh-skill",
+            "path": provider_path,
+            "contract_path": contract_path,
+            "compatibility": "compatible",
+            "execution_actor": "host-llm",
+            "verification_provider": "sql-formatting-style-harness",
+        },
+    }
+    schema_errors = _sql_provider_selection_schema_errors(unsigned)
+    if schema_errors:
+        raise SqlFormattingProviderPathError(
+            schema_errors[0],
+            ",".join(schema_errors),
+            provider_path,
+        )
+    receipt_payload = {
+        "schema_version": SQL_PROVIDER_SELECTION_RECEIPT_SCHEMA_VERSION,
+        "receipt_type": "direct_packaged_sql_provider_selection",
+        "selection_origin": SQL_PROVIDER_SELECTION_ORIGIN_DIRECT_PACKAGED,
+        "producer_module": "src.skills.sql_formatting_provider",
+        "provider_selection_sha256": sql_provider_selection_sha256(unsigned),
+        "provider_id": PACKAGED_PROVIDER_ID,
+        "provider_source": "packaged-kh-skill",
+        "provider_path": provider_path,
+        "selected_active_provider_path": provider_path,
+        "compatibility": "compatible",
+        "selection_status": "selected",
+        "host": normalized_host,
+        "project": str(project_path),
+        "issued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = dict(unsigned)
+    result["provider_selection_receipt"] = (
+        _sql_provider_selection_runtime_boundary(
+            SQL_PROVIDER_SELECTION_ORIGIN_DIRECT_PACKAGED
+        ).issue_claim(
+            receipt_payload,
+            claim_kind=SQL_PROVIDER_SELECTION_RECEIPT_CLAIM_KIND,
+            claim_id_field="provider_selection_receipt_id",
+            claim_id_prefix="direct-selection",
+        )
+    )
+    return result
+
+
 def validate_sql_provider_selection_runtime_receipt(
     provider_selection: Mapping[str, Any],
     *,
@@ -562,20 +718,39 @@ def validate_sql_provider_selection_runtime_receipt(
     if not isinstance(receipt, Mapping):
         return ["provider_selection_runtime_receipt_missing"]
     errors = _sql_provider_selection_schema_errors(provider_selection)
+    origin = provider_selection.get("selection_origin")
+    if origin == SQL_PROVIDER_SELECTION_ORIGIN_DIRECT_PACKAGED:
+        boundary = _sql_provider_selection_runtime_boundary(origin)
+        producer_name = DIRECT_PACKAGED_SQL_PROVIDER_SELECTION_RECEIPT_PRODUCER
+        receipt_type = "direct_packaged_sql_provider_selection"
+        producer_module = "src.skills.sql_formatting_provider"
+        receipt_id_pattern = re.compile(r"^direct-selection-[0-9a-f]{32}$")
+    else:
+        boundary = _sql_provider_selection_runtime_boundary(
+            SQL_PROVIDER_SELECTION_ORIGIN_FRONT_DOOR
+        )
+        producer_name = SQL_PROVIDER_SELECTION_RECEIPT_PRODUCER
+        receipt_type = "kh_front_door_sql_provider_selection"
+        producer_module = "src.orchestration.kh_front_door"
+        receipt_id_pattern = re.compile(r"^selection-[0-9a-f]{32}$")
+    for key in sorted(SQL_PROVIDER_SELECTION_RECEIPT_FIELDS - set(receipt)):
+        errors.append(f"provider_selection_runtime_receipt_{key}_missing")
+    for key in sorted(set(receipt) - SQL_PROVIDER_SELECTION_RECEIPT_FIELDS):
+        errors.append(f"provider_selection_runtime_receipt_{key}_unexpected")
     errors.extend(
         _runtime_receipt_identity_errors(
             receipt,
             error_prefix="provider_selection_runtime_receipt",
             schema_version=SQL_PROVIDER_SELECTION_RECEIPT_SCHEMA_VERSION,
             receipt_id_field="provider_selection_receipt_id",
-            receipt_id_pattern=re.compile(r"^selection-[0-9a-f]{32}$"),
-            boundary=_sql_provider_selection_runtime_boundary(),
-            producer_name=SQL_PROVIDER_SELECTION_RECEIPT_PRODUCER,
+            receipt_id_pattern=receipt_id_pattern,
+            boundary=boundary,
+            producer_name=producer_name,
             claim_kind=SQL_PROVIDER_SELECTION_RECEIPT_CLAIM_KIND,
         )
     )
     errors.extend(
-        _sql_provider_selection_runtime_boundary().validate_claim(
+        boundary.validate_claim(
             receipt,
             claim_kind=SQL_PROVIDER_SELECTION_RECEIPT_CLAIM_KIND,
             claim_id_field="provider_selection_receipt_id",
@@ -585,8 +760,9 @@ def validate_sql_provider_selection_runtime_receipt(
     selected = _explicit_sql_provider_selection_claim(provider_selection)
     expected = {
         "schema_version": SQL_PROVIDER_SELECTION_RECEIPT_SCHEMA_VERSION,
-        "receipt_type": "kh_front_door_sql_provider_selection",
-        "producer_module": "src.orchestration.kh_front_door",
+        "receipt_type": receipt_type,
+        "selection_origin": origin,
+        "producer_module": producer_module,
         "provider_selection_sha256": sql_provider_selection_sha256(provider_selection),
         "provider_id": selected.get("provider_id"),
         "provider_source": selected.get("provider_source"),
@@ -648,6 +824,73 @@ def _explicit_sql_provider_selection_claim(
     }
 
 
+def _direct_packaged_sql_provider_selection_schema_errors(
+    provider_selection: Mapping[str, Any],
+) -> List[str]:
+    errors: List[str] = []
+    expected_fields = set(DIRECT_PACKAGED_SQL_PROVIDER_SELECTION_FIELDS)
+    if "provider_selection_receipt" not in provider_selection:
+        expected_fields.remove("provider_selection_receipt")
+    for key in sorted(expected_fields - set(provider_selection)):
+        errors.append(f"provider_selection_{key}_missing")
+    for key in sorted(set(provider_selection) - expected_fields):
+        errors.append(f"provider_selection_unexpected_{key}")
+
+    metadata = provider_selection.get("provider_metadata")
+    if not isinstance(metadata, Mapping):
+        errors.append("provider_selection_metadata_missing")
+        metadata = {}
+    else:
+        for key in sorted(DIRECT_PACKAGED_SQL_PROVIDER_METADATA_FIELDS - set(metadata)):
+            errors.append(f"provider_selection_metadata_{key}_missing")
+        for key in sorted(set(metadata) - DIRECT_PACKAGED_SQL_PROVIDER_METADATA_FIELDS):
+            errors.append(f"provider_selection_metadata_{key}_unexpected")
+
+    expected_skill = _absolute_provider_path(
+        _default_skills_root() / PACKAGED_PROVIDER_SKILL_DIR / "SKILL.md"
+    )
+    expected_contract = _absolute_provider_path(
+        _default_skills_root() / CANONICAL_CONTRACT_RELATIVE_PATH
+    )
+    expected_values = {
+        "provider_id": PACKAGED_PROVIDER_ID,
+        "provider_source": "packaged-kh-skill",
+        "compatibility": "compatible",
+        "selection_status": "selected",
+    }
+    for key, expected in expected_values.items():
+        value = provider_selection.get(key)
+        if type(value) is not str:
+            errors.append(f"provider_selection_{key}_not_string")
+        elif value != expected:
+            errors.append(f"provider_selection_{key}_mismatch")
+
+    for key in ("provider_path", "selected_active_provider_path"):
+        value = provider_selection.get(key)
+        if type(value) is not str:
+            errors.append(f"provider_selection_{key}_not_string")
+        elif _provider_path_key(value) != _provider_path_key(expected_skill):
+            errors.append("provider_selection_direct_packaged_path_mismatch")
+    expected_metadata = {
+        "source": "packaged-kh-skill",
+        "path": str(expected_skill),
+        "contract_path": str(expected_contract),
+        "compatibility": "compatible",
+        "execution_actor": "host-llm",
+        "verification_provider": "sql-formatting-style-harness",
+    }
+    for key, expected in expected_metadata.items():
+        value = metadata.get(key)
+        if type(value) is not str:
+            errors.append(f"provider_selection_metadata_{key}_not_string")
+        elif key in {"path", "contract_path"}:
+            if _provider_path_key(value) != _provider_path_key(expected):
+                errors.append(f"provider_selection_metadata_{key}_mismatch")
+        elif value != expected:
+            errors.append(f"provider_selection_metadata_{key}_mismatch")
+    return list(dict.fromkeys(errors))
+
+
 def _sql_provider_selection_schema_errors(provider_selection: Any) -> List[str]:
     if not isinstance(provider_selection, Mapping):
         return ["provider_selection_missing"]
@@ -658,7 +901,30 @@ def _sql_provider_selection_schema_errors(provider_selection: Any) -> List[str]:
     elif schema_version != SQL_PROVIDER_SELECTION_SCHEMA_VERSION:
         errors.append("provider_selection_schema_version_mismatch")
 
+    origin = provider_selection.get("selection_origin")
+    if type(origin) is not str:
+        errors.append("provider_selection_selection_origin_not_string")
+    elif origin not in SQL_PROVIDER_SELECTION_ORIGINS:
+        errors.append("provider_selection_selection_origin_not_allowed")
+    if origin == SQL_PROVIDER_SELECTION_ORIGIN_DIRECT_PACKAGED:
+        errors.extend(
+            _direct_packaged_sql_provider_selection_schema_errors(
+                provider_selection
+            )
+        )
+        for key in ("host", "project"):
+            value = provider_selection.get(key)
+            if type(value) is not str:
+                errors.append(f"provider_selection_{key}_not_string")
+            elif not value.strip():
+                errors.append(f"provider_selection_{key}_missing")
+        project = provider_selection.get("project")
+        if type(project) is str and not Path(project).expanduser().is_absolute():
+            errors.append("provider_selection_project_not_absolute")
+        return list(dict.fromkeys(errors))
+
     string_fields = [
+        "selection_origin",
         "host",
         "project",
         "provider_id",
@@ -839,10 +1105,16 @@ def _runtime_receipt_identity_errors(
 def _selected_sql_provider_from_front_door(
     provider_selection: Mapping[str, Any],
 ) -> Dict[str, str]:
+    return _selected_sql_provider_from_signed_selection(provider_selection)
+
+
+def _selected_sql_provider_from_signed_selection(
+    provider_selection: Mapping[str, Any],
+) -> Dict[str, str]:
     if not isinstance(provider_selection, Mapping) or not provider_selection:
         raise SqlFormattingProviderPathError(
             "provider_selection_missing",
-            "Correlated front-door provider selection evidence is required",
+            "A signed SQL provider selection is required",
             "",
         )
     provenance_errors = validate_sql_provider_selection_runtime_receipt(
@@ -863,7 +1135,7 @@ def _selected_sql_provider_claim(
     if not isinstance(provider_selection, Mapping) or not provider_selection:
         raise SqlFormattingProviderPathError(
             "provider_selection_missing",
-            "Correlated front-door provider selection evidence is required",
+            "Signed SQL provider selection evidence is required",
             "",
         )
     schema_errors = _sql_provider_selection_schema_errors(provider_selection)
@@ -887,6 +1159,7 @@ def bind_verified_sql_final_response(
     scalar_function_refactor: Mapping[str, Any] | None = None,
     runtime_receipt_authenticator: Any = None,
     operation: str | None = None,
+    token_optimizer_selected: bool = False,
 ) -> SqlFinalResponseBinding:
     if not isinstance(original_sql, (str, bytes, os.PathLike)) or not original_sql:
         raise SqlFinalResponseBindingError(
@@ -921,6 +1194,8 @@ def bind_verified_sql_final_response(
     if runtime_receipt_authenticator is not None:
         verifier_kwargs["runtime_receipt_authenticator"] = runtime_receipt_authenticator
     verifier_kwargs["operation"] = "formatting"
+    if token_optimizer_selected:
+        verifier_kwargs["token_optimizer_selected"] = True
 
     fresh_result = verify_sql_formatting_style(
         original_sql,
@@ -1047,6 +1322,7 @@ def guard_and_bind_verified_sql_final_response(
     cte_temp_table_reason: str | None = None,
     alias_role_plan: Mapping[str, Any] | Sequence[Mapping[str, Any]] | None = None,
     verifier_history: Sequence[Mapping[str, Any]] | None = None,
+    token_optimizer_selected: bool = False,
 ) -> SqlFinalResponseRelease:
     provider_guard = guard_authoritative_sql_formatting_provider_path(
         provider_path,
@@ -1061,6 +1337,7 @@ def guard_and_bind_verified_sql_final_response(
         cte_temp_table_reason=cte_temp_table_reason,
         alias_role_plan=alias_role_plan,
         operation="formatting",
+        token_optimizer_selected=token_optimizer_selected,
     )
     _require_ready_sql_formatting_repair_history(verifier_history, binding)
     return SqlFinalResponseRelease(
@@ -1125,7 +1402,7 @@ def guard_authoritative_sql_formatting_provider_path(
         / PACKAGED_PROVIDER_SKILL_DIR
         / "SKILL.md"
     )
-    selected_role = _selected_sql_provider_from_front_door(provider_selection)
+    selected_role = _selected_sql_provider_from_signed_selection(provider_selection)
     selection_sha256 = sql_provider_selection_sha256(provider_selection)
     selected_provider_path = str(selected_role["provider_path"])
     provider_id = str(selected_role["provider_id"])
@@ -1169,7 +1446,7 @@ def guard_authoritative_sql_formatting_provider_path(
     if requested_key != selected_key or selected_key != routed_key:
         raise SqlFormattingProviderPathError(
             "provider_selection_path_mismatch",
-            "The runtime provider path must match the provider selected by the correlated front-door evidence",
+            "The runtime provider path must match the signed provider selection",
             str(requested_absolute),
         )
 
@@ -1555,9 +1832,16 @@ def _sql_provider_runtime_boundary() -> RuntimeProducerBoundary:
     )
 
 
-def _sql_provider_selection_runtime_boundary() -> RuntimeProducerBoundary:
+def _sql_provider_selection_runtime_boundary(
+    origin: str = SQL_PROVIDER_SELECTION_ORIGIN_FRONT_DOOR,
+) -> RuntimeProducerBoundary:
+    producer = (
+        DIRECT_PACKAGED_SQL_PROVIDER_SELECTION_RECEIPT_PRODUCER
+        if origin == SQL_PROVIDER_SELECTION_ORIGIN_DIRECT_PACKAGED
+        else SQL_PROVIDER_SELECTION_RECEIPT_PRODUCER
+    )
     return RuntimeProducerBoundary(
-        SQL_PROVIDER_SELECTION_RECEIPT_PRODUCER,
+        producer,
         state_dir=_sql_provider_selection_receipt_state_dir(),
     )
 
@@ -1630,6 +1914,10 @@ def _successful_sql_cli_input_errors(
             errors.append(f"cli_input_argument_{key}_not_string")
         elif not arguments[key].strip():
             errors.append(f"cli_input_argument_{key}_missing")
+    if "token_optimizer_selected" in arguments and type(
+        arguments["token_optimizer_selected"]
+    ) is not bool:
+        errors.append("cli_input_argument_token_optimizer_selected_not_boolean")
     for key in SQL_CLI_PATH_ARGUMENTS:
         argument_value = arguments.get(key)
         if key not in resolved_paths:
@@ -2007,18 +2295,35 @@ def validate_sql_final_response_release_schema(
     for key, expected in {
         "harness": "sql-formatting-style-harness",
         "operation": "formatting",
-        "token_optimizer_status": "passthrough",
     }.items():
         value = metadata.get(key)
         if type(value) is not str:
             errors.append(f"final_response_verification_{key}_not_string")
         elif value != expected:
             errors.append(f"final_response_verification_{key}_mismatch")
-    not_used_reason = metadata.get("not_used_reason")
-    if type(not_used_reason) is not str:
-        errors.append("final_response_verification_not_used_reason_not_string")
-    elif not not_used_reason.strip():
-        errors.append("final_response_verification_not_used_reason_missing")
+    token_fields = {
+        "token_optimizer_status",
+        "token_optimizer_status_reason",
+        "not_used_reason",
+    }
+    if token_fields.intersection(metadata):
+        for key in sorted(token_fields - set(metadata)):
+            errors.append(f"final_response_verification_{key}_missing")
+        token_status = metadata.get("token_optimizer_status")
+        if type(token_status) is not str:
+            errors.append(
+                "final_response_verification_token_optimizer_status_not_string"
+            )
+        elif token_status != "passthrough":
+            errors.append(
+                "final_response_verification_token_optimizer_status_mismatch"
+            )
+        for key in ("token_optimizer_status_reason", "not_used_reason"):
+            value = metadata.get(key)
+            if type(value) is not str:
+                errors.append(f"final_response_verification_{key}_not_string")
+            elif not value.strip():
+                errors.append(f"final_response_verification_{key}_missing")
     for key in ["original_sha256", "formatted_sha256", "verification_id"]:
         value = metadata.get(key)
         if type(value) is not str:
@@ -2354,11 +2659,39 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     parser.add_argument("--alias-role-plan-file")
     parser.add_argument("--verifier-history-file")
     parser.add_argument("--cte-temp-table-reason")
+    parser.add_argument("--token-optimizer-selected", action="store_true")
+    return parser
+
+
+def _build_direct_selection_cli_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Issue a signed module-derived packaged SQL provider selection."
+    )
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--project", required=True)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _build_cli_parser().parse_args(argv)
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args[:1] == ["issue-direct-selection"]:
+        direct_args = _build_direct_selection_cli_parser().parse_args(raw_args[1:])
+        try:
+            selection = issue_direct_packaged_sql_provider_selection(
+                host=direct_args.host,
+                project=direct_args.project,
+            )
+        except (OSError, ValueError) as exc:
+            code = getattr(exc, "code", "direct_packaged_selection_failed")
+            print(
+                json.dumps(
+                    {"status": "blocked", "error_code": code, "message": str(exc)}
+                )
+            )
+            return 1
+        print(json.dumps(selection, ensure_ascii=False, sort_keys=True))
+        return 0
+    args = _build_cli_parser().parse_args(raw_args)
     try:
         artifacts = load_sql_formatting_cli_artifacts(
             original_file=args.original_file,
@@ -2377,6 +2710,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             cte_temp_table_reason=args.cte_temp_table_reason,
             alias_role_plan=_load_json_mapping(args.alias_role_plan_file),
             verifier_history=_load_json_sequence(args.verifier_history_file),
+            token_optimizer_selected=args.token_optimizer_selected,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         code = getattr(exc, "code", "sql_final_binding_failed")
@@ -2410,6 +2744,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "hashes": dict(artifacts.hashes),
     }
+    if args.token_optimizer_selected:
+        receipt["cli_inputs"]["arguments"]["token_optimizer_selected"] = True
     receipt = attach_sql_formatting_cli_runtime_receipt(
         receipt,
         session_id=args.session_id,

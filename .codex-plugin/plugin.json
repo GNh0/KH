@@ -1,7 +1,7 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.145",
-  "description": "KH UAF provides semantically selected workflow skills, optional governed runtime audits, scoped state, development progress state, role-based orchestration, and role-based task command packets for Codex, Antigravity-style agents, Claude Code, and local workflows.",
+  "version": "2.9.146",
+  "description": "KH UAF provides opt-in domain and workflow skills. Ordinary clear requests run directly or load only the matching domain skill; routing audits, token optimization, credential safety, memory, Goal, and orchestration load only on concrete triggers and stay silent unless blocked or requested.",
   "author": {
     "name": "KH UAF",
     "url": "https://github.com/GNh0"
@@ -26,12 +26,12 @@
   "interface": {
     "displayName": "KH UAF",
     "shortDescription": "Personal skillbook with lightweight semantic routing.",
-    "longDescription": "KH UAF packages host-readable workflow skills, optional runtime gates, scoped memory, token telemetry, role orchestration, GoalState, progress state, and quality checks. Its front door uses host semantic selection for ordinary work and reserves Python routing for explicit audits, unresolved provider conflicts, and governed high-risk or large workflows. Before any Git executable, KH runs a filesystem-only workspace gate against the exact target. Non-Git targets run no Git/GitHub commands or retries.",
+    "longDescription": "KH UAF packages host-readable workflow skills, optional runtime gates, scoped memory, token telemetry, role orchestration, GoalState, progress state, and quality checks. For ordinary clear work, answer directly or load only the matching domain skill without reading or narrating routing internals. Routing audits are explicit or governed-only; token optimization requires a reducible payload; credential safety requires actual secret handling. Before any Git executable, KH runs a filesystem-only workspace gate against the exact target. Non-Git targets run no Git/GitHub commands or retries.",
     "developerName": "KH UAF",
     "category": "Productivity",
     "capabilities": [
       "Skills",
-      "Always-On Front Door",
+      "Explicit Routing Audit",
       "Plugin Composition",
       "Superpowers Replacement Layer",
       "Brainstorming",

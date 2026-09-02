@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import json
@@ -8,9 +9,9 @@ import threading
 import uuid
 from contextlib import contextmanager
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Callable, Dict, Iterable, List, Mapping
 
 from src.contracts import GoalState
 
@@ -33,6 +34,14 @@ SCOPE_FIELDS = (
 HASH_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 PRODUCER_BOUNDARY = "in_process_runtime_claim_v1"
 LOCAL_RUNTIME_BOUNDARY = "durable_local_runtime_integrity_v1"
+CONSUMED_LEDGER_SCHEMA_VERSION = 2
+CONSUMED_LEDGER_BLOOM_BITS = 262_144
+CONSUMED_LEDGER_BLOOM_HASHES = 7
+CONSUMED_LEDGER_BUCKET_SECONDS = 3_600
+MAX_SIGNED_CLAIM_VALIDITY_SECONDS = 7 * 24 * 60 * 60
+CONSUMED_LEDGER_MAX_BUCKETS = (
+    MAX_SIGNED_CLAIM_VALIDITY_SECONDS // CONSUMED_LEDGER_BUCKET_SECONDS
+) + 2
 
 
 _DEFAULT_EVIDENCE_ALIAS_GROUPS = [
@@ -49,7 +58,13 @@ _DEFAULT_EVIDENCE_ALIAS_GROUPS = [
 class RuntimeProducerBoundary:
     """Tracks local runtime claims without presenting them as external proof."""
 
-    def __init__(self, producer_name: str, state_dir: str | Path | None = None):
+    def __init__(
+        self,
+        producer_name: str,
+        state_dir: str | Path | None = None,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ):
         name = str(producer_name or "").strip()
         if not name:
             raise ValueError("producer_name is required")
@@ -69,6 +84,7 @@ class RuntimeProducerBoundary:
         self._claims: Dict[str, str] = {}
         self._consumed: set[str] = set()
         self._lock = threading.Lock()
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def issue_claim(
         self,
@@ -77,8 +93,20 @@ class RuntimeProducerBoundary:
         claim_kind: str,
         claim_id_field: str,
         claim_id_prefix: str,
+        validity_seconds: float | None = None,
     ) -> Dict[str, Any]:
         issued = deepcopy(dict(payload))
+        issued.pop("producer_claim_issued_at", None)
+        issued.pop("producer_claim_expires_at", None)
+        if validity_seconds is not None:
+            lifetime = float(validity_seconds)
+            if lifetime <= 0 or lifetime > MAX_SIGNED_CLAIM_VALIDITY_SECONDS:
+                raise ValueError("producer claim validity_seconds is out of range")
+            claim_issued_at = _ensure_utc(self._clock())
+            issued["producer_claim_issued_at"] = claim_issued_at.isoformat()
+            issued["producer_claim_expires_at"] = (
+                claim_issued_at + timedelta(seconds=lifetime)
+            ).isoformat()
         boundary_kind = LOCAL_RUNTIME_BOUNDARY if self._state_dir is not None else PRODUCER_BOUNDARY
         issued["producer_boundary"] = {
             "kind": boundary_kind,
@@ -126,7 +154,16 @@ class RuntimeProducerBoundary:
         if self._state_dir is not None:
             if not hmac.compare_digest(supplied, expected):
                 return ["runtime_producer_claim_mismatch"]
-            return self._validate_durable_consumption(claim_id, consume=consume)
+            return self._validate_durable_consumption(
+                claim_id,
+                payload=payload,
+                consume=consume,
+            )
+        expiry, expiry_error = _claim_expiry(payload)
+        if expiry_error:
+            return [expiry_error]
+        if expiry is not None and _ensure_utc(self._clock()) >= expiry:
+            return ["runtime_producer_claim_expired"]
         with self._lock:
             issued = self._claims.get(claim_id)
             consumed = claim_id in self._consumed
@@ -157,14 +194,39 @@ class RuntimeProducerBoundary:
             return "sha256:" + hashlib.sha256(claim_payload).hexdigest()
         return "hmac-sha256:" + hmac.new(self._secret, claim_payload, hashlib.sha256).hexdigest()
 
-    def _validate_durable_consumption(self, claim_id: str, *, consume: bool) -> List[str]:
+    def _validate_durable_consumption(
+        self,
+        claim_id: str,
+        *,
+        payload: Mapping[str, Any],
+        consume: bool,
+    ) -> List[str]:
+        now = _ensure_utc(self._clock())
+        expiry, expiry_error = _claim_expiry(payload)
+        if expiry_error:
+            return [expiry_error]
         with _exclusive_file_lock(self._lock_path):
-            consumed = _read_consumed_claims(self._consumed_path)
-            if claim_id in consumed:
+            ledger = _read_consumed_ledger(self._consumed_path, now=now)
+            changed = bool(ledger.pop("_migration_pending", False))
+            changed = _prune_consumed_ledger(ledger, now=now) or changed
+            if expiry is not None and now >= expiry:
+                if changed:
+                    _atomic_write_json(self._consumed_path, ledger)
+                return ["runtime_producer_claim_expired"]
+            if _ledger_contains(ledger, claim_id):
+                if changed:
+                    _atomic_write_json(self._consumed_path, ledger)
                 return ["replayed_receipt"]
             if consume:
-                consumed.add(claim_id)
-                _atomic_write_json(self._consumed_path, sorted(consumed))
+                _ledger_add(
+                    ledger,
+                    claim_id,
+                    now=now,
+                    retain_until=expiry,
+                )
+                _atomic_write_json(self._consumed_path, ledger)
+            elif changed:
+                _atomic_write_json(self._consumed_path, ledger)
         return []
 
 
@@ -874,16 +936,196 @@ def _load_or_create_secret(path: Path) -> bytes:
         return secret
 
 
-def _read_consumed_claims(path: Path) -> set[str]:
+def _ensure_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _ensure_utc(parsed)
+
+
+def _claim_expiry(
+    payload: Mapping[str, Any],
+) -> tuple[datetime | None, str]:
+    issued_text = payload.get("producer_claim_issued_at")
+    expiry_text = payload.get("producer_claim_expires_at")
+    if not issued_text and not expiry_text:
+        return None, ""
+    issued = _parse_utc_datetime(issued_text)
+    expiry = _parse_utc_datetime(expiry_text)
+    if issued is None or expiry is None or expiry <= issued:
+        return None, "runtime_producer_claim_expiry_invalid"
+    if (expiry - issued).total_seconds() > MAX_SIGNED_CLAIM_VALIDITY_SECONDS:
+        return None, "runtime_producer_claim_expiry_invalid"
+    return expiry, ""
+
+
+def _empty_bloom() -> bytearray:
+    return bytearray(CONSUMED_LEDGER_BLOOM_BITS // 8)
+
+
+def _decode_bloom(value: Any) -> bytearray:
+    try:
+        raw = base64.b64decode(str(value or ""), validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("local runtime receipt replay filter is malformed") from exc
+    if len(raw) != CONSUMED_LEDGER_BLOOM_BITS // 8:
+        raise ValueError("local runtime receipt replay filter has invalid size")
+    return bytearray(raw)
+
+
+def _encode_bloom(value: bytearray) -> str:
+    return base64.b64encode(bytes(value)).decode("ascii")
+
+
+def _bloom_positions(claim_id: str) -> Iterable[int]:
+    digest = hashlib.sha256(claim_id.encode("utf-8")).digest()
+    first = int.from_bytes(digest[:16], "big")
+    second = int.from_bytes(digest[16:], "big") | 1
+    for index in range(CONSUMED_LEDGER_BLOOM_HASHES):
+        yield (first + index * second) % CONSUMED_LEDGER_BLOOM_BITS
+
+
+def _bloom_contains(encoded: Any, claim_id: str) -> bool:
+    bloom = _decode_bloom(encoded)
+    return all(
+        bloom[position // 8] & (1 << (position % 8))
+        for position in _bloom_positions(claim_id)
+    )
+
+
+def _bloom_add(encoded: Any, claim_id: str) -> str:
+    bloom = _decode_bloom(encoded)
+    for position in _bloom_positions(claim_id):
+        bloom[position // 8] |= 1 << (position % 8)
+    return _encode_bloom(bloom)
+
+
+def _empty_consumed_ledger() -> Dict[str, Any]:
+    return {
+        "schema_version": CONSUMED_LEDGER_SCHEMA_VERSION,
+        "bloom_bits": CONSUMED_LEDGER_BLOOM_BITS,
+        "bloom_hashes": CONSUMED_LEDGER_BLOOM_HASHES,
+        "bucket_seconds": CONSUMED_LEDGER_BUCKET_SECONDS,
+        "permanent": {
+            "filter": _encode_bloom(_empty_bloom()),
+            "insertions": 0,
+        },
+        "buckets": [],
+    }
+
+
+def _read_consumed_ledger(path: Path, *, now: datetime) -> Dict[str, Any]:
     if not path.exists():
-        return set()
+        return _empty_consumed_ledger()
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError("local runtime receipt consumption state is malformed") from exc
-    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+    if isinstance(value, list):
+        if any(not isinstance(item, str) for item in value):
+            raise ValueError("local runtime receipt consumption state is invalid")
+        ledger = _empty_consumed_ledger()
+        for claim_id in value:
+            ledger["permanent"]["filter"] = _bloom_add(
+                ledger["permanent"]["filter"],
+                claim_id,
+            )
+        ledger["permanent"]["insertions"] = len(value)
+        ledger["_migration_pending"] = True
+        return ledger
+    if not isinstance(value, Mapping):
         raise ValueError("local runtime receipt consumption state is invalid")
-    return set(value)
+    ledger = deepcopy(dict(value))
+    if (
+        ledger.get("schema_version") != CONSUMED_LEDGER_SCHEMA_VERSION
+        or ledger.get("bloom_bits") != CONSUMED_LEDGER_BLOOM_BITS
+        or ledger.get("bloom_hashes") != CONSUMED_LEDGER_BLOOM_HASHES
+        or ledger.get("bucket_seconds") != CONSUMED_LEDGER_BUCKET_SECONDS
+    ):
+        raise ValueError("local runtime receipt consumption state version is invalid")
+    permanent = ledger.get("permanent")
+    buckets = ledger.get("buckets")
+    if not isinstance(permanent, Mapping) or not isinstance(buckets, list):
+        raise ValueError("local runtime receipt consumption state is invalid")
+    _decode_bloom(permanent.get("filter"))
+    if len(buckets) > CONSUMED_LEDGER_MAX_BUCKETS:
+        raise ValueError("local runtime receipt consumption state exceeds bound")
+    for bucket in buckets:
+        if not isinstance(bucket, Mapping):
+            raise ValueError("local runtime receipt consumption bucket is invalid")
+        _decode_bloom(bucket.get("filter"))
+        if _parse_utc_datetime(bucket.get("retain_until")) is None:
+            raise ValueError("local runtime receipt consumption bucket expiry is invalid")
+    return ledger
+
+
+def _prune_consumed_ledger(ledger: Dict[str, Any], *, now: datetime) -> bool:
+    buckets = list(ledger.get("buckets") or [])
+    kept = [
+        bucket
+        for bucket in buckets
+        if (_parse_utc_datetime(bucket.get("retain_until")) or now) > now
+    ]
+    if len(kept) == len(buckets):
+        return False
+    ledger["buckets"] = kept
+    return True
+
+
+def _ledger_contains(ledger: Mapping[str, Any], claim_id: str) -> bool:
+    permanent = ledger.get("permanent") or {}
+    if _bloom_contains(permanent.get("filter"), claim_id):
+        return True
+    return any(
+        _bloom_contains(bucket.get("filter"), claim_id)
+        for bucket in ledger.get("buckets") or []
+    )
+
+
+def _ledger_add(
+    ledger: Dict[str, Any],
+    claim_id: str,
+    *,
+    now: datetime,
+    retain_until: datetime | None,
+) -> None:
+    if retain_until is None:
+        permanent = ledger["permanent"]
+        permanent["filter"] = _bloom_add(permanent["filter"], claim_id)
+        permanent["insertions"] = int(permanent.get("insertions") or 0) + 1
+        return
+    epoch = int(now.timestamp()) // CONSUMED_LEDGER_BUCKET_SECONDS
+    buckets = ledger["buckets"]
+    bucket = next(
+        (item for item in buckets if int(item.get("epoch") or -1) == epoch),
+        None,
+    )
+    if bucket is None:
+        if len(buckets) >= CONSUMED_LEDGER_MAX_BUCKETS:
+            raise ValueError("local runtime receipt consumption ledger is full")
+        bucket = {
+            "epoch": epoch,
+            "retain_until": retain_until.isoformat(),
+            "filter": _encode_bloom(_empty_bloom()),
+            "insertions": 0,
+        }
+        buckets.append(bucket)
+        buckets.sort(key=lambda item: int(item.get("epoch") or 0))
+    current_retain_until = _parse_utc_datetime(bucket.get("retain_until"))
+    if current_retain_until is None or retain_until > current_retain_until:
+        bucket["retain_until"] = retain_until.isoformat()
+    bucket["filter"] = _bloom_add(bucket["filter"], claim_id)
+    bucket["insertions"] = int(bucket.get("insertions") or 0) + 1
 
 
 def _atomic_write_json(path: Path, value: Any) -> None:
