@@ -1,6 +1,6 @@
 {
   "name": "kh-uaf",
-  "version": "2.9.146",
+  "version": "2.9.147",
   "description": "KH UAF provides opt-in domain and workflow skills. Ordinary clear requests run directly or load only the matching domain skill; routing audits, token optimization, credential safety, memory, Goal, and orchestration load only on concrete triggers and stay silent unless blocked or requested.",
   "author": "KH UAF",
   "entrypoint": "cli.py",

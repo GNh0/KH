@@ -425,9 +425,9 @@ SYNTHETIC_UI = ("grdList", "gvwList", "colList_ENTITY_CODE", "colDetail_ENTITY_C
 
         self.assertIn("sql-formatting", catalog_names)
         self.assertIn("sql-formatting", root_skill_names)
-        self.assertEqual(root_manifest["version"], "2.9.146")
-        self.assertEqual(codex_manifest["version"], "2.9.146")
-        self.assertEqual(agent_manifest["version"], "2.9.146")
+        self.assertEqual(root_manifest["version"], "2.9.147")
+        self.assertEqual(codex_manifest["version"], "2.9.147")
+        self.assertEqual(agent_manifest["version"], "2.9.147")
         for manifest in [root_manifest, codex_manifest]:
             with self.subTest(manifest=manifest["description"]):
                 layout = manifest["artifact_layout"]

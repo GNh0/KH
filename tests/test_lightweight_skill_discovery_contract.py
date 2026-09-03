@@ -23,7 +23,7 @@ class LightweightSkillDiscoveryContractTests(unittest.TestCase):
         ]
         manifests = [json.loads(read_text(path)) for path in paths]
 
-        self.assertEqual({manifest["version"] for manifest in manifests}, {"2.9.146"})
+        self.assertEqual({manifest["version"] for manifest in manifests}, {"2.9.147"})
         for manifest in manifests:
             description = manifest["description"].lower()
             self.assertIn("ordinary clear requests run directly", description)

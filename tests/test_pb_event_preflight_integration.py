@@ -885,6 +885,7 @@ class PbEventPreflightIntegrationTests(unittest.TestCase):
 
         common = {
             "csharp_source_text": CSHARP,
+            "csharp_source_operation": "generation",
             "designer_source_text": DESIGNER,
             "original_sql_text": SAVE_SP,
             "formatted_sql_text": SAVE_SP,
