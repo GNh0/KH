@@ -21,6 +21,14 @@ def main(argv=None):
     cs.add_argument("input")
     cs.add_argument("--original")
     cs.add_argument("--designer")
+    designer = commands.add_parser('designer', help='compare explicit Designer properties with a supplied baseline')
+    designer.add_argument('input')
+    designer.add_argument('--original')
+    designer.add_argument('--code-behind')
+    designer.add_argument('--preserve-property', action='append', default=[])
+    sp = commands.add_parser('sp-call', help='compare one selected C# call with one actual procedure definition')
+    sp.add_argument('input')
+    sp.add_argument('procedure')
     pb = commands.add_parser("pb", help="inspect a supplied PB export")
     pb.add_argument("input")
     pb.add_argument("--encoding", default="utf-8-sig")
@@ -47,6 +55,15 @@ def main(argv=None):
             result = check_csharp(read_file(args.input).text(),
                                    original=read_file(args.original).text() if args.original else None,
                                    designer=read_file(args.designer).text() if args.designer else None)
+        elif args.command == 'designer':
+            from src.csharp.designer import check_designer
+            result = check_designer(read_file(args.input).text(),
+                original=read_file(args.original).text() if args.original else None,
+                code_behind=read_file(args.code_behind).text() if args.code_behind else '',
+                preserved_properties=args.preserve_property)
+        elif args.command == 'sp-call':
+            from src.pb.sql import check_sp_call
+            result = check_sp_call(read_file(args.input).text(), read_file(args.procedure).text())
         elif args.command == "pb":
             from src.pb.checks import check_pb_export
             result = check_pb_export(read_file(args.input).text(args.encoding), path=args.input)
@@ -66,7 +83,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8")
+    from src.common.output import configure_utf8_streams
+    configure_utf8_streams()
     raise SystemExit(main())

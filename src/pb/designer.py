@@ -10,11 +10,11 @@ def check_field_lineage(source_fields, result_fields, designer_source):
     result = CheckResult(checked=['provided source/result fields against explicit Designer FieldName values'],
                          not_checked=['retrieve execution', 'runtime lookup and display values'])
     if None in bindings:
-        bindings.remove(None)
         result.incomplete = True
         result.issues.append(Issue('dynamic_field_binding', 'warning', 'A FieldName expression needs the actual runtime value.'))
     for field in sorted(set(source_fields) - set(result_fields)):
         result.issues.append(Issue('source_field_not_returned', 'error', 'A required source field is missing from the declared result.', details={'field': field}))
-    for field in sorted(bindings - set(result_fields)):
+    literal_bindings = {value for value in bindings if value is not None}
+    for field in sorted(literal_bindings - set(result_fields)):
         result.issues.append(Issue('designer_field_not_returned', 'error', 'A Designer binding is absent from the declared result.', details={'field': field}))
     return result

@@ -1,6 +1,8 @@
 """Retained csharp syntax and domain mechanics from KH; no host orchestration."""
 from __future__ import annotations
 
+import re
+
 
 
 
@@ -169,7 +171,9 @@ def _scan_csharp(text: str) -> tuple[str, list[tuple[str, str, int, int]]]:
             index = end
             continue
         if not text[index].isspace():
-            operator = next((candidate for candidate in ("+=", "-=", "=>", "?.", "??", "==", "!=", "<=", ">=") if text.startswith(candidate, index)), text[index])
+            operators = ('??=', '<<=', '>>=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=',
+                         '=>', '?.', '??', '==', '!=', '<=', '>=', '::', '++', '--', '&&', '||', '<<', '>>')
+            operator = next((candidate for candidate in operators if text.startswith(candidate, index)), text[index])
             tokens.append(("symbol", operator, index, index + len(operator)))
             index += len(operator)
             continue
@@ -188,19 +192,73 @@ def mask_comments(text: str) -> str:
     return ''.join(chars)
 
 
-def _strip_comments(text: str) -> str:
+def string_literal_value(source: str) -> str | None:
+    """Decode one constant string; expressions, interpolation and invalid escapes stay unresolved."""
+    text = source.strip()
+    if text.startswith('@"'):
+        if not re.fullmatch(r'@"(?:""|[^"])*"', text):
+            return None
+        value = text[2:-1].replace('""', '"')
+    elif text.startswith('"""'):
+        count = len(text) - len(text.lstrip('"'))
+        delimiter = '"' * count
+        if len(text) < count * 2 or not text.endswith(delimiter):
+            return None
+        body = text[count:-count]
+        if delimiter in body:
+            return None
+        if '\n' not in body and '\r' not in body:
+            value = body
+        else:
+            opening = re.match(r'[^\S\r\n]*(?:\r\n|\n|\r)', body)
+            closing = re.search(r'(?:\r\n|\n|\r)([^\S\r\n]*)$', body)
+            if opening is None or closing is None or opening.end() > closing.start():
+                return None
+            indent = closing[1]
+            lines = body[opening.end():closing.start()].splitlines(keepends=True)
+            stripped: list[str] = []
+            for line in lines:
+                if line.startswith(indent):
+                    stripped.append(line[len(indent):])
+                elif not line.strip() and indent.startswith(line.rstrip('\r\n')):
+                    stripped.append(line[len(line.rstrip('\r\n')):])
+                else:
+                    return None
+            value = ''.join(stripped)
+    else:
+        if not re.fullmatch(r'"(?:[^"\\\r\n]|\\.)*"', text):
+            return None
+        body = text[1:-1]
+        escapes = {'0': '\0', 'a': '\a', 'b': '\b', 'f': '\f', 'n': '\n',
+                   'r': '\r', 't': '\t', 'v': '\v', '\\': '\\', '"': '"', "'": "'"}
+        pieces: list[str] = []
+        index = 0
+        while index < len(body):
+            if body[index] != '\\':
+                pieces.append(body[index])
+                index += 1
+                continue
+            token = body[index + 1]
+            if token in escapes:
+                pieces.append(escapes[token])
+                index += 2
+                continue
+            pattern = {'u': r'[0-9a-fA-F]{4}', 'U': r'[0-9a-fA-F]{8}', 'x': r'[0-9a-fA-F]{1,4}'}.get(token)
+            match = re.match(pattern, body[index + 2:]) if pattern else None
+            if match is None or int(match[0], 16) > 0x10FFFF:
+                return None
+            pieces.append(chr(int(match[0], 16)))
+            index += 2 + len(match[0])
+        value = ''.join(pieces)
+    # .NET strings use UTF-16: a surrogate pair and its scalar spelling are equal.
+    return value.encode('utf-16-le', errors='surrogatepass').decode('utf-16-le', errors='surrogatepass')
+
+
+def mask_code(text: str) -> str:
     return _scan_csharp(text)[0]
 
 
-def _identifier_tokens(text: str) -> set[str]:
-    return {value for kind, value, _, _ in _scan_csharp(text)[1] if kind == "identifier"}
-
-
-def _normalized_identifier(value: str) -> str:
-    return str(value or "").strip().removeprefix("@")
-
-
-def _balanced_close(code: str, opening: int, open_char: str = "(", close_char: str = ")") -> int:
+def balanced_close(code: str, opening: int, open_char: str = "(", close_char: str = ")") -> int:
     depth = 0
     for index in range(opening, len(code)):
         if code[index] == open_char:
@@ -210,22 +268,3 @@ def _balanced_close(code: str, opening: int, open_char: str = "(", close_char: s
             if depth == 0:
                 return index
     return -1
-
-
-def _split_arguments(code: str) -> list[str]:
-    parts: list[str] = []
-    start = 0
-    depth = 0
-    masked = _strip_comments(code)
-    for index, char in enumerate(masked):
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth = max(0, depth - 1)
-        elif char == "," and depth == 0:
-            parts.append(code[start:index].strip())
-            start = index + 1
-    tail = code[start:].strip()
-    if tail or parts:
-        parts.append(tail)
-    return parts

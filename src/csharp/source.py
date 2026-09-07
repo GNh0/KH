@@ -276,13 +276,10 @@ def _transaction_invocation_drift_issues(
         if introduced_plain <= 0:
             continue
         issues.append(
-            _issue(
-                "transaction_save_invocation_downgraded",
-                "Do not replace an established transaction-capable save invocation with its non-transaction family without authenticated evidence.",
-                original_invocation=identity,
-                invocation_family=family,
-                introduced_non_transaction_count=introduced_plain,
-            )
+            {"code": "transaction_call_change_review", "severity": "warning",
+             "message": "A transaction-named save call changed to another call in its name family. Inspect actual transaction arguments, wrapper bodies and API behavior; names alone do not prove transaction loss.",
+             "original_invocation": identity, "invocation_family": family,
+             "introduced_plain_name_count": introduced_plain}
         )
     return issues
 

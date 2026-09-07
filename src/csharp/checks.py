@@ -6,7 +6,7 @@ from src.common.results import CheckResult, HarnessResult, Issue, from_legacy_is
 from .lexer import _scan_csharp
 from .source import _call_count, _target_local_method_inventory, _designer_wired_event_handlers, _row_rewrite_loops, _transaction_invocation_drift_issues
 from .designer import check_designer
-from .syntax import _property_assignments
+from .syntax import _property_assignments, linq_candidates
 
 
 def check_csharp(candidate: str, *, original: str | None = None, designer: str | None = None,
@@ -20,7 +20,8 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         result.incomplete = True
         result.issues.append(Issue('csharp_code_missing', 'warning', 'No executable/declarative C# text is available for the requested source checks.'))
     if original is not None:
-        result.checked += ["target method signatures", "transaction call family", "new whole-table row rewrites"]
+        result.checked += ["target method signatures", "transaction-named call changes", "new whole-table row rewrites"]
+        result.not_checked.append("transaction participation and wrapper equivalence; inspect actual call bodies/API contracts")
         wired = _designer_wired_event_handlers(designer)
         old_methods = Counter(x["signature"] for x in _target_local_method_inventory(before, wired_event_handlers=wired))
         new_methods = Counter(x["signature"] for x in _target_local_method_inventory(code, wired_event_handlers=wired))
@@ -46,10 +47,12 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                 if (prop in {'Location', 'Size', 'Font', 'Caption', 'FieldName', 'ColumnEdit'} or prop.startswith('Appearance')) and (old is None or old[0] != value):
                     result.issues.append(Issue('static_ui_in_code_behind_review', 'warning', 'Place static UI setup in Designer; retain a code-behind assignment when the actual event requires dynamic behavior.', line=line, details={'member': member, 'property': prop}))
     patterns = {
-        "linq_preference": r"\b(?:AsEnumerable|ToLookup|GroupBy|Where|SelectMany|ToDictionary)\s*\(",
         "intermediate_table_preference": r"\b(?:Clone|ImportRow)\s*\(",
         "expression_body_preference": r"\b(?:public|protected|private|internal)\b[^;{}\n]*=>",
     }
+    if len(linq_candidates(candidate)) > len(linq_candidates(original or '')):
+        result.issues.append(Issue('linq_preference', 'warning',
+            'Review a likely LINQ invocation against the existing project form. The lexer cannot resolve extension methods; verify the actual API. An exception needs difficult implementation without it or an extreme performance disadvantage.'))
     for name, pattern in patterns.items():
         if len(re.findall(pattern, code)) > len(re.findall(pattern, before)):
             result.issues.append(Issue(name, "warning", "Prefer the established project form. A difficult implementation without this construct or an extreme performance disadvantage can justify an exception; convenience alone cannot."))

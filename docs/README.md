@@ -5,11 +5,12 @@
 ## 2026-09-07 재구성
 
 - [구현 및 검증 결과](kh/reports/2026-09-07-codex-implementation.md): 실제 변경, 요구별 반영 위치와 수행한 검사 및 미확인 범위.
+- [3.0.1 검사기 보강](kh/reports/2026-09-07-checker-hardening.md): 실제 평가 반례, 타입 검증과 독립 사용 평가 결과.
 - 설계 계획과 C#·PB·SQL 대화 감사 원문은 로컬 작업 자료로 보존한다. 공개 보고서에는 48개 요구의 반영 위치와 관찰한 실패 원인 요약을 담았다.
 
 ## GitHub 배포
 
-`main`과 `codex-runtime`은 같은 3.0.0 소스 패키지를 제공한다. 기존 마켓플레이스 이름 `kh-uaf-marketplace`, 플러그인 이름 `kh-uaf`, 설치 대상 ref `codex-runtime`을 유지한다. GitHub 다운로드에도 현재 문서와 테스트 입력을 포함한다. 원격 게시와 사용 중인 Codex 설치 캐시의 갱신은 별도 단계다.
+`main`과 `codex-runtime`은 같은 소스 패키지를 제공하며 버전은 `.codex-plugin/plugin.json`을 기준으로 확인한다. 기존 마켓플레이스 이름 `kh-uaf-marketplace`, 플러그인 이름 `kh-uaf`, 설치 대상 ref `codex-runtime`을 유지한다. GitHub 다운로드에도 현재 문서와 테스트 입력을 포함한다. 원격 게시와 사용 중인 Codex 설치 캐시의 갱신은 별도 단계다.
 
 ## 역사 자료
 

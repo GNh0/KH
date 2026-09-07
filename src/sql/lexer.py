@@ -4,12 +4,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence, Tuple
+from src.common.results import Severity
 
 
 @dataclass(frozen=True)
 class SqlFormattingIssue:
     code: str
-    severity: str
+    severity: Severity
     message: str
     evidence: List[str] = field(default_factory=list)
     check_kind: str = "mechanical"

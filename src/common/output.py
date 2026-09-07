@@ -1,6 +1,15 @@
 """Bounded output with explicit truncation and original exit status."""
 from dataclasses import dataclass
+from io import TextIOWrapper
 import re
+import sys
+
+
+def configure_utf8_streams() -> None:
+    """Configure real console/pipe wrappers while leaving injected StringIO streams usable."""
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, TextIOWrapper):
+            stream.reconfigure(encoding='utf-8')
 
 _ASSIGNMENT = re.compile(r'(?i)(\b(?:password|passwd|pwd|api[_-]?key|access[_-]?token|client[_-]?secret)\b\s*[=:]\s*)(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|[^\s;,]+)')
 _TOKENS = re.compile(r'(?i)\bBearer\s+[^\s"\']+|\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}')

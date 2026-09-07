@@ -11,8 +11,8 @@ def inspect_project(project: str | Path, sources=()) -> CheckResult:
     root = ET.fromstring(snapshot.text())
     result = CheckResult(checked=['actual project declarations and source availability'],
                          not_checked=['MSBuild evaluation', 'compilation', 'Designer runtime'])
-    includes = [node.get('Include') for node in root.iter() if node.tag.split('}')[-1] in {'Compile', 'EmbeddedResource'} and node.get('Include')]
-    references = [node.get('Include') for node in root.iter() if node.tag.split('}')[-1] == 'Reference' and node.get('Include')]
+    includes = [value for node in root.iter() if node.tag.split('}')[-1] in {'Compile', 'EmbeddedResource'} and (value := node.get('Include'))]
+    references = [value for node in root.iter() if node.tag.split('}')[-1] == 'Reference' and (value := node.get('Include'))]
     sdk = bool(root.get('Sdk'))
     default_compile = next((n.text for n in root.iter() if n.tag.split('}')[-1] == 'EnableDefaultCompileItems'), None)
     removed = [part.replace('\\', '/').casefold() for n in root.iter()

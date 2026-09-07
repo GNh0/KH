@@ -1,0 +1,62 @@
+{
+  "version": "3.0.1",
+  "base_commit": "68a5836f0be4fcda528305414d892648ee3bdd50",
+  "python_types": {
+    "tool": "Pyright 1.1.413",
+    "before": {
+      "filesAnalyzed": 51,
+      "errorCount": 10,
+      "warningCount": 1,
+      "informationCount": 0,
+      "timeInSec": 2.375
+    },
+    "after": {
+      "filesAnalyzed": 52,
+      "errorCount": 0,
+      "warningCount": 0,
+      "informationCount": 0,
+      "timeInSec": 2.692
+    },
+    "mode": "standard for all active modules; strict for C#/PB lexers and measurement boundary"
+  },
+  "domain_unit_tests": {
+    "count": 113,
+    "added": 27,
+    "python_3_14_2": "passed",
+    "python_3_12_14": "passed",
+    "evidence": "actual unittest tool outputs in the implementation task"
+  },
+  "probe_replay": {
+    "scoped": 39,
+    "matched": 39,
+    "previous_matched": 33,
+    "declared_limit_observations": 5
+  },
+  "independent_forward_tasks": {
+    "count": 2,
+    "csharp": "literal newline and Visible changes identified; SP names matched; OUTPUT unverified",
+    "pb": "literal/dynamic DW bindings separated; complete SQL extracted; boolean/integer context difference identified",
+    "limitation": "one task per domain using a source snapshot; not a statistical accuracy estimate"
+  },
+  "final_cli_recheck": {
+    "designer": {
+      "exit_code": 1,
+      "status": "failed"
+    },
+    "sp_call": {
+      "exit_code": 0,
+      "status": "passed"
+    },
+    "pb": {
+      "exit_code": 0,
+      "status": "passed"
+    }
+  },
+  "original_untracked_files_preserved": 25,
+  "not_executed": [
+    "ERP C# builds",
+    "SQL Server workload",
+    "native PowerBuilder/ORCA runtime"
+  ],
+  "github_workflow": "configured; remote execution must be checked after publishing"
+}

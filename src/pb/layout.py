@@ -181,13 +181,13 @@ def build_detail_form_layout_plan(
 def extract_csharp_designer_control_specs(source_text: str) -> HarnessResult:
     """Share C# literal boundaries, members, properties and real containment."""
     from src.csharp.designer_model import parse_designer_source
-    from src.csharp.lexer import _scan_csharp, _balanced_close
+    from src.csharp.lexer import _scan_csharp, balanced_close
     model = parse_designer_source(source_text)
     code, _ = _scan_csharp(source_text)
     collections = {}
     for match in re.finditer(r'\bthis\.(\w+)\.([\w.]*AddRange)\s*\(', code):
         opening = code.find('(', match.start())
-        closing = _balanced_close(code, opening, '(', ')')
+        closing = balanced_close(code, opening, '(', ')')
         if closing >= 0:
             collections.setdefault(match[1], {}).setdefault(match[2], []).append(source_text[match.start():closing+1]+';')
     specs = []

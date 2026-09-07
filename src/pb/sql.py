@@ -1,6 +1,6 @@
 """Compare a selected C# call with one real SELECT/SAVE procedure."""
 from src.common.results import CheckResult, Issue
-from src.csharp.syntax import _parameter_constructor_calls
+from src.csharp.syntax import parameter_constructor_sites
 from src.sql.lexer import _scan_sql_tokens
 from src.sql.delta import _full_replace_records
 
@@ -30,22 +30,27 @@ def procedure_parameters(sql: str) -> dict[str, bool]:
 def check_sp_call(csharp_call: str, procedure_sql: str) -> CheckResult:
     """The C# input must be the selected call, not an unrelated whole form."""
     result = CheckResult(checked=['selected call parameter names vs procedure definition'],
-                         not_checked=['parameter values and data types', 'XML schema', 'stored procedure runtime behavior'])
+                         not_checked=['parameter values and data types', 'parameter direction (OUTPUT/INPUTOUTPUT) and return values', 'XML schema', 'stored procedure runtime behavior'])
     try:
         defined = procedure_parameters(procedure_sql)
     except ValueError as error:
         result.incomplete = True
         result.issues.append(Issue('procedure_input_incomplete', 'warning', str(error)))
         return result
-    passed = {'@' + name.lstrip('@').upper() for _, name, _ in _parameter_constructor_calls(csharp_call)}
-    if not passed and defined:
+    sites = parameter_constructor_sites(csharp_call)
+    passed = {'@' + name.lstrip('@').upper() for _, name, _ in sites if name is not None}
+    unresolved = not sites or any(name is None for _, name, _ in sites)
+    if unresolved and defined:
         result.incomplete = True
-        result.issues.append(Issue('call_parameters_unresolved', 'warning', 'No literal DbParameter/SqlParameter names were found in the supplied call.'))
+        result.issues.append(Issue('call_parameters_unresolved', 'warning', 'Some parameter names need expression evaluation or no typed literal parameter constructors were found.'))
     for name in sorted(passed - defined.keys()):
         result.issues.append(Issue('unexpected_sp_parameter', 'error', 'The selected C# call passes a parameter absent from this SP.', details={'parameter': name}))
     for name in sorted(defined.keys() - passed):
         if not defined[name]:
-            result.issues.append(Issue('required_sp_parameter_missing', 'error', 'The selected call omits a required SP parameter.', details={'parameter': name}))
+            result.issues.append(Issue('required_sp_parameter_unconfirmed' if unresolved else 'required_sp_parameter_missing',
+                'warning' if unresolved else 'error',
+                'A required SP parameter is not resolved from the supplied constructors.' if unresolved else 'The selected call omits a required SP parameter.',
+                details={'parameter': name}))
     result.metadata.update(passed_parameters=sorted(passed), defined_parameters=defined)
     result.not_checked.append('caller procedure identity; supply only the selected call for this procedure')
     return result
