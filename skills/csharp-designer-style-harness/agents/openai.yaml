@@ -1,0 +1,4 @@
+interface:
+  display_name: "C# and Designer"
+  short_description: "Preserve WinForms behavior, bindings and Designer style"
+  default_prompt: "Use $csharp-designer-style-harness to help with this task."

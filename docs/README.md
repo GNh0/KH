@@ -1,35 +1,16 @@
-# KH Documentation Boundary
+# KH 문서
 
-This directory contains both current product-surface docs and historical design or audit evidence.
+현재 사용법은 [한국어 README](../README.ko.md)와 `skills/*/SKILL.md`다. 실행 지침으로 쓰는 문서는 현재 스킬에서 연결한 참고 파일이다.
 
-## Current
+## 2026-09-07 재구성
 
-Use these repo-root paths as the current operating contract for the installed plugin and runtime surface:
+- [구현 및 검증 결과](kh/reports/2026-09-07-codex-implementation.md): 실제 변경, 요구별 반영 위치와 수행한 검사 및 미확인 범위.
+- 설계 계획과 C#·PB·SQL 대화 감사 원문은 로컬 작업 자료로 보존한다. 공개 보고서에는 48개 요구의 반영 위치와 관찰한 실패 원인 요약을 담았다.
 
-- `README.md`
-- `README.ko.md`
-- `SKILL.md`
-- `plugin.json`
-- `.codex-plugin/plugin.json`
-- `docs/README.md`
+## GitHub 배포
 
-Current docs should describe what KH requires, records, or audits. They should not imply that every host or subagent silently complies without the installed plugin prompt, active session context, and session-log evidence.
+`main`과 `codex-runtime`은 같은 3.0.0 소스 패키지를 제공한다. 기존 마켓플레이스 이름 `kh-uaf-marketplace`, 플러그인 이름 `kh-uaf`, 설치 대상 ref `codex-runtime`을 유지한다. GitHub 다운로드에도 현재 문서와 테스트 입력을 포함한다. 원격 게시와 사용 중인 Codex 설치 캐시의 갱신은 별도 단계다.
 
-## Historical
+## 역사 자료
 
-Treat these paths as background evidence, not as the current install or prompt contract:
-
-- `docs/skillbook/**`
-- dated files under `docs/kh/qa/**`
-- dated files under `docs/kh/reports/**`
-- standalone postmortems under `docs/kh/**`
-
-Historical docs are useful for rationale, regression context, and release notes. If they conflict with the current README, root `SKILL.md`, or plugin manifests, update the current product surface first and cite the historical file only as evidence.
-
-## Install Ref Terms
-
-- Marketplace descriptor ref: `main`, used by Codex to read `.agents/plugins/marketplace.json`.
-- Plugin source ref: `codex-runtime`, the slim runtime branch installed from the marketplace descriptor.
-- Installed cache: `$CODEX_HOME/plugins/cache/.../kh-uaf/<version>`, a generated copy loaded by a Codex session.
-
-A session is stale when the installed cache version, active skill paths, or active plugin prompt still point to an older KH build. The `main` marketplace descriptor ref alone is not stale.
+이 재구성 이전의 `kh/front-door-*`, `kh/handoffs`, `kh/qa`, `kh/reports` 문서와 `skillbook` 전체는 2.9 계열의 역사 자료로 원문을 보존한다. 삭제된 소스·명령·스킬을 가리키는 과거 링크는 당시 상태를 설명한다. 자동 intake·HMAC·역할 DAG·자기평가·중복 상태 관리 지침을 현재 작업에 적용하지 않는다. 당시 수치와 통과 기록은 현재 설치본이나 새 코드의 성공 증거가 아니다.

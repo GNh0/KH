@@ -1,0 +1,4 @@
+interface:
+  display_name: "PB to C# migration"
+  short_description: "Map real PB behavior to C#, Designer and SQL contracts"
+  default_prompt: "Use $pb-to-csharp-migration-harness to help with this task."

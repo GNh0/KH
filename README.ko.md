@@ -1,112 +1,49 @@
-# KH Universal Agent Framework
+# KH for Codex
 
-[English](README.md) | [Korean](README.ko.md)
+KH 3.0.0은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
 
-KH UAF는 Codex, Antigravity 계열 에이전트, Claude Code, 로컬 워커를 위한 개인 독립형 UAF 스킬북이자 오케스트레이션 런타임입니다. 목표는 특정 호스트의 전역 스킬 폴더에 의존하지 않고, 설치된 marketplace 플러그인 캐시만으로 동작해야 합니다.
+작고 명확한 요청은 직접 처리한다. 필요한 도메인 스킬만 읽고, 현재 사용자 정정·원본·비교 화면·API를 기준으로 작업한다. 과거 세션과 `docs/kh`, `docs/skillbook`의 오래된 보고서는 참고 자료다.
 
-KH는 Superpowers식 작업 흐름, Compound 학습, RTK식 토큰 게이트, OpenClaw/Hermes식 scoped memory, 역할 오케스트레이션, specialist composition을 하나의 개인용 스킬/하네스 프로젝트로 묶습니다.
+## 스킬
 
-## 포함 항목
+| 스킬 | 적용할 작업 |
+| --- | --- |
+| [work-planning](skills/work-planning/SKILL.md) | 규모가 크거나 중요한 선택이 남은 작업의 계획 |
+| [work-execution](skills/work-execution/SKILL.md) | 승인된 다단계 작업, 중단·재개, 현재 호스트 도구 사용 |
+| [code-review](skills/code-review/SKILL.md) | 실제 변경과 요구 동작의 검토 |
+| [systematic-debugging](skills/systematic-debugging/SKILL.md) | 실제 오류 단계와 경로의 원인 분석 |
+| [sql-formatting](skills/sql-formatting/SKILL.md) | SQL 생성·정리·비교·수정과 최종 텍스트 확인 |
+| [csharp-designer-style-harness](skills/csharp-designer-style-harness/SKILL.md) | WinForms/DevExpress/KoneLib 코드와 Designer |
+| [pb-to-csharp-migration-harness](skills/pb-to-csharp-migration-harness/SKILL.md) | PB/PBL/DataWindow 분석 및 C#/SQL 이관 |
+| [artifact-checks](skills/artifact-checks/SKILL.md) | 요청한 전달물의 내용·구조·렌더링 확인 |
+| [context-handoff](skills/context-handoff/SKILL.md) | 현재 작업을 이어가기 위한 간결한 인계 |
+| [kh-maintenance](skills/kh-maintenance/SKILL.md) | KH 자체 수정, 패키지·프로필·명시적 로그 감사 |
 
-- 지원 파일, smoke check, demo를 갖춘 45개 packaged skill/harness
-- `always-on-front-door`: 비사소한 작업 전에 먼저 실행되는 bootstrap skill
-- `automatic-intake-harness`, `plugin-composition-policy`, `request-complexity-router`
-- `brainstorming-harness`, `compound-engineering-harness`, `workflow-usability-harness`
-- `pb-to-csharp-migration-harness`: PowerBuilder/PBL/DataWindow/GWERP를 대상 프로젝트의 C# 및 SELECT/SAVE SP 구조로 마이그레이션
-- `csharp-designer-style-harness`: PB와 무관하게 정확한 C# WinForms/DevExpress/KoneLib source/Designer 쌍을 hash-bound 방식으로 검증
-- `sql-formatting`: host LLM이 실행하는 packaged SQL formatting provider이며, 별도의 `sql-formatting-style-harness`는 생성된 후보 결과의 보존성과 스타일 준수만 검증합니다.
-- GoalState, scoped memory, snapshot, resume handoff, progress panel, host panel JSON
-- 리뷰, QA, 보안, release evidence gate와 session skill audit/postmortem
-- KH-Bench Verified, SIDE regression, practical quality gate
+LINQ·중간 테이블·빌드는 비선호다. 피하면 구현이 어렵거나 대안의 성능이 극단적으로 불리한 경우에만 구체적 이유로 사용한다. 단순 코드 단축·편의·의례적인 검증은 예외 이유가 아니다. 현재 작업에서 사용자가 명시적으로 금지하면 그 지시를 따른다.
 
-## 기본 흐름
+## 선택적 검사
 
-1. 사용자가 KH나 개별 skill 이름을 말하지 않아도 비사소한 작업은 front-door intake를 먼저 실행합니다.
-2. front-door는 실제 적용된 skill, 다음에 바로 적용해야 하는 skill, 아직 실행되지 않은 후보 skill을 분리합니다.
-3. 방향이 승인되지 않은 앱, 제품, 업무, 문서, 분석, 설계 요청은 먼저 brainstorming-harness로 범위와 선택지를 정리합니다.
-4. 승인된 방향에 맞춰 스택, 아키텍처, 산출물 유형, 검증 방식을 선택합니다.
-5. 구현, 리뷰, QA, 검증, branch finishing은 증거가 있을 때만 완료로 보고합니다.
+Python 3.11 이상 표준 라이브러리를 사용한다. 서버 실행, API 키, DB 연결 또는 별도 Python 패키지 설치가 필요하지 않다. 명령의 `<...>`는 실제 절대 경로로 바꾼다.
 
-## 산출물 경계
-
-사용자에게 필요한 산출물은 요청한 프로젝트 경로에 생성합니다. 예를 들어 문서, 스프레드시트, PDF, 도면, 웹 파일, 데이터 파일은 목적과 승인된 산출물 유형에 맞춰 생성됩니다.
-
-KH 내부 작업 자료, GoalState, memory candidate, review evidence, token optimizer evidence는 기본적으로 KH runtime state에 저장합니다. 사용자 프로젝트 루트에 `.uaf`나 `.snapshots`를 기본 생성하지 않습니다. 프로젝트 로컬 상태가 필요하면 명시적인 opt-in이 있어야 합니다.
-
-## Front-Door Intake
-
-프로젝트 파일, 코드 변경, 산출물, 긴 로그, 리뷰, QA, 검증, branch finishing, subagent, 지속 상태, 고위험 작업이 포함되면 먼저 front-door intake를 실행합니다.
-
-```bash
-python skills/always_on_front_door/scripts/front_door.py --prompt-file "<utf8 prompt file>" --project "<target project>" --host codex --summary --strict-execution-gate
+```powershell
+python -B <plugin-root>/scripts/kh_check.py sql <original.sql> <candidate.sql>
+python -B <plugin-root>/scripts/kh_check.py sql <source.sql> --preserve-aliases
+python -B <plugin-root>/scripts/kh_check.py csharp <candidate.cs> --original <original.cs> --designer <screen.Designer.cs>
+python -B <plugin-root>/scripts/kh_check.py pb <source.srw> --encoding cp949
+python -B <plugin-root>/scripts/kh_check.py artifact <document.docx>
+python -B <plugin-root>/scripts/kh_check.py package <plugin-root>
 ```
 
-비 ASCII 또는 여러 줄 prompt는 `--prompt-file`을 사용합니다. 짧은 ASCII prompt에서만 inline `--prompt` 옵션을 사용할 수 있습니다. KH repo root에서 실행 중이면 `python -m src.orchestration.kh_front_door ...`도 같은 런타임 경로입니다.
+일반 결과의 종료 코드는 0=수행한 검사 통과, 1=검사 오류 발견, 2=입력/검사 범위 미완성이다. 비선호·스타일 경고는 별도로 표시한다. `checked`, `not_checked`를 함께 읽는다. SQL 토큰 비교는 DB 의미 동등성 증명이 아니며, C# 정적 검사는 컴파일·UI 실행이 아니다. 파일 구조 검사는 실제 렌더링을 대신하지 않는다. `--normalize-layout`은 지원하는 JOIN/EXISTS 배치만 stdout으로 출력하며 원본을 쓰지 않는다.
 
-front-door는 다음 값을 반환합니다.
+PB의 ORCA probe/추출, DataWindow XML·Designer 초안, 이벤트/상태·SP 매개변수·결과 측정 비교는 [PB 참고 자료](skills/pb-to-csharp-migration-harness/SKILL.md)에 있다. 도구 출력이 실제 실행·전체 이관을 증명하지 않는 부분을 구분한다.
 
-- `runtime_applied_skills`: 런타임에서 실제 적용된 skill
-- `immediate_next_skills`: source 탐색이나 파일 수정 전에 적용, skip, block 증거가 필요한 skill
-- `selected_not_executed_skills`: 아직 실행 증거가 없는 후보
-- `skill_status_summary`: 각 skill의 적용 방식, 근거, 차단 이유
+개발 검증은 저장소 루트에서 `python -B -m unittest discover -s tests/domain`으로 실행한다. [시나리오 평가](skills/kh-maintenance/references/scenario-evaluation.md)는 실제 호스트 평가와 단위/모의 검사를 구분한다.
 
-KH는 intake를 요구하고 audit할 수 있지만, host나 subagent가 항상 자동으로 따르는 것을 보장하지는 않습니다. 누락되면 stale session, plugin injection 문제, 또는 host-compliance 문제로 보고 session log에서 `kh-uaf:always-on-front-door`와 설치 cache wrapper 경로를 확인합니다.
+## 2.9에서 변경
 
-## Codex 플러그인 설치
+필수 front door/intake, Python 호스트 실행 루프, 메타데이터만 만드는 역할 DAG, 중복 Goal/메모리/상태 저장소, HMAC·실행 영수증·자기평가 점수 체계와 관련 테스트를 제거했다. Goal·협업·예약·권한·중단은 현재 호스트 도구 계약과 사용자 요청을 따른다.
 
-Codex에서 `Plugins -> Manage -> Add marketplace`를 열고 다음 값을 입력합니다.
+기존 `cli.py`, FastAPI 서버, root `plugin.json` 및 오래된 workflow API는 더 이상 제공하지 않는다. 유지한 순수 함수 일부만 `src/skills`의 작은 import 연결로 남겼다. 신규 API는 `src/sql`, `src/csharp`, `src/pb`, `src/common`, `src/artifacts`, `src/maintenance`에 있다. 자세한 변경과 검증 범위는 [문서 목록](docs/README.md)을 확인한다.
 
-```text
-Source: https://github.com/GNh0/KH.git
-Git ref: main
-Sparse path: .agents/plugins
-```
-
-`Git ref: main`은 marketplace descriptor를 읽기 위한 ref입니다. 실제 설치되는 plugin source ref는 descriptor 안에서 `codex-runtime`을 가리킵니다. 설치 cache 경로인 `$CODEX_HOME/plugins/cache/.../kh-uaf/<version>`은 생성된 복사본이며 source branch가 아닙니다.
-
-업그레이드 참고: Codex는 manifest version 기준으로 cache를 갱신합니다. 새 빌드를 배포할 때는 `.codex-plugin/plugin.json`, root `plugin.json`, `.agents/plugins/kh-uaf/plugin.json`의 버전 bump를 함께 처리합니다. 업그레이드 후에는 새 thread를 열어 최신 plugin prompt와 skill 파일을 다시 로드합니다.
-
-상태 점검:
-
-```bash
-python -m src.orchestration.plugin_install_audit --summary
-```
-
-## Antigravity 플러그인 설치
-
-Antigravity 계열 호스트에서는 repo의 `.agents/plugins/kh-uaf` wrapper를 plugin marker로 사용할 수 있습니다. 이 wrapper는 KH runtime source를 직접 복제하지 않고, 설치된 marketplace plugin cache와 root runtime 계약을 가리키는 얇은 연결 계층입니다.
-
-예시 경로:
-
-```text
-~/.gemini/config/plugins/kh-uaf
-.agents/plugins/kh-uaf
-```
-
-## 빠른 시작
-
-```bash
-pip install -r requirements.txt
-python cli.py run --project ./my_app --prompt "Create a small demo app"
-```
-
-기본 provider는 smoke-only 확인용 `offline`입니다. 실제 요구사항을 충족하는 산출물이 필요하면 `local`, `openai`, `codex`, `claude` 같은 model-backed provider를 사용합니다.
-
-```bash
-python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --provider local --base-url http://localhost:11434/v1
-python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --provider openai --model gpt-5
-python cli.py run --project ./my_app --prompt "Create a FastAPI backend" --platform antigravity
-```
-
-## 검증
-
-`codex-runtime` branch에서는 runtime 포장 상태를 중심으로 확인합니다.
-
-```bash
-python -B -m src.skills.uaf_skill_catalog --check --summary
-python -B -m src.orchestration.plugin_install_audit --summary
-python -m json.tool plugin.json
-python -m json.tool .codex-plugin/plugin.json
-```
-
-전체 practical quality gate와 fixture 기반 테스트는 개발 checkout인 `main`에서 실행합니다. `codex-runtime`에는 runtime 설치에 불필요한 테스트 파일이 없을 수 있습니다.
+정식 manifest는 `.codex-plugin/plugin.json`이다. 원격 marketplace의 `kh-uaf` 이름과 `codex-runtime` ref는 유지한다. 이 작업 트리의 수정과 현재 설치된 캐시는 별개다. 설치·배포 요청이 있을 때 현재 plugin-creator 흐름으로 배포 대상을 확인하고 적용한다.

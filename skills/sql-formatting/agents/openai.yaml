@@ -1,0 +1,4 @@
+interface:
+  display_name: "SQL formatting"
+  short_description: "Produce complete SQL in the verified KH user style"
+  default_prompt: "Use $sql-formatting to help with this task."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Artifact checks"
+  short_description: "Check deliverable contents, format and rendered output"
+  default_prompt: "Use $artifact-checks to help with this task."

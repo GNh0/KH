@@ -1,0 +1,31 @@
+{
+  "name": "kh-winforms-user-style",
+  "version": 1,
+  "scope": {
+    "frameworks": [
+      "WinForms",
+      "DevExpress",
+      "KoneLib"
+    ],
+    "activation": "actual target project or explicit comparator; not all C# projects"
+  },
+  "authority": "current user instructions and verified project examples; no signature required",
+  "defaults": {
+    "static_ui": "Designer",
+    "business_binding": "code-behind",
+    "row_access": "distinguish focus and checkbox selection",
+    "numeric_editor": "existing Spin repository",
+    "lookup": "actual code/display/button binding",
+    "control_dimensions": "actual UserControl defaults",
+    "tab_order": "specified input order",
+    "format_string": "avoid unnecessary DisplayFormat in these screens; report formatting is scoped",
+    "data_flow": "existing for/Select/NewRow/Rows.Add; preserve NEW/MOD/DEL",
+    "ty_user_lookup": {
+      "query": "RTRUSER",
+      "edit": "USER",
+      "scope": "TY requirements where applicable"
+    }
+  },
+  "preference_exceptions": "Only when avoiding the disfavored method makes implementation difficult or the alternative has an extremely large performance disadvantage; convenience is insufficient.",
+  "source": "User-validated patterns and 2026-09-07 original-log audit; examples are scoped, not fixed business constants."
+}
