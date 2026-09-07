@@ -1,0 +1,37 @@
+name: KH checks
+
+on:
+  push:
+    branches: [main, codex-runtime]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.14']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Domain regression tests
+        run: python -B -m unittest discover -s tests/domain
+      - name: Plugin package checks
+        run: python -B scripts/kh_check.py package "$env:GITHUB_WORKSPACE"
+      - uses: actions/setup-node@v7
+        if: matrix.python == '3.11'
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Static types
+        if: matrix.python == '3.11'
+        run: npx --yes pyright@1.1.413 --project pyrightconfig.json

@@ -5,3 +5,7 @@
 실제 원본과 대상에서 조회·수정 보호·신규/수정/삭제·XML·SP·재조회/복원·보고서까지 요청 범위의 흐름을 비교한다. 누락된 이벤트, 필드, 간접 호출은 미확인으로 기록한다. 사용자 예시의 반대 해석을 fixture로 고정하지 않는다.
 
 정적 PB 입력 분석은 `python <plugin-root>/scripts/kh_check.py pb <absolute-export>`로 시작할 수 있다. 이 출력은 전체 PBL이나 실행 결과를 대신하지 않는다. 값·행 수·쿼리 수·성능 동등성을 주장하려면 실제 비교 조건과 결과가 필요하다.
+
+`src.pb.equivalence.compare_observations`에는 JSON 객체 두 개를 제공한다. `parameters`는 문자열 키 객체, `database`는 비어 있지 않은 문자열, `schema`는 순서 있는 JSON 배열, `ordered`는 실제 boolean, `rows`는 행 값의 JSON 배열이다. 중첩 값의 타입도 비교하며 `true`와 `1`은 다르다. 키 순서는 무관하고, 행 중복은 보존하며 `ordered=true`이면 행 순서도 비교한다. 깊이 100 초과·비문자열 키·비유한 수·잘못된 필드 타입은 `incomplete`다.
+
+`elapsed_ms`는 0 이상 유한 숫자의 비어 있지 않은 배열이며 boolean은 표본이 아니다. 실제 실행 출처는 자동 인증하지 않는다. 선택적인 `query_count`, `logical_reads`는 0 이상 정수로 비교 보고한다. 유효한 시간이 없으면 성능은 미확인이고, 문맥/결과가 다르면 속도 비율이 좋아도 동등한 최적화로 평가하지 않는다.

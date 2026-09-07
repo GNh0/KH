@@ -69,7 +69,7 @@ def check_package(path: str | Path) -> CheckResult:
                 if node.level:
                     base = package_parts[:len(package_parts)-node.level+1]
                     modules = [base + node.module.split('.')] if node.module else [base]
-                elif (node.module or '').startswith('src.'):
+                elif node.module and node.module.startswith('src.'):
                     modules = [node.module.split('.')]
             for module in modules:
                 target = root.joinpath(*module)

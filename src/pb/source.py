@@ -2,39 +2,12 @@
 from dataclasses import asdict, dataclass, field
 import re
 from .datawindow import extract_datawindow_column_specs
+from .lexer import scan_pb
 from src.sql.pb_extract import extract_powerbuilder_sql_fragments
 
 
 def mask_pb_comments(text: str) -> str:
-    result = list(text)
-    index = 0
-    while index < len(text):
-        if text[index] in {'"', "'"}:
-            quote = text[index]
-            index += 1
-            while index < len(text):
-                if text[index] == '~':
-                    index += 2
-                elif text[index] == quote:
-                    index += 1
-                    break
-                else:
-                    index += 1
-            continue
-        if text.startswith('//', index):
-            end = text.find('\n', index)
-            end = len(text) if end == -1 else end
-        elif text.startswith('/*', index):
-            close = text.find('*/', index + 2)
-            end = len(text) if close == -1 else close + 2
-        else:
-            index += 1
-            continue
-        for cursor in range(index, end):
-            if result[cursor] not in '\r\n':
-                result[cursor] = ' '
-        index = end
-    return ''.join(result)
+    return scan_pb(text, mask_literals=False)[0]
 
 
 @dataclass
@@ -46,13 +19,15 @@ class PBExport:
     columns: list[dict] = field(default_factory=list)
     sql_fragments: list = field(default_factory=list)
     coverage: str = 'supplied textual export only; inheritance and linked objects require their own sources'
+    unresolved_dataobjects: list[dict] = field(default_factory=list)
 
     def to_dict(self):
         return asdict(self)
 
 
 def parse_pb_export(text: str, *, path: str | None = None) -> PBExport:
-    code = mask_pb_comments(text)
+    code, literals = scan_pb(text)
+    comments_masked = mask_pb_comments(text)
     objects = [{'name': m[1], 'parent': m[2], 'line': code.count('\n', 0, m.start()) + 1}
                for m in re.finditer(r'(?im)^[ \t]*(?:global\s+)?type\s+(\w+)\s+from\s+([\w.]+)', code)]
     events = []
@@ -75,6 +50,21 @@ def parse_pb_export(text: str, *, path: str | None = None) -> PBExport:
                            'line': code.count('\n', 0, match.start()) + 1,
                            'body': text[match.end():body_end].strip()})
     events.sort(key=lambda event: event['line'])
-    dataobjects = list(dict.fromkeys(m[1] for m in re.finditer(r'(?im)^[ \t]*dataobject\s*=\s*"([^"]+)"', code)))
-    columns = [item.to_dict() for item in extract_datawindow_column_specs(code)]
-    return PBExport(path, objects, events, dataobjects, columns, extract_powerbuilder_sql_fragments(code))
+    by_start = {item.start: item for item in literals}
+    dataobjects: list[str] = []
+    unresolved: list[dict] = []
+    for match in re.finditer(r'(?im)(?:^|(?<=;)|\bthen\b|\belse\b)[ \t]*(?:\w+[ \t]*\.[ \t]*)*dataobject[ \t]*=', code):
+        start = match.end()
+        while start < len(text) and comments_masked[start].isspace():
+            start += 1
+        literal = by_start.get(start)
+        if literal and literal.complete and not code[literal.end:].lstrip(' \t').startswith(('+', '&')):
+            if literal.value not in dataobjects:
+                dataobjects.append(literal.value)
+        else:
+            unresolved.append({'line': text.count('\n', 0, match.start()) + 1,
+                               'reason': 'DataObject value requires expression or escape evaluation'})
+    columns = [item.to_dict() for item in extract_datawindow_column_specs(comments_masked)]
+    return PBExport(path, objects, events, dataobjects, columns,
+                    extract_powerbuilder_sql_fragments(text, source_name=path or ''),
+                    unresolved_dataobjects=unresolved)

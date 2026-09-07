@@ -1,6 +1,6 @@
 # KH for Codex
 
-KH 3.0.0은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
+KH 3.0.1은 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
 
 작고 명확한 요청은 직접 처리한다. 필요한 도메인 스킬만 읽고, 현재 사용자 정정·원본·비교 화면·API를 기준으로 작업한다. 과거 세션과 `docs/kh`, `docs/skillbook`의 오래된 보고서는 참고 자료다.
 
@@ -29,6 +29,7 @@ Python 3.11 이상 표준 라이브러리를 사용한다. 서버 실행, API �
 python -B <plugin-root>/scripts/kh_check.py sql <original.sql> <candidate.sql>
 python -B <plugin-root>/scripts/kh_check.py sql <source.sql> --preserve-aliases
 python -B <plugin-root>/scripts/kh_check.py csharp <candidate.cs> --original <original.cs> --designer <screen.Designer.cs>
+python -B <plugin-root>/scripts/kh_check.py designer <after.Designer.cs> --original <before.Designer.cs> --preserve-property btn.Visible
 python -B <plugin-root>/scripts/kh_check.py pb <source.srw> --encoding cp949
 python -B <plugin-root>/scripts/kh_check.py artifact <document.docx>
 python -B <plugin-root>/scripts/kh_check.py package <plugin-root>
@@ -38,7 +39,7 @@ python -B <plugin-root>/scripts/kh_check.py package <plugin-root>
 
 PB의 ORCA probe/추출, DataWindow XML·Designer 초안, 이벤트/상태·SP 매개변수·결과 측정 비교는 [PB 참고 자료](skills/pb-to-csharp-migration-harness/SKILL.md)에 있다. 도구 출력이 실제 실행·전체 이관을 증명하지 않는 부분을 구분한다.
 
-개발 검증은 저장소 루트에서 `python -B -m unittest discover -s tests/domain`으로 실행한다. [시나리오 평가](skills/kh-maintenance/references/scenario-evaluation.md)는 실제 호스트 평가와 단위/모의 검사를 구분한다.
+개발 검증은 저장소 루트에서 `python -B -m unittest discover -s tests/domain`으로 실행한다. [개발 검사](docs/development.md)는 고정 버전 Pyright로 전체 실행 모듈을 검사하고 입력 검증·공유 lexer에는 엄격한 타입 검사를 적용한다. Node/Pyright는 개발 검사에만 쓰며 KH 실행 의존성이 아니다. [시나리오 평가](skills/kh-maintenance/references/scenario-evaluation.md)는 실제 호스트 평가와 단위/모의 검사를 구분한다.
 
 ## 2.9에서 변경
 

@@ -13,5 +13,9 @@ def check_pb_export(text: str, *, path: str | None = None) -> CheckResult:
         result.issues.append(Issue('pb_structure_not_identified', 'warning', 'No supported textual PB structure was identified; inspect the export format and encoding.', path=path))
     if parsed.dataobjects:
         result.not_checked.append('linked DataWindow sources: '+', '.join(parsed.dataobjects))
+    if parsed.unresolved_dataobjects:
+        result.not_checked.append('dynamic or unresolved DataObject assignments; see source.unresolved_dataobjects')
+    if any(not item['complete'] for item in parsed.sql_fragments):
+        result.not_checked.append('complete SQL for partial/dynamic candidates; inspect each fragment extraction_kind and complete flag')
     result.metadata['source'] = parsed.to_dict()
     return result

@@ -9,7 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from src.common.output import redact
+from src.common.output import redact, configure_utf8_streams
 
 
 def _message_text(payload):
@@ -111,6 +111,5 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    import sys
-    sys.stdout.reconfigure(encoding='utf-8')
+    configure_utf8_streams()
     raise SystemExit(main())
