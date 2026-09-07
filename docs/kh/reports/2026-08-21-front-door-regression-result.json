@@ -1,0 +1,7 @@
+{
+  "command": "python -m unittest tests.test_request_act_parser tests.test_front_door_request_act_benchmark tests.test_request_classifier tests.test_plugin_composition_policy tests.test_kh_front_door tests.test_kh_front_door_always_on tests.test_session_skill_audit",
+  "command_id": "front-door-regression-2026-08-21-616",
+  "exit_code": 0,
+  "stdout": "Ran 616 tests in 66.057s\nOK",
+  "stderr": ""
+}

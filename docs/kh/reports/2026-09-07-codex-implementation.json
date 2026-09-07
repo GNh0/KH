@@ -1,0 +1,1908 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-07",
+  "status": "implemented_and_locally_verified",
+  "baseline_head": "c6a3de2f61c02cec108cabda18a7d5598e9cf296",
+  "source_version": "3.0.0",
+  "installed_cache_updated": false,
+  "counts": {
+    "requirements": 48,
+    "scenarios": 36,
+    "skills": 10,
+    "deleted_tracked_files": 442,
+    "modified_tracked_files": 11,
+    "preserved_original_untracked_files": 23,
+    "active_python_files": 50,
+    "active_python_lines": 8308
+  },
+  "requirements": [
+    {
+      "id": "R01",
+      "title": "현재 원본·정확한 프로젝트·사용자 수정 보호",
+      "rule": "수정 직전 현재 파일·DB·프로젝트를 다시 확인하고 사용자 변경을 기준으로 국소 diff를 만든다. BACKUP·다른 checkout은 명시한 범위에 있을 때만 사용한다. WinForms/DevExpress와 MAUI/PDA 등 서로 다른 프로젝트의 스타일·컨트롤 규칙을 혼합하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/SKILL.md",
+        "src/common/files.py",
+        "src/csharp/designer.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_common.py",
+        "tests/domain/test_csharp.py"
+      ],
+      "note": "현재 파일의 변경 충돌과 명시한 Designer 속성 보존을 검사한다.",
+      "scenarios": [
+        "S06",
+        "S15",
+        "S30"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R02",
+      "title": "명시한 비교 화면과 코드 패턴 적용",
+      "rule": "사용자가 지정한 비교 화면은 실제 전체 호출 경로까지 읽고 적용한다. 단순 이름 복사나 무관한 기능 복제는 피한다. 스타일 프로필과 현재 API·동작 근거를 함께 적용한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/SKILL.md",
+        "skills/csharp-designer-style-harness/references/data-flow.md"
+      ],
+      "local_checks": [
+        "tests/domain/test_csharp.py"
+      ],
+      "note": "지정 비교 화면과 현재 helper/명령 패턴을 기준으로 한다. 독립 C# 평가에서도 기존 helper를 보존했다.",
+      "scenarios": [
+        "S06",
+        "S27"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R03",
+      "title": "SQL 정리의 별칭 정규화 기본값",
+      "rule": "이 사용자의 SQL 정리는 기본적으로 별칭 정규화를 포함한다. 원래 별칭 유지·정렬만을 명시하면 보존한다. 생성·정리 모두 전체 SQL에 일관되게 적용한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/sql-formatting/SKILL.md",
+        "skills/sql-formatting/references/style.md"
+      ],
+      "local_checks": [
+        "tests/domain/test_sql.py"
+      ],
+      "note": "일반 정리에 역할별 별칭 정규화를 포함하며 독립 SQL 평가에서 실제 적용했다.",
+      "scenarios": [
+        "S01",
+        "S04",
+        "S22"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R04",
+      "title": "SQL 별칭을 업무 역할과 스코프로 분류",
+      "rule": "주 조회 대상 A, 다음 업무 역할군 B/C/D, 같은 역할군 안의 복수 테이블 B1/B2 등을 사용한다. 파생 쿼리 내부는 T 계열로 스코프를 나눈다. 테이블명 또는 MAINCD만으로 역할을 단정하지 않는다. E1/E2와 E/F 어느 쪽도 BA011T에 고정하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/sql-formatting/references/style.md",
+        "src/sql/aliases.py",
+        "src/sql/scopes.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_sql.py"
+      ],
+      "note": "역할 판단은 현재 쿼리에서 하고, 도구는 명시한 스코프·참조만 변경한다.",
+      "scenarios": [
+        "S22"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R05",
+      "title": "JOIN·ON·AND와 파생 테이블 정렬",
+      "rule": "실제 사용자 예시의 JOIN 끝 IN과 ON/AND 수직 관계, 파생 블록의 닫는 괄호와 ON/AND 위치를 지킨다. 고정 공백 수만으로 판단하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/sql-formatting/references/style.md",
+        "src/sql/layout.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_sql.py"
+      ],
+      "note": "JOIN/ON/AND 및 파생 JOIN 예시를 독립 평가의 진단과 맞췄다.",
+      "scenarios": [
+        "S23"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R06",
+      "title": "선행 쉼표·대문자·CASE·괄호·절 배치",
+      "rule": "키워드·식별자 대문자, 선행 쉼표, CASE 괄호, 짧은 GROUP BY/ORDER BY 한 줄, IF EXISTS 여닫는 괄호 수직 및 내부 SQL 다음 줄 들여쓰기를 프로필에 반영한다. SP 파라미터의 선행 쉼표와 기본값은 승인된 해당 템플릿과 실제 호출 계약을 함께 따른다. 문자열·주석은 대문자화하지 않는다. 테이블 별칭에 AS를 붙이지 않는 스타일과 컬럼 AS를 구분한다. 해당 SQL 스타일에서는 LEFT OUTER JOIN을 임의로 LEFT JOIN으로 줄이지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/sql-formatting/references/style.md",
+        "src/sql/layout.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_sql.py"
+      ],
+      "note": "선행 쉼표·CASE·IF EXISTS·GROUP/ORDER와 테이블/컬럼 AS를 구분한다. 자동 검사는 토큰/배치의 일부 범위다.",
+      "scenarios": [
+        "S23"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R07",
+      "title": "INSERT 열과 SELECT 값의 줄 묶음 대응",
+      "rule": "INSERT 대상 열과 SELECT/VALUES 값은 동일한 가로 묶음·탭 위치·줄바꿈으로 대응시키고 UPDATE SET은 선행 쉼표를 쓰는 세로 목록으로 둔다. 열-값 대응의 의미 오류와 배치 오류를 구분한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/sql-formatting/references/style.md",
+        "src/sql/layout.py",
+        "src/sql/compare.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_sql.py"
+      ],
+      "note": "열/값의 묶음 배치와 토큰 순서 변경을 구분한다.",
+      "scenarios": [
+        "S24"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R08",
+      "title": "SQL 의미·주석·문자열·출력 계약 보존",
+      "rule": "SQL의 조건·JOIN 종류/순서·리터럴·한글·주석·출력 필드와 결과 의미를 보존한다. 별칭 변경은 해당 참조를 함께 갱신한다. 토큰 전체 동일만을 요구하면 정상 별칭 변경도 막으므로 허용 변환을 구분한다. 기존 로직을 주석으로 남기라고 한 작업에서는 삭제 대신 그 요청을 따른다. 모든 프로젝트에 죽은 코드 보관을 강제하는 규칙으로 확대하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "src/sql/lexer.py",
+        "src/sql/compare.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_sql.py",
+        "tests/domain/test_cli.py"
+      ],
+      "note": "리터럴·한글·주석·JOIN 종류·출력 열/값 순서와 허용된 별칭 변경을 비교한다.",
+      "scenarios": [
+        "S01",
+        "S03",
+        "S05",
+        "S25"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R09",
+      "title": "정리·생성·리팩터링·실행 범위 구분",
+      "rule": "정리·생성·최적화·비교 질문·DB 실행을 구분한다. 정리만이면 제공 SQL을 즉시 완성하고 자동 Goal, 프로젝트 탐색, DB 접속을 선행 절차로 요구하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/sql-formatting/SKILL.md",
+        "src/sql/checks.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_sql.py",
+        "tests/domain/test_cli.py"
+      ],
+      "note": "정리/생성/비교/실행을 구분한다. 의미 변환은 별도 실제 검토 대상이다.",
+      "scenarios": [
+        "S01",
+        "S02",
+        "S07"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R10",
+      "title": "간결하고 전체 붙여넣기 가능한 SQL·코드",
+      "rule": "요청한 전체 SQL·코드를 붙여넣을 수 있게 한 번에 제공하고 생략·추가 요청 유도·불필요한 설명으로 대체하지 않는다. 국소 교체를 원하면 그 교체문을 준다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/sql-formatting/SKILL.md",
+        "skills/work-execution/SKILL.md"
+      ],
+      "local_checks": [],
+      "note": "요청한 전체 붙여넣기 SQL·코드 또는 정확한 교체문을 전달한다. 두 독립 평가에서 결과 파일을 생성했다.",
+      "scenarios": [
+        "S01",
+        "S26"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R11",
+      "title": "단순 UPDATE에 불필요한 실행 절차를 추가하지 않음",
+      "rule": "사용자가 UPDATE만 원하면 같은 UPDATE FROM/CROSS APPLY 형태의 SQL을 제공한다. 실제 실행 요청에서는 대상 확인·트랜잭션·결과 검증이 필요하지만 단순 전달 답변에 전체 백업/롤백 절차를 붙이지 않는다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/sql-formatting/references/style.md"
+      ],
+      "local_checks": [],
+      "note": "UPDATE 전달만이면 요청한 UPDATE FROM/CROSS APPLY 형태를 완성하고 불필요한 실행 절차를 붙이지 않는다.",
+      "scenarios": [
+        "S26"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R12",
+      "title": "업무 계산은 현재 함수와 저장 계약에서 도출",
+      "rule": "금액·환율·수량·키·날짜는 현재 소스와 함수 정의에서 도출한다. GET_CHGRAT 등 지정한 함수를 유지하며 예시 환율·필드·상수를 임의로 고정하지 않는다. 원본 고정값은 원본 규칙대로 유지한다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/sql-formatting/references/style.md",
+        "skills/csharp-designer-style-harness/references/data-flow.md"
+      ],
+      "local_checks": [],
+      "note": "현재 계산 함수와 XML/SAVE 계약을 읽으며 GET_CHGRAT 대신 환율을 하드코딩하지 않는다.",
+      "scenarios": [
+        "S25",
+        "S26",
+        "S28"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R13",
+      "title": "선호 SQL 형태와 필요성에 따른 제한적 예외",
+      "rule": "CTE·중간 SQL 테이블·불필요한 NULL 보정/변수·MERGE 등 비선호 표현을 습관적으로 추가하지 않는다. 필요한 함수→JOIN 변경은 정의·중복·NULL·행 수·성능 근거를 확인한다. 비선호 방식을 피하면 구현이 어렵거나 대안 성능이 극단적으로 불리한 경우만 예외를 검토한다. 해당 SQL 스타일은 불필요한 WHERE/SELECT 서브쿼리·NOT EXISTS보다 JOIN 형태를 우선한다. 의미·NULL·중복·카디널리티가 달라지는 기계적 치환은 하지 않는다. 임시 테이블을 직접 제안한 과거 요구도 있어 전역 금지 근거로 사용하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/sql-formatting/SKILL.md",
+        "skills/work-execution/references/preferences.md",
+        "src/sql/checks.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_sql.py"
+      ],
+      "note": "기본 선호를 적용하되 의미가 바뀌는 기계적 JOIN 치환은 하지 않는다. 중간 테이블 진단은 경고다.",
+      "scenarios": [
+        "S03",
+        "S25",
+        "S32"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R14",
+      "title": "작성자 스타일을 검증 후 패키지 프로필에 고정",
+      "rule": "KH/근호 작성 SP와 대응 C#의 승인된 스타일은 유지보수 단계에서 검증·추출해 범위가 있는 프로필로 보관한다. 일반 작업마다 작성자 검색을 반복하거나 이름 유사성으로 다른 사람의 코드를 선택하지 않는다. 현재 원본은 동작/API 근거이며 사용자 지정 비교 코드는 해당 작업의 스타일 기준이다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/references/default-profile.json",
+        "skills/pb-to-csharp-migration-harness/references/default-profile.json",
+        "skills/kh-maintenance/references/pb-profile-maintenance.md"
+      ],
+      "local_checks": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "note": "범위별 검증 패턴을 보관하고 일반 작업의 작성자 재검색·프로필 서명 요구를 제거했다.",
+      "scenarios": [
+        "S27"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R15",
+      "title": "구체 예시 이름·업무 규칙의 범용화 방지",
+      "rule": "ORD/PUR/REC 등 복합키는 예시다. 임의 개수의 원시 구성 필드와 별도 표시 키를 지원하도록 계획하며 특정 업무 키·폰트·경로를 전체 화면 금지 규칙으로 만들지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/pb-to-csharp-migration-harness/references/default-profile.md",
+        "src/pb/keys.py",
+        "src/pb/layout.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py"
+      ],
+      "note": "임의 개수의 원시 키를 보존하고, 명시한 컨트롤 이름·바인딩이 기본 예시보다 우선한다.",
+      "scenarios": [
+        "S31"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R16",
+      "title": "정적 UI와 Designer 소유권",
+      "rule": "정적 컨트롤·컬럼·배치·속성은 Designer에 두고 업무 처리·바인딩은 code-behind에 둔다. 실제 동적 UI 필요는 별도 판단한다. Visual Studio Designer가 읽지 못하는 생성 helper 구문은 취향이 아니라 호환성 문제로 검사한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/references/designer.md",
+        "src/csharp/designer.py",
+        "src/csharp/checks.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_csharp.py"
+      ],
+      "note": "정적 UI는 Designer, 동적 업무는 실제 code-behind 패턴을 따른다. factory와 새 정적 UI 대입을 검토 진단한다.",
+      "scenarios": [
+        "S28",
+        "S29"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R17",
+      "title": "프레임워크 명령·초기화·이벤트 위치",
+      "rule": "초기화와 명령 이벤트는 해당 프레임워크의 initControl/Load/SearchCommand/NewCommand/DeleteCommand 흐름을 따른다. 모든 이벤트를 Designer로 옮기거나 Search에서 이미 처리하는 m_Editmode 초기화를 중복하지 않는다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/csharp-designer-style-harness/references/data-flow.md"
+      ],
+      "local_checks": [],
+      "note": "Load/initControl/명령 이벤트 위치와 중복 초기화·메시지를 실제 프레임워크에서 확인한다.",
+      "scenarios": [
+        "S28"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R18",
+      "title": "실제 컨트롤·컬럼·메서드 명명 규칙",
+      "rule": "현재 범위에서 검증된 colList_/colDetail_/colTABLE_FIELD 및 컨트롤·Repository·Spin·메서드 명명을 프로필에 기록한다. 이름만 같고 바인딩이 없는 코드를 통과시키지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/references/designer.md",
+        "src/pb/datawindow.py",
+        "src/pb/layout.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py"
+      ],
+      "note": "현재 명명과 명시한 매핑을 사용하고 중복·유효하지 않은 생성 멤버를 검사한다.",
+      "scenarios": [
+        "S27",
+        "S29"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R19",
+      "title": "HTML·DataWindow의 구조와 레이아웃 보존",
+      "rule": "HTML→XML 및 DataWindow에서 실제 그룹·패널·그리드·열·caption·순서·기본값을 읽어 Designer에 반영한다. 기준 HTML은 단순 예시 문서가 아니라 사용자가 사용하는 레이아웃 입력이다. TabIndex는 사용자가 지정한 입력 순서 또는 해당 화면의 왼쪽 위부터 읽는 순서로 맞추고 실제 그룹·컨테이너 순서까지 확인한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/pb-to-csharp-migration-harness/references/datawindow.md",
+        "src/pb/datawindow.py",
+        "src/csharp/designer.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py",
+        "tests/domain/test_csharp.py"
+      ],
+      "note": "HTML/DW 레이아웃을 실제 입력으로 취급한다. DW 열·caption·순서와 지정 TabIndex를 검사하며 실제 HTML/UI 렌더링은 별도다.",
+      "scenarios": [
+        "S29"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R20",
+      "title": "헤더와 셀 정렬·서머리·그룹·lookup·버튼",
+      "rule": "헤더 가운데 정렬과 데이터 셀 정렬을 구분하고 숫자는 해당 Spin Repository, lookup의 코드/표시/버튼, 기본 건수·합계·그룹 footer/merge를 범위대로 유지한다. TY 사용자 lookup은 해당 요구 범위에서 조회의 RTRUSER와 입력·수정의 USER를 구분해 퇴사자 표시와 신규 선택 정책을 맞춘다. 첫 열 건수는 기본일 뿐 사용자가 품목명 등 위치를 지정하면 그 지시를 따른다. 해당 WinForms 화면은 불필요한 DisplayFormat.FormatString 대신 실제 Spin/lookup Repository와 승인된 바인딩을 우선한다. 보고서 표현에서 허용된 서식까지 금지하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/references/designer.md",
+        "src/pb/datawindow.py",
+        "src/csharp/designer.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py",
+        "tests/domain/test_csharp.py"
+      ],
+      "note": "헤더/셀과 lookup/숫자 Repository/등록을 구분한다. summary·그룹·버튼 업무 동작은 실제 화면 검토가 필요하다.",
+      "scenarios": [
+        "S29"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R21",
+      "title": "UserControl 기본값과 대상별 폰트·Visible 상태",
+      "rule": "UserControl의 기본 폭·높이·정렬·버튼·AutoHeight 등을 정확히 읽고 불필요하게 덮지 않는다. 100x25나 특정 font를 모든 컨트롤에 고정하지 않는다. 사용자가 바꾼 font·Visible 값이 우선한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/references/designer.md",
+        "src/csharp/designer.py",
+        "src/pb/datawindow.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_csharp.py",
+        "tests/domain/test_pb.py"
+      ],
+      "note": "UserControl 기본 크기를 가정하지 않고 명시한 Font/Visible 보존과 생성 템플릿 override를 지원한다.",
+      "scenarios": [
+        "S29",
+        "S30"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R22",
+      "title": "포커스 행과 체크 선택 행 구분",
+      "rule": "포커스 행이면 GetFocusedDataRow/FocusedRowHandle, 체크 선택이면 실제 선택 컬렉션을 사용한다. checkbox/indicator 동작과 선택 순서·정렬 순서를 구분한다. 저장·취소 후 strFindKey 등의 기존 복원 흐름을 따른다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/csharp-designer-style-harness/references/data-flow.md"
+      ],
+      "local_checks": [],
+      "note": "포커스와 체크 선택을 구분한다. 독립 C# 평가에서 GetFocusedDataRow와 null 검사를 적용했다.",
+      "scenarios": [
+        "S28"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R23",
+      "title": "SAVE 외 화면 생명주기 전체 비교",
+      "rule": "화면 전체 구현·비교를 요청한 경우 Load→Search→상세→보호→추가/복사/수정/삭제/저장/취소→재조회/포커스까지 확인한다. 해당 프로그램의 BA060T 등 실제 권한 원본과 CustomButton/SimpleButton/U_BUTTON의 업무 처리까지 연결한다. 국소 수정에서는 범위 밖 생명주기를 새로 구현하지 않는다. 확인 메시지를 중복 호출하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/references/data-flow.md",
+        "skills/pb-to-csharp-migration-harness/references/validation.md",
+        "src/pb/events.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py"
+      ],
+      "note": "전체 화면에는 전체 생명주기를 매핑한다. 누락 이벤트 검사는 일부 자동화이며 실제 전체 화면 실행 검증은 별도다.",
+      "scenarios": [
+        "S18",
+        "S28"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R24",
+      "title": "NEW/MOD/DEL 변경분 저장과 필드 소유권",
+      "rule": "선택 행과 NEW/MOD/DEL, Added/Modified/Deleted를 실제 XML 생성기 및 SAVE 분기와 맞춘다. 전체 삭제·재등록 또는 일괄 all-or-nothing을 요청 없이 도입하지 않는다. 단순 스타일 통과로 데이터 동작을 보증하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/references/data-flow.md",
+        "src/sql/delta.py",
+        "src/pb/events.py",
+        "src/csharp/checks.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_sql.py",
+        "tests/domain/test_pb.py"
+      ],
+      "note": "NEW/MOD/DEL·필드 소유권을 보존하며 전체 삭제/재등록과 모든 행 재작성은 검토 대상으로 남긴다.",
+      "scenarios": [
+        "S18",
+        "S28",
+        "S32"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R25",
+      "title": "검증 위치와 C#·SP 인터페이스",
+      "rule": "C#가 실제 전달하는 파라미터·XML 필드·결과테이블과 SP의 채번·고정값·처리 분기를 맞춘다. 요청된 검증 위치가 SAVE SP이면 C#에 중복 구현하지 않는다. SELECT/SAVE 둘 다 필요한 작업을 한쪽만 처리하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/references/data-flow.md",
+        "skills/pb-to-csharp-migration-harness/references/sql.md",
+        "src/pb/sql.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py"
+      ],
+      "note": "실제 SP 정의의 필수/선택 매개변수를 선택 호출과 비교한다. 타입·XML·동적 호출·검증 위치는 실제 소스 검토 사항이다.",
+      "scenarios": [
+        "S18",
+        "S28"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R26",
+      "title": "LINQ·중간 테이블 비선호와 좁은 예외",
+      "rule": "기본은 기존 for/DataTable.Select/NewRow/Rows.Add 및 직접 대상 테이블 추가다. LINQ·Clone/ImportRow·중간 테이블은 이를 피하면 구현이 어렵거나 다른 구현과의 성능 차이가 극단적으로 큰 경우에만 사용한다. 코드 길이·취향·편의는 예외 이유가 아니다. 행 소유권·수명을 분리하려고 사용자가 Clone/ImportRow 방식을 선택한 기록은 별도 문맥으로 보존한다. 직접 추가 선호를 모든 DataTable 복사 금지로 일반화하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/work-execution/references/preferences.md",
+        "src/csharp/checks.py",
+        "src/sql/checks.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_csharp.py",
+        "tests/domain/test_sql.py"
+      ],
+      "note": "LINQ·중간 테이블은 좁은 필요성 예외가 있는 비선호 경고이며 전역 금지가 아니다.",
+      "scenarios": [
+        "S32"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R27",
+      "title": "불필요한 헬퍼·추상화·중복 코드 억제",
+      "rule": "기존 helper와 같은 스타일을 우선하고 편의를 위한 새로운 추상화·중복 메서드·가변 컬럼 생성을 피한다. 여러 보고서의 공통 기능처럼 반복 제거를 사용자가 요구하거나 구현상 필요한 재사용은 허용한다. 해당 C# 스타일의 명시적 get 블록과 파싱/비교 if 분리 요구를 적용하고 단순 축약 표현으로 임의 교체하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/SKILL.md",
+        "skills/csharp-designer-style-harness/references/data-flow.md",
+        "src/csharp/checks.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_csharp.py"
+      ],
+      "note": "새 추상화나 중복 helper를 관성적으로 만들지 않으며 현재 메서드·트랜잭션 계열 변경을 확인한다.",
+      "scenarios": [
+        "S06",
+        "S27",
+        "S32"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R28",
+      "title": "Excel 실제 시트·행·거래처 매칭·오류 모음",
+      "rule": "Excel는 실제 시트·셀 타입·헤더·키를 읽는다. 해당 업로드 사례는 정상 행을 직접 추가하고 잘못된 행만 건너뛰어 오류를 한 번에 표시한다. 이것을 모든 업로드의 보편적 원자성 규칙으로 고정하지 않는다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/csharp-designer-style-harness/references/data-flow.md"
+      ],
+      "local_checks": [],
+      "note": "실제 시트/헤더/셀/키를 읽는다. 해당 업로드 패턴은 정상 행 직접 추가와 오류 모음이며 모든 업로드로 확대하지 않는다.",
+      "scenarios": [
+        "S32"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R29",
+      "title": "새 파일·프로젝트 등록·Designer 지원 구문",
+      "rule": "새 .cs/Designer/리소스 파일의 실제 대상 csproj 등록과 Designer 지원 구조를 확인한다. DB 전용 SQL은 요청 없이 C# 프로젝트 항목으로 추가하지 않는다. 빌드 성공만으로 디자이너/패키지 등록을 대신하지 않는다. 현재 프로젝트에 설치·참조된 DevExpress 버전과 API를 기준으로 하며 최신 라이브러리를 임의로 가져오지 않는다. 이관 대상에 사용자 컨트롤이 없는 경우 실제 사용할 수 있는 DevExpress 또는 기본 컨트롤로 동작을 유지하는 대안을 검토한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/csharp-designer-style-harness/references/designer.md",
+        "src/pb/preflight.py",
+        "src/csharp/designer.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py",
+        "tests/domain/test_csharp.py"
+      ],
+      "note": "실제 project 선언·소스 가용성·SDK 제외/조건·Designer 구문을 확인하고 MSBuild/Designer 실행과 구분한다.",
+      "scenarios": [
+        "S29",
+        "S34"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R30",
+      "title": "PB 정확한 PBL·객체·상속·이벤트 원본 추출",
+      "rule": "정확한 PBL·object·상속 부모·연결 DW·compute/protect/update·이벤트·SQL과 간접 호출을 확인한다. 제공 export만 있으면 그 범위를 활용하고 전체 PBL 확인으로 과장하지 않는다. 원본에 없는 동작을 추측해 추가하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/pb-to-csharp-migration-harness/SKILL.md",
+        "src/pb/source.py",
+        "src/pb/checks.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py"
+      ],
+      "note": "제공 export의 객체·부모·이벤트·연결 DW 범위를 추출한다. 미제공 객체 전체를 읽었다고 하지 않는다.",
+      "scenarios": [
+        "S16",
+        "S17",
+        "S18"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R31",
+      "title": "PB 분석 자료가 실제 구현 가능한 수준인지 확인",
+      "rule": "상세 분석/마이그레이션 계획을 요청하면 화면·이벤트·DW·DB·필드·입출력·저장 순서·불명확점·구현 순서가 연결된 자료를 만든다. 다른 구현자가 자료만 보고 작업할 수 있는지 확인한다. 단순 SELECT 추출에 이 문서 전체를 강제하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/pb-to-csharp-migration-harness/references/validation.md",
+        "src/pb/planning.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py"
+      ],
+      "note": "범위에 맞는 구현 순서와 연결 정보를 계획하며 SQL만 요청한 작업에 화면 생성을 강제하지 않는다.",
+      "scenarios": [
+        "S16",
+        "S18"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R32",
+      "title": "ORCA 환경·실제 출력·오류 진단",
+      "rule": "ORCA/PblScripter 실행 전 버전·bitness·자식 PATH·의존 DLL·라이선스와 실제 PBL을 맞춘다. exit code 0이어도 Session open failed/Bad library/라이선스 오류 또는 빈 산출물이면 실패다. PATH만으로 모든 실패를 설명하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/pb-to-csharp-migration-harness/references/orca.md",
+        "src/pb/orca.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_orca.py"
+      ],
+      "note": "선택 버전·x86·자식 PATH·인코딩과 오류 진단/새 PB 출력 확인을 유지했다. 실제 ORCA 설치 환경 실행은 이번 범위 밖이다.",
+      "scenarios": [
+        "S17"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R33",
+      "title": "보고서 밴드와 실제 렌더링·출력 검증",
+      "rule": "보고서의 H/D/F·그룹·페이지·밴드 순서와 실제 출력·문자 가독성을 확인한다. 여러 보고서 HTML 변환은 공통 factory 등 적절한 단일 경로를 검토하되 생성자 부작용과 밴드 렌더 순서를 보존한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/pb-to-csharp-migration-harness/references/datawindow.md",
+        "skills/artifact-checks/SKILL.md",
+        "src/artifacts/checks.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "note": "공통 보고서 변환 경로와 H/D/F·그룹·밴드·생성자 부작용을 검토한다. 구조 통과와 렌더링 성공을 분리한다.",
+      "scenarios": [
+        "S19",
+        "S33"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R34",
+      "title": "빌드 비선호와 필요한 검증만 수행",
+      "rule": "기본은 필요한 정적 확인을 먼저 하고 불필요한 빌드·전체 테스트 반복을 피한다. 빌드하지 않으면 구현·오류 해결이 어렵다는 구체적 필요가 있을 때만 빌드를 선택한다. 빌드 성공·정적 확인·실행/시각 검증을 구분한다. 최신 비선호 정정을 과거의 전면 금지로 되돌리지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/work-execution/references/preferences.md",
+        "skills/csharp-designer-style-harness/SKILL.md",
+        "src/pb/orca.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_orca.py"
+      ],
+      "note": "의례적 빌드를 피하고 추출 helper가 실제 필요한 경우에만 선택하도록 했다. C# 독립 평가에서는 빌드를 수행하지 않았다.",
+      "scenarios": [
+        "S08",
+        "S32",
+        "S34"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R35",
+      "title": "중단 우선과 자동 Goal 재개 차단",
+      "rule": "사용자의 중단·시간 제한은 자동 Goal continuation보다 우선한다. 이후 명시적 재개 또는 사용자가 예약한 재개 시각 전에는 테스트/하위 에이전트를 다시 시작하지 않는다. 일반 질문이나 피드백은 원래 작업 취소로 오해하지 않는다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/work-execution/SKILL.md",
+        "skills/context-handoff/SKILL.md"
+      ],
+      "local_checks": [],
+      "note": "중단 후 자동 Goal 메시지로 작업을 재개하지 않는다. 기존 자동 continuation 상태 코드를 제거했다.",
+      "scenarios": [
+        "S10",
+        "S11",
+        "S15"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R36",
+      "title": "현재 사용자 승인·범위·후속 정정 유지",
+      "rule": "현재 요청·후속 정정·이미 부여된 승인과 도구 권한을 함께 유지한다. 추가 질문을 했다거나 욕설이 있다는 이유로 작업을 중단하지 않는다. 실제 자동 승인 거절이면 동작과 이유를 명확히 알린다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/work-planning/SKILL.md",
+        "skills/work-execution/SKILL.md",
+        "skills/context-handoff/SKILL.md"
+      ],
+      "local_checks": [],
+      "note": "현재 승인과 최신 정정을 유지하고 계획 서식 재승인을 요구하지 않는다.",
+      "scenarios": [
+        "S07",
+        "S13",
+        "S15"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R37",
+      "title": "읽기·확인 요청을 변경 작업으로 확대하지 않음",
+      "rule": "확인·이유·분석만 요청하면 답변/분석을 완성하고 파일이나 DB를 수정하지 않는다. 행동 요청은 실행으로 처리하되 단순 질문을 새 구현 승인으로 확대하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/sql-formatting/SKILL.md",
+        "skills/work-planning/SKILL.md"
+      ],
+      "local_checks": [
+        "tests/domain/test_cli.py"
+      ],
+      "note": "확인·비교 요청을 쓰기 작업으로 확대하지 않는다. CLI도 입력 파일을 변경하지 않는다.",
+      "scenarios": [
+        "S02",
+        "S07"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R38",
+      "title": "실제 실패 단계와 원인 확인 후 최소 수정",
+      "rule": "실제 호출 경로와 오류 발생 단계, 재현 조건을 확인한 뒤 원인을 설명한다. Connect 이전/인증/relay 등 다른 단계를 섞거나 없는 DevExpress API를 가정하지 않는다. 고쳤다는 말과 사용자의 재현 결과를 별개로 기록한다. DB 실행과 결과 전송·C# 바인딩·BestFit 등 화면 비용을 구분하고 같은 파라미터·행 수의 근거로 성능을 비교한다. 사용자가 제공한 행 수나 소스와 다른 측정을 일반화하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/systematic-debugging/SKILL.md",
+        "src/pb/equivalence.py",
+        "src/pb/orca.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_pb.py",
+        "tests/domain/test_orca.py"
+      ],
+      "note": "실패 단계와 실제 측정 조건을 구분하며 exit 0·부분 결과만으로 원인을 확정하지 않는다.",
+      "scenarios": [
+        "S20",
+        "S34"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R39",
+      "title": "현재 사용 가능한 스킬·도구와 일관된 규칙",
+      "rule": "현재 제공된 스킬/도구와 실제 설치본을 확인하고 오래된 사용자 폴더/캐시/호스트 경로를 추정하지 않는다. 스킬 호출 사실보다 최종 코드가 계약을 지켰는지 확인한다. 요청마다 전체 스킬과 front-door를 실행하는 구조는 제거한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/kh-maintenance/SKILL.md",
+        "src/maintenance/package_check.py",
+        ".codex-plugin/plugin.json"
+      ],
+      "local_checks": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "note": "실제 발견된 스킬·참조·import와 공식 manifest 형식을 검증한다.",
+      "scenarios": [
+        "S01",
+        "S20",
+        "S35"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R40",
+      "title": "호스트 도구 중심 실행과 실제 위임 증명",
+      "rule": "협업 허용 여부는 현재 호스트 정책에 따른다. 역할 JSON 생성·async 함수 실행과 실제 Codex 에이전트 실행을 구분한다. 위임한 경우 실제 생성/결과/실패를 확인하고 공유 파일 경계를 지정한다. 과거 항상 위임 요구를 현재 강제 규칙으로 재사용하지 않는다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/work-execution/references/delegation.md",
+        "src/maintenance/session_report.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "note": "현재 협업 도구만 사용하고 생성/결과/실패를 구분한다. 실제 독립 평가 2건을 수행했다.",
+      "scenarios": [
+        "S14",
+        "S20",
+        "S35"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R41",
+      "title": "Goal은 요청 시에만 생성하고 완료 근거 확인",
+      "rule": "Goal은 현재 사용자의 명시적 요청에 native 도구로 생성하고 임의 budget·별도 KH ledger를 만들지 않는다. 피드백을 목표에 반영하되 완료·중단·blocked는 현재 도구 계약과 근거로 판단한다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/work-execution/SKILL.md"
+      ],
+      "local_checks": [],
+      "note": "사용자가 요청한 native Goal을 사용하며 별도 KH ledger와 임의 token_budget를 만들지 않는다.",
+      "scenarios": [
+        "S10",
+        "S11",
+        "S12"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R42",
+      "title": "자기평가·정해진 테스트 통과와 실제 품질 구분",
+      "rule": "모의 실행·문구/서식 검사·자기평가 점수·기존 테스트 통과 수를 실제 작업 품질과 혼동하지 않는다. 애매한 실제 사용자 발화·부정·정정·다른 키/화면을 포함한 결과 중심 사례로 평가한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/kh-maintenance/references/scenario-evaluation.md",
+        "src/common/results.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "note": "단위·모의·실제 호스트·UI/DB 증거를 구분한다. 고정 점수와 역할 JSON 성공 판정을 제거했다.",
+      "scenarios": [
+        "S20",
+        "S35",
+        "S36"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R43",
+      "title": "단순 요청의 불필요한 지연·절차·출력 억제",
+      "rule": "작은 명확한 요청은 필요한 소스/도구만 사용한다. 로그는 범위를 줄이되 핵심 실패를 보존하고 추정 토큰 절감을 실측으로 표시하지 않는다. 변화 없는 검사·승인·상태 파일 반복을 제거한다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/work-planning/SKILL.md",
+        "skills/sql-formatting/SKILL.md",
+        "skills/kh-maintenance/SKILL.md"
+      ],
+      "local_checks": [],
+      "note": "작고 명확한 요청을 직접 처리하도록 하고 catch-all intake/전체 스킬 로드를 제거했다.",
+      "scenarios": [
+        "S01",
+        "S09",
+        "S20"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R44",
+      "title": "현재 체크아웃·브랜치·설치 캐시 구분",
+      "rule": "작업한 checkout, 배포 branch/ref, manifest·설치 cache 버전을 구분한다. 사용자 요청의 배포 경로를 임의로 바꾸지 않고 실제 설치본으로 확인한다. 저장소 없는 경로에서 무의미한 Git 명령을 반복하지 않는다. 요청이 실제 DB·앱 적용을 포함하면 파일 생성만으로 완료라고 하지 않는다. 적용 대상과 실제 실행 증거를 구분해 보고한다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/kh-maintenance/SKILL.md",
+        "README.ko.md",
+        ".agents/plugins/marketplace.json"
+      ],
+      "local_checks": [],
+      "note": "소스 3.0.0과 설치 캐시를 구분하며 원격 이름/ref를 보존했다. 이번 작업은 로컬 변경이다.",
+      "scenarios": [
+        "S13",
+        "S21",
+        "S35"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R45",
+      "title": "업무 DB 변경의 정확한 대상·거래·검증",
+      "rule": "DB 연결명/서버/데이터베이스/대상 키를 현재 요청으로 확정한다. 실행 권한이 있는 쓰기는 정확한 대상·트랜잭션·후속 값·제외 행을 검증한다. 단순 SQL 전달과 실행은 별개로 보고한다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/sql-formatting/references/style.md"
+      ],
+      "local_checks": [],
+      "note": "실제 DB 변경 요청에는 정확한 연결/DB/대상 키/트랜잭션/사후 값과 제외 행을 확인한다. 이번 작업에서 업무 DB 변경은 없다.",
+      "scenarios": [
+        "S26",
+        "S30"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R46",
+      "title": "대화 언어와 직접적인 답변",
+      "rule": "사용자의 언어와 원하는 상세도에 맞춰 결론부터 답한다. 모든 사용자에게 한국어를 강제하지 않는다. 모델/도구 비교는 날짜·제품/버전·확인 근거를 구분한다. 불필요한 반말·비아냥·웃음 표현을 피하고 차분하고 존중하는 말투로 답한다. 수정 후에는 바뀐 프로그램 ID·이름과 확인 범위를 알려준다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/work-execution/SKILL.md",
+        "skills/work-planning/SKILL.md"
+      ],
+      "local_checks": [],
+      "note": "사용자 언어와 상세도에 맞춰 결과부터 설명하고 프로그램/확인 범위를 알려준다.",
+      "scenarios": [
+        "S01",
+        "S36"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R47",
+      "title": "원시 로그와 기억·인용된 평가 구분",
+      "rule": "감사는 실제 root 사용자 메시지와 응답/도구 결과를 연결한다. 복제된 서브에이전트 문맥·자동 Goal·인용된 리뷰·메모리를 독립 사용자 요구나 실제 실행 증거로 중복 계산하지 않는다. 저장되지 않은 시각/외부 로그는 한계로 표시한다.",
+      "implementation": "instructions_and_local_helpers",
+      "files": [
+        "skills/kh-maintenance/references/session-audit.md",
+        "src/maintenance/session_report.py"
+      ],
+      "local_checks": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "note": "원문 위치·인접 event/response 중복·자식 문맥·tool return을 구분한다. 인용·철회·자동 메시지 의미는 원문 순서로 별도 판단한다.",
+      "scenarios": [
+        "S20",
+        "S36"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    },
+    {
+      "id": "R48",
+      "title": "역사 지시를 참고로만 취급하고 특수 규칙 누적 방지",
+      "rule": "이전 지침은 참고 자료다. 한 번의 오류·특정 경로·반려된 제안에 대응한 금지 규칙을 전역으로 누적하지 않는다. 확실한 의미/호환성 오류는 검사하고 스타일 선호는 좁은 필요성 예외와 구분한다.",
+      "implementation": "instructions_or_host_behavior",
+      "files": [
+        "skills/kh-maintenance/SKILL.md",
+        "docs/README.md",
+        "skills/context-handoff/SKILL.md"
+      ],
+      "local_checks": [],
+      "note": "과거 지시를 현재 승인으로 재사용하지 않으며 기존 감사/계획/역사 문서를 원문 그대로 보존한다.",
+      "scenarios": [
+        "S13",
+        "S32",
+        "S36"
+      ],
+      "runtime_claim": "No blanket end-to-end verification claim."
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "S01",
+      "request": "SQL 정리만",
+      "expected": "업무 역할별 별칭 정규화와 검증된 SQL 배치 적용; JOIN 순서·조건·리터럴·주석·의미 보존; 전체 붙여넣기 SQL; Goal/서명/DB 접속 없음",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "independent_skill_forward_test_executed",
+      "local_check_files": [
+        "tests/domain/test_cli.py",
+        "tests/domain/test_maintenance.py",
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario.",
+      "inputs": [
+        "fixtures/formatting-source.sql"
+      ],
+      "actual_request": "이 SQL 정리해서 전체로 줘. 별칭은 내가 쓰는 방식으로 맞춰주고, 안쪽 계산이나 조건은 유지해."
+    },
+    {
+      "id": "S02",
+      "request": "붙여넣은 두 SQL 차이가 없지?",
+      "expected": "비교 결론을 답하고 파일 수정/포맷 재작성/DB 실행 없음",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_cli.py",
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S03",
+      "request": "SQL 함수 호출을 JOIN으로 변경",
+      "expected": "실제 정의와 결과 계약 확인 후 변경; 이름만으로 의미를 추측하지 않음",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_cli.py",
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S04",
+      "request": "별칭은 그대로 두고 정렬만",
+      "expected": "TT/WW/A1 등 원래 별칭 보존; S01 기본 정리와 명시적 유지 요청 구분",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S05",
+      "request": "UTF-8 BOM 및 CRLF/LF 입력",
+      "expected": "텍스트 보존 검사와 실제 파일 동시 변경 검사를 구분; BOM/개행을 의미 변경으로 오판하지 않음",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_cli.py",
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S06",
+      "request": "C# 한 이벤트 수정",
+      "expected": "현재 파일의 기존 패턴을 따라 국소 수정; 전체 화면/Designer 재생성 없음",
+      "skills": [
+        "csharp-designer-style-harness"
+      ],
+      "evaluation": "independent_skill_forward_test_executed",
+      "local_check_files": [
+        "tests/domain/test_common.py",
+        "tests/domain/test_csharp.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario.",
+      "inputs": [
+        "fixtures/OrderScreen.cs",
+        "fixtures/OrderScreen.Designer.cs"
+      ],
+      "actual_request": "btnOpen 누르면 체크한 행 말고 지금 포커스 행의 문서를 열게 해줘. Designer 폰트와 Visible은 내가 수정한 거니까 그대로 둬. 빌드는 하지마."
+    },
+    {
+      "id": "S07",
+      "request": "확인만 해줘",
+      "expected": "분석과 답변만; 코드/프로젝트/DB 쓰기 0",
+      "skills": [
+        "work-planning"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_cli.py",
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S08",
+      "request": "빌드 비선호",
+      "expected": "기본 정적 확인; 빌드하지 않으면 구현/해결이 어려운 구체적 필요가 있을 때만 빌드 선택; 작성 편의나 의례적 검증은 예외 아님; 실제 확인 범위 보고",
+      "skills": [
+        "work-execution"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_orca.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S09",
+      "request": "소규모 명확한 코드 수정",
+      "expected": "도움 없는 실패 테스트 선행·전체 회귀·다단계 승인·worktree 강제 없음",
+      "skills": [
+        "work-planning"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S10",
+      "request": "Goal로 진행해",
+      "expected": "현재 native create_goal 사용; 임의 token_budget와 KH ledger 생성 없음; 요구된 범위만 완료",
+      "skills": [
+        "work-execution"
+      ],
+      "evaluation": "native_goal_observed_in_this_implementation_task",
+      "local_check_files": [],
+      "setup": "The user explicitly requested Goal. The native create_goal/get_goal calls in this task are evidence; no simulation is counted."
+    },
+    {
+      "id": "S11",
+      "request": "중단 요청과 예약한 시각 재개",
+      "expected": "작업·프로세스·위임을 즉시 중단; 명시적 재개 또는 사용자가 예약한 재개 시각 전에는 저장/테스트/자동 continuation을 이유로 계속하지 않음; 재개 시 기존 체크포인트부터 이어감",
+      "skills": [
+        "work-execution"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S12",
+      "request": "반복되는 외부 blocker",
+      "expected": "현재 update_goal 도구의 연속 turn 기준 적용; 첫 실패나 단순 대기를 blocked로 오용하지 않음",
+      "skills": [
+        "work-execution"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S13",
+      "request": "이전 세션은 참고만",
+      "expected": "과거 시작/커밋/푸시 명령을 실행 권한으로 재사용하지 않음",
+      "skills": [
+        "work-planning"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S14",
+      "request": "독립 하위 작업이 있는 큰 변경",
+      "expected": "현재 정책이 허용할 때만 collaboration 사용; API/동시 수/공유 파일 제약을 따름; 사용자 task를 임의 생성하지 않음",
+      "skills": [
+        "work-execution"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S15",
+      "request": "실행 중 사용자 수정·새 지시",
+      "expected": "기존 목적을 유지하며 새 지시 반영; unrelated changes 보존; 이미 준 승인을 재요청하지 않음",
+      "skills": [
+        "work-execution"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_common.py",
+        "tests/domain/test_csharp.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S16",
+      "request": "제공 PB export로 분석·변환",
+      "expected": "제공 범위는 활용하되 PBL 전체 동작/DB 실행 증명으로 과장하지 않음",
+      "skills": [
+        "pb-to-csharp-migration-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_pb.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S17",
+      "request": "실제 PBL 추출",
+      "expected": "선택 버전/bitness/ORCA 출력/자식 PATH 확인; 도구 없음·실패를 성공으로 표시하지 않음",
+      "skills": [
+        "pb-to-csharp-migration-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_orca.py",
+        "tests/domain/test_pb.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S18",
+      "request": "C#·SP 저장 경로 이관",
+      "expected": "매개변수·필드 소유권·row-state delta·실행 순서·트랜잭션과 오류 경로 보존",
+      "skills": [
+        "pb-to-csharp-migration-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_pb.py",
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S19",
+      "request": "문서·시트·PDF 등 전달물",
+      "expected": "현재 전용 도구 활용; 내용과 실제 렌더링 확인; 구조 검사만으로 시각적 QA 통과 주장 금지",
+      "skills": [
+        "artifact-checks"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S20",
+      "request": "실패 로그·KH 패키지 감사",
+      "expected": "종료 코드와 핵심 실패 보존; 카탈로그/AST/모의 테스트 성공과 실제 호스트 성공을 명확히 구분",
+      "skills": [
+        "kh-maintenance"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_maintenance.py",
+        "tests/domain/test_orca.py",
+        "tests/domain/test_pb.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S21",
+      "request": "새 프로젝트를 Git 저장소로 만들어줘",
+      "expected": "사용자가 요청한 git init을 수행할 수 있음; 기존 저장소가 없다는 이유로 자체 workspace gate가 차단하지 않음",
+      "skills": [
+        "work-execution"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S22",
+      "request": "같은 역할군의 서로 다른 테이블·BA011T 반복·중첩 스코프",
+      "expected": "A/B1/B2 및 내부 T 계열을 실제 역할로 판단; BA011T/MAINCD만으로 E/F 또는 E1/E2를 강제하지 않음; 사용자 정정 이후 반대 규칙이 테스트에 남지 않음",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S23",
+      "request": "JOIN/ON/AND·IF EXISTS·짧은 GROUP/ORDER BY·CASE",
+      "expected": "실제 예시의 상대 위치·여닫는 괄호 수직·가로 배열을 확인; 파라미터 선행 쉼표·템플릿 기본값·LEFT OUTER JOIN 표기 유지; 테이블 AS와 컬럼 AS 차이 유지; 한글/문자열/요청한 기존 주석 손상 없음",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S24",
+      "request": "여러 줄 INSERT와 SELECT/VALUES",
+      "expected": "각 열과 값의 줄 묶음·순서·가로 위치가 대응; 배치와 데이터 의미 오류 구분",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S25",
+      "request": "함수→JOIN 최적화와 불필요한 보정 추가",
+      "expected": "정의·중복·행 수·NULL·실행 의미를 확인; 불필요한 서브쿼리/NOT EXISTS보다 JOIN을 우선하되 카디널리티가 바뀌는 치환은 하지 않음; 미확인 함수는 억지 변환하지 않음; 성능 주장에 실제 근거; 원본 상수/필드 유지",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_cli.py",
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S26",
+      "request": "환율 UPDATE만 요청 vs 실제 DB 수정 요청",
+      "expected": "전달만이면 GET_CHGRAT 기반 요청한 형태만 출력; 실측 환율 하드코딩 없음; 실제 수정은 정확한 대상/거래/사후값 확인 후 실행 사실 구분",
+      "skills": [
+        "sql-formatting"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S27",
+      "request": "승인된 스타일 프로필과 다른 작성자 화면",
+      "expected": "작업마다 작성자 검색을 반복하지 않음; 검증 프로필·명시한 비교 화면·실제 API를 결합; 해당 C# get 블록/if 분리 요구 유지; WinForms와 MAUI/PDA 규칙 혼합 없음; 프로필 없는 대상은 한계와 실제 소스로 판단",
+      "skills": [
+        "csharp-designer-style-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_csharp.py",
+        "tests/domain/test_maintenance.py",
+        "tests/domain/test_pb.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S28",
+      "request": "새 화면의 전체 생명주기·C#/SAVE 계약",
+      "expected": "초기화/조회/상세/보호/추가/수정/삭제/저장/취소/복원과 파라미터·XML·NEW/MOD/DEL 확인; BA060T 등 실제 권한과 custom/simple/U_BUTTON 업무 처리 연결; SAVE만 맞춘 성공/중복 메시지/전체 재등록 방지",
+      "skills": [
+        "csharp-designer-style-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_csharp.py",
+        "tests/domain/test_pb.py",
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S29",
+      "request": "Designer/HTML/DataWindow/보고서 기본 배치",
+      "expected": "UserControl 기본값·헤더/셀·Spin/lookup/button/summary/group/Visible·TabIndex 입력 순서·csproj 등록·Designer 지원 구문을 확인; 불필요한 DisplayFormat 대신 해당 Repository 사용; 보고서 서식 예외 보존; 해당 TY 조회 RTRUSER/입력·수정 USER 구분; 실제 DevExpress 버전과 없는 컨트롤 대안을 확인; Build 성공과 UI 결과를 구분",
+      "skills": [
+        "csharp-designer-style-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_csharp.py",
+        "tests/domain/test_pb.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S30",
+      "request": "사용자 Designer 수정·DB 서버 전환·BACKUP 제외",
+      "expected": "최신 파일과 연결을 다시 확인; 사용자가 바꾼 font/Visible 보존; 제외 경로에 쓰기 없음; 명시된 BACKUP 작업만 그 범위에 수행",
+      "skills": [
+        "csharp-designer-style-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_common.py",
+        "tests/domain/test_csharp.py",
+        "tests/domain/test_pb.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S31",
+      "request": "ORD/PUR/REC 외 임의 개수 복합키",
+      "expected": "원시 키 구성값 유지 및 표시값 분리; 예시 이름/개수/특정 업무 필드를 하드코딩하지 않음",
+      "skills": [
+        "pb-to-csharp-migration-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_pb.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S32",
+      "request": "LINQ·중간 테이블·빌드 비선호의 예외 경계",
+      "expected": "쉽고 성능이 비슷한 대안이면 사용하지 않음; 피하면 구현이 어렵거나 성능 차이가 극단적으로 큰 경우만 구체적 이유로 예외; 단순 코드 단축·편의·막연한 빠름은 불충분; 정상 행 직접 추가와 오류 모음 유지; 행 소유권 분리용 Clone/ImportRow 등 명시적 필요 문맥을 전역 금지로 바꾸지 않음",
+      "skills": [
+        "csharp-designer-style-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_csharp.py",
+        "tests/domain/test_orca.py",
+        "tests/domain/test_pb.py",
+        "tests/domain/test_sql.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S33",
+      "request": "다수 보고서 HTML 변환",
+      "expected": "공통 변환 경로에서 H/D/F·그룹/페이지 밴드 순서와 생성자 부작용·실제 렌더링 확인; 개별 보고서에 동일 변환 코드 반복하지 않음",
+      "skills": [
+        "pb-to-csharp-migration-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S34",
+      "request": "ORCA exit 0+실패 문구·Designer 차이·SSMS/앱 성능",
+      "expected": "실제 실패 단계와 산출물 확인; PATH/버전/bitness/license 구분; 같은 파라미터·행 수에서 DB/전송/바인딩/BestFit 비용 구분; 빌드/도구 성공만으로 화면·DB·성능 정상 판정하지 않음; 원인 미상과 사용자 자체 해결을 인정",
+      "skills": [
+        "pb-to-csharp-migration-harness"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_csharp.py",
+        "tests/domain/test_orca.py",
+        "tests/domain/test_pb.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S35",
+      "request": "현재 host 협업 API·플러그인 설치본·역할 결과",
+      "expected": "실제 도구 schema·지원 인자/상속/제한에 맞춤; 오류를 성공으로 기록하지 않음; 모의 역할 metadata와 실제 에이전트 작업을 구분; 현재 정책이 허용할 때만 위임",
+      "skills": [
+        "work-execution",
+        "kh-maintenance"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    },
+    {
+      "id": "S36",
+      "request": "반복 정정·인용 리뷰·중단/재개·피드백",
+      "expected": "원문 순서로 최신 해석 적용; 복제 로그/자동 Goal/코드 주석을 새 사용자 요구로 세지 않음; 반려한 규칙을 전역 정책에 추가하지 않음; 업무별 요구를 일반 금지로 바꾸지 않음; 결론·변경 프로그램·확인 범위를 존중하는 말투로 보고",
+      "skills": [
+        "kh-maintenance",
+        "context-handoff"
+      ],
+      "evaluation": "not_executed_in_a_real_host",
+      "local_check_files": [
+        "tests/domain/test_maintenance.py"
+      ],
+      "setup": "Use a minimal, explicitly scoped source fixture. Read the matching skill. Inspect the actual answer, edits and tool calls; a local check file does not cover the entire scenario."
+    }
+  ],
+  "verification": {
+    "unit_tests": {
+      "primary_python": "3.14.2",
+      "compatibility_python": "Python 3.12.14",
+      "tests_per_runtime": 86,
+      "status": "passed"
+    },
+    "official_plugin_validator": "passed",
+    "official_skill_validator": "10 valid",
+    "independent_skill_forward_tests": 2,
+    "limits": [
+      "No installed-cache activation test.",
+      "No live ERP UI, DB, report renderer or installed ORCA conversion.",
+      "No claim that all 36 host scenarios were executed.",
+      "Static parsers cover declared patterns, not complete language semantics."
+    ],
+    "capture": "docs/kh/reports/2026-09-07-codex-verification.json"
+  },
+  "deleted_tracked_files": [
+    ".agents/plugins/kh-uaf/plugin.json",
+    ".agents/plugins/kh-uaf/skills/kh-uaf/SKILL.md",
+    ".env.example",
+    "cli.py",
+    "plugin.json",
+    "skills/adapter_contract_harness/SKILL.md",
+    "skills/adapter_contract_harness/examples/minimal-workflow.md",
+    "skills/adapter_contract_harness/references/usage.md",
+    "skills/adapter_contract_harness/scripts/demo.py",
+    "skills/adapter_contract_harness/scripts/smoke_check.py",
+    "skills/always_on_front_door/SKILL.md",
+    "skills/always_on_front_door/agents/openai.yaml",
+    "skills/always_on_front_door/examples/minimal-workflow.md",
+    "skills/always_on_front_door/references/usage.md",
+    "skills/always_on_front_door/scripts/demo.py",
+    "skills/always_on_front_door/scripts/front_door.py",
+    "skills/always_on_front_door/scripts/smoke_check.py",
+    "skills/architect_pipeline/SKILL.md",
+    "skills/architect_pipeline/examples/minimal-workflow.md",
+    "skills/architect_pipeline/references/usage.md",
+    "skills/architect_pipeline/scripts/demo.py",
+    "skills/architect_pipeline/scripts/smoke_check.py",
+    "skills/artifact_render_qa_harness/SKILL.md",
+    "skills/artifact_render_qa_harness/examples/minimal-workflow.md",
+    "skills/artifact_render_qa_harness/references/usage.md",
+    "skills/artifact_render_qa_harness/scripts/demo.py",
+    "skills/artifact_render_qa_harness/scripts/smoke_check.py",
+    "skills/automatic_intake_harness/SKILL.md",
+    "skills/automatic_intake_harness/examples/minimal-workflow.md",
+    "skills/automatic_intake_harness/references/usage.md",
+    "skills/automatic_intake_harness/scripts/demo.py",
+    "skills/automatic_intake_harness/scripts/smoke_check.py",
+    "skills/brainstorming_harness/SKILL.md",
+    "skills/brainstorming_harness/examples/minimal-workflow.md",
+    "skills/brainstorming_harness/references/usage.md",
+    "skills/brainstorming_harness/scripts/demo.py",
+    "skills/brainstorming_harness/scripts/smoke_check.py",
+    "skills/branch_finishing_harness/SKILL.md",
+    "skills/branch_finishing_harness/examples/minimal-workflow.md",
+    "skills/branch_finishing_harness/references/usage.md",
+    "skills/branch_finishing_harness/scripts/demo.py",
+    "skills/branch_finishing_harness/scripts/smoke_check.py",
+    "skills/command_hook_policy_harness/SKILL.md",
+    "skills/command_hook_policy_harness/examples/minimal-workflow.md",
+    "skills/command_hook_policy_harness/references/usage.md",
+    "skills/command_hook_policy_harness/scripts/demo.py",
+    "skills/command_hook_policy_harness/scripts/smoke_check.py",
+    "skills/command_output_harness/SKILL.md",
+    "skills/command_output_harness/examples/minimal-workflow.md",
+    "skills/command_output_harness/references/usage.md",
+    "skills/command_output_harness/scripts/demo.py",
+    "skills/command_output_harness/scripts/smoke_check.py",
+    "skills/compound_engineering_harness/SKILL.md",
+    "skills/compound_engineering_harness/examples/minimal-workflow.md",
+    "skills/compound_engineering_harness/references/usage.md",
+    "skills/compound_engineering_harness/scripts/demo.py",
+    "skills/compound_engineering_harness/scripts/smoke_check.py",
+    "skills/context_state_harness/SKILL.md",
+    "skills/context_state_harness/examples/minimal-workflow.md",
+    "skills/context_state_harness/references/usage.md",
+    "skills/context_state_harness/scripts/demo.py",
+    "skills/context_state_harness/scripts/smoke_check.py",
+    "skills/credential_safety_harness/SKILL.md",
+    "skills/credential_safety_harness/examples/minimal-workflow.md",
+    "skills/credential_safety_harness/references/usage.md",
+    "skills/credential_safety_harness/scripts/demo.py",
+    "skills/credential_safety_harness/scripts/smoke_check.py",
+    "skills/csharp_designer_style_harness/SKILL.md",
+    "skills/csharp_designer_style_harness/examples/minimal-workflow.md",
+    "skills/csharp_designer_style_harness/references/style-contract.json",
+    "skills/csharp_designer_style_harness/references/usage.md",
+    "skills/csharp_designer_style_harness/scripts/demo.py",
+    "skills/csharp_designer_style_harness/scripts/smoke_check.py",
+    "skills/deliverable_template_quality_harness/SKILL.md",
+    "skills/deliverable_template_quality_harness/examples/minimal-workflow.md",
+    "skills/deliverable_template_quality_harness/references/usage.md",
+    "skills/deliverable_template_quality_harness/scripts/demo.py",
+    "skills/deliverable_template_quality_harness/scripts/smoke_check.py",
+    "skills/development_lifecycle_harness/SKILL.md",
+    "skills/development_lifecycle_harness/examples/minimal-workflow.md",
+    "skills/development_lifecycle_harness/references/usage.md",
+    "skills/development_lifecycle_harness/scripts/demo.py",
+    "skills/development_lifecycle_harness/scripts/smoke_check.py",
+    "skills/domain_orchestration_harness/SKILL.md",
+    "skills/domain_orchestration_harness/examples/minimal-workflow.md",
+    "skills/domain_orchestration_harness/references/usage.md",
+    "skills/domain_orchestration_harness/scripts/demo.py",
+    "skills/domain_orchestration_harness/scripts/smoke_check.py",
+    "skills/goal_state_harness/SKILL.md",
+    "skills/goal_state_harness/examples/minimal-workflow.md",
+    "skills/goal_state_harness/references/usage.md",
+    "skills/goal_state_harness/scripts/demo.py",
+    "skills/goal_state_harness/scripts/smoke_check.py",
+    "skills/guard_policy_harness/SKILL.md",
+    "skills/guard_policy_harness/examples/minimal-workflow.md",
+    "skills/guard_policy_harness/references/usage.md",
+    "skills/guard_policy_harness/scripts/demo.py",
+    "skills/guard_policy_harness/scripts/smoke_check.py",
+    "skills/harness_evaluator/SKILL.md",
+    "skills/harness_evaluator/examples/minimal-workflow.md",
+    "skills/harness_evaluator/references/usage.md",
+    "skills/harness_evaluator/scripts/demo.py",
+    "skills/harness_evaluator/scripts/smoke_check.py",
+    "skills/health_check_harness/SKILL.md",
+    "skills/health_check_harness/examples/minimal-workflow.md",
+    "skills/health_check_harness/references/usage.md",
+    "skills/health_check_harness/scripts/demo.py",
+    "skills/health_check_harness/scripts/smoke_check.py",
+    "skills/host_agent_orchestration/SKILL.md",
+    "skills/host_agent_orchestration/examples/minimal-workflow.md",
+    "skills/host_agent_orchestration/references/usage.md",
+    "skills/host_agent_orchestration/scripts/demo.py",
+    "skills/host_agent_orchestration/scripts/smoke_check.py",
+    "skills/memory_state_harness/SKILL.md",
+    "skills/memory_state_harness/examples/minimal-workflow.md",
+    "skills/memory_state_harness/references/usage.md",
+    "skills/memory_state_harness/scripts/demo.py",
+    "skills/memory_state_harness/scripts/smoke_check.py",
+    "skills/orchestration_role_graph/SKILL.md",
+    "skills/orchestration_role_graph/examples/minimal-workflow.md",
+    "skills/orchestration_role_graph/references/usage.md",
+    "skills/orchestration_role_graph/scripts/demo.py",
+    "skills/orchestration_role_graph/scripts/smoke_check.py",
+    "skills/parallel_orchestration_harness/SKILL.md",
+    "skills/parallel_orchestration_harness/examples/minimal-workflow.md",
+    "skills/parallel_orchestration_harness/references/usage.md",
+    "skills/parallel_orchestration_harness/scripts/demo.py",
+    "skills/parallel_orchestration_harness/scripts/smoke_check.py",
+    "skills/pb_to_csharp_migration_harness/SKILL.md",
+    "skills/pb_to_csharp_migration_harness/examples/minimal-workflow.md",
+    "skills/pb_to_csharp_migration_harness/references/datawindow-layout-mapping.md",
+    "skills/pb_to_csharp_migration_harness/references/migration-output-checklist.md",
+    "skills/pb_to_csharp_migration_harness/references/orca-runtime-contract.md",
+    "skills/pb_to_csharp_migration_harness/references/packaged-style-contract.json",
+    "skills/pb_to_csharp_migration_harness/references/packaged-style-contract.md",
+    "skills/pb_to_csharp_migration_harness/references/profile-update-workflow.md",
+    "skills/pb_to_csharp_migration_harness/references/sql-formatting-bridge.md",
+    "skills/pb_to_csharp_migration_harness/references/usage.md",
+    "skills/pb_to_csharp_migration_harness/scripts/demo.py",
+    "skills/pb_to_csharp_migration_harness/scripts/smoke_check.py",
+    "skills/plan_execution_harness/SKILL.md",
+    "skills/plan_execution_harness/examples/minimal-workflow.md",
+    "skills/plan_execution_harness/references/usage.md",
+    "skills/plan_execution_harness/scripts/demo.py",
+    "skills/plan_execution_harness/scripts/smoke_check.py",
+    "skills/plugin_composition_policy/SKILL.md",
+    "skills/plugin_composition_policy/examples/minimal-workflow.md",
+    "skills/plugin_composition_policy/references/usage.md",
+    "skills/plugin_composition_policy/scripts/demo.py",
+    "skills/plugin_composition_policy/scripts/smoke_check.py",
+    "skills/qa_gate_harness/SKILL.md",
+    "skills/qa_gate_harness/examples/minimal-workflow.md",
+    "skills/qa_gate_harness/references/usage.md",
+    "skills/qa_gate_harness/scripts/demo.py",
+    "skills/qa_gate_harness/scripts/smoke_check.py",
+    "skills/quality_gates_harness/SKILL.md",
+    "skills/quality_gates_harness/examples/minimal-workflow.md",
+    "skills/quality_gates_harness/references/usage.md",
+    "skills/quality_gates_harness/scripts/demo.py",
+    "skills/quality_gates_harness/scripts/smoke_check.py",
+    "skills/request_complexity_router/SKILL.md",
+    "skills/request_complexity_router/examples/minimal-workflow.md",
+    "skills/request_complexity_router/references/usage.md",
+    "skills/request_complexity_router/scripts/demo.py",
+    "skills/request_complexity_router/scripts/smoke_check.py",
+    "skills/review_gate_harness/SKILL.md",
+    "skills/review_gate_harness/examples/minimal-workflow.md",
+    "skills/review_gate_harness/references/usage.md",
+    "skills/review_gate_harness/scripts/demo.py",
+    "skills/review_gate_harness/scripts/smoke_check.py",
+    "skills/role_execution_audit_harness/SKILL.md",
+    "skills/role_execution_audit_harness/examples/minimal-workflow.md",
+    "skills/role_execution_audit_harness/references/usage.md",
+    "skills/role_execution_audit_harness/scripts/demo.py",
+    "skills/role_execution_audit_harness/scripts/smoke_check.py",
+    "skills/scenario_evaluation_harness/SKILL.md",
+    "skills/scenario_evaluation_harness/examples/minimal-workflow.md",
+    "skills/scenario_evaluation_harness/references/usage.md",
+    "skills/scenario_evaluation_harness/scripts/demo.py",
+    "skills/scenario_evaluation_harness/scripts/smoke_check.py",
+    "skills/skill_catalog/SKILL.md",
+    "skills/skill_catalog/examples/minimal-workflow.md",
+    "skills/skill_catalog/references/usage.md",
+    "skills/skill_catalog/scripts/demo.py",
+    "skills/skill_catalog/scripts/smoke_check.py",
+    "skills/snapshot_state_harness/SKILL.md",
+    "skills/snapshot_state_harness/examples/minimal-workflow.md",
+    "skills/snapshot_state_harness/references/usage.md",
+    "skills/snapshot_state_harness/scripts/demo.py",
+    "skills/snapshot_state_harness/scripts/smoke_check.py",
+    "skills/sql_formatting/SKILL.md",
+    "skills/sql_formatting/examples/minimal-workflow.md",
+    "skills/sql_formatting/references/usage.md",
+    "skills/sql_formatting/scripts/demo.py",
+    "skills/sql_formatting/scripts/prepare_candidate.py",
+    "skills/sql_formatting/scripts/smoke_check.py",
+    "skills/sql_formatting_style_harness/SKILL.md",
+    "skills/sql_formatting_style_harness/examples/minimal-workflow.md",
+    "skills/sql_formatting_style_harness/references/style-contract.md",
+    "skills/sql_formatting_style_harness/references/usage.md",
+    "skills/sql_formatting_style_harness/scripts/demo.py",
+    "skills/sql_formatting_style_harness/scripts/powerbuilder_sql_probe.py",
+    "skills/sql_formatting_style_harness/scripts/smoke_check.py",
+    "skills/subagent_review_pipeline/SKILL.md",
+    "skills/subagent_review_pipeline/examples/minimal-workflow.md",
+    "skills/subagent_review_pipeline/references/standard-task-packets.md",
+    "skills/subagent_review_pipeline/references/usage.md",
+    "skills/subagent_review_pipeline/scripts/demo.py",
+    "skills/subagent_review_pipeline/scripts/smoke_check.py",
+    "skills/systematic_debugging_harness/SKILL.md",
+    "skills/systematic_debugging_harness/examples/minimal-workflow.md",
+    "skills/systematic_debugging_harness/references/usage.md",
+    "skills/systematic_debugging_harness/scripts/demo.py",
+    "skills/systematic_debugging_harness/scripts/smoke_check.py",
+    "skills/token_optimizer/SKILL.md",
+    "skills/token_optimizer/examples/minimal-workflow.md",
+    "skills/token_optimizer/references/usage.md",
+    "skills/token_optimizer/scripts/demo.py",
+    "skills/token_optimizer/scripts/smoke_check.py",
+    "skills/traceability_matrix_harness/SKILL.md",
+    "skills/traceability_matrix_harness/examples/minimal-workflow.md",
+    "skills/traceability_matrix_harness/references/usage.md",
+    "skills/traceability_matrix_harness/scripts/demo.py",
+    "skills/traceability_matrix_harness/scripts/smoke_check.py",
+    "skills/verification_before_completion_harness/SKILL.md",
+    "skills/verification_before_completion_harness/examples/minimal-workflow.md",
+    "skills/verification_before_completion_harness/references/usage.md",
+    "skills/verification_before_completion_harness/scripts/demo.py",
+    "skills/verification_before_completion_harness/scripts/smoke_check.py",
+    "skills/workflow_skill_distiller/SKILL.md",
+    "skills/workflow_skill_distiller/examples/minimal-workflow.md",
+    "skills/workflow_skill_distiller/references/usage.md",
+    "skills/workflow_skill_distiller/scripts/demo.py",
+    "skills/workflow_skill_distiller/scripts/smoke_check.py",
+    "skills/workflow_usability_harness/SKILL.md",
+    "skills/workflow_usability_harness/examples/minimal-workflow.md",
+    "skills/workflow_usability_harness/references/usage.md",
+    "skills/workflow_usability_harness/scripts/demo.py",
+    "skills/workflow_usability_harness/scripts/smoke_check.py",
+    "skills/worktree_isolation_harness/SKILL.md",
+    "skills/worktree_isolation_harness/examples/minimal-workflow.md",
+    "skills/worktree_isolation_harness/references/usage.md",
+    "skills/worktree_isolation_harness/scripts/demo.py",
+    "skills/worktree_isolation_harness/scripts/git_workspace_gate.py",
+    "skills/worktree_isolation_harness/scripts/smoke_check.py",
+    "src/api/server.py",
+    "src/benchmarks/__init__.py",
+    "src/benchmarks/kh_bench_verified.py",
+    "src/benchmarks/practical_quality_gate.py",
+    "src/core/app_bridge.py",
+    "src/core/architect.py",
+    "src/core/mcp_server.py",
+    "src/core/runner.py",
+    "src/core/snapshot_manager.py",
+    "src/harness/evaluator.py",
+    "src/harness/sandbox.py",
+    "src/orchestration/agent_loop.py",
+    "src/orchestration/artifact_style_gate.py",
+    "src/orchestration/artifacts.py",
+    "src/orchestration/brainstorming.py",
+    "src/orchestration/compound.py",
+    "src/orchestration/deliverable_exports.py",
+    "src/orchestration/development_progress.py",
+    "src/orchestration/domain_profiles.py",
+    "src/orchestration/evidence_producers.py",
+    "src/orchestration/extension_registry.py",
+    "src/orchestration/gate_evaluators.py",
+    "src/orchestration/git_workspace_gate.py",
+    "src/orchestration/goal_evidence.py",
+    "src/orchestration/goal_ledger.py",
+    "src/orchestration/goal_runtime.py",
+    "src/orchestration/handoff.py",
+    "src/orchestration/interactive_side_evaluator.py",
+    "src/orchestration/interruption_state.py",
+    "src/orchestration/kh_front_door.py",
+    "src/orchestration/llm_router.py",
+    "src/orchestration/memory_state.py",
+    "src/orchestration/memory_store.py",
+    "src/orchestration/plugin_composition.py",
+    "src/orchestration/plugin_install_audit.py",
+    "src/orchestration/progress_compound_bridge.py",
+    "src/orchestration/progress_panel.py",
+    "src/orchestration/project_markdown.py",
+    "src/orchestration/quality_harnesses.py",
+    "src/orchestration/request_act_parser.py",
+    "src/orchestration/request_classifier.py",
+    "src/orchestration/role_commands.py",
+    "src/orchestration/role_orchestrator.py",
+    "src/orchestration/roles.py",
+    "src/orchestration/runtime_memory.py",
+    "src/orchestration/runtime_paths.py",
+    "src/orchestration/runtime_token_optimizer.py",
+    "src/orchestration/scenario_evaluator.py",
+    "src/orchestration/session_postmortem.py",
+    "src/orchestration/session_skill_audit.py",
+    "src/orchestration/session_start_context.py",
+    "src/orchestration/skill_application.py",
+    "src/orchestration/skill_transitions.py",
+    "src/orchestration/token_optimizer_provider.py",
+    "src/orchestration/windows_dev_server.py",
+    "src/orchestration/workflow_usability_runtime.py",
+    "src/platforms/antigravity_native.py",
+    "src/platforms/codex_thread_registry.py",
+    "src/platforms/dispatcher_factory.py",
+    "src/skills/base.py",
+    "src/skills/catalog.py",
+    "src/skills/command_policy.py",
+    "src/skills/credential_safety.py",
+    "src/skills/demo_scenarios.py",
+    "src/skills/file_ops.py",
+    "src/skills/license_checker.py",
+    "src/skills/pattern_analyzer.py",
+    "src/skills/pb_designer_ui_contract.py",
+    "src/skills/pb_event_save_contract.py",
+    "src/skills/pb_event_state_contract.py",
+    "src/skills/pb_migration_authority.py",
+    "src/skills/pb_migration_directives.py",
+    "src/skills/pb_migration_preflight.py",
+    "src/skills/pb_orca_runtime.py",
+    "src/skills/pb_performance_equivalence_contract.py",
+    "src/skills/pb_sql_generation_policy.py",
+    "src/skills/pb_to_csharp_profile_maintenance.py",
+    "src/skills/sql_formatting_provider.py",
+    "src/skills/token_optimizer.py",
+    "src/skills/uaf_skill_audit.py",
+    "src/skills/uaf_skill_catalog.py",
+    "src/skills/uaf_skill_quality.py",
+    "src/skills/uaf_skill_validator.py",
+    "src/skills/workflow_distiller.py",
+    "src/tasks/browser_qa.py",
+    "src/tasks/checks.py",
+    "src/tasks/runners.py",
+    "src/tasks/workflow_checks.py",
+    "src/tasks/workflows.py",
+    "tests/fixtures/sql_formatting/c_kone110/derived_table_group_by_inline.sql",
+    "tests/fixtures/sql_formatting/c_kone110/derived_table_group_by_verticalized.sql",
+    "tests/fixtures/sql_formatting/c_kone110/formatted_bad_style.sql",
+    "tests/fixtures/sql_formatting/c_kone110/formatted_changed_literal.sql",
+    "tests/fixtures/sql_formatting/c_kone110/formatted_select.sql",
+    "tests/fixtures/sql_formatting/c_kone110/original_select.sql",
+    "tests/fixtures/sql_formatting/c_kone110/pbl_delete_semicolon_space.formatted.sql",
+    "tests/fixtures/sql_formatting/c_kone110/pbl_delete_semicolon_space.original.sql",
+    "tests/fixtures/sql_formatting/c_kone110/pbl_update_semicolon_space.formatted.sql",
+    "tests/fixtures/sql_formatting/c_kone110/pbl_update_semicolon_space.original.sql",
+    "tests/fixtures/sql_formatting/c_kone110/powerbuilder_sample.sru",
+    "tests/test_agent_loop.py",
+    "tests/test_app_bridge.py",
+    "tests/test_architect_pipeline.py",
+    "tests/test_artifact_manifest.py",
+    "tests/test_artifact_style_routing.py",
+    "tests/test_brainstorming_harness.py",
+    "tests/test_browser_qa.py",
+    "tests/test_builtin_skill_runtime.py",
+    "tests/test_check_runners.py",
+    "tests/test_cli_config.py",
+    "tests/test_codex_thread_registry.py",
+    "tests/test_command_output_runtime.py",
+    "tests/test_command_policy_runtime.py",
+    "tests/test_compound_engineering_harness.py",
+    "tests/test_contracts.py",
+    "tests/test_credential_safety_harness.py",
+    "tests/test_csharp_designer_style_contract.py",
+    "tests/test_csharp_sql_harness_regression.py",
+    "tests/test_csharp_sql_runtime_integration.py",
+    "tests/test_development_progress.py",
+    "tests/test_dispatcher.py",
+    "tests/test_docs_branding.py",
+    "tests/test_domain_profiles.py",
+    "tests/test_evidence_producers.py",
+    "tests/test_extension_registry.py",
+    "tests/test_external_quality_benchmark.py",
+    "tests/test_file_ops.py",
+    "tests/test_front_door_request_act_benchmark.py",
+    "tests/test_gate_evaluators.py",
+    "tests/test_git_workspace_gate.py",
+    "tests/test_goal_evidence.py",
+    "tests/test_goal_ledger.py",
+    "tests/test_goal_runtime.py",
+    "tests/test_goal_skill_integration.py",
+    "tests/test_handoff.py",
+    "tests/test_interactive_side_evaluator.py",
+    "tests/test_kh_bench_verified.py",
+    "tests/test_kh_front_door.py",
+    "tests/test_kh_front_door_always_on.py",
+    "tests/test_large_work_orchestration_bundle.py",
+    "tests/test_lightweight_skill_discovery_contract.py",
+    "tests/test_llm_router.py",
+    "tests/test_memory_contracts.py",
+    "tests/test_memory_state.py",
+    "tests/test_memory_store.py",
+    "tests/test_optional_dependencies.py",
+    "tests/test_orchestration_roles.py",
+    "tests/test_pb_designer_ui_contract.py",
+    "tests/test_pb_designer_ui_contract_integration.py",
+    "tests/test_pb_event_preflight_integration.py",
+    "tests/test_pb_event_save_contract.py",
+    "tests/test_pb_event_state_contract.py",
+    "tests/test_pb_governance_integration.py",
+    "tests/test_pb_migration_authority.py",
+    "tests/test_pb_migration_directives.py",
+    "tests/test_pb_migration_preflight.py",
+    "tests/test_pb_orca_runtime.py",
+    "tests/test_pb_performance_equivalence_contract.py",
+    "tests/test_pb_sql_generation_policy.py",
+    "tests/test_pb_to_csharp_migration_harness.py",
+    "tests/test_pb_to_csharp_profile_maintenance.py",
+    "tests/test_plugin_composition_policy.py",
+    "tests/test_plugin_install_audit.py",
+    "tests/test_plugin_packaging.py",
+    "tests/test_practical_quality_gate.py",
+    "tests/test_project_markdown_artifacts.py",
+    "tests/test_quality_harnesses.py",
+    "tests/test_request_act_parser.py",
+    "tests/test_request_classifier.py",
+    "tests/test_role_orchestrator_parallel.py",
+    "tests/test_runner_config.py",
+    "tests/test_runtime_memory.py",
+    "tests/test_sandbox.py",
+    "tests/test_scenario_evaluator.py",
+    "tests/test_session_postmortem_bounded.py",
+    "tests/test_session_postmortem_guards.py",
+    "tests/test_session_skill_audit.py",
+    "tests/test_session_skill_audit_streaming.py",
+    "tests/test_skill_application_bundle.py",
+    "tests/test_skill_catalog.py",
+    "tests/test_skill_demos.py",
+    "tests/test_skill_transitions.py",
+    "tests/test_snapshot_manager.py",
+    "tests/test_sql_formatting_provider.py",
+    "tests/test_sql_formatting_style_harness.py",
+    "tests/test_superpowers_benchmark_alignment.py",
+    "tests/test_superpowers_replacement_layer.py",
+    "tests/test_task_runners.py",
+    "tests/test_token_optimizer_gate_integration.py",
+    "tests/test_uaf_skill_audit.py",
+    "tests/test_uaf_skill_catalog.py",
+    "tests/test_uaf_skill_quality.py",
+    "tests/test_uaf_skill_validator.py",
+    "tests/test_workflow_checks.py",
+    "tests/test_workflow_distiller_runtime.py",
+    "tests/test_workflow_usability_layer.py",
+    "tests/test_workflows.py"
+  ],
+  "modified_tracked_files": [
+    ".codex-plugin/plugin.json",
+    "README.ko.md",
+    "README.md",
+    "SKILL.md",
+    "docs/README.md",
+    "requirements.txt",
+    "src/contracts.py",
+    "src/skills/csharp_designer_style.py",
+    "src/skills/csharp_designer_style_contract.py",
+    "src/skills/pb_to_csharp_migration.py",
+    "src/skills/sql_formatting_style.py"
+  ]
+}

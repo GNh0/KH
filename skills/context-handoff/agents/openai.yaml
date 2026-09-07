@@ -1,0 +1,4 @@
+interface:
+  display_name: "Context handoff"
+  short_description: "Resume long work from a small accurate checkpoint"
+  default_prompt: "Use $context-handoff to help with this task."

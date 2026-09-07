@@ -1,0 +1,286 @@
+{
+  "date_utc": "2026-09-07T04:54:44.796158+00:00",
+  "status": "passed",
+  "branch": "codex-runtime",
+  "head": "c6a3de2f61c02cec108cabda18a7d5598e9cf296",
+  "python": {
+    "version": "Python 3.14.2",
+    "tests_run": 86,
+    "exit_code": 0,
+    "output": "......................................................................................\n----------------------------------------------------------------------\nRan 86 tests in 0.761s\n\nOK\n"
+  },
+  "compatibility": {
+    "version": "Python 3.12.14",
+    "tests_run": 86,
+    "exit_code": 0,
+    "output": "......................................................................................\n----------------------------------------------------------------------\nRan 86 tests in 0.658s\n\nOK\n"
+  },
+  "python_3_11": "AST syntax check only; no 3.11 runtime run",
+  "imports": {
+    "module_count": 43,
+    "modules": [
+      "src.artifacts.checks",
+      "src.common.files",
+      "src.common.output",
+      "src.common.results",
+      "src.contracts",
+      "src.csharp.checks",
+      "src.csharp.designer",
+      "src.csharp.designer_model",
+      "src.csharp.lexer",
+      "src.csharp.profiles",
+      "src.csharp.source",
+      "src.csharp.syntax",
+      "src.maintenance.package_check",
+      "src.maintenance.pb_profiles",
+      "src.maintenance.session_report",
+      "src.pb.checks",
+      "src.pb.datawindow",
+      "src.pb.designer",
+      "src.pb.equivalence",
+      "src.pb.events",
+      "src.pb.keys",
+      "src.pb.layout",
+      "src.pb.models",
+      "src.pb.orca",
+      "src.pb.planning",
+      "src.pb.preflight",
+      "src.pb.profiles",
+      "src.pb.source",
+      "src.pb.sql",
+      "src.skills.csharp_designer_style",
+      "src.skills.csharp_designer_style_contract",
+      "src.skills.pb_to_csharp_migration",
+      "src.skills.sql_formatting_style",
+      "src.sql.aliases",
+      "src.sql.checks",
+      "src.sql.cli",
+      "src.sql.compare",
+      "src.sql.compare_core",
+      "src.sql.delta",
+      "src.sql.layout",
+      "src.sql.lexer",
+      "src.sql.pb_extract",
+      "src.sql.scopes"
+    ]
+  },
+  "package": {
+    "status": "passed",
+    "issues": [],
+    "checked": [
+      "manifest and skill entrypoints",
+      "local Markdown links",
+      "Python AST and internal import targets"
+    ],
+    "not_checked": [
+      "installed plugin cache",
+      "Codex skill selection",
+      "host or domain runtime behavior"
+    ],
+    "plugin": "kh-uaf",
+    "version": "3.0.0",
+    "skill_names": [
+      "artifact-checks",
+      "code-review",
+      "context-handoff",
+      "csharp-designer-style-harness",
+      "kh-maintenance",
+      "pb-to-csharp-migration-harness",
+      "sql-formatting",
+      "systematic-debugging",
+      "work-execution",
+      "work-planning"
+    ],
+    "skill_count": 10,
+    "python_files": 50
+  },
+  "official_validation": {
+    "plugin_errors": [],
+    "skills": {
+      "artifact-checks": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "code-review": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "context-handoff": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "csharp-designer-style-harness": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "kh-maintenance": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "pb-to-csharp-migration-harness": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "sql-formatting": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "systematic-debugging": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "work-execution": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "work-planning": {
+        "valid": true,
+        "message": "Skill is valid!"
+      }
+    }
+  },
+  "sql_document_examples": [
+    {
+      "example": 1,
+      "status": "passed",
+      "issues": []
+    },
+    {
+      "example": 2,
+      "status": "passed",
+      "issues": []
+    }
+  ],
+  "retired_source_references": [],
+  "git_diff_check": {
+    "exit_code": 0
+  },
+  "preserved_original_untracked_files": 23,
+  "marketplace_hash_preserved": true,
+  "source_hashes": {
+    "scripts/kh_check.py": "1c5ff3f6aac340371fe5bd9cc9e1bc83d12d4f0642b5615138dd90cfe9b541ff",
+    "skills/artifact-checks/agents/openai.yaml": "e97d72fce2232c5bb0ac9b90969a7199aebc6453aa86c191505beb3a4a99cb1c",
+    "skills/artifact-checks/SKILL.md": "9a0dc53b43987aa2fb479525cfeabf76f4a720ba0afc6c83a19a5d55c49cebfd",
+    "skills/code-review/agents/openai.yaml": "104d4fec94396208ff351660ad92b6f37e5ab6787e7561001955da6b8c733369",
+    "skills/code-review/SKILL.md": "b7e86c5f66c2c4c1a7c7743f8f30543fe94def87a54cceb18b45371368e9680e",
+    "skills/context-handoff/agents/openai.yaml": "65420b63459849b3aa40032bb83be8bb27838b68c7494ef67097dd62b7b985ae",
+    "skills/context-handoff/SKILL.md": "0e0640036ec0093153d46ab2bc818afabf267a43db6cb8173393e81609697441",
+    "skills/csharp-designer-style-harness/agents/openai.yaml": "ac3d090832010e043e09593f49f2044fa3b09348b44afb7fd485327ce68116fe",
+    "skills/csharp-designer-style-harness/references/checks.md": "d0e28967d44af4e2e1d3076ec012c271d056de62183fd615a42f858645b15392",
+    "skills/csharp-designer-style-harness/references/data-flow.md": "1ab30f8cddc39f37cefea57095cab7b269e8e5190bdf6917ff6f8c4190b00402",
+    "skills/csharp-designer-style-harness/references/default-profile.json": "5e7f5e3556b683d3205ff9b35a51233902f8516035f342409b53c03b31d4cdc8",
+    "skills/csharp-designer-style-harness/references/designer.md": "07d523efaf57312c2b7fbf398a448d53567b6f566bca62a1969f9b142d7b0e22",
+    "skills/csharp-designer-style-harness/SKILL.md": "e9c9042f36bfff982d89c0b2d431ea556e7f8f563be5a27bf30469050c684e99",
+    "skills/kh-maintenance/agents/openai.yaml": "9af2d6c1cdd6fce62b225d2db1c4447b06d3d79f8fb8b6ec6924986e3405b31c",
+    "skills/kh-maintenance/references/pb-profile-maintenance.md": "eddc41b4eaea1473524d24a13f3e0dc5d855118a2cbe8d4d5b5f49d40c1620f3",
+    "skills/kh-maintenance/references/scenario-evaluation.md": "e07070f246ef9760bfa4c93c43d7d8bfa7b3725311867934030282cad18e3a66",
+    "skills/kh-maintenance/references/session-audit.md": "b6af8d9c67586eff24092714f493ec3a3a0549ef87ef74d9ca50c09d4ba34b66",
+    "skills/kh-maintenance/SKILL.md": "ba71e05b01b3188234c2c83190342da37957981549e8adeefb72b11077624f54",
+    "skills/pb-to-csharp-migration-harness/agents/openai.yaml": "4c28caad607bfddad2d5270120baaac36ba6f94be32a03c3ffa11d7cf119f543",
+    "skills/pb-to-csharp-migration-harness/references/datawindow.md": "94d61b376fd5f87a68d21b4be7659970a2324fe035afd182a0ec7c8ba5678879",
+    "skills/pb-to-csharp-migration-harness/references/default-profile.json": "5e7f5e3556b683d3205ff9b35a51233902f8516035f342409b53c03b31d4cdc8",
+    "skills/pb-to-csharp-migration-harness/references/default-profile.md": "9907e57c4e8d1786d3a6713ec3e16699844b76239626ce40f27e66d27b623405",
+    "skills/pb-to-csharp-migration-harness/references/orca.md": "3b76199b81a354b634e7ec09b83550489395c5b0206c47e68e036eddbf41ba0f",
+    "skills/pb-to-csharp-migration-harness/references/sql.md": "1817cc7c5132857922797408a2fcc743ba063272c3f82a0f62aa8dc54cfe406d",
+    "skills/pb-to-csharp-migration-harness/references/validation.md": "2d325c9e48d6cc05efa932bc66a9641c05f9fa994d240bd5ea1e7c4b11f27965",
+    "skills/pb-to-csharp-migration-harness/scripts/extract_sql.py": "0b705b99b13a3e8dc5f4a254700bf09d0dd7f6503aaa8c0eb9f2389999beb8bf",
+    "skills/pb-to-csharp-migration-harness/SKILL.md": "4498217e2ddd02ce7d2d6c42abbafe18339e0344ec3f826342e8a2a2c3e42ad3",
+    "skills/sql-formatting/agents/openai.yaml": "00387d7b3e2d1a6248c16e79e8383e005cc2f16e84e0306a3cf8cf6a31a9b95c",
+    "skills/sql-formatting/references/checks.md": "1a49971f6d75d47cded77a0ae5a3f94449cb9c4fde7b10c917805ee6250de4f9",
+    "skills/sql-formatting/references/style.md": "80133e3da855ffa02b6ad9e07f838e28e964718140cf20a6acc40c58859f2f97",
+    "skills/sql-formatting/SKILL.md": "9ef5ac4bd81156a74b90432394a684bca3adee9ac57ae3e575ec35a49c8624a1",
+    "skills/systematic-debugging/agents/openai.yaml": "a50fed2456297f50afdcc83797baf4aa3a824875fe5a0e334b31f1ad85dd3f75",
+    "skills/systematic-debugging/SKILL.md": "58aa512b351f03945cb3daea7b7822997bed2ca805aba799831c27e0cf8dd717",
+    "skills/work-execution/agents/openai.yaml": "55ce2851ba41a65e610773d1f8485d18826e6f7e63590d33c5b1eac007a05412",
+    "skills/work-execution/references/delegation.md": "f72c6af05641635badc35b73f8dc1ef4e5841326b65e31666e67397e2f250743",
+    "skills/work-execution/references/preferences.md": "062e9e5f584b59576999a628d953a752189a3d367076932f0b8bc4fe87ae54f3",
+    "skills/work-execution/references/secret-handling.md": "18d10f372f165efa9d81b7dc4fc47c4a2bafb3f9f7efe7a4315ffb72d16525ff",
+    "skills/work-execution/references/windows-commands.md": "fcb75ac122c00746f1d96b38894f81224123a7c2472f4cf24f3e9373dc48f76e",
+    "skills/work-execution/SKILL.md": "90b38f4e5ad917e6be87e058f6b41aa0cbd9a365cf1ca41acfb8328120299d00",
+    "skills/work-planning/agents/openai.yaml": "bdcd2b61b58c43486c4f401b5e0f8a2c7fe19eab098468fe9b6b126149d8fbdd",
+    "skills/work-planning/SKILL.md": "ea082f69d4bf0c62af2e23f1df43ec2c023bf40469ce47dc2309199845c170b8",
+    "src/artifacts/__init__.py": "14076787ba943a00bdc95a098a9c550644745e7945789a0e6da4e4d91094f00d",
+    "src/artifacts/checks.py": "d596ea84305117a6aa31e15a62afa4d3b4713407f6e3291d7b25415cb02a8a56",
+    "src/common/__init__.py": "237d277e2f984f0f25a4e997ae7be7e165446e407d4f1db14b8d53805cbad0b6",
+    "src/common/files.py": "63e6817f1073008e55184aa564ad896736756de0ed3998c81aa51add5f37142e",
+    "src/common/output.py": "ff93f5ce89cbc4b999681a54342507c198d1b4cf8940010dac7d68fc9f97d04f",
+    "src/common/results.py": "5bc6c61da7f4de878be10843176b3ff47a1afd198492cd83bd6331ac56e12d6f",
+    "src/contracts.py": "f694d86b00793811c27c491d703a522952578253ec5af4244adfed65bd0b3146",
+    "src/csharp/__init__.py": "4463ad09471831410dd2efb1f870dc41cf03f751431b74d93185865adf788096",
+    "src/csharp/checks.py": "d4a082ac5949f7ea4325806a1ad1a5b0e5cd8c6b63f0c60275f65774022cca22",
+    "src/csharp/designer.py": "67f6b88fe45ca3ed7d498db76dc92e2fc7a4a51d8622e1e335f3aa6dc85d6039",
+    "src/csharp/designer_model.py": "bb605730c55edcf88e8b2d458839b49beff307cbb252853d7854b0b29d19c94c",
+    "src/csharp/lexer.py": "9e9de7be343ecba907a6acdd1fdbd353906179975a206eaa901029def05d81d2",
+    "src/csharp/profiles.py": "3ae79412d1dba265969fc214b8002565ac1fc16929721417e57514bb0292e0cd",
+    "src/csharp/source.py": "f9a22d6b802f80d89b88b98cf0be67f980f93cfc093f031498bdb207cbd5327f",
+    "src/csharp/syntax.py": "05976f59435b3bb86e92eee260c6548cf37df9fb57b6ebb961c31e34bcbd218c",
+    "src/maintenance/__init__.py": "cd2d2c00e0ebe4412246b12f653a7461356870fcd7cc68824d42de7006f91dd1",
+    "src/maintenance/package_check.py": "edb77bf4f167d91335f35ff27fae1235b68346d072eb2dca9be667824dfd7fe4",
+    "src/maintenance/pb_profiles.py": "853721694fe285f2d480858dde9abbf8f3037454d522d40f42db8b00441c64a9",
+    "src/maintenance/session_report.py": "90beaf29ca59cb656568be6e2c9675a1a55a8045c6ac579d4bcf52d6df24fe94",
+    "src/pb/__init__.py": "c19b49ddf1c6a2c49d1185ea4def17c9812ededf59047f7491c60d65b651950a",
+    "src/pb/checks.py": "56ef152ada49a821eabdf36ff37edb5cf882adef3b154b5b589cbafac6238abb",
+    "src/pb/datawindow.py": "a32b01c9ebd06722e6c843ede342611a0af749ad3b2d3336f38c215f9485fcb4",
+    "src/pb/designer.py": "b993523844af07edddb63fa001e814c97464833cae89a3615344e17f1359e0a8",
+    "src/pb/equivalence.py": "2c792f22b552719af9c6c7bd955461514d87768de815b8ece6e1976ef570d6ef",
+    "src/pb/events.py": "d58f04955e34ec2c92f7d9e111aad8672a19d3ca381b55b812b23c3367b6de9c",
+    "src/pb/keys.py": "b4785bcfc01b3b24e493fa17ba3f1891f5b32b79b413963815558f2b0d794ff3",
+    "src/pb/layout.py": "ad3070a631535de1c653efdbcd59522c8418aaacbb947f7aa891d70f61db0fe7",
+    "src/pb/models.py": "8982c3834b7794ce5a95e7dd7fd06ab73fc7de3678e481b972a504e851bbfcd3",
+    "src/pb/orca.py": "3dcd350602cbe3703f40148fbd84fdad38f94560f5223b930429d29a6855a628",
+    "src/pb/planning.py": "a989ee04628a203eaed2b1131c1f2b03d2bd4c231ce5ce5c15ea41a5252a57ee",
+    "src/pb/preflight.py": "98e6e72b2ad7fff68975193e6e41ac689c4aad39ccab389b5141385708a68c95",
+    "src/pb/profiles.py": "20ff7f8b7fcf704b316378d3fa0be743dbfb501fb0972427a984390fecb7c0d4",
+    "src/pb/source.py": "3552d217c3d61211c33e9853f3906026bc7663e3a31a21b7a94c92a876c1dbbf",
+    "src/pb/sql.py": "56e13ed2ae3ad8f3f495a87f58b8c53946ce7fbf49d89e4fe44c14422f307e45",
+    "src/skills/csharp_designer_style.py": "b88ef0e6074e2ebb1c4e62d5c6ef65c7e073915932491786494e67fe80d1d0a6",
+    "src/skills/csharp_designer_style_contract.py": "2ad0205e41784fcc5b4f38d15da0c02a4e1cd171a396a819ea3004d93e917475",
+    "src/skills/pb_to_csharp_migration.py": "21c3da9b9da956a7e44e6405c29803b3f9001c17713791b27abb0b55f24d1612",
+    "src/skills/sql_formatting_style.py": "8dc3470c50e8cbbe8a64b3df3ee3de975ad67c8abab542b4c4ddf46196783bd9",
+    "src/sql/__init__.py": "82f21e7ea56eec1860bef9d99c44edfac555902162976373686532284f65861d",
+    "src/sql/aliases.py": "7b023dece70b948333e67016755f15790d5b0093f5671c7834385004277d42cc",
+    "src/sql/checks.py": "ffcb43a2201d88e5238a1ec49c0bec2d5de09c5e55dce8c7c7c440d8a4461c3f",
+    "src/sql/cli.py": "d34db5fefda35b093b42f168054e51fd4366853f0f85da14dc6e625332f1c41e",
+    "src/sql/compare.py": "c93ad5b66c21e1b3ab56eb52a531ab9b9e35db1d63c75bef0176b2e65e4668de",
+    "src/sql/compare_core.py": "4c91dc6eee9c028c10c183ead147827116a626c523fe808d912865d7a5b4f18a",
+    "src/sql/delta.py": "d2ceed0a92018ed40e26c9ba88c65b3214be8ac31947977af1a7f707cac0e5a3",
+    "src/sql/layout.py": "6a6a85ef2382b24f5b1b5ff4c08396e1945fc68893dd174f9bf5ade71048e473",
+    "src/sql/lexer.py": "24334f7a7927369a21d9002351ceaf286671141b05bc9a85b34274e8991f2a11",
+    "src/sql/pb_extract.py": "af6cbc782959512966370e423699eca723cfee9380fa499cc326da59490c2678",
+    "src/sql/scopes.py": "780d6a34191a2803258f75547319bef494fdf5184f86b53df2bed6d46e28aac2",
+    "tests/domain/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests/domain/test_cli.py": "797e673db6701d52b990f50a0cd00b9b66d528fffd341abda2cac6c58d1b4a79",
+    "tests/domain/test_common.py": "68c3a2151a4adb90548d12987f5be7210c133ba7e214ae38c07437070f1dfb7e",
+    "tests/domain/test_csharp.py": "f17f8008435f521e109eb4bff291586d336036fe3100d5d966fabaf2b8fce257",
+    "tests/domain/test_maintenance.py": "f1bdd87c270959978ad5745c87d9ad06963a1683ca6e76c5ce6a274aa7e20f3d",
+    "tests/domain/test_orca.py": "9c3dd110ffb3abf38f305b4c42a40d81e2efc3e1bf9479f573a5b85f463083f5",
+    "tests/domain/test_pb.py": "7172c80b1f3df34a51bdb2d21cec7a4cf8139e49aac74ba38feb1059d99cfde3",
+    "tests/domain/test_sql.py": "4104a0b2f544142cf51c096ee884d14b9eca4be0688514e5cdfc75b397d72899",
+    "tests/scenarios/cases.json": "fe2b77b6c178a0f9eed4bd8bcf77f93bc665dc4e44e87cb61a783b4ebe0177ab",
+    "tests/scenarios/fixtures/formatting-source.sql": "f39f9926b7465895d1b0b25b17a0fa9836011448c96b1205a76519bd08175fa2",
+    "tests/scenarios/fixtures/OrderScreen.cs": "4b643339e42d9b15e9c582f664c2923b0cbccd5d530c650437d36f5007d81711",
+    "tests/scenarios/fixtures/OrderScreen.Designer.cs": "f2ee139aa98f6d988b467bcf0a68254c723c824d5f118e30e4f788ca90f8d3f9",
+    "tests/scenarios/README.md": "3a30080f078d8a0f8a2ef76ee2da46ed79f3922d4ad9a0ca458d27c8700bbd0e",
+    ".codex-plugin/plugin.json": "f624defe6ea1b16628292707217a587bf564447116eddcb1cbe238f37cdaff1b",
+    ".agents/plugins/marketplace.json": "f3fd76b37f251a2a63ee460f6466d6beeb29ccf42e64d9d727051800befd7418",
+    ".gitattributes": "e753ca4ab626a92b41677ea64987cf75502986651a88b1ff1b527236a3e4fb21",
+    "README.md": "2b6108aae79ca7836d107daec4c461f28176eb08e7b068da0a9edcc035663293",
+    "README.ko.md": "045c4b790a10fac6d030a74f254551e6c62ddb250b964b24a83f6e8722ccdecd",
+    "docs/README.md": "93653893e1a8644e24f3613c599e50d522afcf3959a0945d6c7a47619e7fbe46",
+    "SKILL.md": "a98660a2f78063be42a9a9377c03b1be64d55e198131c42cd62243c42d1cb291",
+    "requirements.txt": "ccd681cfa351f30af0470033c4ba65f6b83f6595f84240569b6a975ea28b0e6a"
+  },
+  "limits": [
+    "Not an installed-cache activation test.",
+    "No live ERP UI, database, report renderer or ORCA conversion.",
+    "Two independent Codex skill forward tests, not all 36 host scenarios.",
+    "Static parsers and mock runtime tests do not prove complete application behavior."
+  ],
+  "publication_candidate": {
+    "basis": "Git-normalized staged files exported with git archive; excluded local files were absent",
+    "exported_files": 186,
+    "current_document_links": "passed",
+    "preserved_excluded_local_files": 23,
+    "archive_includes_docs_and_tests": true
+  }
+}
