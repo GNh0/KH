@@ -1,19 +1,25 @@
 """Check explicit Designer structure; live Designer compatibility stays separate."""
 import re
 from collections import defaultdict
-from typing import Iterable
+from typing import Iterable, Mapping
 from src.common.results import CheckResult, Issue
 from .lexer import _scan_csharp
 from .syntax import _method_declarations
 from .designer_model import parse_designer_source, _normalized_csharp_value
+from .grid_style import check_grid_style
 
 
 def check_designer(designer: str, *, code_behind: str = "", original: str | None = None,
                    preserved_properties: Iterable[str] = (), expected_tab_order: Iterable[str] = (),
-                   inherited_handlers: Iterable[str] = ()) -> CheckResult:
+                   inherited_handlers: Iterable[str] = (), column_edit_modes: Mapping[str, str] | None = None,
+                   allowed_property_changes: Iterable[str] = ()) -> CheckResult:
     result = CheckResult(checked=["explicit Designer members and assignments", "event handler references"],
                          not_checked=["Visual Studio Designer load", "rendered layout", "control-library version compatibility"])
     model = parse_designer_source(designer)
+    baseline = parse_designer_source(original) if original is not None else None
+    result.issues.extend(check_grid_style(model, original=baseline, column_edit_modes=column_edit_modes,
+                                         allowed_property_changes=allowed_property_changes))
+    result.checked.append('KH HTML grid defaults and explicit column edit modes; property deltas when baseline supplied')
     masked, _ = _scan_csharp(designer)
     preserved_properties = tuple(preserved_properties)
     inherited_handlers = set(inherited_handlers)
@@ -37,11 +43,7 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
             result.issues.append(Issue("repository_not_declared", "warning", "ColumnEdit references a repository not present in this supplied Designer.", details={"column": name, "repository": repository}))
         elif repository and repository not in registered:
             result.issues.append(Issue('repository_registration_unconfirmed', 'warning', 'ColumnEdit repository registration was not found; inspect inherited/dynamic registration if applicable.', details={'column': name, 'repository': repository}))
-        for prop in control.properties:
-            if "DisplayFormat.FormatString" in prop:
-                result.issues.append(Issue("display_format_preference", "warning", "For the KH WinForms profile, prefer the established Spin/lookup repository. Report formatting is a separate scope.", details={"control": name}))
-    if original is not None:
-        baseline = parse_designer_source(original)
+    if baseline is not None:
         requested = set(preserved_properties)
         for key in requested:
             member, separator, prop = key.partition(".")

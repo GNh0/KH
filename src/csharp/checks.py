@@ -1,21 +1,39 @@
 """Useful local C# comparisons without authentication/exception ledgers."""
 from collections import Counter
+from dataclasses import replace
 import re
 from typing import Mapping, Sequence
 from src.common.results import CheckResult, HarnessResult, Issue, from_legacy_issues
 from .lexer import _scan_csharp
 from .source import _call_count, _target_local_method_inventory, _designer_wired_event_handlers, _row_rewrite_loops, _transaction_invocation_drift_issues
 from .designer import check_designer
+from .designer_model import parse_designer_source
+from .grid_style import check_grid_style
 from .syntax import _property_assignments, linq_candidates
 
 
 def check_csharp(candidate: str, *, original: str | None = None, designer: str | None = None,
-                 allowed_changes: Mapping[str, Sequence[str]] | None = None) -> CheckResult:
+                 allowed_changes: Mapping[str, Sequence[str]] | None = None,
+                 original_designer: str | None = None, column_edit_modes: Mapping[str, str] | None = None,
+                 allowed_property_changes: Sequence[str] = ()) -> CheckResult:
     allowed = allowed_changes or {}
     result = CheckResult(checked=["C# lexical source patterns"],
                          not_checked=["C# compilation", "runtime UI and database behavior", "full C# semantic analysis"])
     code, _ = _scan_csharp(candidate)
     before, _ = _scan_csharp(original or "")
+    candidate_model = parse_designer_source(candidate)
+    baseline_model = parse_designer_source(original) if original is not None else None
+    if designer is not None:
+        types = parse_designer_source(designer).controls
+        candidate_model = replace(candidate_model, controls={name: replace(control, type_name=types[name].type_name)
+            if not control.type_name and name in types else control for name, control in candidate_model.controls.items()})
+        if baseline_model is not None:
+            original_types = parse_designer_source(original_designer).controls if original_designer is not None else types
+            baseline_model = replace(baseline_model, controls={name: replace(control, type_name=original_types[name].type_name)
+                if not control.type_name and name in original_types else control for name, control in baseline_model.controls.items()})
+    result.issues.extend(check_grid_style(candidate_model, original=baseline_model,
+                         column_edit_modes=column_edit_modes if designer is None else None,
+                         allowed_property_changes=allowed_property_changes, check_required_defaults=False))
     if not code.strip():
         result.incomplete = True
         result.issues.append(Issue('csharp_code_missing', 'warning', 'No executable/declarative C# text is available for the requested source checks.'))
@@ -57,7 +75,8 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         if len(re.findall(pattern, code)) > len(re.findall(pattern, before)):
             result.issues.append(Issue(name, "warning", "Prefer the established project form. A difficult implementation without this construct or an extreme performance disadvantage can justify an exception; convenience alone cannot."))
     if designer is not None:
-        ui = check_designer(designer, code_behind=candidate)
+        ui = check_designer(designer, code_behind=candidate, original=original_designer,
+                            column_edit_modes=column_edit_modes, allowed_property_changes=allowed_property_changes)
         result.issues.extend(ui.issues)
         result.checked.extend(ui.checked)
         result.not_checked.extend(ui.not_checked)

@@ -21,11 +21,17 @@ def main(argv=None):
     cs.add_argument("input")
     cs.add_argument("--original")
     cs.add_argument("--designer")
+    cs.add_argument('--designer-original')
     designer = commands.add_parser('designer', help='compare explicit Designer properties with a supplied baseline')
     designer.add_argument('input')
     designer.add_argument('--original')
     designer.add_argument('--code-behind')
     designer.add_argument('--preserve-property', action='append', default=[])
+    for command in (cs, designer):
+        command.add_argument('--column-mode', action='append', default=[], metavar='MEMBER=MODE',
+                             help='explicit column contract: read_only, action, or editable')
+        command.add_argument('--allow-property-change', action='append', default=[], metavar='MEMBER.PROPERTY',
+                             help='specific current requirement; suppresses its default-style warning')
     sp = commands.add_parser('sp-call', help='compare one selected C# call with one actual procedure definition')
     sp.add_argument('input')
     sp.add_argument('procedure')
@@ -38,6 +44,14 @@ def main(argv=None):
     package.add_argument("input")
     args = parser.parse_args(argv)
     try:
+        column_modes = {}
+        for item in getattr(args, 'column_mode', []):
+            name, separator, mode = item.partition('=')
+            if not separator or not name or mode not in {'read_only', 'action', 'editable'}:
+                raise ValueError('--column-mode requires MEMBER=read_only, MEMBER=action, or MEMBER=editable')
+            if name in column_modes and column_modes[name] != mode:
+                raise ValueError('Conflicting column modes for ' + name)
+            column_modes[name] = mode
         if args.command == "sql":
             from src.sql.checks import check_sql
             from src.sql.layout import normalize_sql_join_layout
@@ -54,13 +68,16 @@ def main(argv=None):
             from src.csharp.checks import check_csharp
             result = check_csharp(read_file(args.input).text(),
                                    original=read_file(args.original).text() if args.original else None,
-                                   designer=read_file(args.designer).text() if args.designer else None)
+                                   designer=read_file(args.designer).text() if args.designer else None,
+                                   original_designer=read_file(args.designer_original).text() if args.designer_original else None,
+                                   column_edit_modes=column_modes, allowed_property_changes=args.allow_property_change)
         elif args.command == 'designer':
             from src.csharp.designer import check_designer
             result = check_designer(read_file(args.input).text(),
                 original=read_file(args.original).text() if args.original else None,
                 code_behind=read_file(args.code_behind).text() if args.code_behind else '',
-                preserved_properties=args.preserve_property)
+                preserved_properties=args.preserve_property, column_edit_modes=column_modes,
+                allowed_property_changes=args.allow_property_change)
         elif args.command == 'sp-call':
             from src.pb.sql import check_sp_call
             result = check_sp_call(read_file(args.input).text(), read_file(args.procedure).text())

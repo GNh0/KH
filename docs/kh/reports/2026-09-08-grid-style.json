@@ -1,0 +1,68 @@
+{
+  "version": "3.0.2",
+  "baseline_version": "3.0.1",
+  "date": "2026-09-08",
+  "reference": {
+    "html": "DataWindowToXml.html",
+    "sha256": "95b2bbb456a999af84face42e7da005c081153ad6a825d245544d48aaa872358",
+    "fixture": "tests/fixtures/datawindow_to_xml_defaults.xml",
+    "fixture_source": "Actual supplied JavaScript generator executed with generic ITEMCD/QTY inputs"
+  },
+  "unit_tests": {
+    "count": 137,
+    "added": 24,
+    "local_runtimes": {
+      "312": "137 tests passed",
+      "314": "137 tests passed"
+    }
+  },
+  "pyright": {
+    "version": "1.1.413",
+    "files_analyzed": 54,
+    "errors": 0,
+    "warnings": 0
+  },
+  "official_validation": {
+    "plugin_errors": [],
+    "skills_valid": true,
+    "package_status": "passed",
+    "python_311_syntax_files": 54
+  },
+  "independent_skill_trial": {
+    "agent": "grid_skill_trial",
+    "tasks": 1,
+    "observations": {
+      "existing_properties_preserved": true,
+      "caption_changed": true,
+      "handler_source_preserved": true,
+      "action_connected": true,
+      "new_view_has_no_behavior_assignments": true,
+      "old_view_behavior_preserved": true,
+      "independent_output_check_has_no_findings": true,
+      "new_columns_have_no_display_format_or_cell_text_options": true,
+      "numeric_repository_without_mask": true,
+      "column_order": true
+    },
+    "scope": "Isolated synthetic Designer task, actual agent-produced files; no intended answer supplied to agent",
+    "limitation": "One trial does not estimate compliance across future tasks; no live Designer or button-click observation"
+  },
+  "reference_task_source_review": {
+    "mode": "Read-only current source snapshot; review warnings without before-source do not prove unauthorized changes",
+    "finding_counts": {
+      "cell_text_options_preference": 32,
+      "column_read_only_pair": 19,
+      "display_format_preference": 12,
+      "grid_options_behavior_change": 12,
+      "spin_edit_mask_preference": 6
+    }
+  },
+  "preserved_untracked_files": 25,
+  "not_executed": [
+    "ERP source edits",
+    "ERP C# build",
+    "Visual Studio Designer rendering",
+    "SQL Server or PB runtime",
+    "installed-cache replacement"
+  ],
+  "github_workflow": "Local validation completed; verify remote run after publication"
+}

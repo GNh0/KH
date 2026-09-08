@@ -7,6 +7,12 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Sequence
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 from src.common.results import HarnessResult
+from src.common.grid_defaults import (
+    DATAWINDOW_TO_XML_GRIDVIEW_TOP_LEVEL_PROPERTIES,
+    DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS,
+    DATAWINDOW_TO_CSHARP_GRIDVIEW_DEFAULTS,
+)
+from src.csharp.grid_style import column_edit_properties
 from .models import (
     DataWindowColumnSpec,
 )
@@ -87,68 +93,6 @@ def _is_numeric_grid_column(column: "DataWindowColumnSpec") -> bool:
     if declared_type_result is not None:
         return declared_type_result
     return _is_numeric_grid_field_name(column.field_name)
-
-
-DATAWINDOW_TO_XML_GRIDVIEW_TOP_LEVEL_PROPERTIES = [
-    ("#LayoutVersion", ""),
-    ("BestFitMaxRowCount", "-1"),
-    ("PreviewLineCount", "-1"),
-    ("HorzScrollStep", "3"),
-    ("FocusRectStyle", "CellFocus"),
-    ("ScrollStyle", "LiveVertScroll, LiveHorzScroll"),
-    ("PreviewIndent", "-1"),
-    ("GroupPanelText", ""),
-    ("PreviewFieldName", ""),
-    ("VertScrollTipFieldName", ""),
-    ("LevelIndent", "-1"),
-    ("GroupFooterShowMode", "VisibleIfExpanded"),
-    ("NewItemRowText", ""),
-    ("SynchronizeClones", "true"),
-    ("BorderStyle", "Default"),
-    ("ViewCaption", ""),
-    ("DetailHeight", "350"),
-    ("DetailTabHeaderLocation", "Top"),
-    ("ActiveFilterEnabled", "true"),
-]
-
-
-DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS = {
-    "ShowViewCaption": "false",
-    "EnableAppearanceEvenRow": "true",
-    "ShowGroupPanel": "false",
-    "ColumnAutoWidth": "false",
-    "ShowFooter": "true",
-    "ShowAutoFilterRow": "true",
-}
-
-
-DATAWINDOW_TO_CSHARP_GRIDVIEW_DEFAULTS = [
-    ("BestFitMaxRowCount", "-1"),
-    ("PreviewLineCount", "-1"),
-    ("HorzScrollStep", "3"),
-    ("FocusRectStyle", "DevExpress.XtraGrid.Views.Grid.DrawFocusRectStyle.CellFocus"),
-    (
-        "ScrollStyle",
-        "DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.LiveVertScroll | "
-        "DevExpress.XtraGrid.Views.Grid.ScrollStyleFlags.LiveHorzScroll",
-    ),
-    ("PreviewIndent", "-1"),
-    ("GroupPanelText", "string.Empty"),
-    ("PreviewFieldName", "string.Empty"),
-    ("VertScrollTipFieldName", "string.Empty"),
-    ("LevelIndent", "-1"),
-    (
-        "GroupFooterShowMode",
-        "DevExpress.XtraGrid.Views.Grid.GroupFooterShowMode.VisibleIfExpanded",
-    ),
-    ("NewItemRowText", "string.Empty"),
-    ("SynchronizeClones", "true"),
-    ("BorderStyle", "DevExpress.XtraEditors.Controls.BorderStyles.Default"),
-    ("ViewCaption", "string.Empty"),
-    ("DetailHeight", "350"),
-    ("DetailTabHeaderLocation", "DevExpress.XtraTab.TabHeaderLocation.Top"),
-    ("ActiveFilterEnabled", "true"),
-]
 
 
 DEVEXPRESS_GRID_XML_MAX_BYTES = 1024 * 1024
@@ -779,10 +723,11 @@ def build_csharp_grid_column_designer_plan(
     table_name: str = "",
     purpose_name: str = "",
     grid_view_name: str = "",
-    default_allow_edit: bool = False,
+    default_allow_edit: bool | None = None,
     result_fields: Iterable[str] | None = None,
-    column_properties: Mapping[str, Mapping[str, str]] | None = None,
-    view_properties: Mapping[str, str] | None = None,
+    column_properties: Mapping[str, Mapping[str, str | None]] | None = None,
+    view_properties: Mapping[str, str | None] | None = None,
+    column_edit_modes: Mapping[str, str] | None = None,
 ) -> HarnessResult:
     """Build an explicit Designer grid equivalent to the authoritative XML Layout Load result."""
     column_inputs = list(columns)
@@ -827,6 +772,22 @@ def build_csharp_grid_column_designer_plan(
         and column.field_name not in normalized_result_fields
     ]
     issues.extend(_grid_column_mapping_issues(column_inputs, normalized, prefix=resolved_prefix))
+    names = {column.field_name: column.csharp_name for column in normalized}
+    names.update({column.csharp_name: column.csharp_name for column in normalized})
+    resolved_modes: dict[str, str] = {}
+    for key, mode in (column_edit_modes or {}).items():
+        if key not in names:
+            issues.append({'code': 'column_edit_target_missing', 'severity': 'error', 'message': 'Column edit mode needs an existing field/member.', 'target': key})
+            continue
+        try:
+            column_edit_properties(mode)
+        except ValueError as error:
+            issues.append({'code': 'column_edit_mode_invalid', 'severity': 'error', 'message': str(error)})
+            continue
+        member = names[key]
+        if member in resolved_modes and resolved_modes[member] != mode:
+            issues.append({'code': 'column_edit_mode_conflict', 'severity': 'error', 'message': 'Field and member aliases specify different edit modes.', 'target': member})
+        resolved_modes[member] = mode
     role = str(input_format or "list").strip().lower()
     if role in {"table", "dbtable", "source-table", "source_table"} and not str(table_name or purpose_name).strip():
         issues.append(
@@ -902,7 +863,6 @@ def build_csharp_grid_column_designer_plan(
                 f'this.{column.csharp_name}.Caption = "{_escape_csharp_string(column.caption or column.field_name)}";',
                 f'this.{column.csharp_name}.FieldName = "{_escape_csharp_string(column.field_name)}";',
                 f'this.{column.csharp_name}.Name = "{_escape_csharp_string(column.csharp_name)}";',
-                f"this.{column.csharp_name}.OptionsColumn.AllowEdit = {str(default_allow_edit).lower()};",
                 f"this.{column.csharp_name}.AppearanceHeader.Options.UseTextOptions = true;",
                 f"this.{column.csharp_name}.AppearanceHeader.Options.UseFont = true;",
                 f"this.{column.csharp_name}.AppearanceHeader.TextOptions.HAlignment = DevExpress.Utils.HorzAlignment.Center;",
@@ -914,6 +874,8 @@ def build_csharp_grid_column_designer_plan(
                 f"this.{column.csharp_name}.VisibleIndex = {index};",
             ]
         )
+        mode = resolved_modes.get(column.csharp_name, 'read_only' if default_allow_edit is False else 'editable')
+        assignments.extend(f'this.{column.csharp_name}.{prop} = {value};' for prop, value in column_edit_properties(mode).items())
         repository_name = numeric_repository_by_column.get(column.csharp_name, "")
         if repository_name:
             assignments.append(f"this.{column.csharp_name}.ColumnEdit = this.{repository_name};")
@@ -992,8 +954,6 @@ def build_csharp_grid_column_designer_plan(
     }
     # These helpers create a draft. Exact target properties supplied by the caller
     # replace template values rather than being rejected as style violations.
-    names = {column.field_name: column.csharp_name for column in normalized}
-    names.update({column.csharp_name: column.csharp_name for column in normalized})
     overrides = [(view_name, dict(view_properties or {}))]
     for key, properties in (column_properties or {}).items():
         if key not in names:
@@ -1002,18 +962,27 @@ def build_csharp_grid_column_designer_plan(
             overrides.append((names[key], dict(properties)))
     for member, properties in overrides:
         for property_name, value in properties.items():
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", property_name) or not isinstance(value, str) or not value.strip():
-                issues.append({"code": "designer_override_invalid", "severity": "error", "message": "Use an explicit property path and C# value expression from the target."})
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", property_name) or (value is not None and (not isinstance(value, str) or not value.strip())):
+                issues.append({"code": "designer_override_invalid", "severity": "error", "message": "Use an explicit property path and C# value expression, or null to omit the assignment."})
                 continue
             assignment_prefix = f"this.{member}.{property_name} = "
             designer_lines = [line for line in designer_lines if not line.startswith(assignment_prefix)]
-            designer_lines.append(assignment_prefix + value.rstrip(';') + ';')
+            if value is not None:
+                designer_lines.append(assignment_prefix + value.rstrip(';') + ';')
     metadata["property_overrides"] = {"columns": column_properties or {}, "view": view_properties or {}}
+    metadata['column_edit_modes'] = resolved_modes
+    # Overrides preserve actual target properties, but may not silently contradict
+    # a column mode explicitly requested in the same call.
+    if resolved_modes:
+        from src.csharp.designer_model import parse_designer_source
+        from src.csharp.grid_style import check_grid_style
+        issues.extend(item.to_dict() for item in check_grid_style(parse_designer_source('\n'.join(designer_lines)),
+                      column_edit_modes=resolved_modes, check_required_defaults=False) if item.severity == 'error')
     metadata["status"] = "passed" if not issues else "failed"
     return HarnessResult(
         success=not issues,
         stdout="\n".join(designer_lines),
-        stderr="" if not issues else "Grid FieldName/result-field validation failed.",
+        stderr="" if not issues else "Grid column, property, or edit-mode validation failed.",
         exit_code=0 if not issues else 1,
         metadata=metadata,
     )
