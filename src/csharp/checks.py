@@ -9,18 +9,21 @@ from .source import _call_count, _target_local_method_inventory, _designer_wired
 from .designer import check_designer
 from .designer_model import parse_designer_source
 from .grid_style import check_grid_style
+from .control_style import check_control_braces
+from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .syntax import _property_assignments, linq_candidates
 
 
 def check_csharp(candidate: str, *, original: str | None = None, designer: str | None = None,
                  allowed_changes: Mapping[str, Sequence[str]] | None = None,
                  original_designer: str | None = None, column_edit_modes: Mapping[str, str] | None = None,
-                 allowed_property_changes: Sequence[str] = ()) -> CheckResult:
+                 allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = ()) -> CheckResult:
     allowed = allowed_changes or {}
-    result = CheckResult(checked=["C# lexical source patterns"],
+    result = CheckResult(checked=["C# lexical source patterns", "new unbraced control bodies"],
                          not_checked=["C# compilation", "runtime UI and database behavior", "full C# semantic analysis"])
     code, _ = _scan_csharp(candidate)
     before, _ = _scan_csharp(original or "")
+    result.issues.extend(check_control_braces(candidate, original=original))
     candidate_model = parse_designer_source(candidate)
     baseline_model = parse_designer_source(original) if original is not None else None
     if designer is not None:
@@ -31,7 +34,11 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
             original_types = parse_designer_source(original_designer).controls if original_designer is not None else types
             baseline_model = replace(baseline_model, controls={name: replace(control, type_name=original_types[name].type_name)
                 if not control.type_name and name in original_types else control for name, control in baseline_model.controls.items()})
-    result.issues.extend(check_grid_style(candidate_model, original=baseline_model,
+    defaults = read_control_defaults(control_sources)
+    result.issues.extend(check_control_defaults(candidate_model, original=baseline_model, defaults=defaults,
+                         allowed_property_changes=allowed_property_changes, check_declarations=designer is None))
+    result.issues.extend(check_grid_style(with_control_base_types(candidate_model, defaults),
+                         original=with_control_base_types(baseline_model, defaults) if baseline_model else None,
                          column_edit_modes=column_edit_modes if designer is None else None,
                          allowed_property_changes=allowed_property_changes, check_required_defaults=False))
     if not code.strip():
@@ -76,11 +83,17 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
             result.issues.append(Issue(name, "warning", "Prefer the established project form. A difficult implementation without this construct or an extreme performance disadvantage can justify an exception; convenience alone cannot."))
     if designer is not None:
         ui = check_designer(designer, code_behind=candidate, original=original_designer,
-                            column_edit_modes=column_edit_modes, allowed_property_changes=allowed_property_changes)
+                            column_edit_modes=column_edit_modes, allowed_property_changes=allowed_property_changes,
+                            control_sources=control_sources)
         result.issues.extend(ui.issues)
         result.checked.extend(ui.checked)
         result.not_checked.extend(ui.not_checked)
         result.incomplete |= ui.incomplete
+    elif control_sources:
+        result.checked.append('supplied user-control types and direct parameterless-constructor assignments')
+        result.not_checked.append('user-control helpers, unsupplied partial/base initialization, conditions, runtime defaults and actual project availability')
+    else:
+        result.not_checked.append('available user-control selection and constructor-default overrides; no control sources supplied')
     return result
 
 

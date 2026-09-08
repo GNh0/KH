@@ -1,10 +1,12 @@
 # KH for Codex
 
-KH 3.0.2는 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
+KH 3.0.3는 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
 
 작고 명확한 요청은 직접 처리한다. 필요한 도메인 스킬만 읽고, 현재 사용자 정정·원본·비교 화면·API를 기준으로 작업한다. 과거 세션과 `docs/kh`, `docs/skillbook`의 오래된 보고서는 참고 자료다.
 
 새 그리드는 사용자가 제공한 [DataWindowToXml 기본 속성](skills/csharp-designer-style-harness/references/grid-layout.md)을 사용한다. 셀 TextOptions·SpinEdit EditMask·DisplayFormat·OptionsBehavior를 기본으로 덧붙이지 않고, 일반 편집 차단·버튼 동작 유지·편집 가능 컬럼을 구분한다. 기존 화면은 원본과 비교해 현재 설정을 보존한다.
+
+C# 작성은 [사용자 작성 방식](skills/csharp-designer-style-harness/references/coding-style.md)과 [사용자 컨트롤 기본 초기화](skills/csharp-designer-style-harness/references/user-controls.md)를 적용한다. 현재 프로젝트에서 쓸 수 있는 적절한 사용자 컨트롤을 우선하고 초기화 속성을 유지한다. KoneLib에 한정하지 않으며 기존 Name 규칙과 그리드별 Repository 역할 명명을 함께 사용한다. 선택적 검사는 실제 컨트롤 소스로 기본값 덮어쓰기를 비교한다.
 
 ## 스킬
 

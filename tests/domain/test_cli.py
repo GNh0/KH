@@ -74,6 +74,19 @@ class CliTests(unittest.TestCase):
             self.assertIn('column_edit_mode_mismatch', codes)
             self.assertNotIn('grid_options_behavior_change', codes)
 
+    def test_current_user_control_source_is_available_to_both_commands(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source, library = Path(folder)/'screen.cs', Path(folder)/'Control.cs'
+            source.write_text('this.txtName = new Widgets.InputBox(); this.txtName.Properties.AutoHeight = true;', encoding='utf-8')
+            library.write_text('namespace Widgets { public class InputBox : TextEdit { public InputBox() { base.Properties.AutoHeight = false; } } }', encoding='utf-8')
+            before = library.read_bytes()
+            for command in ('designer', 'csharp'):
+                result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), command, str(source),
+                    '--control-source', str(library)], cwd=folder, capture_output=True, text=True, encoding='utf-8')
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertIn('user_control_default_override', {i['code'] for i in json.loads(result.stdout)['issues']})
+            self.assertEqual(before, library.read_bytes())
+
 
 if __name__ == '__main__':
     unittest.main()

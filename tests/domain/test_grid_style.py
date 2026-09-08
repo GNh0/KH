@@ -100,7 +100,7 @@ class GridStyleTests(unittest.TestCase):
         for mode, text in [('read_only', 'this.col.OptionsColumn.AllowEdit = false; this.col.OptionsColumn.ReadOnly = true;'),
                            ('action', 'this.col.OptionsColumn.ReadOnly = true;'), ('editable', '')]:
             with self.subTest(mode=mode):
-                result = check_designer(column(text), column_edit_modes={'col': mode})
+                result = check_designer(column(text).replace('this.col', 'this.colList_ITEMCD'), column_edit_modes={'colList_ITEMCD': mode})
                 self.assertEqual([], result.issues)
 
     def test_explicit_column_mode_mismatch_is_a_contract_error(self):
@@ -166,6 +166,31 @@ class GridStyleTests(unittest.TestCase):
         self.assertIn('button_column_edit_review', issues(source))
         self.assertNotIn('button_column_edit_review', issues(source, column_edit_modes={'col': 'read_only'}))
 
+    def test_verified_konelib_subclasses_use_the_base_control_policy(self):
+        for typename in ['KoneLib.Controls.u_GridView', 'KoneLib.Controls.u_GridControl']:
+            with self.subTest(typename=typename):
+                source = f'this.view = new {typename}(); this.view.OptionsSelection.MultiSelect = true;'
+                self.assertIn('grid_option_outside_baseline', issues(source))
+                self.assertNotIn('grid_option_outside_baseline', issues(source, original=source))
+        source = 'this.view = new KoneLib.Controls.u_GridView(); this.view.OptionsBehavior.Editable = false;'
+        self.assertIn('grid_options_behavior_change', issues(source))
+        self.assertNotIn('grid_options_behavior_change', issues(source, original=source))
+        result = check_csharp('this.view.OptionsBehavior.Editable = false;', original='',
+            designer='private KoneLib.Controls.u_GridView view;',
+            original_designer='private KoneLib.Controls.u_GridView view;')
+        self.assertIn('grid_options_behavior_change', {i.code for i in result.issues})
+
+    def test_konelib_editor_aliases_do_not_generalize_to_similar_member_names(self):
+        spin = 'this.editor = new KoneLib.Controls.u_SpinEdit(); this.editor.Properties.Mask.EditMask = "N0";'
+        self.assertIn('spin_edit_mask_preference', issues(spin))
+        self.assertNotIn('spin_edit_mask_preference', issues(spin, original=spin))
+        date = 'this.editor = new KoneLib.Controls.u_DateEdit(); this.editor.Properties.Mask.EditMask = "yyyy-MM-dd";'
+        self.assertNotIn('spin_edit_mask_preference', issues(date))
+        self.assertIn('display_format_preference', issues(date + ' this.editor.Properties.DisplayFormat.FormatString = "d";'))
+        lookalike = 'this.u_GridView = new UnknownWidget(); this.u_GridView.OptionsBehavior.Editable = false;'
+        self.assertNotIn('grid_options_behavior_change', issues(lookalike))
+        self.assertNotIn('grid_options_behavior_change', issues(lookalike.replace('UnknownWidget', 'Other.u_GridView')))
+
     def test_existing_appearance_and_mask_are_preserved_without_style_cleanup(self):
         source = column('this.col.AppearanceCell.TextOptions.HAlignment = HorzAlignment.Far;') + '\nthis.rep = new RepositoryItemSpinEdit(); this.rep.Mask.EditMask = "N0";'
         self.assertEqual(set(), issues(source, original=source))
@@ -193,8 +218,27 @@ class GridStyleTests(unittest.TestCase):
         self.assertIn('grid_option_outside_baseline', issues(column('this.col.OptionsColumn.AllowFocus = false;')))
 
     def test_string_comments_and_unrelated_controls_do_not_invent_options(self):
-        source = '// this.view.OptionsBehavior.Editable = false;\nstring s = """this.view.OptionsBehavior.ReadOnly = true;""";\nthis.tree = new TreeList(); this.tree.OptionsBehavior.Editable = false;'
+        source = '// this.view.OptionsBehavior.Editable = false;\nstring s = """this.view.OptionsBehavior.ReadOnly = true;""";\nthis.treeListItems = new TreeList(); this.treeListItems.OptionsBehavior.Editable = false;'
         self.assertEqual(set(), issues(source))
+
+    def test_same_numeric_field_in_another_grid_uses_role_before_spin(self):
+        existing = ['rpsSpinQTY']
+        result = build_csharp_grid_column_designer_plan(['QTY'], input_format='detail', existing_repository_names=existing)
+        self.assertTrue(result.success, result.metadata)
+        model = parse_designer_source(result.stdout)
+        self.assertEqual('this.rpsDetailSpinQTY', model.controls['colDetail_QTY'].properties['ColumnEdit'])
+        self.assertIn('rpsDetailSpinQTY', model.controls)
+        self.assertNotIn('rpsSpinQTY', model.controls)
+        self.assertEqual(['rpsSpinQTY'], existing)
+        plain = build_csharp_grid_column_designer_plan(['QTY'])
+        self.assertIn('rpsSpinQTY', parse_designer_source(plain.stdout).controls)
+
+    def test_occupied_role_repository_is_reported_without_inventing_numeric_suffixes(self):
+        result = build_csharp_grid_column_designer_plan(['QTY'], input_format='detail',
+            existing_repository_names=['rpsSpinQTY', 'rpsDetailSpinQTY'])
+        self.assertFalse(result.success)
+        self.assertIn('repository_name_conflict', {i['code'] for i in result.metadata['issues']})
+        self.assertNotIn('rpsDetailSpinQTY2', result.stdout)
 
     def test_both_skill_profiles_share_the_same_current_grid_policy(self):
         csharp = json.loads((ROOT/'skills/csharp-designer-style-harness/references/default-profile.json').read_text(encoding='utf-8'))

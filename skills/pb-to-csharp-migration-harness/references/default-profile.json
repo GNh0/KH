@@ -1,6 +1,6 @@
 {
   "name": "kh-winforms-user-style",
-  "version": 2,
+  "version": 3,
   "scope": {
     "frameworks": [
       "WinForms",
@@ -9,7 +9,7 @@
     ],
     "activation": "actual target project or explicit comparator; not all C# projects"
   },
-  "authority": "current user instructions and verified project examples; no signature required",
+  "authority": "Current user instructions and already agreed C# rules take priority; verified target APIs determine behavior. Recurring examples supplement unspecified style. Conflicting samples may be omissions, not new exceptions; no signature required.",
   "defaults": {
     "static_ui": "Designer",
     "business_binding": "code-behind",
@@ -69,8 +69,53 @@
         "ShowAutoFilterRow": true
       },
       "additional_options": "Add only for a specific requested behavior or when omitting the option makes implementing required behavior difficult. Convenience is insufficient."
-    }
+    },
+    "event_subscription": "Named handlers after InitializeComponent in the existing constructor pattern; preserve existing wiring and subscribe once.",
+    "coding_style": {
+      "reference": "skills/csharp-designer-style-harness/references/coding-style.md",
+      "source_scope": "Seven solution-selected BA/SA/MA WinForms screens, reviewed 2026-09-08; backup and unselected copy projects excluded.",
+      "blocks": "Allman braces and four-space indentation. Use braces even for one-statement if/else/for/foreach/while/do bodies; retain else if chains.",
+      "locals": "Prefer explicit types and existing semantic prefixes; do not rename or reformat unrelated code.",
+      "properties": "Full get blocks; do not shorten to expression bodies.",
+      "parsing": "Separate parsing success checks from subsequent value comparisons.",
+      "members": "Follow existing SelectType, state fields, DataTable properties, constructor, screen command events and behavior helpers.",
+      "database_calls": "Keep CallSelectProcedure/CallSaveProcedure and align one DbParameter per line with a leading comma. Preserve actual SP modes, parameter types, transaction calls and XML row states.",
+      "rows": "Direct DataTable/DataRow and NewRow/field assignments/Rows.Add; reuse verified helpers without redundant Clone calls.",
+      "exceptions": "Use existing message/exception helpers at actual query/save boundaries; never copy an unfinished success-returning stub.",
+      "sample_conflicts": "Unbraced statements, inline parsing shortcuts, unused imports and inconsistent Designer properties in references do not weaken agreed rules."
+    },
+    "user_controls": {
+      "scope": "Every suitable user control available in the actual target project; not limited to KoneLib or a namespace/prefix.",
+      "selection": "Prefer the suitable user control before raw DevExpress/WinForms controls; verify actual project references and APIs.",
+      "initialization": "Read constructor, InitializeComponent, initialization helpers and inheritance. Retain their defaults unless a specific current requirement needs a change.",
+      "assignments": "Set screen-owned names, layout placement, captions, bindings, events and required overrides only. Do not invent, duplicate or overwrite control defaults.",
+      "values": "Use actual current control source, not global font/size/AutoHeight/mask constants. Do not universalize conditional/culture/runtime settings.",
+      "reference": "skills/csharp-designer-style-harness/references/user-controls.md"
+    },
+    "control_names": {
+      "text": "txt<Field>",
+      "numeric": "Spin<Field>",
+      "date": "ymd<Field>",
+      "lookup": "cbo<Field>",
+      "button": "btn<FieldOrRole>",
+      "check": "Chk<Field>",
+      "memo": "memo<Field>",
+      "panel": "pn<Role>",
+      "group": "grp<Role>",
+      "grid": "grd<Role>",
+      "view": "gvw<Role>",
+      "grid_column": "col<Role>_<FIELD>",
+      "numeric_repository": "rpsSpin<Field>; when another grid uses the same field, rps<Role>Spin<Field> (List rpsSpinQTY, Detail rpsDetailSpinQTY). Keep the existing name; Role goes before Spin.",
+      "lookup_repository": "rpscbo<Field>",
+      "button_repository": "rpsbtn<Field>",
+      "check_repository": "rpschk<Field>",
+      "label": "lbl<FieldOrRole>",
+      "tab": "tab<Role>",
+      "tree": "treeList<Role>",
+      "scope": "Agreed defaults for newly written controls, restored from pre-3.0 KH; preserve current explicit naming instructions and avoid unrelated legacy renames."
+    },
+    "date_input": "Do not add DisplayFormat/EditFormat/EditMask/Mask settings just because the input is a date. Inherit the selected control initialization; add only the missing behavior required by the current request."
   },
   "preference_exceptions": "Only when avoiding the disfavored method makes implementation difficult or the alternative has an extremely large performance disadvantage; convenience is insufficient.",
-  "source": "User-validated scoped patterns, 2026-09-07 log audit, and 2026-09-08 direct grid corrections plus DataWindowToXml.html."
+  "source": "User-validated scoped patterns, 2026-09-07 log audit, and 2026-09-08 direct grid corrections plus DataWindowToXml.html. Also supplemented by a 2026-09-08 review of seven user-designated BA/SA/MA screens; explicit prior corrections remain authoritative. 2026-09-08 general user-control corrections and pre-3.0 semantic naming restored after checking the referenced source history."
 }

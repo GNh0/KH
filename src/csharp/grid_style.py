@@ -9,6 +9,7 @@ import re
 from src.common.grid_defaults import DATAWINDOW_TO_XML_OPTIONS_VIEW_DEFAULTS
 from src.common.results import Issue
 from .designer_model import DesignerModel, _normalized_csharp_value
+from .control_names import known_control_kind
 
 
 EDIT_PROPERTIES = ('OptionsColumn.AllowEdit', 'OptionsColumn.ReadOnly')
@@ -53,7 +54,8 @@ def check_grid_style(model: DesignerModel, *, original: DesignerModel | None = N
         before = before_controls.get(name)
         props = control.properties if control else {}
         old = before.properties if before else {}
-        type_name = ((control.type_name if control else '') or (before.type_name if before else '')).split('.')[-1]
+        declared_type = ((control.type_name if control else '') or (before.type_name if before else '')).removeprefix('global::')
+        type_name = known_control_kind(declared_type)
 
         def changed(prop: str) -> bool:
             if f'{name}.{prop}' in allowed:

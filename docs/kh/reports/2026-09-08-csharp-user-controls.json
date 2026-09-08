@@ -1,0 +1,141 @@
+{
+  "version": "3.0.3",
+  "source_review": {
+    "screens": 7,
+    "source_files": 14,
+    "code_behind_lines_read": 2181,
+    "designer_lines_parsed": 14111,
+    "source_files_preserved": true,
+    "raw_source_published": false
+  },
+  "historical_name_contract": {
+    "reference_version": "2.9.147",
+    "reference_commit": "c6a3de2",
+    "csharp_contract_lost_in": "3.0.0",
+    "restored_for_new_controls": true
+  },
+  "repository_naming": {
+    "default": "rpsSpin<Field>",
+    "other_grid_same_field": "rps<Role>Spin<Field>",
+    "existing": "rpsSpinQTY",
+    "new_detail": "rpsDetailSpinQTY"
+  },
+  "unit_tests": {
+    "3.12": {
+      "count": 175,
+      "exit_code": 0
+    },
+    "3.14": {
+      "count": 175,
+      "exit_code": 0
+    }
+  },
+  "pyright": {
+    "version": "1.1.413",
+    "files": 57,
+    "errors": 0,
+    "warnings": 0
+  },
+  "official_plugin_errors": [],
+  "valid_skills": 10,
+  "python_311_syntax_files": 57,
+  "package": {
+    "status": "passed",
+    "issues": [],
+    "checked": [
+      "manifest and skill entrypoints",
+      "local Markdown links",
+      "Python AST and internal import targets"
+    ],
+    "not_checked": [
+      "installed plugin cache",
+      "Codex skill selection",
+      "host or domain runtime behavior"
+    ],
+    "plugin": "kh-uaf",
+    "version": "3.0.3",
+    "skill_names": [
+      "artifact-checks",
+      "code-review",
+      "context-handoff",
+      "csharp-designer-style-harness",
+      "kh-maintenance",
+      "pb-to-csharp-migration-harness",
+      "sql-formatting",
+      "systematic-debugging",
+      "work-execution",
+      "work-planning"
+    ],
+    "skill_count": 10,
+    "python_files": 56
+  },
+  "profiles_equal": true,
+  "previous_grid_policy_preserved": true,
+  "independent_trials": {
+    "count": 2,
+    "code_behind": {
+      "status": "passed",
+      "issues": [],
+      "checked": [
+        "C# lexical source patterns",
+        "new unbraced control bodies",
+        "target method signatures",
+        "transaction-named call changes",
+        "new whole-table row rewrites",
+        "explicit Designer members and assignments",
+        "event handler references",
+        "date control naming and added input formatting",
+        "KH HTML grid defaults and explicit column edit modes; property deltas when baseline supplied"
+      ],
+      "not_checked": [
+        "C# compilation",
+        "runtime UI and database behavior",
+        "full C# semantic analysis",
+        "transaction participation and wrapper equivalence; inspect actual call bodies/API contracts",
+        "Visual Studio Designer load",
+        "rendered layout",
+        "control-library version compatibility",
+        "available user-control selection and constructor-default overrides; no control sources supplied"
+      ]
+    },
+    "generic_user_controls": {
+      "status": "passed",
+      "issues": [],
+      "checked": [
+        "C# lexical source patterns",
+        "new unbraced control bodies",
+        "target method signatures",
+        "transaction-named call changes",
+        "new whole-table row rewrites",
+        "explicit Designer members and assignments",
+        "event handler references",
+        "date control naming and added input formatting",
+        "supplied user-control types and direct parameterless-constructor assignments",
+        "KH HTML grid defaults and explicit column edit modes; property deltas when baseline supplied"
+      ],
+      "not_checked": [
+        "C# compilation",
+        "runtime UI and database behavior",
+        "full C# semantic analysis",
+        "transaction participation and wrapper equivalence; inspect actual call bodies/API contracts",
+        "Visual Studio Designer load",
+        "rendered layout",
+        "control-library version compatibility",
+        "user-control helpers, unsupplied partial/base initialization, conditions, runtime defaults and actual project availability"
+      ]
+    },
+    "new_controls": 9,
+    "all_widget_types_selected": true,
+    "default_property_overrides": 0,
+    "input_files_preserved": true
+  },
+  "preserved_private_untracked_files": 25,
+  "marketplace_preserved": true,
+  "not_checked": [
+    "ERP build and runtime",
+    "Visual Studio Designer rendering",
+    "database or PowerBuilder execution",
+    "future skill adherence rate",
+    "installed plugin cache activation"
+  ]
+}

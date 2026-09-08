@@ -28,6 +28,8 @@ def main(argv=None):
     designer.add_argument('--code-behind')
     designer.add_argument('--preserve-property', action='append', default=[])
     for command in (cs, designer):
+        command.add_argument('--control-source', action='append', default=[], metavar='ABSOLUTE_CONTROL_CS',
+                             help='actual target user-control source; repeat to review types and direct constructor defaults')
         command.add_argument('--column-mode', action='append', default=[], metavar='MEMBER=MODE',
                              help='explicit column contract: read_only, action, or editable')
         command.add_argument('--allow-property-change', action='append', default=[], metavar='MEMBER.PROPERTY',
@@ -44,6 +46,7 @@ def main(argv=None):
     package.add_argument("input")
     args = parser.parse_args(argv)
     try:
+        control_sources = [read_file(path).text() for path in getattr(args, 'control_source', [])]
         column_modes = {}
         for item in getattr(args, 'column_mode', []):
             name, separator, mode = item.partition('=')
@@ -70,14 +73,15 @@ def main(argv=None):
                                    original=read_file(args.original).text() if args.original else None,
                                    designer=read_file(args.designer).text() if args.designer else None,
                                    original_designer=read_file(args.designer_original).text() if args.designer_original else None,
-                                   column_edit_modes=column_modes, allowed_property_changes=args.allow_property_change)
+                                   column_edit_modes=column_modes, allowed_property_changes=args.allow_property_change,
+                                   control_sources=control_sources)
         elif args.command == 'designer':
             from src.csharp.designer import check_designer
             result = check_designer(read_file(args.input).text(),
                 original=read_file(args.original).text() if args.original else None,
                 code_behind=read_file(args.code_behind).text() if args.code_behind else '',
                 preserved_properties=args.preserve_property, column_edit_modes=column_modes,
-                allowed_property_changes=args.allow_property_change)
+                allowed_property_changes=args.allow_property_change, control_sources=control_sources)
         elif args.command == 'sp-call':
             from src.pb.sql import check_sp_call
             result = check_sp_call(read_file(args.input).text(), read_file(args.procedure).text())
