@@ -4,6 +4,8 @@
 
 현재 SearchCommand/NewCommand/DeleteCommand·m_Editmode 흐름을 따른다. 기존 처리를 중복 초기화하거나 확인 메시지를 두 번 띄우지 않는다. 포커스는 GetFocusedDataRow()/FocusedRowHandle, 체크 선택은 실제 선택 컬렉션으로 구분한다. 화면 정렬 순서와 선택 반환 순서를 혼동하지 않는다.
 
+[사용자 작성 방식](coding-style.md)에 맞춰 이름 있는 이벤트 핸들러와 기존 CallSelectProcedure/CallSaveProcedure 경계를 유지한다. ExecSP/ExecSPTrn, GetEditModeWorkType/원래 mode 문자열은 실제 호출 의미를 확인하며 스타일만으로 통일하지 않는다. 기존 master-to-table helper가 복제/행 상태를 처리하는지 먼저 읽고 불필요한 Clone이나 중간 테이블을 덧붙이지 않는다.
+
 NEW/MOD/DEL과 Added/Modified/Deleted를 실제 XML 생성기와 SELECT/SAVE 분기에 맞춘다. 전체 삭제/재등록·모든 행 수정·일괄 원자성을 임의로 추가하지 않는다. SAVE에서 하라고 한 검증을 C#에 중복하지 않는다. 파라미터·XML 필드·채번·고정값·결과 테이블을 대조한다.
 
 기존 for/DataTable.Select/NewRow/Rows.Add를 우선한다. 해당 업로드 사례는 정상 행을 바로 대상에 추가하고 오류 행은 건너뛰어 한 번에 알려준다. 다른 업로드의 원자성을 이 사례로 결정하지 않는다. 실제 Excel 시트·셀 타입·헤더·키·날짜를 읽는다.

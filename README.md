@@ -1,12 +1,14 @@
 # KH for Codex
 
-KH 3.0.2 provides ten focused skills and optional local checks for SQL, C#/Designer and PowerBuilder work. [한국어 및 상세 사용법](README.ko.md)
+KH 3.0.3 provides ten focused skills and optional local checks for SQL, C#/Designer and PowerBuilder work. [한국어 및 상세 사용법](README.ko.md)
 
 Use current user instructions, exact source and real project APIs. Small clear requests run directly. Load only the skills useful for the task. LINQ, intermediate tables and builds are disfavored; use them only when avoidance makes implementation difficult or the alternative has an extreme performance disadvantage. A current explicit prohibition still applies.
 
 The skill entrypoints are `work-planning`, `work-execution`, `code-review`, `systematic-debugging`, `sql-formatting`, `csharp-designer-style-harness`, `pb-to-csharp-migration-harness`, `artifact-checks`, `context-handoff` and `kh-maintenance`.
 
 New DevExpress grids use the user-supplied [DataWindowToXml layout defaults](skills/csharp-designer-style-harness/references/grid-layout.md). Column edit modes distinguish ordinary read-only, action-enabled and editable columns. Checks review added cell TextOptions, SpinEdit masks, DisplayFormat and view behavior changes while preserving existing settings when a baseline is supplied.
+
+C# work uses the [user coding style](skills/csharp-designer-style-harness/references/coding-style.md) and [user-control initialization](skills/csharp-designer-style-harness/references/user-controls.md). Prefer suitable controls available in the target project, retain their defaults, and use the agreed semantic names. Optional checks accept the actual control source; no fixed library name or universal font/size table is required.
 
 Optional Python 3.11+ standard-library checks run from any directory:
 

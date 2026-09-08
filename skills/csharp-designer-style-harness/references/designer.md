@@ -1,6 +1,10 @@
 # WinForms / Designer
 
+먼저 [사용자 컨트롤 선택·기본 초기화](user-controls.md)를 적용한다. 현재 프로젝트의 적절한 사용자 컨트롤을 우선 사용하고, 별도 요구가 없는 속성은 그 생성자·초기화·상속 기본값을 유지한다. 이 기준은 모든 사용자 컨트롤에 적용한다.
+
 정적 필드·컨트롤·컬럼·Repository 생성과 배치·속성은 Designer에 둔다. Visual Studio Designer가 읽지 못하는 helper 생성 구문은 호환성 문제다. 업무·동적 바인딩은 현재 프레임워크의 code-behind에 둔다.
+
+이벤트 구독까지 모두 Designer에 옮기는 규칙은 아니다. 기존 화면은 생성자의 InitializeComponent 다음에 이름 있는 핸들러를 연결하는 [작성 방식](coding-style.md)을 따르며, 이미 연결된 이벤트는 중복 구독하지 않는다.
 
 현재 UserControl 기본 폭·높이·AutoHeight·버튼·정렬을 읽고 덮어쓰지 않는다. 모든 컨트롤에 100x25나 특정 font를 고정하지 않는다. 사용자가 바꾼 font·Visible 값을 보존한다. TabIndex는 지정한 입력 순서와 컨테이너 순서까지 맞춘다.
 

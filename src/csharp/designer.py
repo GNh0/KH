@@ -1,23 +1,36 @@
 """Check explicit Designer structure; live Designer compatibility stays separate."""
 import re
 from collections import defaultdict
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
 from src.common.results import CheckResult, Issue
 from .lexer import _scan_csharp
 from .syntax import _method_declarations
 from .designer_model import parse_designer_source, _normalized_csharp_value
 from .grid_style import check_grid_style
+from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 
 
 def check_designer(designer: str, *, code_behind: str = "", original: str | None = None,
                    preserved_properties: Iterable[str] = (), expected_tab_order: Iterable[str] = (),
                    inherited_handlers: Iterable[str] = (), column_edit_modes: Mapping[str, str] | None = None,
-                   allowed_property_changes: Iterable[str] = ()) -> CheckResult:
+                   allowed_property_changes: Iterable[str] = (), control_sources: Sequence[str] = ()) -> CheckResult:
     result = CheckResult(checked=["explicit Designer members and assignments", "event handler references"],
                          not_checked=["Visual Studio Designer load", "rendered layout", "control-library version compatibility"])
     model = parse_designer_source(designer)
     baseline = parse_designer_source(original) if original is not None else None
-    result.issues.extend(check_grid_style(model, original=baseline, column_edit_modes=column_edit_modes,
+    defaults = read_control_defaults(control_sources)
+    allowed_property_changes = tuple(allowed_property_changes)
+    result.issues.extend(check_control_defaults(model, original=baseline, defaults=defaults,
+                                                allowed_property_changes=allowed_property_changes))
+    result.checked.append('date control naming and added input formatting')
+    if control_sources:
+        result.checked.append('supplied user-control types and direct parameterless-constructor assignments')
+        result.not_checked.append('user-control helpers, unsupplied partial/base initialization, conditions, runtime defaults and actual project availability')
+    else:
+        result.not_checked.append('available user-control selection and constructor-default overrides; no control sources supplied')
+    result.issues.extend(check_grid_style(with_control_base_types(model, defaults),
+                                         original=with_control_base_types(baseline, defaults) if baseline else None,
+                                         column_edit_modes=column_edit_modes,
                                          allowed_property_changes=allowed_property_changes))
     result.checked.append('KH HTML grid defaults and explicit column edit modes; property deltas when baseline supplied')
     masked, _ = _scan_csharp(designer)

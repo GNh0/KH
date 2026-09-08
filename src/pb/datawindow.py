@@ -728,6 +728,8 @@ def build_csharp_grid_column_designer_plan(
     column_properties: Mapping[str, Mapping[str, str | None]] | None = None,
     view_properties: Mapping[str, str | None] | None = None,
     column_edit_modes: Mapping[str, str] | None = None,
+    existing_repository_names: Iterable[str] = (),
+    repository_role: str = "",
 ) -> HarnessResult:
     """Build an explicit Designer grid equivalent to the authoritative XML Layout Load result."""
     column_inputs = list(columns)
@@ -808,6 +810,10 @@ def build_csharp_grid_column_designer_plan(
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", view_name):
         issues.append({"code": "grid_view_name_invalid", "severity": "error", "message": "Supply a valid GridView member name."})
     numeric_repository_by_column: Dict[str, str] = {}
+    occupied_repositories = set(existing_repository_names)
+    repository_suffix = repository_role or grid_names["grid_control_name"].removeprefix("grd")
+    if not re.fullmatch(r"[A-Z][A-Za-z0-9]*", repository_suffix):
+        issues.append({"code": "repository_role_invalid", "severity": "error", "message": "Use the actual grid role for repository name disambiguation."})
     for column in normalized:
         if _is_numeric_grid_column(column):
             csharp_field_name = (
@@ -815,9 +821,13 @@ def build_csharp_grid_column_designer_plan(
                 if column.csharp_name.startswith(resolved_prefix)
                 else column.csharp_name
             )
-            numeric_repository_by_column[column.csharp_name] = (
-                f"rpsSpin{csharp_field_name}"
-            )
+            repository_name = f"rpsSpin{csharp_field_name}"
+            if repository_name in occupied_repositories:
+                repository_name = f"rps{repository_suffix}Spin{csharp_field_name}"
+            if repository_name in occupied_repositories:
+                issues.append({"code": "repository_name_conflict", "severity": "error", "message": "The role-qualified repository name is already occupied; resolve the actual existing ownership.", "repository": repository_name})
+            numeric_repository_by_column[column.csharp_name] = repository_name
+            occupied_repositories.add(repository_name)
     required_repositories = sorted(set(numeric_repository_by_column.values()))
     declarations = [
         f"private DevExpress.XtraGrid.GridControl {grid_names['grid_control_name']};",

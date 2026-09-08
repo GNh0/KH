@@ -12,3 +12,5 @@ PBL/object와 상속 부모, 연결 DW, retrieve 인자, SQL, column/compute, pr
 `build_csharp_grid_column_designer_plan`은 새 구성 초안을 반환한다. 기존 화면 전체를 대체하는 도구가 아니다. 명시한 C# 이름을 사용할 수 있고 `column_properties`(필드명 또는 멤버명 → 속성/실제 C# 식), `view_properties`로 현재 Font·Visible·정렬 등을 템플릿보다 우선한다. 속성 값 `None`은 해당 대입문을 생략한다. 반환 코드에 실제 API/Designer 검증까지 끝났다는 뜻은 없다.
 
 기본 호출은 HTML처럼 AllowEdit·ReadOnly·OptionsBehavior를 생성하지 않는다. `column_edit_modes={'FIELD': 'read_only', 'colAction': 'action', 'EDITFIELD': 'editable'}`로 필요한 컬럼만 지정한다. read_only는 AllowEdit=false와 ReadOnly=true, action은 ReadOnly=true만, editable은 둘 다 생략한다. 기존 인자 `default_allow_edit=False`를 명시하면 일반 편집 차단 두 속성을 생성하며, True이면 둘 다 생략한다. 명시한 모드와 속성 override가 모순되면 실패로 반환한다. Spin Repository 연결에 EditMask·DisplayFormat을 덧붙이지 않는다.
+
+같은 화면의 다른 그리드에 동일 숫자 필드 Repository가 있으면 생성기에 `existing_repository_names=["rpsSpinQTY"]`를 전달한다. Detail 그리드는 `rpsDetailSpinQTY`를 생성하고 ColumnEdit·선언·등록·Name을 함께 연결한다. 기본 역할은 생성할 grd 이름에서 가져오며 실제 역할이 다르면 `repository_role`을 명시한다. 기존 Repository 이름은 변경하지 않는다. 역할을 넣은 이름도 이미 있으면 숫자 접미사를 임의로 붙이지 않고 이름 충돌을 보고한다.
