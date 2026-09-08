@@ -6,6 +6,7 @@
 
 - [구현 및 검증 결과](kh/reports/2026-09-07-codex-implementation.md): 실제 변경, 요구별 반영 위치와 수행한 검사 및 미확인 범위.
 - [3.0.1 검사기 보강](kh/reports/2026-09-07-checker-hardening.md): 실제 평가 반례, 타입 검증과 독립 사용 평가 결과.
+- [3.0.2 그리드 기본값](kh/reports/2026-09-08-grid-style.md): 사용자 HTML 출력, Appearance·편집·표시 속성과 실제 독립 작성 평가.
 - 설계 계획과 C#·PB·SQL 대화 감사 원문은 로컬 작업 자료로 보존한다. 공개 보고서에는 48개 요구의 반영 위치와 관찰한 실패 원인 요약을 담았다.
 
 ## GitHub 배포

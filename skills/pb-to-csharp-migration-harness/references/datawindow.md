@@ -7,6 +7,8 @@ PBL/object와 상속 부모, 연결 DW, retrieve 인자, SQL, column/compute, pr
 보고서는 H/D/F·그룹·밴드·페이지 순서를 보존한다. 여러 보고서 HTML 변환은 공통 경로를 검토하되 생성자 부작용과 렌더 순서를 확인한다. 밴드가 없는 경우와 빈 값의 실제 계약을 확인한다. 단순 HTML 연결로 출력 동작을 대체하지 않는다.
 # 생성 도구의 범위
 
-`src.pb.datawindow`의 XML 생성·검사는 과거 DataWindowToXml 배치 템플릿을 재현한다. 이 템플릿의 Tahoma 9pt·표시값을 모든 기존 화면에 강제하지 않는다. 실제 DataWindow 캡션과 현재 Designer 속성을 먼저 읽는다.
+`src.pb.datawindow`의 XML 생성·검사는 사용자가 2026-09-08에 다시 지정한 DataWindowToXml 기본 속성을 재현한다. [그리드 기본값](../../csharp-designer-style-harness/references/grid-layout.md)을 C# 화면에도 적용한다. 이 템플릿의 Tahoma 9pt·표시값을 모든 기존 화면에 강제하지 않는다. 실제 DataWindow 캡션과 현재 Designer 속성을 먼저 읽는다.
 
-`build_csharp_grid_column_designer_plan`은 새 구성 초안을 반환한다. 기존 화면 전체를 대체하는 도구가 아니다. 명시한 C# 이름을 사용할 수 있고 `column_properties`(필드명 또는 멤버명 → 속성/실제 C# 식), `view_properties`로 현재 Font·Visible·정렬 등을 템플릿보다 우선한다. 반환 코드에 실제 API/Designer 검증까지 끝났다는 뜻은 없다.
+`build_csharp_grid_column_designer_plan`은 새 구성 초안을 반환한다. 기존 화면 전체를 대체하는 도구가 아니다. 명시한 C# 이름을 사용할 수 있고 `column_properties`(필드명 또는 멤버명 → 속성/실제 C# 식), `view_properties`로 현재 Font·Visible·정렬 등을 템플릿보다 우선한다. 속성 값 `None`은 해당 대입문을 생략한다. 반환 코드에 실제 API/Designer 검증까지 끝났다는 뜻은 없다.
+
+기본 호출은 HTML처럼 AllowEdit·ReadOnly·OptionsBehavior를 생성하지 않는다. `column_edit_modes={'FIELD': 'read_only', 'colAction': 'action', 'EDITFIELD': 'editable'}`로 필요한 컬럼만 지정한다. read_only는 AllowEdit=false와 ReadOnly=true, action은 ReadOnly=true만, editable은 둘 다 생략한다. 기존 인자 `default_allow_edit=False`를 명시하면 일반 편집 차단 두 속성을 생성하며, True이면 둘 다 생략한다. 명시한 모드와 속성 override가 모순되면 실패로 반환한다. Spin Repository 연결에 EditMask·DisplayFormat을 덧붙이지 않는다.

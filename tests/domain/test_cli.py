@@ -62,6 +62,18 @@ class CliTests(unittest.TestCase):
             self.assertIn('required_sp_parameter_missing', [item['code'] for item in output['issues']])
             self.assertTrue(any('OUTPUT' in item for item in output['not_checked']))
 
+    def test_column_mode_and_specific_option_exception_are_available(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder)/'screen.cs'
+            source.write_text('this.col = new GridColumn(); this.col.OptionsColumn.AllowEdit = false; this.view = new GridView(); this.view.OptionsBehavior.ReadOnly = true;', encoding='utf-8')
+            result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), 'designer', str(source),
+                '--column-mode', 'col=action', '--allow-property-change', 'view.OptionsBehavior.ReadOnly'],
+                cwd=folder, capture_output=True, text=True, encoding='utf-8')
+            self.assertEqual(1, result.returncode, result.stderr)
+            codes = {item['code'] for item in json.loads(result.stdout)['issues']}
+            self.assertIn('column_edit_mode_mismatch', codes)
+            self.assertNotIn('grid_options_behavior_change', codes)
+
 
 if __name__ == '__main__':
     unittest.main()

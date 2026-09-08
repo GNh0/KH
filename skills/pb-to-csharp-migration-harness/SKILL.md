@@ -8,7 +8,7 @@ description: Analyze PowerBuilder/PBL/DataWindow sources or migrate them to C# W
 정확한 PBL/object, 상속 부모, 연결 DataWindow, 실제 이벤트·SQL·보고서 관계를 먼저 읽는다. 제공 export만 있으면 그 증명 범위를 사용하고 읽지 않은 전체 PBL 분석으로 확대하지 않는다.
 
 - 추출이나 라이브러리 오류에는 [ORCA 실행](references/orca.md)을 읽는다.
-- UI·DataWindow 매핑은 [DataWindow와 화면](references/datawindow.md)을 읽는다.
+- UI·DataWindow 매핑은 [DataWindow와 화면](references/datawindow.md)을 읽는다. 그리드 기본값과 편집 속성은 [사용자 HTML 기준](../csharp-designer-style-harness/references/grid-layout.md)을 적용한다.
 - 이관 계획과 생성 결과는 [이관 검증](references/validation.md)을 사용한다.
 - SQL 작업에는 [SELECT/SAVE 연결](references/sql.md)과 SQL 스킬의 스타일을 사용한다.
 - 기존 사용자 스타일은 [범위별 프로필](references/default-profile.json)을 적용한다. 새 프로필 추출 요청 때만 KH 유지보수 지침을 읽는다.

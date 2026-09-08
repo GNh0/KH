@@ -1,6 +1,6 @@
 {
   "name": "kh-winforms-user-style",
-  "version": 1,
+  "version": 2,
   "scope": {
     "frameworks": [
       "WinForms",
@@ -14,18 +14,63 @@
     "static_ui": "Designer",
     "business_binding": "code-behind",
     "row_access": "distinguish focus and checkbox selection",
-    "numeric_editor": "existing Spin repository",
+    "numeric_editor": "Use the actual Spin repository without adding Mask.EditMask by default; preserve existing editor behavior.",
     "lookup": "actual code/display/button binding",
     "control_dimensions": "actual UserControl defaults",
     "tab_order": "specified input order",
-    "format_string": "avoid unnecessary DisplayFormat in these screens; report formatting is scoped",
+    "format_string": "Do not add DisplayFormat.FormatType or FormatString by default; preserve existing settings; reports have separate requirements.",
     "data_flow": "existing for/Select/NewRow/Rows.Add; preserve NEW/MOD/DEL",
     "ty_user_lookup": {
       "query": "RTRUSER",
       "edit": "USER",
       "scope": "TY requirements where applicable"
+    },
+    "grid_layout": {
+      "source": "User-supplied DataWindowToXml.html, confirmed 2026-09-08",
+      "source_sha256": "95b2bbb456a999af84face42e7da005c081153ad6a825d245544d48aaa872358",
+      "reference": "skills/csharp-designer-style-harness/references/grid-layout.md",
+      "application": "Use HTML Load Layout defaults when no specific additional behavior is required. Preserve verified existing user changes.",
+      "cell": {
+        "Options.UseFont": true,
+        "Font": "Tahoma, 9pt",
+        "TextOptions": "omit",
+        "Options.UseTextOptions": "omit"
+      },
+      "header": {
+        "Options.UseFont": true,
+        "Options.UseTextOptions": true,
+        "Font": "Tahoma, 9pt",
+        "TextOptions.HAlignment": "Center",
+        "TextOptions.VAlignment": "Center"
+      },
+      "font_scope": "Template font for newly generated grids only; retain current user-modified fonts.",
+      "column_edit_modes": {
+        "read_only": {
+          "OptionsColumn.AllowEdit": false,
+          "OptionsColumn.ReadOnly": true
+        },
+        "action": {
+          "OptionsColumn.AllowEdit": "omit",
+          "OptionsColumn.ReadOnly": true
+        },
+        "editable": {
+          "OptionsColumn.AllowEdit": "omit",
+          "OptionsColumn.ReadOnly": "omit"
+        }
+      },
+      "default_column_mode": "editable; no edit flags in the HTML baseline",
+      "OptionsBehavior": "No default assignments. Preserve existing values and omissions; do not substitute view locks for column edit rules.",
+      "OptionsView": {
+        "ShowViewCaption": false,
+        "EnableAppearanceEvenRow": true,
+        "ShowGroupPanel": false,
+        "ColumnAutoWidth": false,
+        "ShowFooter": true,
+        "ShowAutoFilterRow": true
+      },
+      "additional_options": "Add only for a specific requested behavior or when omitting the option makes implementing required behavior difficult. Convenience is insufficient."
     }
   },
   "preference_exceptions": "Only when avoiding the disfavored method makes implementation difficult or the alternative has an extremely large performance disadvantage; convenience is insufficient.",
-  "source": "User-validated patterns and 2026-09-07 original-log audit; examples are scoped, not fixed business constants."
+  "source": "User-validated scoped patterns, 2026-09-07 log audit, and 2026-09-08 direct grid corrections plus DataWindowToXml.html."
 }
