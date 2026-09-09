@@ -8,7 +8,7 @@ from .lexer import _scan_csharp
 from .source import _call_count, _target_local_method_inventory, _designer_wired_event_handlers, _row_rewrite_loops, _transaction_invocation_drift_issues
 from .designer import check_designer
 from .designer_model import parse_designer_source
-from .grid_style import check_grid_style
+from .grid_style import check_grid_style, check_numeric_column_editors
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .syntax import _property_assignments, linq_candidates
@@ -17,7 +17,8 @@ from .syntax import _property_assignments, linq_candidates
 def check_csharp(candidate: str, *, original: str | None = None, designer: str | None = None,
                  allowed_changes: Mapping[str, Sequence[str]] | None = None,
                  original_designer: str | None = None, column_edit_modes: Mapping[str, str] | None = None,
-                 allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = ()) -> CheckResult:
+                 allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = (),
+                 numeric_columns: Sequence[str] = ()) -> CheckResult:
     allowed = allowed_changes or {}
     result = CheckResult(checked=["C# lexical source patterns", "new unbraced control bodies"],
                          not_checked=["C# compilation", "runtime UI and database behavior", "full C# semantic analysis"])
@@ -84,7 +85,7 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     if designer is not None:
         ui = check_designer(designer, code_behind=candidate, original=original_designer,
                             column_edit_modes=column_edit_modes, allowed_property_changes=allowed_property_changes,
-                            control_sources=control_sources)
+                            control_sources=control_sources, numeric_columns=numeric_columns)
         result.issues.extend(ui.issues)
         result.checked.extend(ui.checked)
         result.not_checked.extend(ui.not_checked)
@@ -94,6 +95,25 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         result.not_checked.append('user-control helpers, unsupplied partial/base initialization, conditions, runtime defaults and actual project availability')
     else:
         result.not_checked.append('available user-control selection and constructor-default overrides; no control sources supplied')
+    if allowed_property_changes:
+        result.metadata['style_exemptions'] = sorted(set(allowed_property_changes))
+        notice = 'default-style checks for supplied exempt properties; exemptions do not establish user authorization or necessity'
+        if notice not in result.not_checked:
+            result.not_checked.append(notice)
+    if numeric_columns:
+        combined = parse_designer_source(designer or '')
+        controls = dict(combined.controls)
+        for name, control in candidate_model.controls.items():
+            existing = controls.get(name)
+            controls[name] = replace(control, properties={
+                **(existing.properties if existing else {}), **control.properties,
+            })
+        combined = replace(combined, controls=controls)
+        for issue in check_numeric_column_editors(with_control_base_types(combined, defaults), numeric_columns):
+            if issue not in result.issues:
+                result.issues.append(issue)
+        result.checked.append('supplied numeric column bindings including explicit code-behind assignments')
+        result.not_checked.append('runtime paths, dynamic column recreation and unsupplied numeric data types')
     return result
 
 

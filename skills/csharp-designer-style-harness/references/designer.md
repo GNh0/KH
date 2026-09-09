@@ -13,3 +13,7 @@
 기본 건수·합계·group footer/merge/EvenRow와 지정된 표시 위치를 확인한다. colList_/colDetail_/colTABLE_FIELD 등 현재 프로젝트 명명을 사용한다. 이름만 맞고 바인딩이 없는 상태는 완료가 아니다.
 
 실제 DevExpress 참조 버전과 API, csproj/.resx 등록을 확인한다. MAUI/PDA에는 이 UI 계약을 일괄 적용하지 않는다.
+
+Designer의 Dispose에는 업무 관리자·DB·Task 정리 코드를 덧붙이지 않는다. 필요한 정리는 현재 code-behind의 실제 종료/취소 수명에 연결하고 상속·partial Dispose 구현을 중복하지 않는다. Designer가 다시 열렸다는 사실과 실제 종료 중 Task 정리 검증은 별개다.
+
+컬럼 폭·숫자 편집기가 조회나 크기 변경 후 달라지는 경우에는 [화면 동작 계약](screen-behavior.md)의 런타임 덮어쓰기 경로까지 확인한다.

@@ -132,3 +132,27 @@ def check_grid_style(model: DesignerModel, *, original: DesignerModel | None = N
             if editor and editor.type_name.split('.')[-1] == 'RepositoryItemButtonEdit' and actual_edit.get('OptionsColumn.AllowEdit') == 'false':
                 warn('button_column_edit_review', 'If the repository action must remain available, set only ReadOnly=true and omit AllowEdit. Confirm the intended column mode.', 'OptionsColumn.AllowEdit')
     return issues
+
+
+def check_numeric_column_editors(model: DesignerModel, numeric_columns: Iterable[str]) -> list[Issue]:
+    """Check supplied numeric column members; never infer numeric semantics from names."""
+    issues: list[Issue] = []
+    for name in sorted(set(numeric_columns)):
+        column = model.controls.get(name)
+        if column is None:
+            issues.append(Issue('numeric_column_target_missing', 'warning',
+                'The supplied numeric column is absent from these source fragments.',
+                details={'column': name}))
+            continue
+        if known_control_kind(column.type_name) != 'GridColumn':
+            issues.append(Issue('numeric_column_target_invalid', 'warning',
+                'The supplied numeric member must identify a GridColumn.',
+                details={'column': name}))
+            continue
+        reference = column.properties.get('ColumnEdit', '').strip().removeprefix('this.')
+        repository = model.controls.get(reference)
+        if repository is None or known_control_kind(repository.type_name) != 'RepositoryItemSpinEdit':
+            issues.append(Issue('numeric_column_spin_editor_missing', 'warning',
+                'Connect the numeric GridColumn to its actual Spin repository. A numeric name, declaration or mask alone does not establish the ColumnEdit binding.',
+                details={'column': name, 'repository': reference or None}))
+    return issues

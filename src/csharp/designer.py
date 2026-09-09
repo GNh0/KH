@@ -6,20 +6,29 @@ from src.common.results import CheckResult, Issue
 from .lexer import _scan_csharp
 from .syntax import _method_declarations
 from .designer_model import parse_designer_source, _normalized_csharp_value
-from .grid_style import check_grid_style
+from .grid_style import check_grid_style, check_numeric_column_editors
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 
 
 def check_designer(designer: str, *, code_behind: str = "", original: str | None = None,
                    preserved_properties: Iterable[str] = (), expected_tab_order: Iterable[str] = (),
                    inherited_handlers: Iterable[str] = (), column_edit_modes: Mapping[str, str] | None = None,
-                   allowed_property_changes: Iterable[str] = (), control_sources: Sequence[str] = ()) -> CheckResult:
+                   allowed_property_changes: Iterable[str] = (), control_sources: Sequence[str] = (),
+                   numeric_columns: Iterable[str] = ()) -> CheckResult:
     result = CheckResult(checked=["explicit Designer members and assignments", "event handler references"],
                          not_checked=["Visual Studio Designer load", "rendered layout", "control-library version compatibility"])
     model = parse_designer_source(designer)
     baseline = parse_designer_source(original) if original is not None else None
     defaults = read_control_defaults(control_sources)
     allowed_property_changes = tuple(allowed_property_changes)
+    numeric_columns = tuple(numeric_columns)
+    if allowed_property_changes:
+        result.metadata['style_exemptions'] = sorted(set(allowed_property_changes))
+        result.not_checked.append('default-style checks for supplied exempt properties; exemptions do not establish user authorization or necessity')
+    result.issues.extend(check_numeric_column_editors(with_control_base_types(model, defaults), numeric_columns))
+    if numeric_columns:
+        result.checked.append('Spin repository bindings for supplied numeric column members')
+    result.not_checked.append('numeric column type inference and runtime ColumnEdit/column recreation')
     result.issues.extend(check_control_defaults(model, original=baseline, defaults=defaults,
                                                 allowed_property_changes=allowed_property_changes))
     result.checked.append('date control naming and added input formatting')

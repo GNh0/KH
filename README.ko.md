@@ -1,6 +1,6 @@
 # KH for Codex
 
-KH 3.0.3는 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
+KH 3.0.4는 현재 Codex 도구와 실제 소스에 맞춘 스킬 10개와 선택적 로컬 검사기다. [English](README.md)
 
 작고 명확한 요청은 직접 처리한다. 필요한 도메인 스킬만 읽고, 현재 사용자 정정·원본·비교 화면·API를 기준으로 작업한다. 과거 세션과 `docs/kh`, `docs/skillbook`의 오래된 보고서는 참고 자료다.
 
@@ -39,7 +39,7 @@ python -B <plugin-root>/scripts/kh_check.py artifact <document.docx>
 python -B <plugin-root>/scripts/kh_check.py package <plugin-root>
 ```
 
-일반 결과의 종료 코드는 0=수행한 검사 통과, 1=검사 오류 발견, 2=입력/검사 범위 미완성이다. 비선호·스타일 경고는 별도로 표시한다. `checked`, `not_checked`를 함께 읽는다. SQL 토큰 비교는 DB 의미 동등성 증명이 아니며, C# 정적 검사는 컴파일·UI 실행이 아니다. 파일 구조 검사는 실제 렌더링을 대신하지 않는다. `--normalize-layout`은 지원하는 JOIN/EXISTS 배치만 stdout으로 출력하며 원본을 쓰지 않는다.
+일반 결과의 종료 코드는 0=수행한 검사 통과, 1=검사 오류 발견, 2=입력/검사 범위 미완성이다. 비선호·스타일 경고는 별도로 표시한다. `checked`, `not_checked`를 함께 읽는다. SQL 토큰 비교는 DB 의미 동등성 증명이 아니며, C# 정적 검사는 컴파일·UI 실행이 아니다. 파일 구조 검사는 실제 렌더링을 대신하지 않는다. `--normalize-layout`은 지원하는 FROM/JOIN/EXISTS 배치만 stdout으로 출력하며 원본을 쓰지 않는다.
 
 PB의 ORCA probe/추출, DataWindow XML·Designer 초안, 이벤트/상태·SP 매개변수·결과 측정 비교는 [PB 참고 자료](skills/pb-to-csharp-migration-harness/SKILL.md)에 있다. 도구 출력이 실제 실행·전체 이관을 증명하지 않는 부분을 구분한다.
 

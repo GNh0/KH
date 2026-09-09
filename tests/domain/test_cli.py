@@ -88,5 +88,21 @@ class CliTests(unittest.TestCase):
             self.assertEqual(before, library.read_bytes())
 
 
+    def test_numeric_column_and_exemption_scope_are_reported_by_both_commands(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder)/'screen.cs'
+            source.write_text('this.colList_QTY = new GridColumn(); this.rpsSpinQTY = new RepositoryItemSpinEdit(); this.rpsSpinQTY.Mask.EditMask = "N0";', encoding='utf-8')
+            original = source.read_bytes()
+            for command in ('designer', 'csharp'):
+                result = subprocess.run([sys.executable, '-B', str(ROOT/'scripts/kh_check.py'), command, str(source),
+                    '--numeric-column', 'colList_QTY', '--allow-property-change', 'rpsSpinQTY.Mask.EditMask'],
+                    cwd=folder, capture_output=True, text=True, encoding='utf-8')
+                self.assertEqual(0, result.returncode, result.stderr)
+                data = json.loads(result.stdout)
+                self.assertIn('numeric_column_spin_editor_missing', {i['code'] for i in data['issues']})
+                self.assertEqual(['rpsSpinQTY.Mask.EditMask'], data['style_exemptions'])
+            self.assertEqual(original, source.read_bytes())
+
+
 if __name__ == '__main__':
     unittest.main()
