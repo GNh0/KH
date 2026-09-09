@@ -5,7 +5,7 @@ description: Generate, edit, or format SQL/T-SQL using the scoped KH layout whil
 
 # SQL formatting
 
-SQL 생성·수정·정리는 [사용자 SQL 스타일](references/style.md)을 적용한다. 이 사용자의 일반적인 “정리”에는 업무 역할별 별칭 정규화가 포함된다. “별칭 그대로”, “정렬만”이면 원래 별칭을 유지한다. 역할은 테이블명/MAINCD만으로 결정하지 않는다.
+SQL 생성·수정·정리는 [사용자 SQL 스타일](references/style.md)을 적용한다. 파생 FROM/JOIN은 여는 괄호에 닫는 괄호를 맞추고 내부 절은 한 칸 오른쪽, 파생 JOIN의 ON/AND는 괄호와 같은 열에 둔다. 일반 테이블 JOIN의 ON/AND는 JOIN의 I 열이다. 이 사용자의 일반적인 “정리”에는 업무 역할별 별칭 정규화가 포함된다. “별칭 그대로”, “정렬만”이면 원래 별칭을 유지한다. 역할은 테이블명/MAINCD만으로 결정하지 않는다.
 
 제공된 SQL만 정리하는 요청은 완성된 SQL을 바로 전달한다. 단순 비교·이유 질문에는 재작성하거나 DB에 접속하지 않는다. 의미·JOIN 종류/순서·조건·리터럴·한글·기존 주석과 출력 열을 보존한다. SQL 생성과 DB 실행은 서로 다른 요청 범위다.
 

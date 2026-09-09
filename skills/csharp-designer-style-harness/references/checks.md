@@ -27,3 +27,11 @@ python <plugin-root>/scripts/kh_check.py designer <absolute-after.Designer.cs> -
 검사기는 C# 컴파일러나 Visual Studio Designer가 아니다. 실제 프로젝트에서 허용되는 동적 UI·helper·변경은 현재 지시/소스 근거와 함께 검토한다. 스타일 경고를 전역 금지나 별도 서명 승인으로 바꾸지 않는다. 복잡한 데이터 경로·DB 동작은 실제 소스와 도구로 확인한다.
 
 LINQ 후보와 트랜잭션 이름 계열 변화는 검토 경고다. 메서드 이름만으로 LINQ 확장 메서드나 트랜잭션 손실을 확정하지 않는다. 실제 선언·인자·wrapper 본문과 프레임워크 API를 확인한다. Designer의 명시적 보존 속성은 문장 경계로 비교하며 일반·verbatim·raw 상수 문자열은 값으로 비교한다. 동적 식의 의미 동등성은 검사 범위 밖이다.
+
+## 실제 숫자 컬럼과 검사 예외
+
+C#/Designer 명령의 --numeric-column colList_QTY를 반복해 실제 숫자 컬럼의 Spin Repository 연결을 확인한다. 필드명으로 숫자 타입을 추측하지 않으며, 명시한 연결은 원본과 같아도 검사한다. csharp --designer 명령은 명시적인 code-behind ColumnEdit 덮어쓰기도 확인한다. designer 명령의 숫자 연결 검사는 제공한 Designer 대입을 대상으로 한다. 조건별 실행·동적 컬럼 생성은 정적 검사로 확정하지 않는다.
+
+--allow-property-change를 사용하면 결과의 style_exemptions와 not_checked에 제외 범위를 남긴다. 변경 목록을 그대로 예외 목록으로 복사해 통과시키지 않는다. 해당 옵션은 사용자 허가나 비선호의 필요성 근거가 아니며, --preserve-property 등 명시적 보존 계약을 무효화하지 않는다.
+
+전체 스타일 재검토 요청에서는 원본 보존 비교와 후보 자체의 스타일 검사를 함께 판단한다. 원본을 준 변경분 검사에서 기존 코드가 그대로라는 이유만으로, 전체 소스의 중괄호·명명·연결이 맞는다고 보고하지 않는다. 스타일 수정 범위와 사용자 변경 보존은 동시에 지킨다.

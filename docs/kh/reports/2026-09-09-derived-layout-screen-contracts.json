@@ -1,0 +1,186 @@
+{
+  "version": "3.0.4",
+  "date": "2026-09-09",
+  "kind": "observed_correction_and_skill_trials",
+  "audit": {
+    "user_messages_read": 107,
+    "initial_snapshot_user_messages": 103,
+    "later_user_messages": 4,
+    "initial_completed_responses_indexed": 29,
+    "initial_tool_calls_indexed": 383,
+    "evidence_scope": "All selected-task user messages; relevant response text, successful file changes and command outputs reviewed. Not every tool output or image was independently verified.",
+    "confirmed_causes": [
+      "derived-query layout contract contradicted an earlier user requirement",
+      "first FROM-derived source omitted from layout checks",
+      "generated style properties automatically added to checker exemptions",
+      "instructions read but later changes still missed scope and runtime overwrite paths"
+    ],
+    "not_classified_as_confirmed_defects": [
+      "withdrawn unit complaint",
+      "later requirement changes and cancellations",
+      "unverified new aggregate defect inferred from a question",
+      "missing per-control diff when shared routing implements the request",
+      "product defect inferred solely from auxiliary-probe crash"
+    ],
+    "private_inputs_published": false
+  },
+  "implementation": {
+    "sql": "Opening and closing source parentheses align; derived JOIN ON/AND/OR use that column; inner clauses use open+1; nested FROM/UNION supported.",
+    "csharp": [
+      "explicit numeric-column Spin binding checks",
+      "code-behind binding overwrite review in csharp command",
+      "visible style exemptions",
+      "source-grounded screen ownership, refresh timing, runtime overwrite and calculation guidance"
+    ],
+    "existing_csharp_style_preserved": true,
+    "preferences_policy_changed": false
+  },
+  "validation": {
+    "unit_tests": [
+      {
+        "python": "3.14.2",
+        "tests": 194,
+        "passed": true
+      },
+      {
+        "python": "3.12.14",
+        "tests": 194,
+        "passed": true
+      }
+    ],
+    "pyright": {
+      "version": "1.1.413",
+      "filesAnalyzed": 57,
+      "errorCount": 0,
+      "warningCount": 0,
+      "informationCount": 0,
+      "timeInSec": 3.23
+    },
+    "official_plugin_errors": [],
+    "official_skills": {
+      "artifact-checks": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "code-review": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "context-handoff": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "csharp-designer-style-harness": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "kh-maintenance": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "pb-to-csharp-migration-harness": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "sql-formatting": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "systematic-debugging": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "work-execution": {
+        "valid": true,
+        "message": "Skill is valid!"
+      },
+      "work-planning": {
+        "valid": true,
+        "message": "Skill is valid!"
+      }
+    },
+    "python_311_syntax_files": 57,
+    "package": {
+      "status": "passed",
+      "issues": [],
+      "checked": [
+        "manifest and skill entrypoints",
+        "local Markdown links",
+        "Python AST and internal import targets"
+      ],
+      "not_checked": [
+        "installed plugin cache",
+        "Codex skill selection",
+        "host or domain runtime behavior"
+      ],
+      "plugin": "kh-uaf",
+      "version": "3.0.4",
+      "skill_names": [
+        "artifact-checks",
+        "code-review",
+        "context-handoff",
+        "csharp-designer-style-harness",
+        "kh-maintenance",
+        "pb-to-csharp-migration-harness",
+        "sql-formatting",
+        "systematic-debugging",
+        "work-execution",
+        "work-planning"
+      ],
+      "skill_count": 10,
+      "python_files": 56
+    },
+    "user_sql_cases": [
+      {
+        "case": "nested canonical query",
+        "tokens_preserved": true,
+        "idempotent": true,
+        "input_unchanged": true,
+        "issues": []
+      },
+      {
+        "case": "derived JOIN correction",
+        "tokens_preserved": true,
+        "idempotent": true,
+        "issues": []
+      }
+    ],
+    "independent_skill_trials": [
+      {
+        "skill": "sql-formatting",
+        "raw_queries": 2,
+        "expected_output_provided": false,
+        "output_read_by_parent": true,
+        "issues": [],
+        "result": "derived JOIN, nested FROM/UNION and ordinary JOIN layout passed"
+      },
+      {
+        "skill": "csharp-designer-style-harness",
+        "raw_files": 2,
+        "expected_output_provided": false,
+        "output_read_by_parent": true,
+        "issues": [],
+        "preserved_properties": 13,
+        "style_exemptions": [],
+        "result": "removed two width overwrite paths and connected the actual Spin repository"
+      }
+    ],
+    "preservation": {
+      "private_untracked_files": 25,
+      "all_preserved": true,
+      "marketplace_preserved": true,
+      "profiles_preserved": true
+    }
+  },
+  "not_verified": [
+    "ERP build or execution",
+    "Visual Studio Designer or rendered UI",
+    "DevExpress version and library integration in the synthetic C# trial",
+    "dynamic runtime column recreation and decimal editing",
+    "SQL Server result equivalence, execution plan or performance",
+    "every indexed tool output and image",
+    "auxiliary probe detailed crash cause and actual effect of the later fix",
+    "future agent compliance",
+    "installed cache activation and remote CI are verified separately from this source artifact"
+  ]
+}

@@ -55,12 +55,13 @@ _JOIN_LAYOUT_CONTRACT = {
     "join_indent_from_from": 8,
     "join_prefix_and_token": "single_line",
     "outer_keyword": "generation requires explicit OUTER for LEFT/RIGHT/FULL; formatting and refactor preserve the source token stream",
-    "predicate_alignment": "ON and line-leading same-join continuation AND/OR align to the I column of JOIN",
+    "predicate_alignment": "ordinary JOIN: I column of JOIN; derived JOIN: source opening parenthesis",
     "indentation_basis": "current_query_scope_from_column",
     "ordinary_table_joins": "enforced",
-    "derived_table_joins": "same_relative_contract_as_ordinary_joins",
-    "derived_inner_clause_indent_from_join": 4,
-    "derived_closing_alias_alignment": "outer_join_clause_start",
+    "derived_table_joins": "closing parenthesis and ON/AND/OR align with the source opening parenthesis",
+    "derived_inner_clause_indent_from_open": 1,
+    "derived_closing_alias_alignment": "source_opening_parenthesis",
+    "derived_from_sources": "same parenthesis and inner-clause contract, including nested UNION branches",
     "join_hints": ["LOOP", "HASH", "MERGE", "REMOTE"],
     "predicate_context": "ordered_group_subquery_case_between_stack",
     "predicate_exclusions": [
@@ -101,114 +102,148 @@ _JOIN_PREDICATE_BOUNDARIES = {
 
 
 def normalize_sql_join_layout(sql: str) -> str:
-    """Normalize IF EXISTS and line-leading JOIN predicate indentation."""
+    """Normalize supported JOIN predicates and FROM/JOIN/EXISTS query blocks."""
     if not isinstance(sql, str):
         raise TypeError("sql must be a string")
     sql = _normalize_if_exists_layout(sql)
+    sql = _normalize_derived_query_breaks(sql)
     tokens, integrity_issues = _analyze_sql_integrity(sql, check_kind="join_layout")
     if _has_errors(integrity_issues):
         raise ValueError("SQL integrity must pass before JOIN layout can be normalized")
 
     directives: Dict[int, int] = {}
+    joins: Dict[int, Tuple[int, _SourceDeclaration, int, int]] = {}
+    blocks: Dict[int, int] = {}
     for scope in _build_sql_scopes(tokens):
-        if len(scope.declarations) < 2:
+        if not scope.declarations:
             continue
         from_index = _source_marker_before(
-            tokens,
-            scope.declarations[0].source_start,
-            scope.start,
-            scope.depth,
-            {"FROM"},
+            tokens, scope.declarations[0].source_start, scope.start, scope.depth, {"FROM"},
         )
         if from_index is None:
             continue
-        _, from_column, _ = _token_line_position(sql, tokens[from_index])
-        expected_clause_column = from_column + int(
-            _JOIN_LAYOUT_CONTRACT["join_indent_from_from"]
-        )
-        for declaration in scope.declarations[1:]:
-            join_index = _source_marker_before(
-                tokens,
-                declaration.source_start,
-                scope.start,
-                scope.depth,
-                {"JOIN"},
+        for declaration in scope.declarations:
+            marker = _source_marker_before(
+                tokens, declaration.source_start, scope.start, scope.depth,
+                {"FROM", "JOIN", "APPLY"},
             )
-            if join_index is None:
+            if marker is None or tokens[marker].normalized not in {"FROM", "JOIN"}:
                 continue
-            clause_start = _join_clause_start(sql, tokens, join_index)
-            clause_line, clause_column, clause_line_leading = _token_line_position(
-                sql,
-                tokens[clause_start],
-            )
-            join_line, join_column, _ = _token_line_position(sql, tokens[join_index])
+            pair = _derived_query_bounds(tokens, declaration)
+            if pair is not None:
+                blocks[pair[0]] = pair[1]
+            if tokens[marker].normalized == "JOIN":
+                joins[marker] = (from_index, declaration, scope.end, scope.depth)
+
+    for pair in _exists_subquery_pairs(tokens):
+        open_line = _token_line_position(sql, tokens[pair["open"]])[0]
+        close_line = _token_line_position(sql, tokens[pair["close"]])[0]
+        if open_line != close_line:
+            blocks[pair["open"]] = pair["close"]
+
+    # Source order places an enclosing block or predicate before its nested query.
+    # Every later event uses already planned columns, including shifted FROM lines.
+    for index in sorted(set(joins) | set(blocks)):
+        if index in joins:
+            from_index, declaration, scope_end, depth = joins[index]
+            clause_start = _join_clause_start(sql, tokens, index)
+            clause_line, clause_column, leading = _token_line_position(sql, tokens[clause_start])
+            join_line, join_column, _ = _token_line_position(sql, tokens[index])
             if clause_line != join_line:
                 raise ValueError("JOIN type/hint prefixes must be on the JOIN line")
-            if clause_line_leading:
-                directives[clause_line] = expected_clause_column
-            expected_predicate_column = (
-                expected_clause_column + (join_column - clause_column) + 2
-            )
-            for predicate_index in _same_join_predicate_indexes(
-                sql,
-                tokens,
-                join_index,
-                scope.end,
-                scope.depth,
-            ):
+            if leading:
+                directives[clause_line] = _planned_token_column(sql, tokens[from_index], directives) + int(
+                    _JOIN_LAYOUT_CONTRACT["join_indent_from_from"]
+                )
+            pair = _derived_query_bounds(tokens, declaration)
+            predicate_column = _planned_token_column(
+                sql, tokens[pair[0]] if pair is not None else tokens[index], directives,
+            ) + (0 if pair is not None else 2)
+            for predicate_index in _same_join_predicate_indexes(sql, tokens, index, scope_end, depth):
                 line, _, line_leading = _token_line_position(sql, tokens[predicate_index])
                 if line_leading:
-                    directives[line] = expected_predicate_column
+                    directives[line] = predicate_column
+        if index in blocks:
+            _align_query_block(sql, tokens, index, blocks[index], directives)
 
-    _propagate_exists_layout_directives(sql, tokens, directives)
-    if directives:
-        lines = sql.splitlines(keepends=True)
-        for line_number, indent in directives.items():
-            index = line_number - 1
-            lines[index] = re.sub(r"^[ \t]*", " " * indent, lines[index], count=1)
-        sql = "".join(lines)
-    return sql
+    lines = sql.splitlines(keepends=True)
+    for line_number, indent in directives.items():
+        lines[line_number - 1] = re.sub(r"^[ \t]*", " " * indent, lines[line_number - 1], count=1)
+    return "".join(lines)
 
 
-def _propagate_exists_layout_directives(
-    sql: str,
-    tokens: Sequence[_SqlToken],
+def _derived_query_bounds(
+    tokens: Sequence[_SqlToken], declaration: _SourceDeclaration,
+) -> Tuple[int, int] | None:
+    if declaration.source != "(DERIVED)":
+        return None
+    first = _next_code_token(tokens, declaration.source_start + 1, declaration.source_name_end)
+    if first is None or tokens[first].kind != "word" or tokens[first].normalized != "SELECT":
+        return None
+    return declaration.source_start, declaration.source_name_end
+
+
+def _planned_token_column(sql: str, token: _SqlToken, directives: Mapping[int, int]) -> int:
+    line, column, _ = _token_line_position(sql, token)
+    line_start = sql.rfind("\n", 0, token.start) + 1
+    prefix = sql[line_start:token.start]
+    indent = len(prefix) - len(prefix.lstrip(" \t"))
+    return column + directives.get(line, indent) - indent
+
+
+def _align_query_block(
+    sql: str, tokens: Sequence[_SqlToken], open_index: int, close_index: int,
     directives: Dict[int, int],
 ) -> None:
-    """Keep nested EXISTS blocks aligned when JOIN normalization shifts their predicate line."""
-    if not directives:
-        return
-    lines = sql.splitlines()
-    for pair in _exists_subquery_pairs(tokens):
-        open_index = pair["open"]
-        close_index = pair["close"]
-        first_index = pair["first"]
-        open_line, open_column, _ = _token_line_position(sql, tokens[open_index])
-        target_indent = directives.get(open_line)
-        if target_indent is None or open_line > len(lines):
-            continue
-        current_indent = len(lines[open_line - 1]) - len(
-            lines[open_line - 1].lstrip(" \t")
-        )
-        shifted_open_column = open_column + target_indent - current_indent
-        close_line, _, _ = _token_line_position(sql, tokens[close_index])
-        if pair["if"] < 0 and open_line == close_line:
-            continue
+    open_column = _planned_token_column(sql, tokens[open_index], directives)
+    inner_column = open_column + 1
+    anchors = [
+        index for index in _subquery_inner_clause_indexes(tokens, {"open": open_index, "close": close_index})
+        if _token_line_position(sql, tokens[index])[2]
+    ]
+    for ordinal, anchor in enumerate(anchors):
+        delta = inner_column - _planned_token_column(sql, tokens[anchor], directives)
+        start = open_index + 1 if ordinal == 0 else anchor
+        end = anchors[ordinal + 1] if ordinal + 1 < len(anchors) else close_index
+        seen: set[int] = set()
+        for token in tokens[start:end]:
+            line, _, leading = _token_line_position(sql, token)
+            if not leading or line in seen:
+                continue
+            seen.add(line)
+            # Only whitespace before a token moves. Multiline literal/comment
+            # contents have no independent tokens and therefore remain byte-exact.
+            directives[line] = max(0, _planned_token_column(sql, token, directives) + delta)
+    close_line, _, close_leading = _token_line_position(sql, tokens[close_index])
+    if close_leading:
+        directives[close_line] = open_column
 
-        first_line, _, first_line_leading = _token_line_position(
-            sql,
-            tokens[first_index],
-        )
-        if first_line_leading:
-            directives[first_line] = shifted_open_column + 1
-        for index in _if_exists_inner_clause_indexes(tokens, pair):
-            line, _, line_leading = _token_line_position(sql, tokens[index])
-            if line_leading:
-                directives[line] = shifted_open_column + 1
 
-        _, _, close_line_leading = _token_line_position(sql, tokens[close_index])
-        if close_line_leading:
-            directives[close_line] = shifted_open_column
+def _normalize_derived_query_breaks(sql: str) -> str:
+    tokens, issues = _analyze_sql_integrity(sql, check_kind="derived_layout")
+    if _has_errors(issues):
+        raise ValueError("SQL integrity must pass before derived layout can be normalized")
+    edits: Dict[Tuple[int, int], str] = {}
+    for scope in _build_sql_scopes(tokens):
+        for declaration in scope.declarations:
+            pair = _derived_query_bounds(tokens, declaration)
+            if pair is None:
+                continue
+            marker = _source_marker_before(
+                tokens, declaration.source_start, scope.start, scope.depth, {"FROM", "JOIN", "APPLY"},
+            )
+            if marker is None or tokens[marker].normalized not in {"FROM", "JOIN"}:
+                continue
+            open_index, close_index = pair
+            _, open_column, _ = _token_line_position(sql, tokens[open_index])
+            for index in [*_subquery_inner_clause_indexes(tokens, {"open": open_index, "close": close_index}), close_index]:
+                previous = _previous_code_token(tokens, index - 1, open_index)
+                if previous is not None and _token_line_position(sql, tokens[previous])[0] == _token_line_position(sql, tokens[index])[0]:
+                    _queue_whitespace_line_break(
+                        sql, tokens[previous], tokens[index],
+                        open_column if index == close_index else open_column + 1, edits,
+                    )
+    return _apply_text_edits(sql, edits) if edits else sql
 
 
 def _normalize_if_exists_layout(sql: str) -> str:
@@ -240,7 +275,7 @@ def _normalize_if_exists_layout(sql: str) -> str:
                 edits,
             )
 
-        for index in _if_exists_inner_clause_indexes(tokens, pair):
+        for index in _subquery_inner_clause_indexes(tokens, pair):
             if index == first_index:
                 continue
             previous = _previous_code_token(tokens, index - 1, open_index + 1)
@@ -330,7 +365,7 @@ def _normalize_if_exists_layout(sql: str) -> str:
         if close_line_leading:
             directives[close_line] = open_column
 
-        for index in _if_exists_inner_clause_indexes(tokens, pair):
+        for index in _subquery_inner_clause_indexes(tokens, pair):
             line, _, line_leading = _token_line_position(sql, tokens[index])
             if line_leading:
                 directives[line] = inner_column
@@ -477,7 +512,7 @@ def _check_if_exists_layout(
             )
 
         clause_conflicts: List[str] = []
-        for index in _if_exists_inner_clause_indexes(tokens, pair):
+        for index in _subquery_inner_clause_indexes(tokens, pair):
             line, column, line_leading = _token_line_position(sql, tokens[index])
             if line_leading and column == expected_inner_column:
                 continue
@@ -575,9 +610,9 @@ def _check_join_layout(
                 declaration.source_start,
                 scope.start,
                 scope.depth,
-                {"JOIN"},
+                {"FROM", "JOIN", "APPLY"},
             )
-            if join_index is None:
+            if join_index is None or formatted_tokens[join_index].normalized != "JOIN":
                 continue
             clause_start = _join_clause_start(
                 formatted_sql,
@@ -624,7 +659,11 @@ def _check_join_layout(
                 formatted_sql,
                 formatted_tokens[join_index],
             )
-            expected_predicate_column = join_column + 2
+            pair = _derived_query_bounds(formatted_tokens, declaration)
+            expected_predicate_column = (
+                _token_line_position(formatted_sql, formatted_tokens[pair[0]])[1]
+                if pair is not None else join_column + 2
+            )
             predicate_indexes = _same_join_predicate_indexes(
                 formatted_sql,
                 formatted_tokens,
@@ -706,21 +745,23 @@ def _check_join_layout(
                     SqlFormattingIssue(
                         code="join_predicate_alignment_invalid",
                         severity="error",
-                        message="ON and same-join AND/OR keywords must align to the I column of JOIN.",
+                        message="ON and same-join AND/OR align with the opening parenthesis for a derived JOIN, or the I column of an ordinary JOIN.",
                         evidence=predicate_conflicts[:16],
                         check_kind="style",
                     )
                 )
-            if declaration.source == "(DERIVED)":
-                issues.extend(
-                    _check_derived_source_block_layout(
-                        formatted_sql,
-                        formatted_tokens,
-                        declaration,
-                        scope.scope_id,
-                        expected_join_column,
-                    )
-                )
+    for scope in _build_sql_scopes(formatted_tokens):
+        for declaration in scope.declarations:
+            if _derived_query_bounds(formatted_tokens, declaration) is None:
+                continue
+            marker = _source_marker_before(
+                formatted_tokens, declaration.source_start, scope.start, scope.depth,
+                {"FROM", "JOIN", "APPLY"},
+            )
+            if marker is not None and formatted_tokens[marker].normalized in {"FROM", "JOIN"}:
+                issues.extend(_check_derived_source_block_layout(
+                    formatted_sql, formatted_tokens, declaration, scope.scope_id,
+                ))
     return issues
 
 
@@ -729,22 +770,22 @@ def _check_derived_source_block_layout(
     tokens: Sequence[_SqlToken],
     declaration: _SourceDeclaration,
     scope_id: str,
-    join_clause_column: int,
 ) -> List[SqlFormattingIssue]:
     issues: List[SqlFormattingIssue] = []
+    _, open_column, _ = _token_line_position(sql, tokens[declaration.source_start])
     close_index = declaration.source_name_end
     close_line, close_column, close_line_leading = _token_line_position(
         sql,
         tokens[close_index],
     )
-    if not close_line_leading or close_column != join_clause_column:
+    if not close_line_leading or close_column != open_column:
         issues.append(
             SqlFormattingIssue(
                 code="derived_join_closing_alias_indentation_invalid",
                 severity="error",
-                message="A derived-table closing parenthesis and alias must align with the outer JOIN clause start.",
+                message="A FROM/JOIN derived-table closing parenthesis must align with its opening parenthesis; keep the alias on that closing line.",
                 evidence=[
-                    f"{scope_id}:line {close_line}:close indent={close_column}, expected={join_clause_column}"
+                    f"{scope_id}:line {close_line}:close indent={close_column}, expected={open_column}"
                 ],
                 check_kind="style",
             )
@@ -769,14 +810,14 @@ def _check_derived_source_block_layout(
             )
 
     inner_depth = tokens[declaration.source_start].depth + 1
-    expected_inner_column = join_clause_column + int(
-        _JOIN_LAYOUT_CONTRACT["derived_inner_clause_indent_from_join"]
+    expected_inner_column = open_column + int(
+        _JOIN_LAYOUT_CONTRACT["derived_inner_clause_indent_from_open"]
     )
     clause_keywords = {"SELECT", "FROM", "WHERE", "GROUP", "HAVING", "ORDER", "UNION", "EXCEPT", "INTERSECT"}
     conflicts: List[str] = []
     for index in range(declaration.source_start + 1, close_index):
         token = tokens[index]
-        if token.depth != inner_depth or token.normalized not in clause_keywords:
+        if token.kind != "word" or token.depth != inner_depth or token.normalized not in clause_keywords:
             continue
         line, column, line_leading = _token_line_position(sql, token)
         if line_leading and column == expected_inner_column:
@@ -789,7 +830,7 @@ def _check_derived_source_block_layout(
             SqlFormattingIssue(
                 code="derived_query_clause_indentation_invalid",
                 severity="error",
-                message="Top-level clauses inside a derived table must align four columns inside the outer JOIN clause.",
+                message="SELECT/FROM/WHERE/GROUP BY and UNION branches inside a derived table start one column after its opening parenthesis.",
                 evidence=conflicts[:16],
                 check_kind="style",
             )
@@ -1093,7 +1134,7 @@ def _exists_predicate_anchor(
     return None
 
 
-def _if_exists_inner_clause_indexes(
+def _subquery_inner_clause_indexes(
     tokens: Sequence[_SqlToken],
     pair: Mapping[str, int],
 ) -> List[int]:
@@ -1114,7 +1155,7 @@ def _if_exists_inner_clause_indexes(
     return [
         index
         for index in range(open_index + 1, close_index)
-        if tokens[index].kind not in {"line_comment", "block_comment"}
+        if tokens[index].kind == "word"
         and tokens[index].depth == inner_depth
         and tokens[index].normalized in clause_words
     ]
