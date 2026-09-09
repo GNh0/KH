@@ -34,4 +34,16 @@ C#/Designer 명령의 --numeric-column colList_QTY를 반복해 실제 숫자 �
 
 --allow-property-change를 사용하면 결과의 style_exemptions와 not_checked에 제외 범위를 남긴다. 변경 목록을 그대로 예외 목록으로 복사해 통과시키지 않는다. 해당 옵션은 사용자 허가나 비선호의 필요성 근거가 아니며, --preserve-property 등 명시적 보존 계약을 무효화하지 않는다.
 
+공통 초기화가 없는 대상에 같은 숫자 표시를 적용하라는 현재 명시적 요청과 실제 원본 설정을 확인했다면, 해당 Repository의 DisplayFormat.FormatString·FormatType만 정확히 예외로 전달할 수 있다. 이는 불필요한 기본값 추가와 구분한다. 검사기는 공통 helper 호출 여부나 대화의 최신 요청을 자동 판정하지 않으므로, 그 근거와 적용 범위를 별도로 확인한다. 제외 결과 자체가 같은 근거를 대신하지는 않는다.
+
 전체 스타일 재검토 요청에서는 원본 보존 비교와 후보 자체의 스타일 검사를 함께 판단한다. 원본을 준 변경분 검사에서 기존 코드가 그대로라는 이유만으로, 전체 소스의 중괄호·명명·연결이 맞는다고 보고하지 않는다. 스타일 수정 범위와 사용자 변경 보존은 동시에 지킨다.
+
+## 숫자 형식의 표기와 설정 위치
+
+numeric_format_preference는 새 N0·N2·Nn 형식 사용을 검토 경고로 표시한다. 직접 FormatString/DisplayFormat/EditMask 대입, GridColumnSummaryItem·GridGroupSummaryItem 생성자의 복합 형식, ToString의 첫 형식 인수, string.Format, 보간식의 정적 형식 지정자를 확인한다. 문자열·주석의 단순 N0와 이스케이프된 중괄호는 형식 사용으로 간주하지 않는다. 원본이 있으면 같은 문맥/형식의 기존 발생 수를 제외하며 기존 파일을 자동 수정하지 않는다.
+
+알 수 없는 형식 변수·연결식·사용자 정의 formatter·실제 오버로드 타입은 확정하지 않는다. string.Format의 문화권 오버로드는 직접 보이는 CultureInfo 인수만 구분한다. 일반 C# 문자열 변수가 숫자인지는 이 검사로 증명하지 못한다. 사용자 지정 형식 후보가 표시되어도 0·고정 소수·문화권·반올림 의미를 대조해야 한다.
+
+SummaryItem.DisplayFormat은 합계 형식이므로 일반 셀의 display_format_preference 대상에서 구분한다. 컬럼/Repository의 DisplayFormat은 # 형식을 사용해도 기존 기본값 검토가 그대로 적용된다. --allow-property-change는 속성의 기본 스타일 검사를 제외할 뿐 N 형식을 쓰라는 요구를 만들지 않으며 숫자 표기 검토는 별도로 남긴다.
+
+status=passed와 종료 코드 0만으로 스타일 준수를 보고하지 않는다. display_format_preference가 있으면 현재 사용자의 미사용 지시·설정 위치·실제 초기화와 대조한다. Spin 연결이나 소수점 표시 문제를 임의의 속성 추가 예외로 판단하지 않는다.

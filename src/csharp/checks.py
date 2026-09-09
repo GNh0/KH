@@ -9,6 +9,7 @@ from .source import _call_count, _target_local_method_inventory, _designer_wired
 from .designer import check_designer
 from .designer_model import parse_designer_source
 from .grid_style import check_grid_style, check_numeric_column_editors
+from .numeric_format import check_numeric_formats
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .syntax import _property_assignments, linq_candidates
@@ -25,6 +26,9 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     code, _ = _scan_csharp(candidate)
     before, _ = _scan_csharp(original or "")
     result.issues.extend(check_control_braces(candidate, original=original))
+    result.issues.extend(check_numeric_formats(candidate, original=original))
+    result.checked.append('literal numeric format choices at recognized C# format sites')
+    result.not_checked.append('numeric-format overload types, dynamic formats, custom formatters and runtime culture/rounding')
     candidate_model = parse_designer_source(candidate)
     baseline_model = parse_designer_source(original) if original is not None else None
     if designer is not None:

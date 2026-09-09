@@ -92,8 +92,8 @@ def check_grid_style(model: DesignerModel, *, original: DesignerModel | None = N
         is_editor = type_name.startswith('RepositoryItem') or type_name in {'SpinEdit', 'DateEdit', 'TextEdit', 'ButtonEdit', 'LookUpEdit', 'GridLookUpEdit'}
         if is_column or is_editor:
             for prop in props:
-                if re.search(r'(^|\.)DisplayFormat(?:\.|$)', prop) and changed(prop):
-                    warn('display_format_preference', 'Omit default DisplayFormat settings, including FormatType and FormatString. Use the actual editor/data contract; a specific required format is an exception.', prop)
+                if re.search(r'(^|\.)DisplayFormat(?:\.|$)', prop) and not prop.startswith('SummaryItem.') and changed(prop):
+                    warn('display_format_preference', 'Omit unnecessary DisplayFormat settings, including FormatType and FormatString. Trace effective common initialization and current user instructions. A Spin binding complaint alone is insufficient; an explicit request to reproduce verified formatting in a target missing that initialization can justify these specific settings.', prop)
         if type_name in {'SpinEdit', 'RepositoryItemSpinEdit'}:
             for prop in props:
                 if prop.endswith('Mask.EditMask') and changed(prop):
