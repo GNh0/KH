@@ -7,6 +7,7 @@ from .lexer import _scan_csharp
 from .syntax import _method_declarations
 from .designer_model import parse_designer_source, _normalized_csharp_value
 from .grid_style import check_grid_style, check_numeric_column_editors
+from .numeric_format import check_numeric_formats
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 
 
@@ -18,6 +19,9 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
     result = CheckResult(checked=["explicit Designer members and assignments", "event handler references"],
                          not_checked=["Visual Studio Designer load", "rendered layout", "control-library version compatibility"])
     model = parse_designer_source(designer)
+    result.issues.extend(check_numeric_formats(designer, original=original))
+    result.checked.append('literal numeric format choices at recognized C# format sites')
+    result.not_checked.append('numeric-format overload types, dynamic formats, custom formatters and runtime culture/rounding')
     baseline = parse_designer_source(original) if original is not None else None
     defaults = read_control_defaults(control_sources)
     allowed_property_changes = tuple(allowed_property_changes)

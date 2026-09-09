@@ -49,3 +49,5 @@
 ## 변경 후 확인
 
 새 기본값·컬럼 편집 모드를 검사하고, 기존 화면 수정은 원본과 비교해 요청하지 않은 옵션이 추가·변경·삭제되지 않았는지 확인한다. [검사 명령](checks.md)에 원본과 명시한 컬럼 모드를 전달할 수 있다. 결과의 스타일 경고는 검토 항목이며, 경고가 있다는 이유로 구현을 차단하거나 기존 옵션을 일괄 삭제하지 않는다. 검사 통과는 실제 Designer 실행이나 버튼 이벤트 동작의 증거가 아니다.
+
+합계의 SummaryItem.DisplayFormat·Summary 생성자 형식 인수는 일반 셀/Repository의 DisplayFormat 설정과 적용 위치가 다르다. 필요한 합계 형식은 [사용자 지정 숫자 형식](coding-style.md)을 따르고, 이를 이유로 컬럼·Repository에 DisplayFormat·FormatType을 추가하지 않는다.

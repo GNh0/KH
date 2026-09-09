@@ -69,3 +69,22 @@ DataTable/DataRow 직접 처리와 `NewRow` → 필드 대입 → `Rows.Add`를 
 조회/저장의 예외와 사용자 메시지는 실제 프레임워크의 ShowMessage 계열 및 예외 표시 helper를 사용한다. helper 이름·시그니처를 임의로 교정하거나 모든 이벤트에 try/catch를 추가하지 않는다. null/false 반환은 호출부 처리와 함께 확인한다. DB 호출이 비어 있는데 true를 반환하는 참조 메서드를 완성된 저장 흐름으로 복제하지 않는다.
 
 그리드 속성은 [사용자가 정정한 HTML 기본값](grid-layout.md)을 우선한다. 참조 Designer의 셀 정렬·마스크·DisplayFormat·OptionsBehavior 또는 편집 속성 누락을 새 기본값으로 학습하지 않는다.
+
+## 숫자 표시 형식
+
+숫자 형식이 필요한 위치에서는 N0·N2 등 표준 N 형식보다 사용자 지정 형식을 우선한다. 이 기준은 형식 문자열을 고르는 기준이다. 그리드 컬럼이나 Repository의 DisplayFormat·FormatType·EditMask를 새로 추가하는 근거로 사용하지 않는다.
+
+| 표시 요구 | 우선 예시 | 0을 생략하는 기존 요구가 있을 때 |
+| --- | --- | --- |
+| 천 단위 구분, 소수 없음 | #,##0 | #,### |
+| 천 단위 구분, 소수 최대 2자리 | #,##0.## | #,###.## |
+
+위 표는 형식을 고를 때의 예시이며 기존 초기화의 소수 정밀도를 변경하는 규칙이 아니다. 사용자 컨트롤 생성자와 상속 클래스뿐 아니라 공통 폼에서 호출하는 초기화 helper, Repository 순회와 적용 조건까지 확인한다. 실제 경로에서 이미 숫자 표시를 처리하면 화면 Designer에 중복 대입하지 않는다.
+
+공통 초기화가 없는 대상에 같은 표시를 적용하라고 사용자가 명시한 경우에는 확인한 설정을 적용한다. 예를 들어 원본 경로가 Numeric과 `"{0:#,###,###,##0.####}"`를 사용하고 사용자가 그 값을 지정했다면, 정확히 그 형식을 따른다. 임의로 `#,##0.##`로 줄이거나 형식 외의 버튼·마스크·정렬 속성을 함께 복사하지 않는다. 이 구체적인 요청은 해당 대상에 적용하며 다른 화면의 새 기본값으로 확대하지 않는다.
+
+합계 표시는 기존 SummaryItem.DisplayFormat 또는 GridColumnSummaryItem의 형식 인수에 {0:#,##0}, {0:#,##0.##}처럼 넣는다. 기존 {0:N0} 건의 접미사, 자리 정렬, SummaryType, FieldName, 집계 계산은 유지한다. 합계 형식 요구를 일반 셀·Repository의 DisplayFormat 설정으로 확장하지 않는다. 실제 숫자의 ToString, string.Format, 보간 문자열에도 같은 표기 선호를 적용하되, 형식 때문에 새 보간식·helper를 만들지 않는다.
+
+#,##0은 0을 표시하며 #,###은 0의 숫자 자리를 생략할 수 있다. 소수부 ##는 최대 자리수이므로 N2의 고정 두 자리와 표시 결과가 같다고 단정하지 않는다. 고정 두 자리가 실제 요구이면 #,##0.00을 사용한다. 기존 문화권·숫자 타입·반올림·음수/0 표시를 임의로 바꾸거나, 표시를 맞추려고 수치 데이터를 문자열로 바꾸지 않는다. 실제 API가 N 형식을 요구하는 제약은 현재 사용자 지시와 함께 판단하며 편의만으로 예외를 만들지 않는다.
+
+문법 근거는 [Microsoft 사용자 지정 숫자 형식](https://learn.microsoft.com/en-us/dotnet/standard/base-types/custom-numeric-format-strings)과 [DevExpress 합계 형식](https://docs.devexpress.com/WindowsForms/DevExpress.XtraGrid.GridSummaryItem.DisplayFormat)이다.

@@ -20,6 +20,10 @@ description: Generate, modify, or review WinForms/DevExpress/KoneLib C# and Desi
 
 그리드 기본값은 사용자가 제공한 DataWindowToXml.html의 Load Layout 속성을 따른다. 기본으로 셀 TextOptions, SpinEdit EditMask, DisplayFormat(FormatType 포함), OptionsBehavior를 덧붙이지 않는다. 편집 차단 컬럼은 AllowEdit=false와 ReadOnly=true, 동작을 남길 버튼 등의 컬럼은 ReadOnly=true만, 편집 가능 컬럼은 둘 다 생략한다. 기존 화면의 속성을 일괄 초기화하지 않고, 별도 동작에 필요한 변경만 현재 요구와 실제 소스로 판단한다.
 
+숫자 형식이 필요한 합계·문자열 표시는 [사용자 지정 숫자 형식](references/coding-style.md)을 따른다. N0·N2보다 #,##0·#,##0.## 등을 우선한다. 합계 형식이나 Spin 연결 확인 요청을 셀·Repository DisplayFormat 추가 근거로 확장하지 않는다.
+
+기본값은 사용자 컨트롤 생성자뿐 아니라 실제 호출되는 공통 폼 초기화·helper까지 추적한다. 그 경로가 없는 대상에 같은 표시를 적용하라는 현재 명시적 요청이 있으면, 확인한 형식과 소수 정밀도를 그대로 적용할 수 있다. 이전 미사용 지시만으로 이후의 구체적인 요청을 차단하지 않는다.
+
 검사 경고를 없애기 위해 변경 속성을 임의로 --allow-property-change에 넣지 않는다. 예외로 제외한 검사는 통과 근거가 아니며 실제 요구·필요성은 별도로 확인한다.
 
 전체 화면 요청은 전체 생명주기를 확인하고 국소 수정은 그 범위로 제한한다. 최종 확인은 실제 요구 동작으로 하며 빌드 결과로 UI나 저장 동작을 보증하지 않는다.
