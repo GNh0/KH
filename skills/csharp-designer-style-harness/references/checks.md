@@ -1,5 +1,7 @@
 # 선택적 C# 정적 검사
 
+결과의 `status=passed`는 검사한 항목에 오류가 없다는 뜻이다. C# 결과는 경고가 있으면 `review_status=needs_review`, 없으면 `static_checks_only`를 표시하며 `project_style_verified=false`를 명시한다. 이는 작업 완료 판정을 하지 않는다는 의미다. 현재 사용자 요구와 이벤트 상태·API·저장 계약의 대조를 생략하는 통과 증거로 쓰지 않는다.
+
 `python <plugin-root>/scripts/kh_check.py csharp <absolute-source.cs> [--designer <absolute-Designer.cs>] [--original <absolute-before.cs>]`로 정적 UI 소유권·이벤트 참조·국소 코드 변경을 확인한다.
 
 그리드 밖 컨트롤도 [사용자 컨트롤 기준](user-controls.md)을 적용한다. 새 컨트롤의 Spin/ymd/pn/grd/gvw/col/rps 등 합의한 명명, 멤버/Name 불일치, DateEdit의 EditFormat/입력 마스크 추가를 검토한다. `--control-source <absolute-control.cs>`를 반복하여 현재 프로젝트의 사용자 컨트롤 구현을 제공하면, 라이브러리 이름에 관계없이 상속 선언과 직접 기본 생성자 대입을 기준으로 타입 선택·기본값 덮어쓰기도 확인한다. C#과 Designer 양쪽 명령에서 지원한다. 소스가 없거나 helper·조건·동적 값인 부분은 자동 검증했다고 표시하지 않는다.
@@ -27,6 +29,18 @@ python <plugin-root>/scripts/kh_check.py designer <absolute-after.Designer.cs> -
 검사기는 C# 컴파일러나 Visual Studio Designer가 아니다. 실제 프로젝트에서 허용되는 동적 UI·helper·변경은 현재 지시/소스 근거와 함께 검토한다. 스타일 경고를 전역 금지나 별도 서명 승인으로 바꾸지 않는다. 복잡한 데이터 경로·DB 동작은 실제 소스와 도구로 확인한다.
 
 LINQ 후보와 트랜잭션 이름 계열 변화는 검토 경고다. 메서드 이름만으로 LINQ 확장 메서드나 트랜잭션 손실을 확정하지 않는다. 실제 선언·인자·wrapper 본문과 프레임워크 API를 확인한다. Designer의 명시적 보존 속성은 문장 경계로 비교하며 일반·verbatim·raw 상수 문자열은 값으로 비교한다. 동적 식의 의미 동등성은 검사 범위 밖이다.
+
+## 새 이벤트·데이터 처리 검토
+
+C# 검사는 현재 메서드와 원본을 비교하여 다음 후보를 경고한다. 기존 같은 처리는 보존하며, 호출을 다른 이벤트로 옮기거나 다시 추가한 경우도 검토한다.
+
+- `new_ui_data_helper`: 새로 선언한 조회·선택 행·테이블 복제 wrapper. 기존 메서드의 빈 본문을 구현하는 것과 구분한다.
+- `entry_query_review`: NewCommand/EditCommand 형태의 이벤트에 추가한 조회. 빈 테이블 스키마 조회 등 필요한 경우도 있으므로 자동 제거하지 않는다.
+- `save_gate_review`: 저장 이벤트/CallSaveProcedure에 추가한 메시지와 return 조건. 기존 검증·실패 처리 및 현재 요청과 대조한다.
+- `manual_selected_row_delete`, `client_sequence_review`, `row_header_propagation_review`: 수동 선택 행 삭제, RowVersion과 최대값을 이용한 순번 후보, 새 행으로의 헤더/문맥 필드 복사. 실제 API와 XML/SP의 담당 범위를 확인한다.
+- `date_helper_review`: 원본의 같은 멤버가 SetToDay를 쓰거나, `--control-source`로 제공한 실제 타입이 SetToDay(int)를 제공하는데 DateTime.Today/Now를 직접 대입한 경우. 제공되지 않은 API를 추측하지 않는다.
+
+이 항목은 구조를 인식하는 경고이며 모든 검증·반복문·helper·재조회를 금지하지 않는다. 메서드 별칭, 간접 호출, 지역 함수 내부, 조건별 실행 순서, 실제 서버 채번·필수 필드는 자동 판정하지 못한다. 원본 주석 본문의 완전한 보존도 이 검사에 포함되지 않으므로 해당 요청은 실제 본문으로 따로 대조한다. 새 helper 추가 여부를 비교하려면 `--original`이 필요하다. 필요한 실제 컨트롤 소스는 기존 `--control-source` 인자로 전달하며 사용자에게 새 프로필이나 승인 파일을 요구하지 않는다.
 
 ## 실제 숫자 컬럼과 검사 예외
 
