@@ -46,8 +46,11 @@ class CheckResult:
         return {"passed": 0, "failed": 1, "incomplete": 2}[self.status]
 
     def to_dict(self) -> dict[str, Any]:
-        return {"status": self.status, "issues": [i.to_dict() for i in self.issues],
-                "checked": self.checked, "not_checked": self.not_checked, **self.metadata}
+        review_keys = ('review_status', 'project_style_verified')
+        review = {key: self.metadata[key] for key in review_keys if key in self.metadata}
+        other = {key: value for key, value in self.metadata.items() if key not in review_keys}
+        return {"status": self.status, **review, "issues": [i.to_dict() for i in self.issues],
+                "checked": self.checked, "not_checked": self.not_checked, **other}
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=2)

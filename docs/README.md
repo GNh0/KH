@@ -10,6 +10,7 @@
 - [3.0.3 C#·사용자 컨트롤](kh/reports/2026-09-08-csharp-user-controls.md): 실제 작성 방식, 모든 사용자 컨트롤의 기본값 유지, Name 규칙 복구와 두 건의 독립 작성 평가.
 - [3.0.4 SQL 괄호·화면 동작 계약](kh/reports/2026-09-09-derived-layout-screen-contracts.md): 기존 요구와 어긋난 정렬 교정, 반복 화면 문제 재감사, 숫자 편집기·검사 예외 보강과 독립 작성 평가.
 - [3.0.5 숫자 형식](kh/reports/2026-09-09-numeric-formats.md): N 형식 대신 사용자 지정 형식 선호, 합계와 셀/Repository의 DisplayFormat 적용 위치 구분.
+- [3.0.6 이벤트·데이터 처리](kh/reports/2026-09-10-project-flow-review.md): 대상 프로젝트의 API·조회 상태 유지, 불필요한 처리 검토, 원본 주석 보존과 실제 실패 코드·독립 작성 평가.
 - 설계 계획과 C#·PB·SQL 대화 감사 원문은 로컬 작업 자료로 보존한다. 공개 보고서에는 48개 요구의 반영 위치와 관찰한 실패 원인 요약을 담았다.
 
 ## GitHub 배포

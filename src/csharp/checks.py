@@ -10,6 +10,7 @@ from .designer import check_designer
 from .designer_model import parse_designer_source
 from .grid_style import check_grid_style, check_numeric_column_editors
 from .numeric_format import check_numeric_formats
+from .flow_review import check_project_flow
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .syntax import _property_assignments, linq_candidates
@@ -40,6 +41,13 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
             baseline_model = replace(baseline_model, controls={name: replace(control, type_name=original_types[name].type_name)
                 if not control.type_name and name in original_types else control for name, control in baseline_model.controls.items()})
     defaults = read_control_defaults(control_sources)
+    flow_types = {name: control.type_name for name, control in parse_designer_source(designer or '').controls.items()}
+    flow_types.update({name: control.type_name for name, control in candidate_model.controls.items() if control.type_name})
+    result.issues.extend(check_project_flow(candidate, original=original,
+        control_types=flow_types,
+        control_sources=control_sources))
+    result.checked.append('new recognizable UI/data helpers, entry queries, save gates, row handling and supplied date APIs')
+    result.not_checked.append('necessity of new validation, target event state, XML/SP field ownership and project-wide coding-style compliance')
     result.issues.extend(check_control_defaults(candidate_model, original=baseline_model, defaults=defaults,
                          allowed_property_changes=allowed_property_changes, check_declarations=designer is None))
     result.issues.extend(check_grid_style(with_control_base_types(candidate_model, defaults),
@@ -118,6 +126,8 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
                 result.issues.append(issue)
         result.checked.append('supplied numeric column bindings including explicit code-behind assignments')
         result.not_checked.append('runtime paths, dynamic column recreation and unsupplied numeric data types')
+    result.metadata['review_status'] = 'needs_review' if result.issues else 'static_checks_only'
+    result.metadata['project_style_verified'] = False
     return result
 
 
