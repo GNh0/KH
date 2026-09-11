@@ -9,15 +9,25 @@ from .designer_model import parse_designer_source, _normalized_csharp_value
 from .grid_style import check_grid_style, check_numeric_column_editors
 from .numeric_format import check_numeric_formats
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
+from .source_preservation import compare_existing_properties, remap_members, validate_designer_renames
 
 
 def check_designer(designer: str, *, code_behind: str = "", original: str | None = None,
                    preserved_properties: Iterable[str] = (), expected_tab_order: Iterable[str] = (),
                    inherited_handlers: Iterable[str] = (), column_edit_modes: Mapping[str, str] | None = None,
                    allowed_property_changes: Iterable[str] = (), control_sources: Sequence[str] = (),
-                   numeric_columns: Iterable[str] = ()) -> CheckResult:
+                   numeric_columns: Iterable[str] = (), preserve_existing: bool = False,
+                   member_renames: Mapping[str, str] | None = None) -> CheckResult:
     result = CheckResult(checked=["explicit Designer members and assignments", "event handler references"],
                          not_checked=["Visual Studio Designer load", "rendered layout", "control-library version compatibility"])
+    result.metadata['comparison_baselines'] = {'designer': original is not None}
+    renames = member_renames or {}
+    if renames:
+        if original is None:
+            raise ValueError('member renames require the original Designer')
+        validate_designer_renames(parse_designer_source(original), renames)
+        original = remap_members(original, renames)
+        result.metadata['member_renames'] = dict(renames)
     model = parse_designer_source(designer)
     result.issues.extend(check_numeric_formats(designer, original=original))
     result.checked.append('literal numeric format choices at recognized C# format sites')
@@ -49,9 +59,16 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
     masked, _ = _scan_csharp(designer)
     preserved_properties = tuple(preserved_properties)
     inherited_handlers = set(inherited_handlers)
-    if preserved_properties and original is None:
+    if (preserved_properties or preserve_existing) and original is None:
         result.incomplete = True
         result.issues.append(Issue('preservation_baseline_missing', 'warning', 'Supply the original Designer to verify requested property preservation.'))
+    if preserve_existing and baseline is not None:
+        preserved = compare_existing_properties(model, baseline, allowed_property_changes)
+        result.issues.extend(preserved.issues)
+        result.checked.extend(preserved.checked)
+        result.not_checked.extend(preserved.not_checked)
+        result.incomplete |= preserved.incomplete
+        result.metadata.update(preserved.metadata)
     for match in re.finditer(r"\bthis\.(\w+)\s*=\s*(?:this\.)?(Create\w*|Build\w*)\s*\(", masked):
         result.issues.append(Issue("designer_factory_assignment", "warning",
                                   "Check Designer support for this factory assignment; static controls normally use explicit initialization.",
@@ -102,4 +119,6 @@ def check_designer(designer: str, *, code_behind: str = "", original: str | None
         if len(grouped) > 1:
             result.not_checked.append("tab traversal order between separate containers")
     result.metadata["controls"] = sorted(model.controls)
+    result.metadata['review_status'] = 'needs_review' if result.issues else 'static_checks_only'
+    result.metadata['project_style_verified'] = False
     return result

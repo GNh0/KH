@@ -2,6 +2,8 @@
 
 결과의 `status=passed`는 검사한 항목에 오류가 없다는 뜻이다. C# 결과는 경고가 있으면 `review_status=needs_review`, 없으면 `static_checks_only`를 표시하며 `project_style_verified=false`를 명시한다. 이는 작업 완료 판정을 하지 않는다는 의미다. 현재 사용자 요구와 이벤트 상태·API·저장 계약의 대조를 생략하는 통과 증거로 쓰지 않는다.
 
+`comparison_baselines`는 원본 제공 여부다. 원본 없는 단일 파일 검사는 변경·보존 검증이 아니다. C#/Designer/SQL에서 원본과 후보에 같은 파일(링크로 같은 파일인 경우 포함)을 넘기면 입력 오류로 처리한다. 원본은 수정 전 사본 또는 사용자가 지정한 실제 이관 원본을 사용한다. 수정 후 사본을 만들어 원본이라고 입력하는 것도 보존 증거가 되지 않는다. 내용이 같은 별도의 정상 사본은 비교할 수 있으며, 검사기가 그 사본의 생성 시점·출처까지 보증하지 않는다.
+
 `python <plugin-root>/scripts/kh_check.py csharp <absolute-source.cs> [--designer <absolute-Designer.cs>] [--original <absolute-before.cs>]`로 정적 UI 소유권·이벤트 참조·국소 코드 변경을 확인한다.
 
 그리드 밖 컨트롤도 [사용자 컨트롤 기준](user-controls.md)을 적용한다. 새 컨트롤의 Spin/ymd/pn/grd/gvw/col/rps 등 합의한 명명, 멤버/Name 불일치, DateEdit의 EditFormat/입력 마스크 추가를 검토한다. `--control-source <absolute-control.cs>`를 반복하여 현재 프로젝트의 사용자 컨트롤 구현을 제공하면, 라이브러리 이름에 관계없이 상속 선언과 직접 기본 생성자 대입을 기준으로 타입 선택·기본값 덮어쓰기도 확인한다. C#과 Designer 양쪽 명령에서 지원한다. 소스가 없거나 helper·조건·동적 값인 부분은 자동 검증했다고 표시하지 않는다.
@@ -39,8 +41,23 @@ C# 검사는 현재 메서드와 원본을 비교하여 다음 후보를 경고�
 - `save_gate_review`: 저장 이벤트/CallSaveProcedure에 추가한 메시지와 return 조건. 기존 검증·실패 처리 및 현재 요청과 대조한다.
 - `manual_selected_row_delete`, `client_sequence_review`, `row_header_propagation_review`: 수동 선택 행 삭제, RowVersion과 최대값을 이용한 순번 후보, 새 행으로의 헤더/문맥 필드 복사. 실제 API와 XML/SP의 담당 범위를 확인한다.
 - `date_helper_review`: 원본의 같은 멤버가 SetToDay를 쓰거나, `--control-source`로 제공한 실제 타입이 SetToDay(int)를 제공하는데 DateTime.Today/Now를 직접 대입한 경우. 제공되지 않은 API를 추측하지 않는다.
+- `ui_state_policy_review`: bool 필드가 새로 편집 모드·Enabled/ReadOnly·입력 취소·컨트롤 보호·이벤트 제한에 쓰이는 경우. 기존 필드라도 제한 적용 위치가 바뀌면 검토한다. 필드 선언부터 초기화·조회 대입·사용처까지 대조하며, 이름 변경과 실제 정책 변경을 구분한다. 상수·읽기 전용 필드와 단순 지역 bool은 이 후보에 포함하지 않는다.
 
 이 항목은 구조를 인식하는 경고이며 모든 검증·반복문·helper·재조회를 금지하지 않는다. 메서드 별칭, 간접 호출, 지역 함수 내부, 조건별 실행 순서, 실제 서버 채번·필수 필드는 자동 판정하지 못한다. 원본 주석 본문의 완전한 보존도 이 검사에 포함되지 않으므로 해당 요청은 실제 본문으로 따로 대조한다. 새 helper 추가 여부를 비교하려면 `--original`이 필요하다. 필요한 실제 컨트롤 소스는 기존 `--control-source` 인자로 전달하며 사용자에게 새 프로필이나 승인 파일을 요구하지 않는다.
+
+## 원본 Designer 속성 보존
+
+원본 유지 이관은 C#의 `--original`, `--designer-original`을 제공하고 `--preserve-existing`으로 남긴 컨트롤과 폼의 명시적 대입을 비교한다. Designer 단독 명령도 `--original`과 `--preserve-existing`을 지원한다. 이름이 바뀌면 `--member-rename oldName=newName`을 반복한다. 예:
+
+```text
+python <plugin-root>/scripts/kh_check.py csharp <after.cs> --original <source.cs> --designer <after.Designer.cs> --designer-original <source.Designer.cs> --preserve-existing --member-rename txt_old=txtOld
+```
+
+이름 대응은 메모리 안에서 식별자·Name·직접 resources.GetObject/GetString 키에 적용하며 실제 원본 파일은 수정하지 않는다. 일반 Text·BindingField 문자열은 이름과 같아도 바꾸지 않는다. 존재하지 않는 원본 멤버·중복 대상·원본 멤버 충돌은 오류다.
+
+결과의 `designer_preservation`에서 비교한 멤버 수, 속성 차이, 대응되지 않은 원본 멤버와 새 멤버를 확인한다. 차이는 컨트롤별 `designer_existing_properties_changed` 경고로 나온다. 필요한 바인딩·위치 변경 등은 실제 요청을 근거로 `--allow-property-change currentMember.Property`를 지정할 수 있다. 폼 속성은 `form.ClientSize`처럼 지정한다. 제외 항목은 검증 완료가 아니며, 기존 `--preserve-property`의 명시적 보존 오류를 지우지 않는다.
+
+삭제·새 컨트롤이 자동 승인된다는 뜻은 아니다. 대응되지 않은 목록을 요청한 삭제·추가 목록 및 resx 참조와 대조한다. 전부 이름이 달라 비교 대상이 없으면 incomplete다. 컬렉션 Add/AddRange, 초기화 순서, 조건·간접 대입, 실제 자원 본문과 런타임 동작은 별도 확인한다.
 
 ## 실제 숫자 컬럼과 검사 예외
 

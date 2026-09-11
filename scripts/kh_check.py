@@ -28,6 +28,10 @@ def main(argv=None):
     designer.add_argument('--code-behind')
     designer.add_argument('--preserve-property', action='append', default=[])
     for command in (cs, designer):
+        command.add_argument('--preserve-existing', action='store_true',
+                             help='compare retained Designer properties with the actual original; requires a Designer baseline')
+        command.add_argument('--member-rename', action='append', default=[], metavar='OLD=NEW',
+                             help='explicit original-to-current Designer member name; repeat for renamed members')
         command.add_argument('--control-source', action='append', default=[], metavar='ABSOLUTE_CONTROL_CS',
                              help='actual target user-control source; repeat to review types and direct constructor defaults')
         command.add_argument('--numeric-column', action='append', default=[], metavar='COLUMN_MEMBER',
@@ -48,6 +52,25 @@ def main(argv=None):
     package.add_argument("input")
     args = parser.parse_args(argv)
     try:
+        pairs = []
+        if args.command == 'sql' and args.candidate:
+            pairs.append((args.input, args.candidate))
+        elif args.command in {'csharp', 'designer'}:
+            if args.original:
+                pairs.append((args.original, args.input))
+            if args.command == 'csharp' and args.designer_original:
+                if not args.designer:
+                    raise ValueError('--designer-original requires --designer')
+                pairs.append((args.designer_original, args.designer))
+        for original_path, candidate_path in pairs:
+            if Path(original_path).samefile(candidate_path):
+                raise ValueError('comparison baseline and candidate are the same file; supply a separate original snapshot or run a single-file inspection')
+        member_renames = {}
+        for item in getattr(args, 'member_rename', []):
+            old, separator, new = item.partition('=')
+            if not separator or not old or not new or (old in member_renames and member_renames[old] != new):
+                raise ValueError('--member-rename requires one consistent OLD=NEW mapping per member')
+            member_renames[old] = new
         control_sources = [read_file(path).text() for path in getattr(args, 'control_source', [])]
         column_modes = {}
         for item in getattr(args, 'column_mode', []):
@@ -76,14 +99,16 @@ def main(argv=None):
                                    designer=read_file(args.designer).text() if args.designer else None,
                                    original_designer=read_file(args.designer_original).text() if args.designer_original else None,
                                    column_edit_modes=column_modes, allowed_property_changes=args.allow_property_change,
-                                   control_sources=control_sources, numeric_columns=args.numeric_column)
+                                   control_sources=control_sources, numeric_columns=args.numeric_column,
+                                   preserve_existing=args.preserve_existing, member_renames=member_renames)
         elif args.command == 'designer':
             from src.csharp.designer import check_designer
             result = check_designer(read_file(args.input).text(),
                 original=read_file(args.original).text() if args.original else None,
                 code_behind=read_file(args.code_behind).text() if args.code_behind else '',
                 preserved_properties=args.preserve_property, column_edit_modes=column_modes,
-                allowed_property_changes=args.allow_property_change, control_sources=control_sources, numeric_columns=args.numeric_column)
+                allowed_property_changes=args.allow_property_change, control_sources=control_sources, numeric_columns=args.numeric_column,
+                preserve_existing=args.preserve_existing, member_renames=member_renames)
         elif args.command == 'sp-call':
             from src.pb.sql import check_sp_call
             result = check_sp_call(read_file(args.input).text(), read_file(args.procedure).text())

@@ -14,16 +14,28 @@ from .flow_review import check_project_flow
 from .control_style import check_control_braces
 from .control_defaults import read_control_defaults, check_control_defaults, with_control_base_types
 from .syntax import _property_assignments, linq_candidates
+from .source_preservation import remap_members
 
 
 def check_csharp(candidate: str, *, original: str | None = None, designer: str | None = None,
                  allowed_changes: Mapping[str, Sequence[str]] | None = None,
                  original_designer: str | None = None, column_edit_modes: Mapping[str, str] | None = None,
                  allowed_property_changes: Sequence[str] = (), control_sources: Sequence[str] = (),
-                 numeric_columns: Sequence[str] = ()) -> CheckResult:
+                 numeric_columns: Sequence[str] = (), preserve_existing: bool = False,
+                 member_renames: Mapping[str, str] | None = None) -> CheckResult:
     allowed = allowed_changes or {}
     result = CheckResult(checked=["C# lexical source patterns", "new unbraced control bodies"],
                          not_checked=["C# compilation", "runtime UI and database behavior", "full C# semantic analysis"])
+    result.metadata['comparison_baselines'] = {'csharp': original is not None, 'designer': original_designer is not None}
+    if member_renames and (designer is None or original_designer is None):
+        raise ValueError('C# member renames require both Designer versions')
+    if original is None:
+        result.not_checked.append('C# changes and source preservation; no original C# supplied')
+    if original is not None and member_renames:
+        original = remap_members(original, member_renames)
+    if preserve_existing and designer is None:
+        result.incomplete = True
+        result.issues.append(Issue('preservation_designer_missing', 'warning', 'Supply both Designer versions for existing-property preservation.'))
     code, _ = _scan_csharp(candidate)
     before, _ = _scan_csharp(original or "")
     result.issues.extend(check_control_braces(candidate, original=original))
@@ -37,7 +49,7 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
         candidate_model = replace(candidate_model, controls={name: replace(control, type_name=types[name].type_name)
             if not control.type_name and name in types else control for name, control in candidate_model.controls.items()})
         if baseline_model is not None:
-            original_types = parse_designer_source(original_designer).controls if original_designer is not None else types
+            original_types = parse_designer_source(remap_members(original_designer, member_renames or {})).controls if original_designer is not None else types
             baseline_model = replace(baseline_model, controls={name: replace(control, type_name=original_types[name].type_name)
                 if not control.type_name and name in original_types else control for name, control in baseline_model.controls.items()})
     defaults = read_control_defaults(control_sources)
@@ -97,11 +109,15 @@ def check_csharp(candidate: str, *, original: str | None = None, designer: str |
     if designer is not None:
         ui = check_designer(designer, code_behind=candidate, original=original_designer,
                             column_edit_modes=column_edit_modes, allowed_property_changes=allowed_property_changes,
-                            control_sources=control_sources, numeric_columns=numeric_columns)
+                            control_sources=control_sources, numeric_columns=numeric_columns,
+                            preserve_existing=preserve_existing, member_renames=member_renames)
         result.issues.extend(ui.issues)
         result.checked.extend(ui.checked)
         result.not_checked.extend(ui.not_checked)
         result.incomplete |= ui.incomplete
+        for key in ('designer_preservation', 'member_renames'):
+            if key in ui.metadata:
+                result.metadata[key] = ui.metadata[key]
     elif control_sources:
         result.checked.append('supplied user-control types and direct parameterless-constructor assignments')
         result.not_checked.append('user-control helpers, unsupplied partial/base initialization, conditions, runtime defaults and actual project availability')
