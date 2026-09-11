@@ -26,6 +26,7 @@ _MESSAGES = {
     'client_sequence_review': 'Review this client-side maximum/row-version calculation against sequence ownership in the actual save procedure. Do not duplicate server-owned numbering.',
     'row_header_propagation_review': 'Review this new header/context assignment to a new detail row against XML/SP field ownership. Assign only fields the target detail contract requires.',
     'date_helper_review': 'The supplied target control exposes SetToDay(int), or this member already uses it. Prefer that existing date API when it matches the requested initialization; inspect intentional semantic differences.',
+    'ui_state_policy_review': 'A screen boolean field controls editing, action availability or an event gate. Compare its declaration, reset, assignment and uses with the actual source and request. Do not introduce or broaden a business restriction as a style change.',
 }
 
 
@@ -69,11 +70,60 @@ def _date_types(sources: Sequence[str]) -> set[str]:
     return result
 
 
+def _state_policies(source: str, code: str) -> list[_Finding]:
+    findings: list[_Finding] = []
+    for owner in re.finditer(r'\bclass\s+(\w+)[^{}]*\{', code):
+        closing = balanced_close(code, owner.end() - 1, '{', '}')
+        if closing < 0:
+            continue
+        body = code[owner.end():closing]
+        for field in re.finditer(r'\b((?:(?:private|public|protected|internal|static|readonly|const|volatile)\s+)*)(?:bool|Boolean|System\.Boolean)\s+(\w+)\s*(?:=[^;{}]*)?;', body):
+            prefix = body[:field.start()]
+            if prefix.count('{') != prefix.count('}') or {'readonly', 'const'} & set(field[1].split()):
+                continue
+            member = field[2]
+            reference = re.compile(r'(?<![\w.])(?:this\.)?' + re.escape(member) + r'\b')
+            uses = []
+            for declaration, start, end in _methods(body):
+                fragment = body[start:end]
+                # Bare names shadowed by a parameter/local are not resolved as fields.
+                shadow = re.search(r'\b(?:bool|Boolean|System\.Boolean)\s+' + re.escape(member) + r'\b', declaration['parameters'] + ' ' + fragment)
+                ref = re.compile(r'\bthis\.' + re.escape(member) + r'\b') if shadow else reference
+                spans = []
+                for assignment in re.finditer(r'\b(?:\w+\.)*(?:Enabled|ReadOnly|AllowEdit|Editable|Cancel|m_Editmode)\s*=(?!=)[^;{}]*;', fragment):
+                    if ref.search(assignment[0]):
+                        spans.append((assignment.start(), assignment.end()))
+                for call in re.finditer(r'\bUsr_ControlsProtect\s*\(', fragment):
+                    end_call = balanced_close(fragment, call.end() - 1, '(', ')')
+                    if end_call >= 0 and ref.search(fragment[call.start():end_call + 1]):
+                        spans.append((call.start(), end_call + 1))
+                for condition in re.finditer(r'\bif\s*\(', fragment):
+                    end_condition = balanced_close(fragment, condition.end() - 1, '(', ')')
+                    if end_condition < 0 or not ref.search(fragment[condition.end():end_condition]):
+                        continue
+                    opening = end_condition + 1
+                    while opening < len(fragment) and fragment[opening].isspace():
+                        opening += 1
+                    end_body = (balanced_close(fragment, opening, '{', '}') if fragment[opening:opening + 1] == '{'
+                                else fragment.find(';', opening))
+                    guarded = fragment[opening:end_body + 1] if end_body >= 0 else ''
+                    if re.search(r'\breturn\b|\bUsr_ControlsProtect\s*\(|\.(?:Cancel|Enabled|ReadOnly|AllowEdit|Editable|Text|EditValue)\s*=(?!=)', guarded):
+                        spans.append((condition.start(), end_body + 1))
+                for left, right in spans:
+                    raw = source[owner.end() + start + left:owner.end() + start + right]
+                    tokens = [(kind, value) for kind, value, _, _ in _scan_csharp(raw)[1]]
+                    uses.append((declaration['name'], repr(tokens)))
+            if uses:
+                findings.append(_Finding('ui_state_policy_review', owner[1] + '.' + member,
+                                         repr(sorted(set(uses))), owner.end() + field.start(2)))
+    return findings
+
+
 def _findings(source: str, *, control_types: Mapping[str, str], date_types: set[str],
               known_date_members: set[str]) -> list[_Finding]:
     code, _ = _scan_csharp(source)
     helpers = {item['name'] for item in _target_local_method_inventory(code)}
-    findings: list[_Finding] = []
+    findings = _state_policies(source, code)
     for declaration, start, end in _methods(code):
         name = declaration['name']
         signature = name + '(' + re.sub(r'\s+', ' ', declaration['parameters']).strip() + ')'

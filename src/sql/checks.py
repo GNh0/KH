@@ -11,6 +11,7 @@ def check_sql(candidate: str, *, original: str | None = None, preserve_aliases: 
               check_style: bool = True, check_delta: bool = False) -> CheckResult:
     result = compare_sql(original, candidate, preserve_aliases=preserve_aliases) if original is not None else CheckResult(
         checked=["SQL lexical integrity"], not_checked=["SQL Server execution", "complete T-SQL grammar and type semantics", "business equivalence to an unsupplied source"])
+    result.metadata['comparison_baselines'] = {'sql': original is not None}
     tokens, errors = _analyze_sql_integrity(candidate, check_kind="candidate")
     if not any(t.kind not in {'line_comment', 'block_comment'} for t in tokens):
         result.incomplete = True
